@@ -1,0 +1,3 @@
+[submodule "docs/device"]
+	path = docs/device
+	url = git@github.com:nebuloss/gt-be98-docs.git
