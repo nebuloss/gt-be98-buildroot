@@ -38,6 +38,33 @@ still TODO — the hard part).
   set `BR2_TOOLCHAIN_EXTERNAL_URL` in the committed defconfig so it builds without
   the firmware repo present. (Upload needs the user — no `gh` CLI.)
 
+## Step 2 plan (VERIFIED against the merlin artifacts)
+
+Key finding: the architecture is **mixed** — **kernel = aarch64**, **userspace =
+32-bit ARM softfp** (`file` on merlin's `vmlinux` = ELF 64-bit aarch64; busybox =
+ELF 32-bit ARM). So Buildroot's BR2_arm target is right for the rootfs, but its
+normal kernel flow would wrongly build a 32-bit kernel. Defer kernel-from-source.
+
+Image is a **two-layer FIT** (verified via `dumpimage -l`):
+- `.itb` (bootfs, 13M) = atf + uboot + fdt_uboot + kernel(lzo,aarch64,@0x200000)
+  + many per-board aarch64 DTBs (incl. `fdt_GT-BE98`) + optional OP-TEE.
+  **No rootfs in here.**
+- `.pkgtb` (74M, the flashable bundle) = loader + bootfs(.itb) + **rootfs.squashfs**.
+
+merlin tooling (under `…/src-rt-5.04behnd.4916/bootloaders`): `build/work/
+generate_linux_its`, `build/work/generate_bundle_itb`, `build/work/
+fit_header_tool`, `obj/uboot/tools/{mkimage,dumpimage}`; config `build/configs/
+options_6813_nand.conf.GT-BE98`. rootfs = `mksquashfs … -noappend -all-root
+-comp xz` (v4.0, 128K block, ~61M).
+
+**Step 2a (fastest flashable image):** Buildroot builds ONLY the 32-bit rootfs →
+squashfs(xz/all-root); `board/gt-be98/post-image.sh` calls `generate_bundle_itb`
+to wrap merlin's **prebuilt** `.itb` + loader (→ gt-be98-packages blobs) around
+Buildroot's rootfs → mkimage → `.pkgtb`. Proves the packaging pipeline end-to-end
+with our rootfs. **Step 2b (deferred):** build aarch64 kernel + ATF + U-Boot from
+source. NB: `generate_*` are Perl with specific args — READ them before wiring
+post-image.sh (don't trust second-hand arg lists).
+
 ## Reference: the working build
 
 `../gt-be98-firmware` produces a verified `GT-BE98_*.pkgtb` on Debian today

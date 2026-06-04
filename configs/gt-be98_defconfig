@@ -58,7 +58,9 @@ BR2_TOOLCHAIN_EXTERNAL_CXX=y
 
 # --- Root filesystem ---------------------------------------------------------
 BR2_TARGET_ROOTFS_SQUASHFS=y
-# merlin ships squashfs; match its compressor (xz/lzma) once confirmed.
+# merlin's rootfs.img is squashfs v4.0, xz, 128K block (the squashfs default),
+# all-root (confirmed via `file`/mksquashfs args). Match the compressor:
+BR2_TARGET_ROOTFS_SQUASHFS4_XZ=y
 
 # --- Init / base userspace ---------------------------------------------------
 BR2_INIT_BUSYBOX=y
