@@ -15,10 +15,26 @@ Buildroot's `rootfs.squashfs` with a prebuilt bootfs `.itb` (ATF+U-Boot+aarch64
 kernel+dtbs+OP-TEE, borrowed from the sibling merlin tree) via u-boot `mkimage`,
 reproducing merlin's exact bundle FIT. Verified structurally: all metadata tokens
 present, squashfs magic once, embedded rootfs byte-identical, `dumpimage` parses.
-HONEST limits: not boot-tested on hardware; the rootfs is still busybox-only
-(userspace parity = Steps 3-4); the kernel/ATF/U-Boot are reused prebuilt, not
-yet Buildroot-built (Step 2b). Blobs currently come from the merlin tree — should
-move to gt-be98-packages Release assets.
+mkimage now comes from Buildroot's host-uboot-tools (merlin only lends the bootfs
+`.itb`). HONEST limits: not boot-tested on hardware; kernel/ATF/U-Boot reused
+prebuilt (Step 2b deferred — needs Broadcom build wrapper).
+
+**Steps 3-4 IN PROGRESS — userspace landing in the image:**
+- Generic (upstream Buildroot pkgs): openssl, cjson, lighttpd, openvpn, dropbear,
+  strongswan (charon/stroke). NB **samba4 won't build** with the gcc-10.3 external
+  toolchain — its dep cmocka 2.0.2 uses `__attribute__((access(none)))` (GCC 11+).
+  This is a general constraint: modern upstream pkgs needing GCC 11+ fail; get
+  smbd (and similar) from the ASUS blob instead.
+- Proprietary (gt-be98-packages blobs + recipes, fetched by URL+hash):
+  - `gt-be98-dhd-firmware` — rtecdc.bin (6717a0/6726b0) -> /rom/etc/wlan/dhd.
+  - `gt-be98-userspace-base` — nvram, rc, wl, dhd, httpd + their 34-lib ASUS
+    shared-lib closure -> /bin,/sbin,/usr/sbin,/lib,/usr/lib. Verified the
+    dynamic-link closure is COMPLETE in the rootfs.
+  Blob pattern: `gt-be98-packages/scripts/package-blob.sh` (reproducible tar) ->
+  Release asset -> recipe `_SITE`/`.hash`. Tarballs staged locally in `dl/`;
+  Release uploads pending (needs the user / no gh CLI).
+- Still TODO for functional parity: init/rc wiring, nvram defaults, /www web UI
+  assets, wl/dhd config, service start scripts.
 
 - `external.desc` (name `GT_BE98`), `external.mk`, `Config.in` — wired.
 - `configs/gt-be98_defconfig` — arch/ABI **confirmed from the real compiler**:

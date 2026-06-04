@@ -2,9 +2,11 @@
 #
 # Arch/ABI below are CONFIRMED from the merlin cross-compiler (gcc -v on
 # crosstools-arm_softfp-gcc-10.3): 32-bit ARM, cortex-a9, EABI soft-float ABI,
-# VFPv3. The toolchain is itself Buildroot 2021.02.4, so build against upstream
-# Buildroot 2021.02.4. Kernel/bootloader/image/wireless remain TODO (the hard
-# part — see ARCHITECTURE.md roadmap steps 2-4).
+# VFPv3. Built against the latest stable Buildroot (2026.02.2); the external
+# toolchain (gcc 10.3) is consumed as-is. NB gcc 10.3 lacks some GCC-11+ features,
+# so a few modern upstream packages won't build (e.g. samba4 -> cmocka 2.0.2 uses
+# __attribute__((access(none)))) — prefer ASUS blobs for those. Kernel/bootloader
+# from source remain deferred (see ARCHITECTURE.md / AGENTS.md).
 #
 # Build with:
 #   make BR2_EXTERNAL=/path/to/gt-be98-buildroot gt-be98_defconfig
