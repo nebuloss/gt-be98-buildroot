@@ -40,7 +40,13 @@ COMPATSTR="${GT_BE98_COMPATSTR:-rev=a0+;ip=ipv6,ipv4;ddr=ddr4}"
 EXT="${BR2_EXTERNAL_GT_BE98_PATH:-$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd)}"
 MERLIN_ROOT="${GT_BE98_MERLIN_ROOT:-$EXT/../gt-be98-firmware/vendor/asuswrt-merlin.ng/release/src-rt-5.04behnd.4916}"
 
-BOOTFS_ITB="${GT_BE98_BOOTFS_ITB:-$MERLIN_ROOT/targets/$PROFILE/bcm${PROFILE}_uboot_linux.itb}"
+# bootfs .itb source, in priority order:
+#   1. GT_BE98_BOOTFS_ITB env override
+#   2. the gt-be98-bootfs package (installs it into BINARIES_DIR) — no merlin tree
+#   3. auto-locate the sibling merlin tree (fallback for local dev)
+if [ -n "${GT_BE98_BOOTFS_ITB:-}" ]; then BOOTFS_ITB="$GT_BE98_BOOTFS_ITB"
+elif [ -f "$BINARIES_DIR/bcm${PROFILE}_uboot_linux.itb" ]; then BOOTFS_ITB="$BINARIES_DIR/bcm${PROFILE}_uboot_linux.itb"
+else BOOTFS_ITB="$MERLIN_ROOT/targets/$PROFILE/bcm${PROFILE}_uboot_linux.itb"; fi
 
 # mkimage: explicit override, else Buildroot host, else merlin, else PATH.
 if [ -n "${GT_BE98_MKIMAGE:-}" ]; then MKIMAGE="$GT_BE98_MKIMAGE"

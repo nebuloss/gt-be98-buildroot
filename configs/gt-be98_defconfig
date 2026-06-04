@@ -89,6 +89,13 @@ BR2_PACKAGE_STRONGSWAN_STROKE=y
 BR2_PACKAGE_GT_BE98_DHD_FIRMWARE=y
 # core asus userspace (nvram, rc, wl, dhd, httpd) + ASUS shared-lib closure.
 BR2_PACKAGE_GT_BE98_USERSPACE_BASE=y
+# The two below are built + verified but their Release assets aren't uploaded yet,
+# so they're left OFF to keep a fresh-clone build self-contained/green. Uncomment
+# once the gt-be98-packages samba-1.0 / bootfs-1.0 Release assets are published:
+#   ASUS samba (smbd/nmbd) — upstream samba4 won't build on gcc 10.3.
+# BR2_PACKAGE_GT_BE98_SAMBA=y
+#   prebuilt bootfs .itb -> BINARIES_DIR (post-image bundles it; no merlin tree).
+# BR2_PACKAGE_GT_BE98_BOOTFS=y
 
 # --- Board hooks -------------------------------------------------------------
 BR2_ROOTFS_OVERLAY="$(BR2_EXTERNAL_GT_BE98_PATH)/board/gt-be98/rootfs_overlay"

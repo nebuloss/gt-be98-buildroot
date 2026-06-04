@@ -1,0 +1,13 @@
+config BR2_PACKAGE_GT_BE98_BOOTFS
+	bool "gt-be98-bootfs"
+	help
+	  Prebuilt GT-BE98 bootfs FIT image (bcm96813GW_uboot_linux.itb):
+	  ATF + U-Boot + aarch64 kernel (lzo) + per-board DTBs + OP-TEE.
+
+	  Installs the .itb into $(BINARIES_DIR) so board/gt-be98/post-image.sh
+	  wraps the Buildroot rootfs.squashfs around it into the flashable
+	  .pkgtb — without needing the merlin source tree present. This is the
+	  Step 2a "reuse the prebuilt boot chain" path (kernel-from-source is
+	  the deferred Step 2b).
+
+	  Proprietary; fetched from a gt-be98-packages Release asset.

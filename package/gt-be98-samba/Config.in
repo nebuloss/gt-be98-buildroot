@@ -1,0 +1,10 @@
+config BR2_PACKAGE_GT_BE98_SAMBA
+	bool "gt-be98-samba"
+	help
+	  ASUS Samba server for the GT-BE98: the self-contained samba_multicall
+	  binary with smbd/nmbd/smbpasswd symlinks, plus write_smb_conf.
+	  Installed to /usr/sbin and /sbin (merlin layout).
+
+	  Used instead of upstream samba4, which can't be built with the
+	  gcc-10.3 external toolchain (its cmocka dep needs GCC 11+).
+	  Proprietary; fetched from a gt-be98-packages Release asset.
