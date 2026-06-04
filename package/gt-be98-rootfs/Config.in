@@ -1,0 +1,17 @@
+config BR2_PACKAGE_GT_BE98_ROOTFS
+	bool "gt-be98-rootfs (complete ASUS rootfs.img)"
+	help
+	  Merlin's FINAL ASUS GT-BE98 root filesystem image (rootfs.img: an
+	  all-root xz squashfs) — content-identical to a working merlin flash.
+	  It is the full proprietary userspace (rc/cfg_server engine, wl/dhd,
+	  hostapd, /www) AFTER merlin's buildFS post-processing.
+
+	  post-image-full.sh uses it verbatim as rootfs.squashfs, so the .pkgtb
+	  matches the stock firmware. Network + SSH come back from the persistent
+	  nvram + /jffs after a flash. The proprietary WiFi engine can't be
+	  rebuilt from source, and raw fs.install isn't equivalent (it's the
+	  pre-processed tree), so this reuses the built image wholesale.
+
+	  Use this for the "working firmware" build (gt-be98_full_defconfig);
+	  supersedes the granular gt-be98-userspace-base/-samba packages.
+	  Proprietary; fetched from a gt-be98-packages Release asset.
