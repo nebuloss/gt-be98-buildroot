@@ -56,8 +56,16 @@ BR2_TOOLCHAIN_EXTERNAL_CXX=y
 # --- Kernel (TODO — roadmap step 2) ------------------------------------------
 # Broadcom 4.19 vendor kernel + BCM6813 dts/defconfig. Major task.
 
-# --- Bootloader + image (TODO — roadmap step 2) ------------------------------
-# Reuse merlin's ATF/U-Boot + .itb/.pkgtb packaging via board/gt-be98/post-image.sh.
+# --- Bootloader + image (roadmap step 2) -------------------------------------
+# Step 2a: board/gt-be98/post-image.sh wraps the rootfs with a prebuilt bootfs
+# .itb into a .pkgtb. mkimage comes from Buildroot's host-uboot-tools (the bundle
+# is a plain FIT, so no Broadcom-specific mkimage is needed) — this removes the
+# merlin-tree mkimage dependency; only the prebuilt bootfs .itb is still borrowed
+# (-> gt-be98-packages blob). Step 2b will build the kernel/ATF/U-Boot from source.
+BR2_PACKAGE_HOST_UBOOT_TOOLS=y
+# FIT support is required: the bundle FIT carries sha256 hash nodes, which a
+# non-FIT mkimage rejects (prints usage, exits 1).
+BR2_PACKAGE_HOST_UBOOT_TOOLS_FIT_SUPPORT=y
 
 # --- Root filesystem ---------------------------------------------------------
 BR2_TARGET_ROOTFS_SQUASHFS=y
