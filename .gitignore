@@ -1,0 +1,8 @@
+# Never commit blobs/sources here — they live in gt-be98-packages / gt-be98-toolchain
+# (hosted as GitHub Release assets). This tree is recipes only.
+*.tar
+*.tar.*
+*.bin
+*.o
+dl/
+output/

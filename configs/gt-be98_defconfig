@@ -1,0 +1,60 @@
+# GT-BE98 Buildroot defconfig — WORK-IN-PROGRESS SKELETON.
+#
+# This is a starting point, NOT a working config yet. It wires the external
+# toolchain (gt-be98-toolchain) and leaves the target CPU + kernel + bootloader
+# + image packaging as TODOs (the hard part — see ARCHITECTURE.md roadmap).
+#
+# Build with:
+#   make BR2_EXTERNAL=/path/to/gt-be98-buildroot gt-be98_defconfig
+#   make
+
+# --- Target architecture -----------------------------------------------------
+# BCM6813 is ARM. The merlin build's primary tuple is arm-buildroot-linux-gnueabi
+# (32-bit, softfp, ARMv7) but it ALSO invokes an aarch64 compiler. Confirm the
+# real CPU/ABI before trusting this. Starting 32-bit ARMv7 to match the primary
+# toolchain:
+BR2_arm=y
+BR2_ARM_EABIHF=n
+# TODO: pick the exact core, e.g. BR2_cortex_a7 / a53. Verify against BCM6813.
+# BR2_cortex_a7=y
+
+# --- External toolchain (gt-be98-toolchain) ----------------------------------
+BR2_TOOLCHAIN_EXTERNAL=y
+BR2_TOOLCHAIN_EXTERNAL_CUSTOM=y
+# Option A — download the Release asset (preferred once uploaded):
+# BR2_TOOLCHAIN_EXTERNAL_DOWNLOAD=y
+# BR2_TOOLCHAIN_EXTERNAL_URL="https://github.com/nebuloss/gt-be98-toolchain/releases/download/<tag>/gt-be98-toolchain-brcm-arm-hnd-minimal.tar.gz"
+# Option B — point at a pre-extracted tree:
+# BR2_TOOLCHAIN_EXTERNAL_PATH="/path/to/brcm-arm-hnd/crosstools-arm_softfp-gcc-10.3-linux-4.19-glibc-2.32-binutils-2.36.1/usr"
+#
+# NOTE: the current tarball unpacks to brcm-arm-hnd/<crosstools-…>/usr/{bin,...}.
+# Buildroot's external-toolchain expects a tree whose bin/ holds <prefix>-gcc.
+# You will likely need to repackage a SINGLE crosstools dir (its usr/) as the
+# toolchain root, or use BR2_TOOLCHAIN_EXTERNAL_PATH into the extracted usr/.
+BR2_TOOLCHAIN_EXTERNAL_CUSTOM_PREFIX="arm-buildroot-linux-gnueabi"
+BR2_TOOLCHAIN_EXTERNAL_GCC_10=y
+BR2_TOOLCHAIN_EXTERNAL_HEADERS_4_19=y
+BR2_TOOLCHAIN_EXTERNAL_CUSTOM_GLIBC=y
+BR2_TOOLCHAIN_EXTERNAL_CXX=y
+
+# --- Kernel (TODO) -----------------------------------------------------------
+# Broadcom 4.19 vendor kernel. Either import it as a custom source tarball
+# (gt-be98-packages) or BR2_LINUX_KERNEL_CUSTOM_TARBALL. Needs the BCM6813 dts +
+# defconfig. This is a major task.
+# BR2_LINUX_KERNEL=y
+
+# --- Bootloader + image (TODO) -----------------------------------------------
+# Reuse merlin's ATF/U-Boot + .itb/.pkgtb packaging initially via the
+# board/gt-be98/post-image.sh hook. See ARCHITECTURE.md roadmap step 2.
+
+# --- Root filesystem ---------------------------------------------------------
+BR2_TARGET_ROOTFS_SQUASHFS=y
+# merlin ships squashfs; match its compressor once known (xz/lzma).
+
+# --- Init / base userspace ---------------------------------------------------
+BR2_INIT_BUSYBOX=y
+
+# --- Board hooks -------------------------------------------------------------
+BR2_ROOTFS_OVERLAY="$(BR2_EXTERNAL_GT_BE98_PATH)/board/gt-be98/rootfs_overlay"
+BR2_ROOTFS_POST_BUILD_SCRIPT="$(BR2_EXTERNAL_GT_BE98_PATH)/board/gt-be98/post-build.sh"
+BR2_ROOTFS_POST_IMAGE_SCRIPT="$(BR2_EXTERNAL_GT_BE98_PATH)/board/gt-be98/post-image.sh"
