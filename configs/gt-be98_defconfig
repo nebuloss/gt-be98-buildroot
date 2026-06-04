@@ -33,18 +33,12 @@ BR2_ARM_FPU_VFPV3=y
 BR2_TOOLCHAIN_EXTERNAL=y
 BR2_TOOLCHAIN_EXTERNAL_CUSTOM=y
 #
-# Toolchain SOURCE — pick ONE (this WIP defconfig sets neither; choose locally):
-#
-#   Option A (production — uncomment once the tarball is uploaded as a Release
-#   asset; the download/extract path is already verified working via file://).
-#   Build the tarball with gt-be98-toolchain/scripts/make-buildroot-toolchain-tarball.sh.
-# BR2_TOOLCHAIN_EXTERNAL_DOWNLOAD=y
-# BR2_TOOLCHAIN_EXTERNAL_URL="https://github.com/nebuloss/gt-be98-toolchain/releases/download/<tag>/gt-be98-toolchain-arm_softfp-gcc10.3.tar.gz"
-#
-#   Option B (local pre-extracted tree — point at the crosstools dir whose bin/
-#   holds arm-buildroot-linux-gnueabi-gcc; the firmware repo already extracts it):
-# BR2_TOOLCHAIN_EXTERNAL_PATH="/abs/path/to/brcm-arm-hnd/crosstools-arm_softfp-gcc-10.3-linux-4.19-glibc-2.32-binutils-2.36.1"
-#
+# Toolchain SOURCE: download the single-variant tarball from its gt-be98-toolchain
+# Release asset (built by scripts/make-buildroot-toolchain-tarball.sh). Verified
+# end-to-end. For offline/local dev you can instead set BR2_TOOLCHAIN_EXTERNAL_PATH
+# to a pre-extracted crosstools dir.
+BR2_TOOLCHAIN_EXTERNAL_DOWNLOAD=y
+BR2_TOOLCHAIN_EXTERNAL_URL="https://github.com/nebuloss/gt-be98-toolchain/releases/download/arm_softfp-gcc10.3/gt-be98-toolchain-arm_softfp-gcc10.3.tar.gz"
 BR2_TOOLCHAIN_EXTERNAL_CUSTOM_PREFIX="arm-buildroot-linux-gnueabi"
 BR2_TOOLCHAIN_EXTERNAL_GCC_10=y
 BR2_TOOLCHAIN_EXTERNAL_HEADERS_4_19=y
