@@ -88,6 +88,10 @@ BR2_PACKAGE_DROPBEAR=y
 BR2_PACKAGE_STRONGSWAN=y
 BR2_PACKAGE_STRONGSWAN_STROKE=y
 
+# --- GT-BE98-specific components (Steps 3-4, gt-be98-packages blobs) ----------
+# dhd wireless firmware (rtecdc.bin for radios 6717a0 + 6726b0).
+BR2_PACKAGE_GT_BE98_DHD_FIRMWARE=y
+
 # --- Board hooks -------------------------------------------------------------
 BR2_ROOTFS_OVERLAY="$(BR2_EXTERNAL_GT_BE98_PATH)/board/gt-be98/rootfs_overlay"
 BR2_ROOTFS_POST_BUILD_SCRIPT="$(BR2_EXTERNAL_GT_BE98_PATH)/board/gt-be98/post-build.sh"

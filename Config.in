@@ -1,6 +1,5 @@
 menu "GT-BE98 packages"
 
-# As packages are added under package/<name>/, source their Config.in here, e.g.:
-#   source "$BR2_EXTERNAL_GT_BE98_PATH/package/gt-be98-dhd-firmware/Config.in"
+source "$BR2_EXTERNAL_GT_BE98_PATH/package/gt-be98-dhd-firmware/Config.in"
 
 endmenu

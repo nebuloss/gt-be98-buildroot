@@ -1,0 +1,9 @@
+config BR2_PACKAGE_GT_BE98_DHD_FIRMWARE
+	bool "gt-be98-dhd-firmware"
+	help
+	  Broadcom dhd wireless firmware blobs (rtecdc.bin) for the
+	  GT-BE98 radios 6717a0 + 6726b0. Installed to /rom/etc/wlan/dhd
+	  (matching the merlin rootfs layout).
+
+	  Proprietary, non-redistributable. Fetched from a gt-be98-packages
+	  GitHub Release asset.
