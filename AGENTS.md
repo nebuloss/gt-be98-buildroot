@@ -70,9 +70,16 @@ options_6813_nand.conf.GT-BE98`. rootfs = `mksquashfs … -noappend -all-root
 squashfs(xz/all-root); `board/gt-be98/post-image.sh` calls `generate_bundle_itb`
 to wrap merlin's **prebuilt** `.itb` + loader (→ gt-be98-packages blobs) around
 Buildroot's rootfs → mkimage → `.pkgtb`. Proves the packaging pipeline end-to-end
-with our rootfs. **Step 2b (deferred):** build aarch64 kernel + ATF + U-Boot from
-source. NB: `generate_*` are Perl with specific args — READ them before wiring
-post-image.sh (don't trust second-hand arg lists).
+with our rootfs.
+
+**Step 2b (investigated → DEFERRED).** Building the aarch64 kernel from source is
+NOT a standard Buildroot kernel package: a bounded `make ARCH=arm64 olddefconfig`
+test fails at Kconfig (`../bcmkernel/Kconfig.bcm_kf.4.19.294`), and the build
+consumes dozens of env vars from `build/Bcmkernel.mk` pointing into bcmdrivers/RDP
+SDK. Building it means vendoring a large Broadcom subtree + wrapping their build
+system (multi-day) for NO functional gain over the prebuilt `.itb` we already
+reuse. Keep reusing the prebuilt `.itb`; revisit only if from-source becomes a
+hard requirement. (The aarch64 toolchain works: gcc10.3, `aarch64-buildroot-linux-gnu-`.)
 
 ## Reference: the working build
 
