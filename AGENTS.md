@@ -5,14 +5,38 @@ asuswrt-merlin SDK build. Read `ARCHITECTURE.md` first.
 
 ## State (2026-06-04)
 
-A valid-but-empty `BR2_EXTERNAL`:
+**Step 1 DONE & verified** — the external toolchain builds a minimal busybox
+glibc rootfs with the exact merlin target ABI (ARMv7-A cortex-a9, EABI softfp,
+VFPv3, glibc 2.32, interp `/lib/ld-linux.so.3`). Produces
+`output/images/rootfs.squashfs`. No device integration yet (kernel/boot/image
+still TODO — the hard part).
+
 - `external.desc` (name `GT_BE98`), `external.mk`, `Config.in` — wired.
-- `configs/gt-be98_defconfig` — WIP: external toolchain stanza + TODOs for CPU,
-  kernel, bootloader, image.
+- `configs/gt-be98_defconfig` — arch/ABI **confirmed from the real compiler**:
+  `BR2_arm` + `BR2_cortex_a9` + `BR2_ARM_EABI` + `BR2_ARM_ENABLE_VFP` +
+  `BR2_ARM_FPU_VFPV3`, external glibc 10.3/2.32/hdr-4.19, `INET_RPC` disabled.
+  Toolchain SOURCE intentionally left unset (pick URL or PATH locally — see file).
 - `board/gt-be98/` — post-build/post-image **placeholders** (no-ops).
 - `package/README.md` — recipe template referencing `gt-be98-packages` Releases.
 
-**Nothing builds end-to-end yet.** This is scaffolding.
+### How Step 1 was built / reproduced
+- Buildroot upstream cloned at tag **2021.02.4** in `~/be98/buildroot` (matches
+  the toolchain's own Buildroot version).
+- Build it via a LOCAL test defconfig that appends
+  `BR2_TOOLCHAIN_EXTERNAL_PATH=<firmware's extracted crosstools-arm_softfp dir>`
+  (the firmware repo already extracts the toolchain), then `make defconfig && make`.
+- **Host-tool fix required** on Debian 13 (glibc 2.41/gcc 14): host-fakeroot
+  1.25.3 won't compile → bumped the clone's `package/fakeroot` to **1.31** with
+  `AUTORECONF=NO` and patches removed. This patch lives in the Buildroot clone,
+  not here (recipes-only). A 2021 Buildroot on a 2025 host may need more such
+  fixes; if they cascade, consider a modern Buildroot LTS (the external toolchain
+  + custom kernel tarball are version-independent).
+
+### Remaining Step-1 polish (before Step 2)
+- Repackage ONE crosstools variant into a Buildroot-download-ready single tarball
+  (root = `bin/ lib/ ...`) and upload as a `gt-be98-toolchain` Release asset, then
+  set `BR2_TOOLCHAIN_EXTERNAL_URL` in the committed defconfig so it builds without
+  the firmware repo present. (Upload needs the user — no `gh` CLI.)
 
 ## Reference: the working build
 

@@ -1,55 +1,64 @@
-# GT-BE98 Buildroot defconfig — WORK-IN-PROGRESS SKELETON.
+# GT-BE98 Buildroot defconfig — Step 1: external toolchain + minimal rootfs.
 #
-# This is a starting point, NOT a working config yet. It wires the external
-# toolchain (gt-be98-toolchain) and leaves the target CPU + kernel + bootloader
-# + image packaging as TODOs (the hard part — see ARCHITECTURE.md roadmap).
+# Arch/ABI below are CONFIRMED from the merlin cross-compiler (gcc -v on
+# crosstools-arm_softfp-gcc-10.3): 32-bit ARM, cortex-a9, EABI soft-float ABI,
+# VFPv3. The toolchain is itself Buildroot 2021.02.4, so build against upstream
+# Buildroot 2021.02.4. Kernel/bootloader/image/wireless remain TODO (the hard
+# part — see ARCHITECTURE.md roadmap steps 2-4).
 #
 # Build with:
 #   make BR2_EXTERNAL=/path/to/gt-be98-buildroot gt-be98_defconfig
 #   make
 
-# --- Target architecture -----------------------------------------------------
-# BCM6813 is ARM. The merlin build's primary tuple is arm-buildroot-linux-gnueabi
-# (32-bit, softfp, ARMv7) but it ALSO invokes an aarch64 compiler. Confirm the
-# real CPU/ABI before trusting this. Starting 32-bit ARMv7 to match the primary
-# toolchain:
+# --- Target architecture (CONFIRMED) -----------------------------------------
 BR2_arm=y
-BR2_ARM_EABIHF=n
-# TODO: pick the exact core, e.g. BR2_cortex_a7 / a53. Verify against BCM6813.
-# BR2_cortex_a7=y
+BR2_cortex_a9=y
+BR2_ARM_EABI=y
+# cortex-a9 has VFP only optionally (MAYBE_HAS_VFPV3), so VFP must be explicitly
+# enabled before the VFPv3 FPU choice is selectable — otherwise Buildroot
+# silently falls back to soft float, which is ABI-incompatible with the softfp
+# sysroot. Toolchain is -mfloat-abi=softfp -mfpu=vfpv3.
+BR2_ARM_ENABLE_VFP=y
+BR2_ARM_FPU_VFPV3=y
+# merlin compiles userspace+kernel with: -mcpu=cortex-a9 -marm
+#   -march=armv7-a+mp+sec+vfpv3 -mfloat-abi=softfp -mfpu=vfpv3 -mabi=aapcs-linux
+# (aarch64 is only ~160 build invocations — minor 64-bit bits, not the target.)
 
 # --- External toolchain (gt-be98-toolchain) ----------------------------------
+# Versions confirmed from the compiler: gcc 10.3.0, binutils 2.36.1,
+# glibc 2.32, kernel-headers 4.19. Tuple arm-buildroot-linux-gnueabi.
 BR2_TOOLCHAIN_EXTERNAL=y
 BR2_TOOLCHAIN_EXTERNAL_CUSTOM=y
-# Option A — download the Release asset (preferred once uploaded):
-# BR2_TOOLCHAIN_EXTERNAL_DOWNLOAD=y
-# BR2_TOOLCHAIN_EXTERNAL_URL="https://github.com/nebuloss/gt-be98-toolchain/releases/download/<tag>/gt-be98-toolchain-brcm-arm-hnd-minimal.tar.gz"
-# Option B — point at a pre-extracted tree:
-# BR2_TOOLCHAIN_EXTERNAL_PATH="/path/to/brcm-arm-hnd/crosstools-arm_softfp-gcc-10.3-linux-4.19-glibc-2.32-binutils-2.36.1/usr"
 #
-# NOTE: the current tarball unpacks to brcm-arm-hnd/<crosstools-…>/usr/{bin,...}.
-# Buildroot's external-toolchain expects a tree whose bin/ holds <prefix>-gcc.
-# You will likely need to repackage a SINGLE crosstools dir (its usr/) as the
-# toolchain root, or use BR2_TOOLCHAIN_EXTERNAL_PATH into the extracted usr/.
+# Toolchain SOURCE — pick ONE (this WIP defconfig sets neither; choose locally):
+#
+#   Option A (production, once the single-variant tarball is a Release asset):
+# BR2_TOOLCHAIN_EXTERNAL_DOWNLOAD=y
+# BR2_TOOLCHAIN_EXTERNAL_URL="https://github.com/nebuloss/gt-be98-toolchain/releases/download/<tag>/gt-be98-toolchain-arm-softfp-gcc10.3.tar.gz"
+#
+#   Option B (local pre-extracted tree — point at the crosstools dir whose bin/
+#   holds arm-buildroot-linux-gnueabi-gcc; the firmware repo already extracts it):
+# BR2_TOOLCHAIN_EXTERNAL_PATH="/abs/path/to/brcm-arm-hnd/crosstools-arm_softfp-gcc-10.3-linux-4.19-glibc-2.32-binutils-2.36.1"
+#
 BR2_TOOLCHAIN_EXTERNAL_CUSTOM_PREFIX="arm-buildroot-linux-gnueabi"
 BR2_TOOLCHAIN_EXTERNAL_GCC_10=y
 BR2_TOOLCHAIN_EXTERNAL_HEADERS_4_19=y
 BR2_TOOLCHAIN_EXTERNAL_CUSTOM_GLIBC=y
 BR2_TOOLCHAIN_EXTERNAL_CXX=y
+# This glibc 2.32 was built without the deprecated Sun RPC (removed from modern
+# glibc); RPC support defaults on for glibc, so disable it or the toolchain check
+# fails ("RPC support not available in C library").
+# BR2_TOOLCHAIN_EXTERNAL_INET_RPC is not set
 
-# --- Kernel (TODO) -----------------------------------------------------------
-# Broadcom 4.19 vendor kernel. Either import it as a custom source tarball
-# (gt-be98-packages) or BR2_LINUX_KERNEL_CUSTOM_TARBALL. Needs the BCM6813 dts +
-# defconfig. This is a major task.
-# BR2_LINUX_KERNEL=y
+# --- Kernel (TODO — roadmap step 2) ------------------------------------------
+# Broadcom 4.19 vendor kernel + BCM6813 dts/defconfig. Major task.
 
-# --- Bootloader + image (TODO) -----------------------------------------------
-# Reuse merlin's ATF/U-Boot + .itb/.pkgtb packaging initially via the
-# board/gt-be98/post-image.sh hook. See ARCHITECTURE.md roadmap step 2.
+# --- Bootloader + image (TODO — roadmap step 2) ------------------------------
+# Reuse merlin's ATF/U-Boot + .itb/.pkgtb packaging via board/gt-be98/post-image.sh.
 
 # --- Root filesystem ---------------------------------------------------------
 BR2_TARGET_ROOTFS_SQUASHFS=y
-# merlin ships squashfs; match its compressor once known (xz/lzma).
+# merlin ships squashfs; match its compressor (xz/lzma) once confirmed.
 
 # --- Init / base userspace ---------------------------------------------------
 BR2_INIT_BUSYBOX=y
