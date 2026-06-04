@@ -7,9 +7,18 @@ asuswrt-merlin SDK build. Read `ARCHITECTURE.md` first.
 
 **Step 1 DONE & verified** — the external toolchain builds a minimal busybox
 glibc rootfs with the exact merlin target ABI (ARMv7-A cortex-a9, EABI softfp,
-VFPv3, glibc 2.32, interp `/lib/ld-linux.so.3`). Produces
-`output/images/rootfs.squashfs`. No device integration yet (kernel/boot/image
-still TODO — the hard part).
+VFPv3, glibc 2.32, interp `/lib/ld-linux.so.3`).
+
+**Step 2a DONE (packaging pipeline)** — `make` now also produces
+`output/images/GT-BE98_nand_squashfs.pkgtb`: `board/gt-be98/post-image.sh` wraps
+Buildroot's `rootfs.squashfs` with a prebuilt bootfs `.itb` (ATF+U-Boot+aarch64
+kernel+dtbs+OP-TEE, borrowed from the sibling merlin tree) via u-boot `mkimage`,
+reproducing merlin's exact bundle FIT. Verified structurally: all metadata tokens
+present, squashfs magic once, embedded rootfs byte-identical, `dumpimage` parses.
+HONEST limits: not boot-tested on hardware; the rootfs is still busybox-only
+(userspace parity = Steps 3-4); the kernel/ATF/U-Boot are reused prebuilt, not
+yet Buildroot-built (Step 2b). Blobs currently come from the merlin tree — should
+move to gt-be98-packages Release assets.
 
 - `external.desc` (name `GT_BE98`), `external.mk`, `Config.in` — wired.
 - `configs/gt-be98_defconfig` — arch/ABI **confirmed from the real compiler**:
