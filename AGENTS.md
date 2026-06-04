@@ -29,17 +29,17 @@ move to gt-be98-packages Release assets.
 - `package/README.md` — recipe template referencing `gt-be98-packages` Releases.
 
 ### How Step 1 was built / reproduced
-- Buildroot upstream cloned at tag **2021.02.4** in `~/be98/buildroot` (matches
-  the toolchain's own Buildroot version).
+- Buildroot upstream cloned at tag **2026.02.2** (latest stable LTS) in
+  `~/be98/buildroot`. The external toolchain (gcc10.3/glibc2.32/hdr4.19) is
+  consumed as-is regardless of Buildroot version; 2026.02 still offers
+  `BR2_TOOLCHAIN_EXTERNAL_HEADERS_4_19`. The defconfig is **version-portable** —
+  it built unchanged on both 2021.02.4 and 2026.02.2.
 - Build it via a LOCAL test defconfig that appends
   `BR2_TOOLCHAIN_EXTERNAL_PATH=<firmware's extracted crosstools-arm_softfp dir>`
   (the firmware repo already extracts the toolchain), then `make defconfig && make`.
-- **Host-tool fix required** on Debian 13 (glibc 2.41/gcc 14): host-fakeroot
-  1.25.3 won't compile → bumped the clone's `package/fakeroot` to **1.31** with
-  `AUTORECONF=NO` and patches removed. This patch lives in the Buildroot clone,
-  not here (recipes-only). A 2021 Buildroot on a 2025 host may need more such
-  fixes; if they cascade, consider a modern Buildroot LTS (the external toolchain
-  + custom kernel tarball are version-independent).
+- On modern Buildroot the host tools build cleanly on Debian 13 (host-fakeroot
+  1.37 — no patch). (An older Buildroot like 2021.02 needs a fakeroot bump to
+  build on glibc 2.41; avoided by using latest stable.)
 
 ### Remaining Step-1 polish (before Step 2)
 - Repackage ONE crosstools variant into a Buildroot-download-ready single tarball
