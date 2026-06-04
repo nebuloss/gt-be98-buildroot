@@ -1,0 +1,15 @@
+config BR2_PACKAGE_GT_BE98_USERSPACE_BASE
+	bool "gt-be98-userspace-base"
+	help
+	  Core asuswrt userspace for the GT-BE98: the nvram, rc, wl, dhd and
+	  httpd binaries plus their proprietary ASUS shared-library closure
+	  (libnvram, libshared, libwlcsm, libbcm_*, etc.). Installed into
+	  /bin, /sbin, /usr/sbin, /lib, /usr/lib (merlin rootfs layout).
+
+	  These are glibc-2.32 binaries (same toolchain as the target), so
+	  they run on the Buildroot rootfs. Proprietary, non-redistributable;
+	  fetched from a gt-be98-packages Release asset.
+
+	  NOTE: this provides the binaries/libraries (component presence).
+	  Full functional bring-up (init/rc wiring, nvram defaults, web UI
+	  assets under /www) is layered separately.
