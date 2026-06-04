@@ -76,6 +76,18 @@ BR2_TARGET_ROOTFS_SQUASHFS4_XZ=y
 # --- Init / base userspace ---------------------------------------------------
 BR2_INIT_BUSYBOX=y
 
+# --- Userspace components (Step 4) -------------------------------------------
+# Generic components that the merlin artifact ships and Buildroot has upstream
+# (verify-artifact.sh checklist). The ASUS-specific ones (nvram, wl/dhd, httpd +
+# web UI, rc/init, rtecdc.bin) become gt-be98-packages recipes/blobs separately.
+BR2_PACKAGE_OPENSSL=y
+BR2_PACKAGE_CJSON=y
+BR2_PACKAGE_LIGHTTPD=y
+BR2_PACKAGE_OPENVPN=y
+BR2_PACKAGE_DROPBEAR=y
+BR2_PACKAGE_STRONGSWAN=y
+BR2_PACKAGE_STRONGSWAN_STROKE=y
+
 # --- Board hooks -------------------------------------------------------------
 BR2_ROOTFS_OVERLAY="$(BR2_EXTERNAL_GT_BE98_PATH)/board/gt-be98/rootfs_overlay"
 BR2_ROOTFS_POST_BUILD_SCRIPT="$(BR2_EXTERNAL_GT_BE98_PATH)/board/gt-be98/post-build.sh"
