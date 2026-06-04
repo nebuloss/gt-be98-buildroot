@@ -22,7 +22,8 @@ BR2_ARM_ENABLE_VFP=y
 BR2_ARM_FPU_VFPV3=y
 # merlin compiles userspace+kernel with: -mcpu=cortex-a9 -marm
 #   -march=armv7-a+mp+sec+vfpv3 -mfloat-abi=softfp -mfpu=vfpv3 -mabi=aapcs-linux
-# (aarch64 is only ~160 build invocations — minor 64-bit bits, not the target.)
+# (Userspace/rootfs is 32-bit ARM. NB the kernel itself is aarch64 — built
+# separately with the aarch64 crosstool; that's Step 2b, not this target.)
 
 # --- External toolchain (gt-be98-toolchain) ----------------------------------
 # Versions confirmed from the compiler: gcc 10.3.0, binutils 2.36.1,
@@ -32,9 +33,11 @@ BR2_TOOLCHAIN_EXTERNAL_CUSTOM=y
 #
 # Toolchain SOURCE — pick ONE (this WIP defconfig sets neither; choose locally):
 #
-#   Option A (production, once the single-variant tarball is a Release asset):
+#   Option A (production — uncomment once the tarball is uploaded as a Release
+#   asset; the download/extract path is already verified working via file://).
+#   Build the tarball with gt-be98-toolchain/scripts/make-buildroot-toolchain-tarball.sh.
 # BR2_TOOLCHAIN_EXTERNAL_DOWNLOAD=y
-# BR2_TOOLCHAIN_EXTERNAL_URL="https://github.com/nebuloss/gt-be98-toolchain/releases/download/<tag>/gt-be98-toolchain-arm-softfp-gcc10.3.tar.gz"
+# BR2_TOOLCHAIN_EXTERNAL_URL="https://github.com/nebuloss/gt-be98-toolchain/releases/download/<tag>/gt-be98-toolchain-arm_softfp-gcc10.3.tar.gz"
 #
 #   Option B (local pre-extracted tree — point at the crosstools dir whose bin/
 #   holds arm-buildroot-linux-gnueabi-gcc; the firmware repo already extracts it):
