@@ -47,6 +47,23 @@ CI), no git-history bloat. The toolchain is on LFS today as a bootstrap; migrate
 to a Release asset (`scripts/upload-release.sh`). New blobs in gt-be98-packages
 should go straight to Releases.
 
+### Why toolchain/packages are NOT git submodules
+
+They're consumed **by URL**, not as submodules, and this is deliberate:
+
+- Buildroot's external-tree model fetches the toolchain (`BR2_TOOLCHAIN_EXTERNAL_URL`)
+  and each package source (`<PKG>_SITE` + `<PKG>_HASH`) as **tarballs-by-URL with
+  hash verification** — it never builds from a submodule checkout.
+- The buildroot external tree is **recipes only / small text** (its `.gitignore`
+  blocks `*.tar*`, `*.bin`, `*.o`). Submoduling the 423M LFS toolchain and the
+  proprietary blob repo would drag hundreds of MB of binaries into every clone and
+  CI run — exactly what the repo split (and the Releases-over-LFS move) avoids.
+- `docs/device` **is** a submodule because it's the opposite case: small shared
+  **text** docs, pinned and read in-tree, identical across the family.
+
+For a one-shot dev checkout of the whole family, use a separate umbrella repo (all
+family repos as submodules) rather than submoduling into the recipe tree.
+
 ## Toolchain facts (from a full merlin build trace)
 
 Primary tuple `arm-buildroot-linux-gnueabi` — GCC 10.3, binutils 2.36.1,
