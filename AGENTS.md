@@ -3,7 +3,34 @@
 You're working in the **Buildroot external tree** that will replace the
 asuswrt-merlin SDK build. Read `ARCHITECTURE.md` first.
 
-## State (2026-06-05)
+## State (2026-06-05, night session)
+
+**M2 DONE — Buildroot pkgtb flashed; trial+rollback harness PROVEN on
+hardware.** The device's committed, running image (slot 2) is the
+Buildroot-assembled M1 pkgtb, validated by the automated gate (19/19).
+The flash safety harness (`board/gt-be98/trial/`) is live-proven:
+- trial entry via `hnd-write` (auto-commits) → `bcm_bootstate +GOOD` repair →
+  `bcm_bootstate 3` (ONCE/ACTIVATE — WORKS on this board, 2/2) → reboot;
+- Layer-B dead-man fired for real (deliberate no-disarm): re-committed the
+  good slot (also repairing ASUS init's self-commit of the trial) and
+  returned the device automatically;
+- booted-slot truth = kernel cmdline `ubi.block=0,4|6` —
+  **`/proc/bootstate/active_image` LIES**, never use it.
+Key facts + corrections in `gt-be98-docs/flash-journal.md` and
+`recovery-procedure.md` (corrections section).
+
+**M3 pipeline READY (not yet flashed):** `rootfs-transform.sh` (mutate the
+0031 rootfs blob: overlay + removal list + `/rom/etc/gt-be98-release`
+marker, merlin-exact re-squash), `rootfs-diff.sh` proof tool, in-image
+dead-man (S26 boot-rail). br-0032 built & diff-proven (3 files added, zero
+content changes); artifact at `~/be98/artifacts-br/`. Version scheme:
+`br-00NN` monotonic after merlin 0031.
+
+**Pending user actions:** upload Release assets `rootfs-0031`/`bootfs-0031`
+(tarballs + commands in `gt-be98-docs/buildroot-m1-hybrid-image.md`); until
+then pre-seed `$BR2_DL_DIR` (already done locally).
+
+## Previous state (2026-06-05)
 
 **M1 DONE — first Buildroot-assembled hybrid .pkgtb.** `gt-be98_full_defconfig`
 builds end-to-end on a CLEAN buildroot 2026.02.2 clone: toolchain + blobs fetched
