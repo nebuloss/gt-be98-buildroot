@@ -17,7 +17,7 @@
 #
 # Trial outcomes:
 #   PASS: disarm within the window (touch /tmp/deadman-disarm), gate-check.sh,
-#         then rm /jffs/.trial-armed. The trial slot is already committed
+#         then rm /data/.trial-armed. The trial slot is already committed
 #         (init self-commit) = the new good; old good stays valid as fallback.
 #   FAIL (SSH up):   bcm_bootstate +G; reboot; then NEUTRALIZE: re-run this
 #                    script with the GOOD image (overwrites the trial slot),
@@ -65,7 +65,7 @@ RR=$($SSH 'cat /proc/bootstate/reset_reason')
 echo "$STATE" | grep -q 'valid 1,2' || die "preflight: both slots must be valid, got: $(echo "$STATE" | grep -om1 'valid [0-9,]*')"
 [ "$ACTIVE" = "$COMMITTED" ] || die "preflight: booted($ACTIVE) != committed($COMMITTED) - unfinished trial? clean up first"
 [ "$RR" = "34" ] || die "preflight: reset_reason=$RR (expected 34/steadystate) - ONCE already armed?"
-$SSH 'test -f /jffs/.trial-armed' && die "preflight: /jffs/.trial-armed exists - previous trial not cleaned up"
+$SSH 'test -f /data/.trial-armed' && die "preflight: /data/.trial-armed exists - previous trial not cleaned up"
 GOOD=$ACTIVE
 TRIAL=$((3 - GOOD))
 info "preflight OK: good slot=$GOOD (booted+committed), trial slot=$TRIAL, both valid"
@@ -90,8 +90,8 @@ $SSH 'cat > /jffs/scripts/trial-deadman && chmod +x /jffs/scripts/trial-deadman'
 $SSH 'touch /jffs/scripts/services-start; chmod +x /jffs/scripts/services-start;
       grep -q trial-deadman /jffs/scripts/services-start ||
       echo "/bin/sh /jffs/scripts/trial-deadman &  # flash-trial harness (slot-aware, inert when not armed)" >> /jffs/scripts/services-start'
-$SSH "printf 'TRIAL_SLOT=%s\nGOOD_SLOT=%s\nWINDOW=%s\nSHA=%s\n' $TRIAL $GOOD $WINDOW $SHA > /jffs/.trial-armed; sync"
-$SSH 'cat /jffs/.trial-armed' | grep -q "TRIAL_SLOT=$TRIAL" || die "arming flag verify failed"
+$SSH "printf 'TRIAL_SLOT=%s\nGOOD_SLOT=%s\nWINDOW=%s\nSHA=%s\n' $TRIAL $GOOD $WINDOW $SHA > /data/.trial-armed; sync"
+$SSH 'cat /data/.trial-armed' | grep -q "TRIAL_SLOT=$TRIAL" || die "arming flag verify failed"
 info "dead-man armed: trial=$TRIAL good=$GOOD (flag persists until operator cleanup)"
 
 # ---- flash inactive slot (hnd-write auto-commits it) ---------------------------
@@ -123,7 +123,7 @@ if [ $DO_REBOOT = 0 ]; then
     cat <<EOF
 == READY. Not rebooting (run with --reboot, or manually: ssh -p $PORT $DEV reboot)
 == To ABORT the trial instead:
-==   $SSH 'echo steadystate > /proc/bootstate/reset_reason; rm -f /jffs/.trial-armed'
+==   $SSH 'echo steadystate > /proc/bootstate/reset_reason; rm -f /data/.trial-armed'
 ==   then neutralize: re-run this script with the good image to overwrite slot $TRIAL.
 EOF
     exit 0
@@ -142,11 +142,11 @@ while [ "$(date +%s)" -lt $DEADLINE ]; do
 == TRIAL SLOT IS UP. Dead-man fires at services-start+${WINDOW}s unless disarmed:
 ==   $SSH 'touch /tmp/deadman-disarm'
 == then run gate-check.sh; on PASS finish with:
-==   $SSH 'rm -f /jffs/.trial-armed'   (trial slot stays committed via init self-commit)
+==   $SSH 'rm -f /data/.trial-armed'   (trial slot stays committed via init self-commit)
 EOF
         else
             echo "== device is on the GOOD slot - trial failed or rolled back; see /jffs/trial-deadman.log"
-            echo "== neutralize before anything else: re-flash slot $TRIAL with the good image, then rm /jffs/.trial-armed"
+            echo "== neutralize before anything else: re-flash slot $TRIAL with the good image, then rm /data/.trial-armed"
         fi
         exit 0
     }

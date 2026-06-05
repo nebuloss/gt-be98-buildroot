@@ -3,21 +3,21 @@
 # Runs ON THE DEVICE, started from /jffs/scripts/services-start (bootstrap)
 # or an in-image early-init hook (Buildroot-mutated images, M3+).
 #
-# IMPORTANT BOARD FACTS (live-verified 2026-06-05, see flash-journal.md):
-#  - BOOT_SET_*_ONCE / ACTIVATE one-shot boot is DEAD CODE on this SMC-boot
-#    BCM6813: the armed register does not survive reboot. There is NO one-shot
-#    trial mechanism. The bootloader always boots the COMMITTED slot.
-#  - Flashing (hnd-write) auto-commits the freshly written slot.
-#  - ASUS init re-commits the HIGHER-SEQ slot on every boot where the booted
-#    slot differs from its "reboot policy" (sync_boot_state, init.c:27102).
-#    A trial slot is always the higher-seq one, so every good-slot boot
-#    re-flips the commit to the trial slot.
+# BOARD FACTS (live-verified 2026-06-05/06, see flash-journal.md):
+#  - ONCE/ACTIVATE one-shot trial WORKS (bcm_bootstate 3); it is consumed at
+#    the trial boot, so any later reset returns to the COMMITTED slot.
+#  - hnd-write auto-commits the slot it writes; ASUS init self-commits a
+#    booted trial slot late in boot (sync_boot_state, init.c:27102) — this
+#    dead-man repairs the commit at fire time.
+#  - The armed flag lives on **/data** (mounted by the boot rail at
+#    S25mount-fs, BEFORE rc) — never on /jffs, which rc mounts much later;
+#    the br-0033 incident proved a pre-/jffs hang leaves a /jffs-based
+#    dead-man blind.
 #
-# Therefore this dead-man IS the rollback mechanism, and the armed flag is
-# NEVER consumed by failure paths — it protects across repeated power-cycles
-# until the OPERATOR ends the trial:
+# Flag lifecycle — NEVER consumed by failure paths; it protects across
+# repeated power-cycles until the OPERATOR ends the trial:
 #   - trial PASSED: touch /tmp/deadman-disarm during the window, run the gate,
-#     then rm /jffs/.trial-armed (trial slot stays committed = new good).
+#     then rm /data/.trial-armed (trial slot stays committed = new good).
 #   - trial FAILED: after auto-return to the good slot, re-flash the good
 #     image over the trial slot (hnd-write auto-commits it), then rm the flag.
 #
@@ -29,8 +29,8 @@
 #
 # Must stay /bin/sh (busybox ash) + statically-available tools only.
 
-FLAG=/jffs/.trial-armed
-LOG=/jffs/trial-deadman.log
+FLAG=/data/.trial-armed
+LOG=/data/trial-deadman.log
 DISARM=/tmp/deadman-disarm
 
 log() { echo "$(date '+%Y-%m-%d %H:%M:%S') deadman: $*" >> $LOG; }
