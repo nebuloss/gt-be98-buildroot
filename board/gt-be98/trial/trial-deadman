@@ -1,0 +1,73 @@
+#!/bin/sh
+# GT-BE98 trial-boot dead-man (Layer B of the flash safety harness).
+# Runs ON THE DEVICE, started from /jffs/scripts/services-start (bootstrap)
+# or an in-image early-init hook (Buildroot-mutated images, M3+).
+#
+# Contract:
+#  - Armed per-trial by /jffs/.trial-armed containing:
+#        TRIAL_SLOT=<1|2> GOOD_SLOT=<1|2> WINDOW=<seconds> SHA=<sha256>
+#  - Slot-aware: only fires when the running slot IS the trial slot.
+#  - Disarm: touch /tmp/deadman-disarm (operator over SSH, within WINDOW).
+#  - Fire action: re-commit the GOOD slot (bcm_bootstate +G — repairs the
+#    sync_boot_state self-commit of the trial slot, init.c:27102) THEN reboot.
+#    Falls back to sysrq-b if the clean reboot hangs; the HW watchdog is the
+#    final layer (commit is already repaired by then).
+#  - Self-clearing: the armed flag never survives the first boot that sees it.
+#
+# Must stay /bin/sh (busybox ash) + statically-available tools only.
+
+FLAG=/jffs/.trial-armed
+LOG=/jffs/trial-deadman.log
+DISARM=/tmp/deadman-disarm
+
+log() { echo "$(date '+%Y-%m-%d %H:%M:%S') deadman: $*" >> $LOG; }
+
+[ -f $FLAG ] || exit 0
+
+# shellcheck disable=SC1090
+. $FLAG   # TRIAL_SLOT, GOOD_SLOT, WINDOW, SHA
+
+ACTIVE=$(cat /proc/bootstate/active_image 2>/dev/null)
+
+case "$TRIAL_SLOT$GOOD_SLOT" in 12|21) ;; *)
+    log "BAD FLAG (TRIAL_SLOT=$TRIAL_SLOT GOOD_SLOT=$GOOD_SLOT) - clearing"
+    mv $FLAG $FLAG.bad 2>/dev/null
+    exit 1
+esac
+
+if [ "$ACTIVE" != "$TRIAL_SLOT" ]; then
+    # We are on the good slot: either the trial rolled back (Layer A/B did its
+    # job) or this is a stale flag. Clear it, keep evidence.
+    log "on slot $ACTIVE != trial $TRIAL_SLOT (rollback or stale flag) - clearing"
+    mv $FLAG $FLAG.rolledback 2>/dev/null
+    exit 0
+fi
+
+WINDOW=${WINDOW:-300}
+log "ARMED on trial slot $TRIAL_SLOT (good=$GOOD_SLOT window=${WINDOW}s sha=$SHA)"
+
+T=0
+while [ $T -lt "$WINDOW" ]; do
+    if [ -f $DISARM ]; then
+        log "DISARMED at T+${T}s - trial continues under operator control"
+        mv $FLAG $FLAG.disarmed 2>/dev/null
+        exit 0
+    fi
+    sleep 5
+    T=$((T+5))
+done
+
+log "WINDOW EXPIRED - repairing commit to slot $GOOD_SLOT and rebooting"
+bcm_bootstate +$GOOD_SLOT >> $LOG 2>&1
+# verify the repair took; retry once
+if ! bcm_bootstate 2>/dev/null | grep -q "committed $GOOD_SLOT"; then
+    log "repair verify FAILED - retrying"
+    bcm_bootstate +$GOOD_SLOT >> $LOG 2>&1
+fi
+mv $FLAG $FLAG.fired 2>/dev/null
+sync
+log "rebooting now"
+reboot
+sleep 45
+# clean reboot hung - force it
+echo b > /proc/sysrq-trigger
