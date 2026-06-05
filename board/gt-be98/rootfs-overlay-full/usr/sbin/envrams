@@ -1,0 +1,11 @@
+#!/bin/sh
+# GT-BE98 fork: envrams (remote NVRAM service, TCP 5152) gated, default off.
+# Mirrors merlin patch 0032 (rootfs wrapper at the real start site - httpd's
+# prebuilt web_hook.o calls system("/usr/sbin/envrams"), outside rc, so the
+# 0026 rc gate alone cannot stop it). Real daemon kept as envrams.real.
+# Enable with: nvram set envrams_enable=1 (bootloader mfg mode bypasses).
+[ -n "$(/bin/pidof envrams.real 2>/dev/null)" ] && exit 0
+[ "$(/bin/nvram get envrams_enable 2>/dev/null)" = "1" ] && exec /usr/sbin/envrams.real "$@"
+[ -e /proc/environment/mfg_nvram_mode ] && exec /usr/sbin/envrams.real "$@"
+[ -e /proc/brcm/blxparms/mfg_nvram_mode ] && exec /usr/sbin/envrams.real "$@"
+exit 0

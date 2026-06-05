@@ -19,12 +19,14 @@ The flash safety harness (`board/gt-be98/trial/`) is live-proven:
 Key facts + corrections in `gt-be98-docs/flash-journal.md` and
 `recovery-procedure.md` (corrections section).
 
-**M3 pipeline READY (not yet flashed):** `rootfs-transform.sh` (mutate the
-0031 rootfs blob: overlay + removal list + `/rom/etc/gt-be98-release`
-marker, merlin-exact re-squash), `rootfs-diff.sh` proof tool, in-image
-dead-man (S26 boot-rail). br-0032 built & diff-proven (3 files added, zero
-content changes); artifact at `~/be98/artifacts-br/`. Version scheme:
-`br-00NN` monotonic after merlin 0031.
+**M3 DONE — mutation pipeline proven on hardware.** The device now runs
+**br-0032** (committed, slot 1; gate 20/20 incl. identity marker): 0031
+rootfs + `/rom/etc/gt-be98-release` + in-image dead-man (S26 boot-rail —
+took the instance lock on the trial boot, armed, disarmed on command).
+Pipeline: `rootfs-transform.sh` (rename list → removal list → overlay →
+marker → merlin-exact re-squash; all typo-guarded), `rootfs-diff.sh` proof
+(br-0032: 3 ADDED, zero content changes). Version scheme `br-00NN`,
+monotonic after merlin 0031. Fallback: slot 2 = M1 (gate-validated).
 
 **Pending user actions:** upload Release assets `rootfs-0031`/`bootfs-0031`
 (tarballs + commands in `gt-be98-docs/buildroot-m1-hybrid-image.md`); until

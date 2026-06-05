@@ -62,6 +62,23 @@ if [ -f "$RMLIST" ]; then
     done < "$WORK/rm.list"
 fi
 
+# 1b. rename list (e.g. daemon -> daemon.real for wrapper gating). Format:
+#     "src dst" per line, paths absolute-in-rootfs. Both checked.
+MVLIST="$BOARD/rootfs-rename.list"
+if [ -f "$MVLIST" ]; then
+    grep -v '^\s*#' "$MVLIST" | grep -v '^\s*$' > "$WORK/mv.list" || true
+    while read -r src dst; do
+        s="$ROOT/${src#/}"; d="$ROOT/${dst#/}"
+        if [ -e "$s" ] || [ -L "$s" ]; then
+            mv "$s" "$d"
+            echo "rootfs-transform: renamed $src -> $dst"
+        else
+            echo "rootfs-transform: FATAL - rename source not in rootfs: $src"
+            exit 1
+        fi
+    done < "$WORK/mv.list"
+fi
+
 # 2. overlay
 OVL="$BOARD/rootfs-overlay-full"
 if [ -d "$OVL" ] && [ -n "$(find "$OVL" -type f -o -type l 2>/dev/null | head -1)" ]; then

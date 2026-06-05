@@ -1,0 +1,3 @@
+# moves applied before the overlay (see rootfs-transform.sh)
+# envrams wrapper-gated (mirror of merlin patch 0032): real daemon kept
+/usr/sbin/envrams /usr/sbin/envrams.real
