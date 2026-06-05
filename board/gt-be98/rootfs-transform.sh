@@ -69,20 +69,25 @@ if [ -d "$OVL" ] && [ -n "$(find "$OVL" -type f -o -type l 2>/dev/null | head -1
     echo "rootfs-transform: overlay applied ($(find "$OVL" -type f | wc -l) files)"
 fi
 
-# 3. release marker (image identity for the validation gate)
+# 3. release marker (image identity for the validation gate).
+#    NB /etc in this rootfs is a symlink to tmpfs (tmp/etc) - the marker must
+#    live under the real /rom/etc.
 GITSHA=$(git -C "$EXT" rev-parse --short=12 HEAD 2>/dev/null || echo unknown)
 DIRTY=$(git -C "$EXT" diff --quiet 2>/dev/null || echo "-dirty")
-REL="${GT_BE98_RELEASE:-dev-$GITSHA}"
+# version scheme: br-00NN, monotonic after merlin patch numbering (0031 was
+# the last merlin-built release; the first Buildroot mutation is br-0032).
+# Canonical value lives in board/gt-be98/RELEASE; override via GT_BE98_RELEASE.
+REL="${GT_BE98_RELEASE:-$(cat "$BOARD/RELEASE" 2>/dev/null || echo dev)+g$GITSHA}"
 BLOBV=$(sed -n 's/^GT_BE98_ROOTFS_VERSION = //p' "$EXT/package/gt-be98-rootfs/gt-be98-rootfs.mk")
 BOOTV=$(sed -n 's/^GT_BE98_BOOTFS_VERSION = //p' "$EXT/package/gt-be98-bootfs/gt-be98-bootfs.mk")
-cat > "$ROOT/etc/gt-be98-release" <<EOF
+cat > "$ROOT/rom/etc/gt-be98-release" <<EOF
 release=$REL
 buildroot_tree=$GITSHA$DIRTY
 rootfs_blob=$BLOBV
 bootfs_blob=$BOOTV
 build_date=$(date -u '+%Y-%m-%dT%H:%M:%SZ')
 EOF
-echo "rootfs-transform: /etc/gt-be98-release -> release=$REL tree=$GITSHA$DIRTY blobs=$BLOBV/$BOOTV"
+echo "rootfs-transform: /rom/etc/gt-be98-release -> release=$REL tree=$GITSHA$DIRTY blobs=$BLOBV/$BOOTV"
 
 # 4. re-squash with merlin's exact options (squashfs 4.0, xz, 128K, all-root)
 OUT="$BINARIES_DIR/rootfs.squashfs"

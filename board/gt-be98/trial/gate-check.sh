@@ -31,7 +31,7 @@ if [ -n "$ACTIVE" ]; then ok "SSH answers on :$PORT, booted slot=$ACTIVE"; else 
 [ -n "$EXPECT_SLOT" ] && { [ "$ACTIVE" = "$EXPECT_SLOT" ] && ok "active slot == expected ($EXPECT_SLOT)" || bad "active slot $ACTIVE != expected $EXPECT_SLOT"; }
 
 # 2. Image identity (release marker, present from M3 onward)
-REL=$($SSH 'cat /etc/gt-be98-release 2>/dev/null')
+REL=$($SSH 'cat /rom/etc/gt-be98-release 2>/dev/null')
 if [ -n "$REL" ]; then
     echo "--- /etc/gt-be98-release:"; echo "$REL" | sed 's/^/    /'
     [ -n "$EXPECT_SHA" ] && { echo "$REL" | grep -q "$EXPECT_SHA" && ok "release marker matches flashed sha" || bad "release marker does not contain $EXPECT_SHA"; }
