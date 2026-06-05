@@ -1,3 +1,4 @@
 # sha256 of the gt-be98-packages Release asset, from scripts/package-blob.sh
-# (reproducible tar: --sort=name --mtime=@0 + gzip -n).
-sha256  1eea37fc583729ee7d0f33ac9d831f257029bda418b011801152464f411555a7  gt-be98-rootfs-1.0.tar.gz
+# (reproducible tar: --sort=name --mtime=@0 + gzip -n). Contents extracted from
+# the validated 0031 pkgtb (scripts/extract-pkgtb.sh).
+sha256  26fa4540015346484e89d355a4fa608dce05b5085a657cf55d4c7dfab4754d5b  gt-be98-rootfs-0031.tar.gz

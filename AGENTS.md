@@ -3,7 +3,21 @@
 You're working in the **Buildroot external tree** that will replace the
 asuswrt-merlin SDK build. Read `ARCHITECTURE.md` first.
 
-## State (2026-06-04)
+## State (2026-06-05)
+
+**M1 DONE — first Buildroot-assembled hybrid .pkgtb.** `gt-be98_full_defconfig`
+builds end-to-end on a CLEAN buildroot 2026.02.2 clone: toolchain + blobs fetched
+by URL+hash, `output/images/GT-BE98_nand_squashfs.pkgtb` whose embedded bootfs
+and rootfs are BYTE-IDENTICAL to the validated 0031 artifact (the image running
+on the device, pkgtb sha256 a7dcd0c1…fa01). Blob versions bumped 1.0 → **0031**:
+the 1.0 blobs were packaged from a drifted vendor tree (different uboot+kernel
+hashes!); 0031 blobs are extracted from the validated pkgtb itself via
+`gt-be98-packages/scripts/extract-pkgtb.sh`. NOT flashed; Release assets
+rootfs-0031/bootfs-0031 must be uploaded by the user (no gh CLI on this host —
+tarballs staged in `gt-be98-packages/output/`). See
+`gt-be98-docs/buildroot-m1-hybrid-image.md`.
+
+## Previous state (2026-06-04)
 
 **Step 1 DONE & verified** — the external toolchain builds a minimal busybox
 glibc rootfs with the exact merlin target ABI (ARMv7-A cortex-a9, EABI softfp,
