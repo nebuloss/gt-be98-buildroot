@@ -3,16 +3,29 @@
 # Runs ON THE DEVICE, started from /jffs/scripts/services-start (bootstrap)
 # or an in-image early-init hook (Buildroot-mutated images, M3+).
 #
-# Contract:
-#  - Armed per-trial by /jffs/.trial-armed containing:
-#        TRIAL_SLOT=<1|2> GOOD_SLOT=<1|2> WINDOW=<seconds> SHA=<sha256>
-#  - Slot-aware: only fires when the running slot IS the trial slot.
-#  - Disarm: touch /tmp/deadman-disarm (operator over SSH, within WINDOW).
-#  - Fire action: re-commit the GOOD slot (bcm_bootstate +G — repairs the
-#    sync_boot_state self-commit of the trial slot, init.c:27102) THEN reboot.
-#    Falls back to sysrq-b if the clean reboot hangs; the HW watchdog is the
-#    final layer (commit is already repaired by then).
-#  - Self-clearing: the armed flag never survives the first boot that sees it.
+# IMPORTANT BOARD FACTS (live-verified 2026-06-05, see flash-journal.md):
+#  - BOOT_SET_*_ONCE / ACTIVATE one-shot boot is DEAD CODE on this SMC-boot
+#    BCM6813: the armed register does not survive reboot. There is NO one-shot
+#    trial mechanism. The bootloader always boots the COMMITTED slot.
+#  - Flashing (hnd-write) auto-commits the freshly written slot.
+#  - ASUS init re-commits the HIGHER-SEQ slot on every boot where the booted
+#    slot differs from its "reboot policy" (sync_boot_state, init.c:27102).
+#    A trial slot is always the higher-seq one, so every good-slot boot
+#    re-flips the commit to the trial slot.
+#
+# Therefore this dead-man IS the rollback mechanism, and the armed flag is
+# NEVER consumed by failure paths — it protects across repeated power-cycles
+# until the OPERATOR ends the trial:
+#   - trial PASSED: touch /tmp/deadman-disarm during the window, run the gate,
+#     then rm /jffs/.trial-armed (trial slot stays committed = new good).
+#   - trial FAILED: after auto-return to the good slot, re-flash the good
+#     image over the trial slot (hnd-write auto-commits it), then rm the flag.
+#
+# Branches:
+#   on trial slot: wait WINDOW for /tmp/deadman-disarm, else commit good slot
+#                  + reboot (flag KEPT — protects the next power-cycle too).
+#   on good slot:  sleep until after sync_boot_state has run, then repair the
+#                  commit back to the good slot (flag KEPT; operator cleans up).
 #
 # Must stay /bin/sh (busybox ash) + statically-available tools only.
 
@@ -27,20 +40,41 @@ log() { echo "$(date '+%Y-%m-%d %H:%M:%S') deadman: $*" >> $LOG; }
 # shellcheck disable=SC1090
 . $FLAG   # TRIAL_SLOT, GOOD_SLOT, WINDOW, SHA
 
-ACTIVE=$(cat /proc/bootstate/active_image 2>/dev/null)
+# booted slot from the kernel cmdline (ubi.block=0,4 -> rootfs1/slot 1,
+# ubi.block=0,6 -> rootfs2/slot 2). /proc/bootstate/active_image LIES on this
+# board (live-verified 2026-06-05: read 1 while running rootfs2) - never use it.
+case "$(cat /proc/cmdline 2>/dev/null)" in
+    *ubi.block=0,4*) ACTIVE=1 ;;
+    *ubi.block=0,6*) ACTIVE=2 ;;
+    *) ACTIVE= ;;
+esac
 
 case "$TRIAL_SLOT$GOOD_SLOT" in 12|21) ;; *)
-    log "BAD FLAG (TRIAL_SLOT=$TRIAL_SLOT GOOD_SLOT=$GOOD_SLOT) - clearing"
+    log "BAD FLAG (TRIAL_SLOT=$TRIAL_SLOT GOOD_SLOT=$GOOD_SLOT) - quarantining"
     mv $FLAG $FLAG.bad 2>/dev/null
     exit 1
 esac
 
-if [ "$ACTIVE" != "$TRIAL_SLOT" ]; then
-    # We are on the good slot: either the trial rolled back (Layer A/B did its
-    # job) or this is a stale flag. Clear it, keep evidence.
-    log "on slot $ACTIVE != trial $TRIAL_SLOT (rollback or stale flag) - clearing"
-    mv $FLAG $FLAG.rolledback 2>/dev/null
+if [ "$ACTIVE" = "$GOOD_SLOT" ]; then
+    # Good-slot boot during an unfinished trial. init's sync_boot_state will
+    # re-commit the higher-seq trial slot late in boot — wait it out, then
+    # repair. Flag stays: only the operator ends a trial.
+    log "good-slot boot ($ACTIVE) with trial $TRIAL_SLOT still armed - will repair commit in 180s"
+    sleep 180
+    bcm_bootstate +$GOOD_SLOT >> $LOG 2>&1
+    if bcm_bootstate 2>/dev/null | grep -q "committed $GOOD_SLOT"; then
+        log "commit repaired to good slot $GOOD_SLOT (flag kept until operator cleanup)"
+    else
+        log "REPAIR FAILED - retrying once"
+        bcm_bootstate +$GOOD_SLOT >> $LOG 2>&1
+    fi
     exit 0
+fi
+
+if [ "$ACTIVE" != "$TRIAL_SLOT" ]; then
+    log "active=$ACTIVE matches neither flag slot (trial=$TRIAL_SLOT good=$GOOD_SLOT) - quarantining"
+    mv $FLAG $FLAG.bad 2>/dev/null
+    exit 1
 fi
 
 WINDOW=${WINDOW:-300}
@@ -50,24 +84,23 @@ T=0
 while [ $T -lt "$WINDOW" ]; do
     if [ -f $DISARM ]; then
         log "DISARMED at T+${T}s - trial continues under operator control"
-        mv $FLAG $FLAG.disarmed 2>/dev/null
+        # flag stays until the operator's commit decision (rm by hand/gate)
         exit 0
     fi
     sleep 5
     T=$((T+5))
 done
 
-log "WINDOW EXPIRED - repairing commit to slot $GOOD_SLOT and rebooting"
+log "WINDOW EXPIRED - committing good slot $GOOD_SLOT and rebooting (flag kept)"
+echo "FIRED=$(date '+%s') slot=$ACTIVE" >> $FLAG.history 2>/dev/null
 bcm_bootstate +$GOOD_SLOT >> $LOG 2>&1
-# verify the repair took; retry once
 if ! bcm_bootstate 2>/dev/null | grep -q "committed $GOOD_SLOT"; then
-    log "repair verify FAILED - retrying"
+    log "commit verify FAILED - retrying"
     bcm_bootstate +$GOOD_SLOT >> $LOG 2>&1
 fi
-mv $FLAG $FLAG.fired 2>/dev/null
 sync
 log "rebooting now"
 reboot
 sleep 45
-# clean reboot hung - force it
+# clean reboot hung - force it (sysrq enabled on this image, verified)
 echo b > /proc/sysrq-trigger

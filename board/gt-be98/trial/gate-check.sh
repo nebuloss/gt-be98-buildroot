@@ -25,9 +25,9 @@ bad()  { echo "FAIL: $*"; FAIL=$((FAIL+1)); }
 
 echo "=== GT-BE98 validation gate $(date '+%F %T') ==="
 
-# 1. SSH + slot identity
-ACTIVE=$($SSH 'cat /proc/bootstate/active_image' 2>/dev/null)
-if [ -n "$ACTIVE" ]; then ok "SSH answers on :$PORT, active_image=$ACTIVE"; else bad "SSH unreachable"; echo "=== ABORT ==="; exit 1; fi
+# 1. SSH + slot identity (booted slot from cmdline - /proc/bootstate/active_image lies)
+ACTIVE=$($SSH 'case "$(cat /proc/cmdline)" in *ubi.block=0,4*) echo 1;; *ubi.block=0,6*) echo 2;; esac' 2>/dev/null)
+if [ -n "$ACTIVE" ]; then ok "SSH answers on :$PORT, booted slot=$ACTIVE"; else bad "SSH unreachable or slot undetectable"; echo "=== ABORT ==="; exit 1; fi
 [ -n "$EXPECT_SLOT" ] && { [ "$ACTIVE" = "$EXPECT_SLOT" ] && ok "active slot == expected ($EXPECT_SLOT)" || bad "active slot $ACTIVE != expected $EXPECT_SLOT"; }
 
 # 2. Image identity (release marker, present from M3 onward)
@@ -53,10 +53,13 @@ done
 NHAPD=$($SSH 'ps w | grep -c "[h]ostapd"')
 [ "$NHAPD" -ge 4 ] && ok "$NHAPD hostapd instances running" || bad "only $NHAPD hostapd instances"
 
-# 5. Network basics
+# 5. Network basics. NB dnsmasq does NOT run on this AP (verified absent in
+# the pre-flash 0031 baseline ps - AP mode, no DHCP served); don't require it.
 $SSH 'ip addr show br0 | grep -q "inet "' && ok "br0 has an IP" || bad "br0 has no IP"
-$SSH 'ps w | grep -q "[d]nsmasq"' && ok "dnsmasq running" || bad "dnsmasq not running"
 $SSH 'mount | grep -q "jffs.*rw"' && ok "jffs mounted rw" || bad "jffs not rw"
+for d in eapd wlceventd mcpd watchdog; do
+    $SSH "pidof $d >/dev/null" && ok "$d running" || bad "$d not running"
+done
 
 # 6. Crash health
 BFC=$($SSH 'cat /proc/bootstate/boot_failed_count')
@@ -67,9 +70,12 @@ OOPS=$($SSH 'dmesg | grep -ciE "oops|panic|BUG:|segfault"' )
 # 7. Daemon stability soak (3 min): key daemon pids must not change
 if [ $QUICK = 0 ]; then
     echo "--- 3-minute daemon stability soak..."
-    SNAP1=$($SSH 'for d in dropbear dnsmasq eapd wlceventd mcpd; do pidof $d | tr " " "\n" | sort | head -3 | tr "\n" ","; echo " $d"; done')
+    # dropbear: master listener pid only (session children incl. our own come
+    # and go); others: full pidof
+    SOAK='echo "dropbear-master $(cat /var/run/dropbear.pid 2>/dev/null)"; for d in eapd wlceventd mcpd watchdog; do echo "$d $(pidof $d | tr " " "\n" | sort -n | tr "\n" ",")"; done'
+    SNAP1=$($SSH "$SOAK")
     sleep 180
-    SNAP2=$($SSH 'for d in dropbear dnsmasq eapd wlceventd mcpd; do pidof $d | tr " " "\n" | sort | head -3 | tr "\n" ","; echo " $d"; done')
+    SNAP2=$($SSH "$SOAK")
     if [ "$SNAP1" = "$SNAP2" ]; then ok "daemon pids stable over 3 min"; else bad "daemon pids changed:"; diff <(echo "$SNAP1") <(echo "$SNAP2") | sed 's/^/    /'; fi
 fi
 
