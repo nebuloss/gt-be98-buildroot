@@ -1,0 +1,40 @@
+# M4 batch 1 (br-0033) — stock ASUS service strip, lowest blast radius.
+# Sources of truth: gt-be98-docs/plans/stock-services-disposition.md (verdicts,
+# static starter+respawner analysis, live kill-tests [V] 2026-06-05) and a live
+# not-running check on br-0032 (2026-06-06 00:57). All starters are nvram-gated
+# at source by patches 0024-0030 compiled into the 0031 rootfs blob, so a
+# deleted binary has no live exec path and no respawn spam. NO shared libs in
+# this batch (rc/httpd may link them - lib pruning is a later batch).
+# Deliberately KEPT: wanduck (RUNNING on br-0032 - its gate never landed in
+# 0031; needs a wrapper batch), usbmuxd (running), amas_ipc/amas_lib (roles
+# unverified), all libs, httpd/webUI (last, after webui-go validation).
+
+# telemetry / cloud / phone-home (patches 0024, 0027)
+/usr/sbin/infosvr
+/usr/sbin/awsiot
+/usr/sbin/mastiff
+/usr/sbin/networkmap
+/usr/networkmap
+/usr/bin/asd
+
+# discovery / misc dead weight
+/usr/sbin/wsdd2
+/usr/sbin/uamsrv
+
+# AiMesh / cfg ecosystem (patches 0027, 0028, 0029)
+/usr/sbin/cfg_server
+/usr/sbin/wlc_nt
+/usr/sbin/lldpd
+/sbin/amas_lanctrl
+/sbin/amas_portstatus
+/sbin/amas_ssd_cd
+/sbin/conn_diag
+/sbin/amas_bhctrl
+/sbin/amas_ssd
+/sbin/amas_status
+/sbin/amas_misc
+/sbin/amas_wlcconnect
+
+# band-steer / roaming (patch 0030; both already off in stock)
+/usr/sbin/bsd
+/sbin/roamast
