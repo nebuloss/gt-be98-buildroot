@@ -1,0 +1,15 @@
+config BR2_PACKAGE_GT_BE98_BR_OPENSSH
+	bool "gt-be98-br-openssh"
+	select BR2_PACKAGE_ZLIB
+	help
+	  OpenSSH 10.2p1 built from the hash-verified upstream tarball
+	  for the /usr/br island, providing sftp-server (+ the scp/sftp/
+	  ssh/ssh-keygen tools). openssl 3.6.2 (our gt-be98-br-openssl
+	  /usr/br build) is linked STATICALLY (the device ships only
+	  openssl 1.1 - a dynamic link would be an ABI mismatch); glibc
+	  and zlib are dynamic against the device's own libs. Harvested
+	  into the ASUS rootfs at /usr/br/libexec/sftp-server and
+	  /usr/br/bin/{scp,sftp,ssh,ssh-keygen} by
+	  board/gt-be98/rootfs-transform.sh. The S28 br-dropbear server
+	  advertises the sftp subsystem pointing at this sftp-server, so
+	  modern scp/sftp work against port 2223.

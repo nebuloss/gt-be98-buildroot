@@ -136,6 +136,23 @@ OSSL=$(find "$BUILD_DIR" -maxdepth 3 -type f -name 'openssl' -path '*gt-be98-br-
 [ -n "$OSSL" ] || { echo "rootfs-transform: FATAL - br-openssl apps/openssl not found (enable BR2_PACKAGE_GT_BE98_BR_OPENSSL)"; exit 1; }
 install -m 0755 "$OSSL" "$BRDST/bin/openssl"
 
+# openssh (M5, br-0046): sftp-server is what makes modern scp/sftp work against
+# the from-source dropbear (:2223), which has no server-side sftp/scp of its own
+# and execs SFTPSERVER_PATH=/usr/br/libexec/sftp-server. The scp/sftp/ssh/
+# ssh-keygen clients are harvested alongside. Unlike the other three, these are
+# dynamically linked (glibc + zlib from the device; openssl 3.6.2 is static in
+# them) - see the dynamic-linkage guard below.
+OSSH_DIR=$(find "$BUILD_DIR" -maxdepth 1 -type d -name 'gt-be98-br-openssh-*' | head -1)
+[ -n "$OSSH_DIR" ] || { echo "rootfs-transform: FATAL - br-openssh build dir not found (enable BR2_PACKAGE_GT_BE98_BR_OPENSSH)"; exit 1; }
+mkdir -p "$BRDST/libexec"
+chmod 0775 "$BRDST/libexec"
+[ -f "$OSSH_DIR/sftp-server" ] || { echo "rootfs-transform: FATAL - br-openssh sftp-server not built"; exit 1; }
+install -m 0755 "$OSSH_DIR/sftp-server" "$BRDST/libexec/sftp-server"
+for c in scp sftp ssh ssh-keygen; do
+    [ -f "$OSSH_DIR/$c" ] || { echo "rootfs-transform: FATAL - br-openssh $c not built"; exit 1; }
+    install -m 0755 "$OSSH_DIR/$c" "$BRDST/bin/$c"
+done
+
 # applet-parity guard: the produced symlink set must match the pinned
 # manifest EXACTLY (any busybox config drift fails the build).
 ( cd "$BRDST" && find bin sbin -type l | sort ) > "$WORK/bb.links"
@@ -145,7 +162,8 @@ if ! cmp -s "$WORK/bb.links" "$BOARD/br-busybox.links"; then
     exit 1
 fi
 
-# static-linkage guard: none of the three may have PT_INTERP or DT_NEEDED.
+# static-linkage guard: the three island core binaries must be fully static
+# (no PT_INTERP, no DT_NEEDED).
 if command -v readelf >/dev/null 2>&1; then
     for b in "$BRDST/bin/busybox" "$BRDST/sbin/dropbearmulti" "$BRDST/bin/openssl"; do
         if readelf -l "$b" 2>/dev/null | grep -q 'INTERP' || \
@@ -154,8 +172,35 @@ if command -v readelf >/dev/null 2>&1; then
             exit 1
         fi
     done
+
+    # dynamic-linkage guard for the openssh binaries: these are NOT static (they
+    # link openssl 3.6.2 statically but glibc + zlib dynamically). Verify each is
+    # an ELF with the device's 32-bit interpreter /lib/ld-linux.so.3 and that
+    # EVERY DT_NEEDED soname is satisfiable from the ASUS rootfs (/lib or
+    # /usr/lib) - so they will actually run on the device. Crucially NONE may
+    # need libcrypto/libssl: that would mean openssl leaked to dynamic and would
+    # clash with the device's openssl 1.1.
+    for b in "$BRDST/libexec/sftp-server" "$BRDST/bin/scp" "$BRDST/bin/sftp" \
+             "$BRDST/bin/ssh" "$BRDST/bin/ssh-keygen"; do
+        interp=$(readelf -l "$b" 2>/dev/null | sed -n 's/.*program interpreter: \(.*\)\]/\1/p')
+        if [ "$interp" != "/lib/ld-linux.so.3" ]; then
+            echo "rootfs-transform: FATAL - $b interpreter '$interp' != /lib/ld-linux.so.3"
+            exit 1
+        fi
+        for so in $(readelf -d "$b" 2>/dev/null | sed -n 's/.*(NEEDED).*\[\(.*\)\]/\1/p'); do
+            case "$so" in
+                libcrypto*|libssl*)
+                    echo "rootfs-transform: FATAL - $b dynamically needs $so (openssl must be STATIC; device has only openssl 1.1)"
+                    exit 1 ;;
+            esac
+            if [ ! -e "$ROOT/lib/$so" ] && [ ! -e "$ROOT/usr/lib/$so" ]; then
+                echo "rootfs-transform: FATAL - $b needs $so, absent from rootfs /lib and /usr/lib"
+                exit 1
+            fi
+        done
+    done
 fi
-echo "rootfs-transform: /usr/br harvest OK (busybox $(stat -c%s "$BRDST/bin/busybox")B + $(wc -l < "$WORK/bb.links") links, dropbearmulti $(stat -c%s "$BRDST/sbin/dropbearmulti")B, openssl $(stat -c%s "$BRDST/bin/openssl")B)"
+echo "rootfs-transform: /usr/br harvest OK (busybox $(stat -c%s "$BRDST/bin/busybox")B + $(wc -l < "$WORK/bb.links") links, dropbearmulti $(stat -c%s "$BRDST/sbin/dropbearmulti")B, openssl $(stat -c%s "$BRDST/bin/openssl")B, sftp-server $(stat -c%s "$BRDST/libexec/sftp-server")B + scp/sftp/ssh/ssh-keygen)"
 
 # 3. release marker (image identity for the validation gate).
 #    NB /etc in this rootfs is a symlink to tmpfs (tmp/etc) - the marker must

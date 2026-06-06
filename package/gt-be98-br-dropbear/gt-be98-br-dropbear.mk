@@ -15,6 +15,13 @@
 # -lcrypt would break the -static link (the manual br-0041 build linked against
 # the firmware sysroot, which has libcrypt.a).
 #
+# SFTP (br-0048): localoptions.h sets DROPBEAR_SFTPSERVER + repoints
+# SFTPSERVER_PATH from the upstream default /usr/libexec/sftp-server to
+# /usr/br/libexec/sftp-server (the OpenSSH sftp-server harvested by
+# gt-be98-br-openssh). dropbear bundles no sftp-server of its own; with this
+# the :2223 server advertises the sftp subsystem, so modern OpenSSH scp/sftp
+# (which speak the sftp protocol) work against it.
+#
 # Used by the S28 br-dropbear rail on port 2223. Harvested into the ASUS
 # rootfs at /usr/br/sbin/dropbearmulti by rootfs-transform.sh (no command
 # symlinks - the rail invokes "dropbearmulti <cmd>" directly, matching the
@@ -32,6 +39,8 @@ GT_BE98_BR_DROPBEAR_PROGRAMS = dropbear dbclient dropbearkey scp
 
 define GT_BE98_BR_DROPBEAR_CONFIGURE_CMDS
 	printf '#define DROPBEAR_SVR_PASSWORD_AUTH 0\n' > $(@D)/localoptions.h
+	printf '#define DROPBEAR_SFTPSERVER 1\n' >> $(@D)/localoptions.h
+	printf '#define SFTPSERVER_PATH "/usr/br/libexec/sftp-server"\n' >> $(@D)/localoptions.h
 	cd $(@D) && $(TARGET_CONFIGURE_OPTS) ac_cv_lib_crypt_crypt=no ./configure \
 		--host=$(GNU_TARGET_NAME) \
 		--prefix=/usr/br \

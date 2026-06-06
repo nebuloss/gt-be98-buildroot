@@ -34,6 +34,13 @@ endef
 define GT_BE98_BR_OPENSSL_BUILD_CMDS
 	$(TARGET_MAKE_ENV) $(MAKE) -C $(@D) build_sw
 	$(TARGET_CROSS)strip $(@D)/apps/openssl
+	# Stage the static dev tree (headers + libcrypto.a/libssl.a, no .so since
+	# no-shared) into $(@D)/_brdev/usr/br so gt-be98-br-openssh can link the
+	# /usr/br openssl 3.6.2 statically (the device only ships openssl 1.1 -
+	# a dynamic link would be an ABI mismatch). DOES NOT touch apps/openssl,
+	# so the harvested CLI stays byte-identical to br-0044.
+	rm -rf $(@D)/_brdev
+	$(TARGET_MAKE_ENV) $(MAKE) -C $(@D) DESTDIR=$(@D)/_brdev install_dev
 endef
 
 # no target-install: harvested by board/gt-be98/rootfs-transform.sh

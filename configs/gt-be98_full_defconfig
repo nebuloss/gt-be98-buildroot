@@ -62,6 +62,7 @@ BR2_PACKAGE_GT_BE98_BOOTFS=y
 BR2_PACKAGE_GT_BE98_BR_BUSYBOX=y
 BR2_PACKAGE_GT_BE98_BR_DROPBEAR=y
 BR2_PACKAGE_GT_BE98_BR_OPENSSL=y
+BR2_PACKAGE_GT_BE98_BR_OPENSSH=y
 
 # --- Board hooks -------------------------------------------------------------
 # Buildroot builds a throwaway minimal rootfs; post-image-full.sh then replaces
