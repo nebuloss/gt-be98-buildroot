@@ -40,9 +40,18 @@ story: `gt-be98-docs/flash-journal.md`. Slot 2 was neutralized with the
 br-0032 artifact; all trial flags cleared; final metadata
 booted=1=committed, valid 1,2.
 
-**br-0040 IS NOW THE COMMITTED BASELINE — M4 STRIP COMPLETE**
-(2026-06-06 13:21: slot 2, gate 20/20 + slice gate; slot 1 = br-0039
-fallback; artifact `730badb6…474b` archived; ONCE 10/10 lifetime).
+**br-0041 IS NOW THE COMMITTED BASELINE — M4 COMPLETE + M5 candidate 1**
+(2026-06-06 13:42: slot 1, gate 20/20 + M5 gate; slot 2 = br-0040
+fallback; artifact `7119b3a7…9ba6` archived; ONCE 11/11 lifetime).
+M5 candidate 1 = dropbear 2025.89 static at `/usr/br/sbin/dropbearmulti`
+(key-auth only), rail `S28br-dropbear`, parallel listener :2223, hostkey
+on /data/br/dropbear; stock :2222 untouched. **NB the M5 prefix is
+`/usr/br`, NOT /opt/br — /opt is a tmpfs symlink (opt -> tmp/opt) in this
+rootfs.** Promotion to primary deferred until multi-day soak. Next M5:
+busybox, openssl + dependents, lighttpd/webui-go (one trial each).
+
+Superseded baseline: **br-0040 — M4 STRIP COMPLETE**
+(2026-06-06 13:21: gate 20/20 + slice gate; artifact `730badb6…474b`).
 Cumulative strip (six slices br-0035..br-0040, each its own trial, all
 gates green): infosvr awsiot mastiff asd wsdd2 | networkmap
 (+/usr/networkmap) uamsrv | cfg_server wlc_nt lldpd | amas_lanctrl
