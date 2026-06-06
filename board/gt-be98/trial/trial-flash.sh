@@ -31,7 +31,7 @@
 # Usage: trial-flash.sh [--reboot] [--window N] <image.pkgtb>
 set -u
 
-DEV="admin@10.0.0.8"; PORT=2222
+DEV="${GT_BE98_DEV:-admin@10.0.0.8}"; PORT="${GT_BE98_PORT:-2222}"
 SSH="ssh -p $PORT -o ConnectTimeout=10 $DEV"
 # booted slot via kernel cmdline - the ONLY reliable source (see header)
 BOOTED_SLOT_CMD='case "$(cat /proc/cmdline)" in *ubi.block=0,4*) echo 1;; *ubi.block=0,6*) echo 2;; *) echo "";; esac'

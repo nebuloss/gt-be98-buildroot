@@ -28,27 +28,32 @@ marker → merlin-exact re-squash; all typo-guarded), `rootfs-diff.sh` proof
 (br-0032: 3 ADDED, zero content changes). Version scheme `br-00NN`,
 monotonic after merlin 0031. Fallback: slot 2 = M1 (gate-validated).
 
-**M4 batch 1 INCIDENT (2026-06-06 01:07, unresolved at write time):** the
-br-0033 trial (22 service removals + envrams wrapper) hung pre-network on
-its ONCE boot; the device went dark (no SSH/ping; the /jffs-based dead-man
-flag was unreadable because rc hung before mounting /jffs). Safety state is
-sound: committed=1 = br-0032 (validated), ONCE consumed ⇒ **any power-cycle
-boots the good slot**. Static analysis found no early-boot path among the
-removals; root cause unknown — that's why harness v2 (committed) moves the
-flag to /data (rail-mounted at S25) and adds an S27 breadcrumb logger.
-**Recovery runbook on device return (slot 1):** re-flash slot 2 with the
-archived br-0032 artifact (`~/be98/artifacts-br/…br-0032…`, sha 6c3b8918…)
-to neutralize; `bcm_bootstate +1`; rm /jffs/.trial-armed and /data flags;
-gate --quick; journal. Next baseline candidate: **br-0034** (harness v2
-only, archived, sha d1b40b0f…) via a normal trial. M4 removals return in
-≤5-file slices on top of br-0034 so breadcrumbs can pinpoint any hang.
-M4 inputs staged in `board/gt-be98/m4-staging/`.
+**M4 batch 1 (br-0033) trial FAILED and was auto-rolled-back by the
+dead-man — the harness's first real save.** The 22-removal image booted
+slowly with broken LAN; the dead-man armed at services-start, fired at
++300s, repaired the commit and rebooted; the device has run br-0032
+healthily since (gate 20/20 re-run post-recovery). The hours of apparent
+"darkness" were a management-path artifact: the AP took a new DHCP lease
+(**10.0.0.95**, was 10.0.0.8) and the inter-VLAN firewall only allowed the
+old address (this build host probes from VLAN 50, routed). Full corrected
+story: `gt-be98-docs/flash-journal.md`. Slot 2 was neutralized with the
+br-0032 artifact; all trial flags cleared; final metadata
+booted=1=committed, valid 1,2.
 
-**Pending user actions:** upload Release assets `rootfs-0031`/`bootfs-0031`
-(tarballs + commands in `gt-be98-docs/buildroot-m1-hybrid-image.md`); until
-then pre-seed `$BR2_DL_DIR` (already done locally). If the device stays
-dark: a power-cycle of the AP recovers it onto the validated br-0032
-(committed slot 1) — no other physical action needed.
+**M4 resumes in ≤5-file slices** on a br-0034 baseline (harness v2:
+dead-man flag on /data + S27 breadcrumb logger → forensics for any future
+slow/broken boot). br-0033's exact culprit is unknown; bisect via slices.
+Inputs staged in `board/gt-be98/m4-staging/`; artifacts in
+`~/be98/artifacts-br/` (br-0032 6c3b8918…, br-0033 8f0b70a1… quarantined,
+br-0034 d1b40b0f…). Harness scripts honor `GT_BE98_DEV`/`GT_BE98_PORT`
+(device currently at admin@10.0.0.95:2222).
+
+**Pending user actions:** (1) upload Release assets
+`rootfs-0031`/`bootfs-0031` (tarballs + commands in
+`gt-be98-docs/buildroot-m1-hybrid-image.md`); until then pre-seed
+`$BR2_DL_DIR` (already done locally). (2) Decide the AP's management
+address: restore the 10.0.0.8 DHCP reservation or adopt 10.0.0.95 (and
+keep the new firewall rule either way).
 
 ## Previous state (2026-06-05)
 

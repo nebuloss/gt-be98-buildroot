@@ -7,7 +7,7 @@
 #   --quick skips the 3-minute daemon-stability soak.
 set -u
 
-DEV="admin@10.0.0.8"; PORT=2222
+DEV="${GT_BE98_DEV:-admin@10.0.0.8}"; PORT="${GT_BE98_PORT:-2222}"
 SSH="ssh -p $PORT -o ConnectTimeout=10 $DEV"
 EXPECT_SLOT=""; EXPECT_SHA=""; QUICK=0
 while [ $# -gt 0 ]; do
