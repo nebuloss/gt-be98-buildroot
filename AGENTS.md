@@ -40,13 +40,18 @@ story: `gt-be98-docs/flash-journal.md`. Slot 2 was neutralized with the
 br-0032 artifact; all trial flags cleared; final metadata
 booted=1=committed, valid 1,2.
 
-**M4 resumes in ≤5-file slices** on a br-0034 baseline (harness v2:
-dead-man flag on /data + S27 breadcrumb logger → forensics for any future
-slow/broken boot). br-0033's exact culprit is unknown; bisect via slices.
-Inputs staged in `board/gt-be98/m4-staging/`; artifacts in
-`~/be98/artifacts-br/` (br-0032 6c3b8918…, br-0033 8f0b70a1… quarantined,
-br-0034 d1b40b0f…). Harness scripts honor `GT_BE98_DEV`/`GT_BE98_PORT`
-(device currently at admin@10.0.0.95:2222).
+**br-0034 IS NOW THE COMMITTED BASELINE** (2026-06-06: slot 2, gate 20/20;
+v2 dead-man verified running from the /data flag; S27 breadcrumb logger
+verified from uptime 9 s; slot 1 = br-0032 fallback). br-0033's collateral
+MAC poisoning (BSP default written to nvram) was repaired from the baseline
+backup — the **envrams wrapper is BANNED** (see `m4-staging/README.md`);
+envrams retirement stays kill+firewall-based.
+**M4 resumes in ≤5-file slices** on this baseline; bisect br-0033's
+culprit with breadcrumb forensics. Inputs staged in
+`board/gt-be98/m4-staging/`; artifacts in `~/be98/artifacts-br/`
+(br-0032 6c3b8918…, br-0033 8f0b70a1… quarantined, br-0034 d1b40b0f…).
+Harness scripts honor `GT_BE98_DEV`/`GT_BE98_PORT`; device back at
+admin@10.0.0.8:2222 (factory MAC restored → old DHCP reservation).
 
 **Pending user actions:** (1) upload Release assets
 `rootfs-0031`/`bootfs-0031` (tarballs + commands in
