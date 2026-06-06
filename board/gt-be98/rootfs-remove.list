@@ -1,11 +1,19 @@
-# M4 slice 1 (br-0035) — telemetry/cloud/phone-home + wsdd2. ≤5 removals,
-# one trial per slice (post-br-0033 rule, m4-staging/README.md). Source:
-# m4-staging/rootfs-remove.list (batch-1 inputs); starters nvram-gated by
-# patches 0024/0027 in the 0031 blob; live not-running check 2026-06-06.
-# Also bisects br-0033: if this slice trips the slow-boot/broken-LAN failure,
-# the culprit is in this group.
+# M4 cumulative removal list. The transform unpacks the pristine 0031 blob
+# every build, so this list MUST accumulate across slices — a slice-only list
+# silently re-adds earlier removals (caught by rootfs-diff on the first
+# br-0036 build, 2026-06-06). One NEW slice (≤5 removals) per trial.
+
+# --- slice 1 (br-0035, ADOPTED 2026-06-06, gate 20/20) ---
+# telemetry/cloud/phone-home + wsdd2
 /usr/sbin/infosvr
 /usr/sbin/awsiot
 /usr/sbin/mastiff
 /usr/bin/asd
 /usr/sbin/wsdd2
+
+# --- slice 2 (br-0036, this trial) ---
+# networkmap LAN scanner (+ its data dir) and uamsrv (captive-portal
+# lighttpd symlink). Live pre-check 2026-06-06: neither running.
+/usr/sbin/networkmap
+/usr/networkmap
+/usr/sbin/uamsrv
