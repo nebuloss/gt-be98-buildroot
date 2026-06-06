@@ -3,6 +3,48 @@
 You're working in the **Buildroot external tree** that will replace the
 asuswrt-merlin SDK build. Read `ARCHITECTURE.md` first.
 
+## State (2026-06-06, br-0044 — /usr/br built FROM SOURCE)
+
+**br-0044 = the /usr/br island rebuilt from upstream source, no longer
+prebuilt blobs in the git overlay.** The three `gt-be98-br-{busybox,dropbear,
+openssl}` packages cross-build (external gcc-10.3 toolchain) from
+hash-verified upstream tarballs:
+- busybox 1.37.0 (pinned `package/gt-be98-br-busybox/busybox.config`:
+  static + INSTALL_NO_USR + SHA1/SHA256_HWACCEL off + TC off);
+- dropbear 2025.89 dropbearmulti (server + dbclient/ssh + dropbearkey/
+  ssh-keygen + scp, key-only, bundled libtom, zlib off). **Build fix:
+  `ac_cv_lib_crypt_crypt=no` forces @CRYPTLIB@ empty — the Buildroot-staged
+  external sysroot has only libcrypt.so (no .a) so a stray `-lcrypt` breaks
+  the `-static` link; crypt() is unreferenced anyway (no password auth);**
+- openssl 3.6.2 CLI (linux-armv4, no-shared -static, OPENSSLDIR
+  `/usr/br/etc/ssl`).
+`rootfs-transform.sh` step 2b harvests the binaries + regenerated applet
+symlinks into `/usr/br/{bin,sbin}` (parity guard vs `br-busybox.links`,
+fully-static readelf guard, and `chmod 0775` on bin/sbin to match the
+baseline dir modes). The ~400 prebuilt binaries + applet symlinks were
+DELETED from `rootfs-overlay-full/usr/br/` (git overlay keeps only
+openssl.cnf + ssl dirs + init.d rails).
+
+**Build + diff-proof GREEN.** `make BR2_EXTERNAL=… gt-be98_full_defconfig &&
+make` produces `output/images/GT-BE98_nand_squashfs.pkgtb` (77M, sha256
+`89b716fe…f66d`); harvest guards all pass. `rootfs-diff.sh` vs the br-0043
+baseline (`~/be98/artifacts-br/rootfs-ref/rootfs-br0043.squashfs`): 3213
+files both sides, the ONLY deltas are the release stamp + the 3 rebuilt
+binaries (content; dropbearmulti also size 935632→976588B) — zero other
+path/mode deltas. Functional parity (qemu-arm): busybox v1.37.0 402 applets/
+401 symlinks (only `linuxrc` un-symlinked, by design), dropbearmulti
+v2025.89 (4 components), openssl 3.6.2 OPENSSLDIR=/usr/br/etc/ssl; all three
+fully static. Artifact archived `~/be98/artifacts-br/GT-BE98_br-0044_…pkgtb`.
+
+**TRIAL DEFERRED — 2026-06-06 budget spent (15 flashes today, MAX-1/day
+rule).** br-0044 is **trial-ready, flash deferred to the next budget day.**
+Functionally equivalent to the committed br-0043 baseline (same versions/
+components), so the trial is expected nominal; still owes one hardware
+trial cycle before it becomes the committed baseline. NOT flashed.
+`board/gt-be98/phase3/` (graft-manifest generator) is unrelated WIP — left
+untracked. `docs/device` submodule shows untracked content — left for the
+operator.
+
 ## State (2026-06-05, night session)
 
 **M2 DONE — Buildroot pkgtb flashed; trial+rollback harness PROVEN on
