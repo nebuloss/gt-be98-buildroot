@@ -3,7 +3,74 @@
 You're working in the **Buildroot external tree** that will replace the
 asuswrt-merlin SDK build. Read `ARCHITECTURE.md` first.
 
-## State (2026-06-06 NIGHT — br-0046 webui-go TRIALED, **FAILED on guest-net regression; baseline STAYS br-0045**)
+## State (2026-06-06 NIGHT-2 — br-0046 OpenSSH/scp/sftp TRIALED + PASSED, **NEW COMMITTED BASELINE**)
+
+**COMMITTED BASELINE = br-0046** (slot 2; committed=2 valid 1,2 seq 35,36,
+booted slot 2, reset_reason 34). Slot 1 = br-0045, still valid as the fallback
+baseline. The agent nvram key (`guillaume@dev-build` in `sshd_authkeys`)
+persisted across the whole cycle.
+
+> **Numbering note:** the number `br-0046` was *briefly* squatted by the
+> webui-go candidate that was TRIALED + REJECTED earlier tonight (guest-net
+> regression — see the entry below; never committed, never a baseline). That
+> rejection freed the number, so this **OpenSSH** slice — a completely
+> different, safe, self-contained image — reuses `br-0046` and *is* the
+> committed baseline. The webui branch `br-0046-webui` (`90cd55a`) is dead;
+> ignore it.
+
+- **What br-0046 is:** the OpenSSH slice (orig br-0048 on
+  `worktree-agent-a1fa28cb3cfc39a5a`, commit ba73316, built off the OLD br-0045
+  commit b4c9417) rebased CLEAN onto current master HEAD as commit **`258bd50`
+  (now master)**. The code files the slice touches (rootfs-transform.sh,
+  dropbear/openssl `.mk`, Config.in, full_defconfig) were byte-identical
+  between the openssh base and master, so the graft was conflict-free and
+  cumulative — the br-0045 syslog substitution + busybox syslog patch are
+  preserved. Adds package `gt-be98-br-openssh` (OpenSSH 10.2p1; openssl 3.6.2
+  linked STATIC from gt-be98-br-openssl's new `_brdev` install_dev tree;
+  glibc + zlib dynamic against the device's own libs). Harvests
+  `/usr/br/libexec/sftp-server` + `/usr/br/bin/{scp,sftp,ssh,ssh-keygen}`, and
+  rebuilds br-dropbear with the SFTP subsystem
+  (`SFTPSERVER_PATH=/usr/br/libexec/sftp-server` via localoptions.h) so the
+  S28 :2223 dropbear gains scp/sftp. **Unlike the webui binary, OpenSSH
+  sftp-server/scp touch NO wifi or shared system state — safe, self-contained.**
+- **Build + diff-proof GREEN.** `make` → 83M pkgtb (sha256 `38d6bb28…d6d`,
+  artifact `~/be98/artifacts-br/GT-BE98_br-0046_nand_squashfs.pkgtb`, which
+  OVERWRITES the dead webui br-0046 artifact). Clean openssl rebuild perturbed
+  only the 5-byte compile-date string in `/usr/br/bin/openssl`; restored the
+  br-0045 openssl binary into `apps/openssl` + re-ran the image step, so it is
+  byte-identical to br-0045 again. `rootfs-diff` vs the br-0045 artifact:
+  content deltas EXACTLY = release stamp (CHANGED), `/usr/br/sbin/dropbearmulti`
+  (CHANGED — now sftp-aware, 976588B), and the 5 OpenSSH binaries (ADDED:
+  `/usr/br/libexec/sftp-server` + `/usr/br/bin/{scp,sftp,ssh,ssh-keygen}`).
+  busybox + openssl byte-identical to br-0045. Both harvest guards passed
+  (static guard on busybox/dropbear/openssl; dynamic-linkage guard on the 5
+  openssh binaries: interp `/lib/ld-linux.so.3`, no libcrypto/libssl in
+  DT_NEEDED, all NEEDED sonames satisfiable from /lib+/usr/lib).
+- **TRIAL on hardware: flashed slot 2, dead-man armed (TRIAL=2 GOOD=1
+  win 600s, sha 38d6bb28), ONCE/reboot, SSH answered on slot 2, DISARMED at
+  T+10s.** ASUS init self-committed slot 2. **Gate 20/20 PASS** (identity
+  `br-0046+g258bd506576a`, 4 radios, 3 named nets Ramondia/Pagoa/DEV-SCEP,
+  11 hostapd, all daemons, dmesg clean, 3-min soak stable). **No guest-net
+  regression** (OpenSSH leaves wifi untouched — the webui defect does not recur).
+- **SCP + SFTP LIVE-VALIDATED over :2223 (the point of the slice):**
+  - `scp -P 2223 <file> admin@10.0.0.8:/jffs/…` → exit 0, file landed,
+    remote sha == local sha (byte-identical). `scp -v` showed
+    `Sending subsystem: sftp` against `dropbear_2025.89` — modern scp speaks
+    the sftp protocol and dropbear advertised + accepted the subsystem (the
+    OpenSSH sftp-server was exec'd).
+  - `sftp -P 2223 -b` batch put/ls/get → exit 0; put landed (sha match),
+    `ls -l` served correct listings, `get` round-tripped byte-identical.
+  - Both confirmed working; test files cleaned up afterward.
+- **PASS path executed:** removed `/data/.trial-armed`; trial slot stays
+  committed (init self-commit) = new good. Final: committed=2 booted=2 valid
+  1,2 RR=34. **br-0046 = new committed baseline.**
+- **UNBLOCKS flash-free beta pushes:** scp/sftp now usable to drop files on the
+  device without a flash, e.g. `scp -P 2223 webui.next admin@<ip>:/jffs/webui/`.
+  This is the transport the webui-go beta workflow needs — once webui-go gains
+  its `-no-apply`/`-test` mode (so a 2nd instance stops mutating shared wifi
+  state), the beta-aware S29 rail + scp push give a flash-free beta loop.
+
+## State (2026-06-06 NIGHT — br-0046 webui-go TRIALED, **FAILED on guest-net regression; baseline STAYS br-0045**) [SUPERSEDED — that br-0046 number was reassigned to the OpenSSH slice above]
 
 **COMMITTED BASELINE = br-0045** (slot 1; committed=1 valid 1,2; both slots now
 hold br-0045 after the failed-trial neutralize). **br-0046 = webui-go parallel
