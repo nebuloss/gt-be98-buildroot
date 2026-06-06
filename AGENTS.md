@@ -3,7 +3,54 @@
 You're working in the **Buildroot external tree** that will replace the
 asuswrt-merlin SDK build. Read `ARCHITECTURE.md` first.
 
-## State (2026-06-06 NIGHT-3 — webui-go `-no-apply` DONE + live-proven; br-0047 in-image webui **NAND-BLOCKED**, baseline STAYS br-0046)
+## State (2026-06-06 NIGHT-4 — br-0047 monitor-retire BUILT + diff-proven; **TRIAL PENDING**, baseline STAYS br-0046)
+
+**COMMITTED BASELINE = br-0046** (unchanged). br-0047 is the Phase-2 rc-drain
+**monitor-retire #1** slice (plan-phase2-rc-drain.md P2-2): an OFFLINE
+build+diff-prove only — NO flash/reboot/device this session.
+
+> **Numbering note:** the number br-0047 was previously squatted by the in-image
+> webui slice that proved **NAND-BLOCKED** (branch `slice/br-0047-webui-nand-blocked`,
+> never on master, never a baseline — see the NIGHT-3 entry below). A blocked
+> non-baseline slice frees its number (same rule as the br-0046 webui→OpenSSH
+> reuse), so this monitor-retire slice — a pure removal slice that SHRINKS the
+> rootfs — takes br-0047. The dead webui artifact was preserved as
+> `~/be98/artifacts-br/GT-BE98_br-0047-webui-nandblocked_nand_squashfs.pkgtb`.
+
+- **What br-0047 is:** removes 4 stock monitor daemons (cumulative slice 7 in
+  `rootfs-remove.list`), all with **RETIRE** verdicts + "none found" respawn in
+  plan-phase2-rc-drain.md §1.1 (safe Pattern-B file removal, no watchdog
+  respawn-fail loop):
+  - `/sbin/netool` — `/sbin/rc` MULTICALL SYMLINK (verified `-> rc` in 0031);
+  - `/sbin/rtkmonitor` — `/sbin/rc` MULTICALL SYMLINK;
+  - `/usr/sbin/sysstate` — real binary (42864 B in 0031);
+  - `/usr/sbin/wlc_monitor` — real binary (9780 B in 0031).
+  Deleting the two symlinks removes only those rc entry-points; the `/sbin/rc`
+  binary is untouched (same as slices 4-6). **All 4 candidates INCLUDED, none
+  excluded** — each had a clean RETIRE verdict and exact-path match in the 0031
+  blob.
+- **Build + diff-proof GREEN.** `make` → 80M pkgtb (sha256 `cd3e7f1e…`, artifact
+  `~/be98/artifacts-br/GT-BE98_br-0047_nand_squashfs.pkgtb`, 83301064 B). The
+  transform removed all 26 cumulative paths (typo-guard passed — every listed
+  path existed in the blob), harvest/parity/static guards all green. `rootfs-diff`
+  vs the br-0046 artifact: 3216 vs 3218 files; content deltas EXACTLY = release
+  stamp (CHANGED) + `usr/sbin/sysstate` + `usr/sbin/wlc_monitor` (REMOVED files)
+  + `sbin/netool` + `sbin/rtkmonitor` (REMOVED symlinks, listing-only). Parent-dir
+  + strongswan.d entries are benign directory-metadata size wobbles (zero content
+  delta). The /usr/br island (busybox/dropbearmulti/openssl + 5 openssh binaries)
+  is BYTE-IDENTICAL to br-0046 (absent from the diff).
+- **Space freed:** rootfs 69,988,352 → 69,971,968 B = **16,384 B (one 128K
+  squashfs block)** recovered. Modest (the binaries are small + xz-compressed),
+  but the image shrinks. br-0047 rootfs headroom under the slot-2 ceiling
+  (71,106,560 B) = **1,134,592 B (~1.1 MB)**.
+- **TRIAL PENDING (owed before this becomes a baseline):** flash slot 2 / GOOD =
+  slot 1 (br-0045) per the standard dead-man pattern; gate 20/20 + the
+  **wlc_monitor kill-test caveat** — wlc_monitor is wifi-ADJACENT by name (plan
+  flags LOW-MED risk); on the trial, confirm 4 radios isup + bridges intact after
+  removal. If wlc_monitor degrades wifi it moves to KEEP and the slice re-ships 3
+  paths. NEVER run `service restart_*` mid-trial (evicts the injected SSH key).
+
+
 
 **COMMITTED BASELINE = br-0046** (unchanged; slot 2 committed, slot 1 = br-0045
 fallback, device healthy). The webui-go regression-fix slice was completed and
