@@ -63,3 +63,19 @@
 /sbin/rtkmonitor
 /usr/sbin/sysstate
 /usr/sbin/wlc_monitor
+
+# --- slice 8 (br-0048) — wanduck + USB crew retire (Phase-2 P2-3) ---
+# All three carry RETIRE verdicts in docs/device/plans/plan-phase2-rc-drain.md
+# §1.1. wanduck is an rc symlink whose starter AND watchdog respawn are BOTH
+# gated by no_need_to_start_wanduck() -> the committed stock gate
+# `wanduck_down=1` (set in device nvram before this flash) blocks both
+# [V-src: services.c:14130+14166, watchdog.c:11637]. disk_monitor (rc symlink)
+# and usbmuxd (real bin, 73536 B in 0031) have NO watchdog respawner (only an
+# event-driven notify_rc restart verb for diskmon) -> safe Pattern-B removal,
+# no respawn-fail loop. Live kill-tests on the br-0047 baseline (2026-06-06,
+# wanduck_down=1 committed): wanduck killed -> no respawn over 2 watchdog
+# periods, :18017 closed; disk_monitor killed -> no respawn; usbmuxd already
+# absent. This is the LAST pure-removal Pattern-B slice in Phase 2.
+/sbin/wanduck
+/sbin/disk_monitor
+/usr/bin/usbmuxd
