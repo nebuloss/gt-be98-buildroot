@@ -3,6 +3,64 @@
 You're working in the **Buildroot external tree** that will replace the
 asuswrt-merlin SDK build. Read `ARCHITECTURE.md` first.
 
+## State (2026-06-06 NIGHT-5 — br-0047 monitor-retire TRIALED + PASSED → NEW COMMITTED BASELINE (slot 2; slot 1 = br-0045 fallback))
+
+**COMMITTED BASELINE = br-0047** (slot 2; **committed 2 valid 1,2 seq 35,36,
+Booted Second, reset_reason 34, boot_failed_count 0**). Slot 1 = br-0045, still
+valid as the fallback baseline. The agent nvram key (`guillaume@dev-build` in
+`sshd_authkeys`) persisted across the whole cycle; NO `service restart_*` run.
+
+- **What br-0047 is:** the Phase-2 rc-drain **monitor-retire #1** slice — removes
+  4 stock monitor daemons, everything else byte-identical to br-0046:
+  `/sbin/netool` + `/sbin/rtkmonitor` (rc MULTICALL symlinks), `/usr/sbin/sysstate`
+  + `/usr/sbin/wlc_monitor` (real bins). Artifact
+  `~/be98/artifacts-br/GT-BE98_br-0047_nand_squashfs.pkgtb`, sha256
+  `cd3e7f1edd8f1876b7384107b9edb6c411dbae83fceba43196302092544dbf16` (83301064 B).
+  Release marker `br-0047+g506ef6f96b74`.
+
+- **Slot-1-hop was REQUIRED first.** The device was running **slot 2** (br-0046)
+  at trial start, so slot 2 was not flashable. A prior agent hopped it to **slot 1
+  (br-0045)** (committed 1 valid 1,2 seq 35,36) so slot 2 became the idle/flashable
+  trial slot. Standard slot-2-trial / GOOD=slot-1 pattern then applied.
+
+- **TRIAL on hardware — PASS.** `trial-flash.sh --window 600` from slot 1:
+  pre-check good=1 booted=1 committed=1 valid 1,2 RR 34; dead-man armed
+  (TRIAL_SLOT=2 GOOD_SLOT=1 WINDOW=600 SHA=cd3e7f1e…, exact parser format,
+  read-back verified) → hnd-write slot 2 (exit 99, auto-commit 2) → commit
+  repaired to slot 1 → ONCE (`bcm_bootstate 3`, RR→1) → plain `reboot`. SSH
+  answered on slot 2 at **+107s**; **DISARMED at T+5s** (deadman log). ASUS init
+  self-committed slot 2.
+
+- **Gate 19/19 PASS** (slot==2, identity `br-0047+g506ef6f96b74`, 4 radios up,
+  Ramondia/Pagoa/DEV-SCEP present, 11 hostapd, br0 IP, jffs rw,
+  eapd/wlceventd/mcpd/watchdog up, boot_failed_count=0, dmesg clean, 3-min
+  daemon-pid soak stable). Identical to the br-0046 baseline (19/0).
+
+- **WIFI SLICE CHECK — IDENTICAL to pre-trial br-0046 baseline (the decisive
+  proof, esp. the wlc_monitor caveat):** wl0-3 isup all =1; `brctl show`
+  br0/br20/br30/br50/br70 memberships byte-identical; **11 hostapd** (4 stock
+  `/tmp/wlX_hapd.conf` + 7 webui `/tmp/webui-hapd/*`), same BSS set; all 7 named
+  BSSes **state=ENABLED** — Ramondia (wl0.1/wl1.1/wl3.2), DEV-SCEP
+  (wl0.2/wl1.2/wl3.5), Pagoa (wl3.3); 4 stock primaries ENABLED. The 4 monitor
+  binaries + processes **ABSENT** (intended). **10-min syslog+breadcrumb soak:
+  syslog grew 1 line, ZERO matches for netool/rtkmonitor/sysstate/wlc_monitor /
+  respawn / watchdog-restart** (the `blog_get_dstentry_by_id … match fails`
+  breadcrumb lines are benign Broadcom fcache/blog flow-accel noise, present on
+  the baseline board, unrelated to the removed daemons). Radios + 7 BSSes
+  re-verified once more after the soak — still all up/ENABLED.
+  **wlc_monitor removal did NOT degrade wifi — it stays RETIRED (no need to move
+  to KEEP).**
+
+- **ACCEPTED.** `rm /data/.trial-armed` (init had already self-committed slot 2);
+  no trial flag remains. Pre/post wifi captures saved under
+  `~/.claude/jobs/178892d1/tmp/br0047-{pretrial,posttrial}-wifi.txt` + gate logs.
+
+- **Submodule note:** `docs/device` is pinned at an old commit in the parent and
+  the live flash-journal lives in the **standalone `gt-be98-docs` repo** (same
+  remote, `main`); the journal entry was committed there (precedent = the
+  br-0046 d9c8abe commit). The parent's `docs/device` submodule pointer was left
+  dirty/untouched on purpose — do NOT commit the parent submodule pointer.
+
 ## State (2026-06-06 NIGHT-4 — br-0047 monitor-retire BUILT + diff-proven; **TRIAL PENDING**, baseline STAYS br-0046)
 
 **COMMITTED BASELINE = br-0046** (unchanged). br-0047 is the Phase-2 rc-drain
