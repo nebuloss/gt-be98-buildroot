@@ -3,7 +3,51 @@
 You're working in the **Buildroot external tree** that will replace the
 asuswrt-merlin SDK build. Read `ARCHITECTURE.md` first.
 
-## State (2026-06-06 PM — TRIALS: br-0044 PASSED+COMMITTED; br-0045 INCONCLUSIVE, NOT accepted)
+## State (2026-06-06 EVE — br-0045 RE-TRIALED, PASSED, **COMMITTED BASELINE**)
+
+**COMMITTED BASELINE = br-0045** (slot 1; committed=1 valid 1,2 seq 35,34,
+booted slot 1, reset_reason 34). The syslog-receive DEFECT that made the
+first br-0045 trial inconclusive is FIXED and the corrected image re-trialed
+clean on hardware 2026-06-06 EVE.
+
+- **The fix:** busybox 1.37.0 syslogd, built with `CONFIG_FEATURE_REMOTE_LOG=y`,
+  gated the local-logfile write on a stale local `opts` copy that never saw the
+  auto "log locally by default" bit (set only on the global `option_mask32`).
+  With ASUS's default argv (no `-R`/`-L`) every `/dev/log` message was dropped.
+  One-token source patch `package/gt-be98-br-busybox/0001-syslogd-honor-default-
+  local-logging.patch` makes the read-loop gate test `option_mask32` (matches
+  busybox 1.25.1 and the sibling remote-forward check at line 906). No applet/
+  config drift → `br-busybox.links` parity intact (401 links). Cherry-picked
+  from `fix/br-0045-syslog-local-logging` onto master; RELEASE bumped → br-0045.
+- **Build + diff-proof GREEN.** `make` → 77M pkgtb (sha256 `be40d654…7281`).
+  `rootfs-diff` vs the br-0044 artifact: 3213 files both sides, the ONLY deltas
+  are the patched `/usr/br/bin/busybox`, the 3 substitution symlinks
+  (`sbin/syslogd`, `sbin/klogd`, `usr/sbin/crond` → `/usr/br/bin/busybox`), and
+  the release stamp (`www/mobile/js` 12-byte dir-metadata wobble = benign
+  squashfs artifact, zero content delta). dropbearmulti + openssl byte-identical
+  to br-0044 (openssl was restored to the br-0044 binary to drop a benign
+  compile-date-only delta from a clean rebuild — same recipe/source).
+  Artifact `~/be98/artifacts-br/GT-BE98_br-0045_nand_squashfs.pkgtb`
+  (be40d654…, replaces the prior broken c4ccf907).
+- **LOCKOUT DESIGNED OUT.** Before flashing, the agent pubkey
+  (`guillaume@dev-build`) was APPENDED to nvram `sshd_authkeys`
+  (`key1>key2>mykey`, `>`-separated as ASUS stores it; both operator keys
+  preserved byte-exact, `nvram commit`). Now a `service restart_*`
+  authorized_keys rewrite-from-nvram can no longer evict the agent key. This is
+  the ONLY nvram write performed; MAC vars / envrams untouched.
+- **Trial:** flashed slot 1, dead-man armed (sha be40d654…, window 600s,
+  TRIAL=1 GOOD=2), ONCE/ACTIVATE, reboot. SSH answered on slot 1, DISARMED at
+  T+40s, **gate 19/19 PASS** (identity `br-0045+gd94cc52408e6`, 3-min soak
+  stable, radios/nets/daemons green), init self-committed slot 1, flag removed.
+- **LIVE-SYSLOG CONFIRMED (the point of the re-trial):** substituted syslogd
+  pid exe = `/usr/br/bin/busybox`, ASUS default argv `-m 0 -S -O /jffs/syslog.log
+  -s 1024 -l 6` (no -L), **fd 5 → /jffs/syslog.log OPEN for write** (the fd that
+  was MISSING in the broken trial). `logger -t retrycheck …` line appended to
+  /jffs/syslog.log live (3808→3809). klogd + crond also → /usr/br busybox; one
+  crond (no PID1 double-launch). Defect fully resolved.
+- Slot 2 = br-0044, still valid as the fallback baseline.
+
+## State (2026-06-06 PM — TRIALS: br-0044 PASSED+COMMITTED; br-0045 INCONCLUSIVE, NOT accepted) [SUPERSEDED by the EVE entry above]
 
 **COMMITTED BASELINE = br-0044** (slot 2; committed=2 valid 1,2 seq 33,34
 reset_reason 34). Hardware-trialed 2026-06-06: booted slot 2 via ONCE,
