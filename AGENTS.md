@@ -3,6 +3,67 @@
 You're working in the **Buildroot external tree** that will replace the
 asuswrt-merlin SDK build. Read `ARCHITECTURE.md` first.
 
+## State (2026-06-06 NIGHT — br-0046 webui-go TRIALED, **FAILED on guest-net regression; baseline STAYS br-0045**)
+
+**COMMITTED BASELINE = br-0045** (slot 1; committed=1 valid 1,2; both slots now
+hold br-0045 after the failed-trial neutralize). **br-0046 = webui-go parallel
+rail, REJECTED — do NOT promote.**
+
+- **What br-0046 is:** the webui-go candidate (was br-0047 on branch
+  `worktree-agent-a16fe2fafc3bbe9c6`, built off the OLD br-0045 commit b4c9417)
+  rebased clean onto current master HEAD as commit **`90cd55a` on branch
+  `br-0046-webui`** (cherry-pick applied with no conflicts; only RELEASE needed
+  setting → br-0046; the master syslog substitution is intact/cumulative).
+  Package `gt-be98-br-webui` (pure-Go static ARM webui-go) harvested to
+  `/usr/br/sbin/webui`; S29 rail launches it as a loopback listener on
+  127.0.0.1:8089. **I also made the S29 rail BETA-AWARE** (launch
+  `/jffs/webui/webui.next` if executable else the in-image binary; log the
+  channel+version via `logger`; crash-fallback to in-image after ≥3 exits/~60s).
+- **Build + diff-proof GREEN.** `make` → 80M pkgtb (sha256 `810a4a36…b41d`,
+  artifact `~/be98/artifacts-br/GT-BE98_br-0046_nand_squashfs.pkgtb`). rootfs-diff
+  vs the br-0045 artifact: content deltas EXACTLY = release stamp, `/usr/br/sbin/
+  webui` (ADDED), `br-webui.sh` rail + S29 symlink (ADDED); busybox/dropbearmulti/
+  openssl byte-identical to br-0045 (no openssl date-perturbation — kept output/
+  so no clean openssl rebuild). Dir-metadata size wobble only (benign, zero
+  content delta).
+- **TRIAL on hardware: flashed slot 2, dead-man armed (TRIAL=2 GOOD=1 win 600s),
+  ONCE/reboot, SSH answered on slot 2, DISARMED at T+~40s.** Webui-narrow checks
+  all PASSED: rail launched (`pidof webui`→4752, `/proc/4752/exe`=`/usr/br/sbin/
+  webui`, cmdline `-listen 127.0.0.1:8089 -www /jffs/webui/www -conf /data/br/
+  webui`); **LISTENING on 127.0.0.1:8089**; **HTTP probe → 200 OK** + the GT-BE98
+  login HTML; **ASUS httpd :80 STILL UP** (pid 3792). (Beta-channel log line did
+  NOT persist to /jffs/syslog.log at boot — syslogd-readiness timing at S29;
+  `logger -t br-webui` works live, so the rail code path is correct, just early.)
+- **WHY REJECTED — guest-net (SDN) regression.** The webui binary's
+  `hapdDir = "/tmp/webui-hapd"` is a HARDCODED package var (internal/wifi/
+  supervisor.go:26), NOT derived from `-conf`. So our parallel rail's webui shares
+  the live `/jffs/webui` instance's hostapd-supervision dir. Our instance boots
+  with an EMPTY `/data/br/webui` DB yet still runs all the boot hooks
+  (`ApplyBootHooks`/`StartVLANs`/`StartDirectWifi`/`StartCaptive` + the supervisor
+  reconcile — it even spawned `udhcpc -i br70`): it tore down the live instance's
+  guest BSS hostapds and DELETED `/tmp/webui-hapd/*.conf`, so the live watcher
+  spun forever ("hostapd for wlX.Y died — relaunching … Could not open
+  /tmp/webui-hapd/wlX.Y.conf"; guest BSS `state=no-ctrl`). The named SDN nets
+  Ramondia/Pagoa/DEV-SCEP lost their hostapd (gate user-net checks 3× FAIL on
+  br-0046; PASS on br-0045). A clean br-0045 reboot REPOPULATED /tmp/webui-hapd
+  and restored all guest hostapds (ENABLED) — **proving the breakage was caused by
+  the second webui instance, not pre-existing.** The "loopback test port" framing
+  is misleading: the binary's startup mutates SHARED system wifi state regardless
+  of `-listen`/`-conf`.
+- **Rollback executed (FAIL path):** committed slot 1, rebooted → br-0045 on slot
+  1, dead-man good-slot branch repaired commit (+1), guest nets self-healed;
+  then NEUTRALIZED slot 2 (hnd-write br-0045, sha `be40d654…7281`, +1 re-commit),
+  removed `/data/.trial-armed`. **Final: gate 18/18 PASS on br-0045** (--quick;
+  all radios/nets/daemons green, 11 hostapd, 3 named nets present). nvram
+  `sshd_authkeys` agent key persisted across the whole cycle (key-auth never lost).
+- **FIX PATH for a future br-0046 retry (out of scope tonight, needs webui-go
+  source work):** the parallel rail MUST launch webui in an inert/read-only mode
+  that skips `ApplyBootHooks`/`Start*` and the hostapd supervisor (a new `-test`/
+  `-no-apply` flag), OR `hapdDir` must be made instance-scoped (derive from
+  `-conf`) so two instances don't fight. Until then, do NOT run a 2nd full webui
+  instance beside the live `/jffs/webui` one. The beta-aware S29 rail itself is
+  sound and reusable once the binary stops mutating shared state.
+
 ## State (2026-06-06 EVE — br-0045 RE-TRIALED, PASSED, **COMMITTED BASELINE**)
 
 **COMMITTED BASELINE = br-0045** (slot 1; committed=1 valid 1,2 seq 35,34,
