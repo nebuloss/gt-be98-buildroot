@@ -1,0 +1,14 @@
+config BR2_PACKAGE_GT_BE98_BR_WEBUI
+	bool "gt-be98-br-webui"
+	help
+	  Static, pure-Go webui-go management backend for the /usr/br
+	  island (M5 candidate 4, br-0047). Cross-compiled with
+	  CGO_ENABLED=0 GOOS=linux GOARCH=arm GOARM=7 -> a fully static
+	  ARM EABI binary (no PT_INTERP, no DT_NEEDED; modernc.org/sqlite
+	  is pure Go, so no libc/CGO dependency). Built by an external host
+	  Go toolchain from the sibling gt-be98-webui-go checkout (SITE is
+	  override-able via GT_BE98_BR_WEBUI_SRCDIR). Harvested into the
+	  ASUS rootfs at /usr/br/sbin/webui by
+	  board/gt-be98/rootfs-transform.sh and launched by the S29
+	  br-webui rail as a PARALLEL listener (does NOT take over :80;
+	  the ASUS httpd stays running until patch-0033 gates it).
