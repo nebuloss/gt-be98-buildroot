@@ -17,3 +17,10 @@
 /usr/sbin/networkmap
 /usr/networkmap
 /usr/sbin/uamsrv
+
+# --- slice 3 (br-0037, TRIAL PENDING - built+diff-proven 2026-06-06,
+# flash deferred: daily trial budget exhausted) ---
+# AiMesh/cfg ecosystem core daemons; starters nvram-gated (patches 0027-0029)
+/usr/sbin/cfg_server
+/usr/sbin/wlc_nt
+/usr/sbin/lldpd
