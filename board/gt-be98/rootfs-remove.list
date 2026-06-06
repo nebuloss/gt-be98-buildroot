@@ -1,0 +1,11 @@
+# M4 slice 1 (br-0035) — telemetry/cloud/phone-home + wsdd2. ≤5 removals,
+# one trial per slice (post-br-0033 rule, m4-staging/README.md). Source:
+# m4-staging/rootfs-remove.list (batch-1 inputs); starters nvram-gated by
+# patches 0024/0027 in the 0031 blob; live not-running check 2026-06-06.
+# Also bisects br-0033: if this slice trips the slow-boot/broken-LAN failure,
+# the culprit is in this group.
+/usr/sbin/infosvr
+/usr/sbin/awsiot
+/usr/sbin/mastiff
+/usr/bin/asd
+/usr/sbin/wsdd2
