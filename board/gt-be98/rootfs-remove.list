@@ -37,3 +37,13 @@
 # band-steer / roaming assist (both off in stock; roamast is an rc symlink)
 /usr/sbin/bsd
 /sbin/roamast
+
+# --- slice 6 (br-0040) ---
+# re_mode-only AiMesh-node crew (all -> rc symlinks; re_mode=0 on this AP,
+# none running). Completes br-0033 batch-1 parity except the banned envrams
+# wrapper.
+/sbin/amas_bhctrl
+/sbin/amas_ssd
+/sbin/amas_status
+/sbin/amas_misc
+/sbin/amas_wlcconnect
