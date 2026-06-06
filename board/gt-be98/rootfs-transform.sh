@@ -153,6 +153,16 @@ for c in scp sftp ssh ssh-keygen; do
     install -m 0755 "$OSSH_DIR/$c" "$BRDST/bin/$c"
 done
 
+# webui-go management backend (M5 candidate 4, br-0047): pure-Go static ARM
+# binary (CGO_ENABLED=0; modernc.org/sqlite is pure Go -> no PT_INTERP/
+# DT_NEEDED). Launched by the S29 br-webui rail as a parallel loopback listener
+# with -no-apply (inert mode: serves the read UI only, never mutates wifi/
+# system state). Verified by the static-linkage guard below alongside the
+# busybox/dropbear/openssl island cores.
+WEBUI=$(find "$BUILD_DIR" -maxdepth 2 -type f -name 'webui' -path '*gt-be98-br-webui*' | head -1)
+[ -n "$WEBUI" ] || { echo "rootfs-transform: FATAL - br-webui binary not found (enable BR2_PACKAGE_GT_BE98_BR_WEBUI)"; exit 1; }
+install -m 0755 "$WEBUI" "$BRDST/sbin/webui"
+
 # applet-parity guard: the produced symlink set must match the pinned
 # manifest EXACTLY (any busybox config drift fails the build).
 ( cd "$BRDST" && find bin sbin -type l | sort ) > "$WORK/bb.links"
@@ -162,10 +172,10 @@ if ! cmp -s "$WORK/bb.links" "$BOARD/br-busybox.links"; then
     exit 1
 fi
 
-# static-linkage guard: the three island core binaries must be fully static
-# (no PT_INTERP, no DT_NEEDED).
+# static-linkage guard: the static island binaries must be fully static
+# (no PT_INTERP, no DT_NEEDED). webui is pure-Go static (CGO off).
 if command -v readelf >/dev/null 2>&1; then
-    for b in "$BRDST/bin/busybox" "$BRDST/sbin/dropbearmulti" "$BRDST/bin/openssl"; do
+    for b in "$BRDST/bin/busybox" "$BRDST/sbin/dropbearmulti" "$BRDST/bin/openssl" "$BRDST/sbin/webui"; do
         if readelf -l "$b" 2>/dev/null | grep -q 'INTERP' || \
            readelf -d "$b" 2>/dev/null | grep -q 'NEEDED'; then
             echo "rootfs-transform: FATAL - $b is not fully static"
@@ -200,7 +210,7 @@ if command -v readelf >/dev/null 2>&1; then
         done
     done
 fi
-echo "rootfs-transform: /usr/br harvest OK (busybox $(stat -c%s "$BRDST/bin/busybox")B + $(wc -l < "$WORK/bb.links") links, dropbearmulti $(stat -c%s "$BRDST/sbin/dropbearmulti")B, openssl $(stat -c%s "$BRDST/bin/openssl")B, sftp-server $(stat -c%s "$BRDST/libexec/sftp-server")B + scp/sftp/ssh/ssh-keygen)"
+echo "rootfs-transform: /usr/br harvest OK (busybox $(stat -c%s "$BRDST/bin/busybox")B + $(wc -l < "$WORK/bb.links") links, dropbearmulti $(stat -c%s "$BRDST/sbin/dropbearmulti")B, openssl $(stat -c%s "$BRDST/bin/openssl")B, sftp-server $(stat -c%s "$BRDST/libexec/sftp-server")B + scp/sftp/ssh/ssh-keygen, webui $(stat -c%s "$BRDST/sbin/webui")B)"
 
 # 3. release marker (image identity for the validation gate).
 #    NB /etc in this rootfs is a symlink to tmpfs (tmp/etc) - the marker must
