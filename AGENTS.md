@@ -40,13 +40,19 @@ story: `gt-be98-docs/flash-journal.md`. Slot 2 was neutralized with the
 br-0032 artifact; all trial flags cleared; final metadata
 booted=1=committed, valid 1,2.
 
-**br-0035 IS NOW THE COMMITTED BASELINE** (2026-06-06 11:57: slot 1,
-gate 20/20 + slice gate; M4 slice 1 = br-0034 − infosvr/awsiot/mastiff/
-asd/wsdd2; slot 2 = br-0034 fallback; artifact `fb909b7d…18d0` archived;
-ONCE 5/5 lifetime; diff-proof exact; **bisect: telemetry/cloud group is NOT
-the br-0033 culprit**). M4 next slices: networkmap/uamsrv → cfg_server/
-wlc_nt/lldpd → amas symlinks → bsd/roamast. Trial-cycle budget 2026-06-06:
-2 used (br-0034, br-0035).
+**br-0036 IS NOW THE COMMITTED BASELINE** (2026-06-06 12:14: slot 2,
+gate 20/20 + slice gate; cumulative M4 strip = slice 1
+infosvr/awsiot/mastiff/asd/wsdd2 + slice 2 networkmap(+/usr/networkmap)/
+uamsrv; slot 1 = br-0035 (gate 20/20) fallback; artifact `e8ec5f34…e84c`
+archived; ONCE 6/6 lifetime). **rootfs-remove.list is CUMULATIVE** — the
+transform re-unpacks the pristine 0031 blob each build; a slice-only list
+re-adds earlier removals (caught by rootfs-diff, 2026-06-06).
+**Bisect: telemetry/cloud group AND networkmap/uamsrv are NOT the br-0033
+culprit** — remaining suspects: cfg ecosystem (slice 3), amas symlinks
+(slice 4), bsd/roamast (slice 5), banned envrams wrapper (prime).
+M4 next: slice 3 cfg_server/wlc_nt/lldpd (br-0037, prebuilt+diff-proven,
+TRIAL PENDING) → slice 4 amas → slice 5 bsd/roamast. Trial-cycle budget
+2026-06-06: 3/3 used (br-0034/0035/0036) — no more flashes today.
 
 Previous baseline note (superseded):
 **br-0034** (2026-06-06: slot 2, gate 20/20;
