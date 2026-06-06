@@ -83,11 +83,28 @@ if [ -f "$MVLIST" ]; then
     done < "$WORK/mv.list"
 fi
 
-# 2. overlay
+# 2. overlay. `cp -a` stamps the overlay's OWN directory mode onto any
+#    pre-existing ASUS directory the overlay also provides. Git does not track
+#    directory modes, so an overlay dir's mode is just the builder's umask -- if
+#    that dir SHADOWS a stock ASUS system dir (e.g. the br-0045 substitution
+#    ships /usr/sbin/crond, dragging the overlay's 0775 /usr/sbin over the stock
+#    0755 one) the result is an unintended, umask-dependent mode delta. Snapshot
+#    the stock mode of every shadowed stock system dir, apply the overlay, then
+#    restore those modes so the only deltas are files/symlinks. SHADOWED is the
+#    list of stock dirs the substitution overlay reintroduces; /sbin and /usr
+#    are already overlay-provided in the committed baseline (sbin/trial-deadman,
+#    usr/br) so they are intentionally NOT restored -- leaving the baseline's
+#    established modes untouched keeps the slice diff to the intended deltas.
 OVL="$BOARD/rootfs-overlay-full"
 if [ -d "$OVL" ] && [ -n "$(find "$OVL" -type f -o -type l 2>/dev/null | head -1)" ]; then
+    SHADOWED="usr/sbin"
+    SAVED="$WORK/dirmodes"; : > "$SAVED"
+    for rel in $SHADOWED; do
+        [ -d "$ROOT/$rel" ] && printf '%s %s\n' "$(stat -c '%a' "$ROOT/$rel")" "$rel" >> "$SAVED"
+    done
     cp -a "$OVL"/. "$ROOT"/
-    echo "rootfs-transform: overlay applied ($(find "$OVL" -type f | wc -l) files)"
+    while read -r m rel; do chmod "$m" "$ROOT/$rel"; done < "$SAVED"
+    echo "rootfs-transform: overlay applied ($(find "$OVL" -type f | wc -l) files; stock dir modes preserved: $SHADOWED)"
 fi
 
 # 2b. harvest the /usr/br island binaries (M5, br-0044): built FROM SOURCE by
