@@ -3,7 +3,52 @@
 You're working in the **Buildroot external tree** that will replace the
 asuswrt-merlin SDK build. Read `ARCHITECTURE.md` first.
 
-## State (2026-06-06, br-0045 — log/time/cron substitution; TRIAL-READY)
+## State (2026-06-06 PM — TRIALS: br-0044 PASSED+COMMITTED; br-0045 INCONCLUSIVE, NOT accepted)
+
+**COMMITTED BASELINE = br-0044** (slot 2; committed=2 valid 1,2 seq 33,34
+reset_reason 34). Hardware-trialed 2026-06-06: booted slot 2 via ONCE,
+dead-man (sha 89b716fe) ARMED→DISARMED clean, **gate 19/19 PASS** (identity
+`br-0044+gab1854a78cc4`, 3-min soak stable, all radios/nets/daemons green),
+ASUS init self-committed slot 2, flag removed. br-0044 = the from-source
+`/usr/br` island (busybox/dropbear/openssl) and it BOOTS CLEAN. Slot 1 was
+br-0043, now overwritten by the br-0045 trial (see below).
+
+**No daily trial cap** — trials are gated only by the dead-man disarm harness
+(user removed the bogus budget 2026-06-06).
+
+**br-0045 (syslogd/klogd/crond → /usr/br busybox) = TRIAL INCONCLUSIVE, NOT
+COMMITTED-GOOD.** Flashed to slot 1, booted via ONCE; in-image S26 rail
+auto-launched the dead-man (sha c4ccf907, 600s) — DISARMED clean. **Core gate
+19/19 PASS.** Substitution STRUCTURALLY PROVEN: all 3 symlinks → `/usr/br/bin/
+busybox`; syslogd/klogd/crond running with unchanged argv; `/proc/<pid>/exe`
+for all three = `/usr/br/bin/busybox` (v1.37.0, NOT stock 1.25.1); exactly 1
+crond (no PID1 double-launch); klogd kernel lines present; stock `/bin/busybox`
+1.25.1 intact as fallback.
+**OPEN DEFECT (unresolved): fresh `logger` messages did NOT append to
+`/jffs/syslog.log`** (count stuck at 1199 across 10+ min / 3 attempts), and the
+running syslogd has NO logfile fd open — only sockets. The substituted syslogd
+DID capture this boot's early kernel + service-stop messages (so klogd + boot
+logging work), but live message reception could not be confirmed. Needs a
+clean re-trial with a proper logger-receive test.
+**ACCESS INCIDENT (operator-induced, NOT a br-0045 fault):** while probing the
+syslog issue I ran `service restart_time` on the device — ASUS rewrote the
+admin authorized_keys from nvram `sshd_authkeys` (two operator ed25519 keys;
+MY `id_ed25519` is NOT among them), evicting the key that services-start had
+copied from `/jffs/.ssh/authorized_keys` at boot. SSH pubkey is now rejected
+on :2222 AND :2223; webui (:8080) needs a password I don't have. **DEVICE IS
+HEALTHY** (all WiFi nets, webui, both dropbears, radios up — NOT an outage).
+**SAFE STATE: the dead-man flag `/data/.trial-armed` (TRIAL_SLOT=1 GOOD_SLOT=2
+WINDOW=600) is STILL ARMED.** On the NEXT reboot the S26 rail re-arms the
+dead-man on slot 1, no disarm arrives, it FIRES at +600s → commits slot 2 and
+reboots → **device auto-returns to br-0044**, and services-start re-restores my
+SSH key. **OPERATOR ACTION: reboot the device** (power-cycle, or `reboot` via
+your nvram key / webui login) to complete the rollback to br-0044 and regain
+key access; then `rm /data/.trial-armed`. Do NOT run `service restart_*` during
+a trial again (it nukes the injected SSH key). br-0045 artifact stays archived
+(`~/be98/artifacts-br/GT-BE98_br-0045_…pkgtb`, sha c4ccf907…5c108) for re-trial
+after the syslog-receive question is closed.
+
+## State (2026-06-06, br-0045 — log/time/cron substitution; built, NOT accepted)
 
 **br-0045 = Phase 2 service substitution (Pattern A), built + diff-proven, NOT
 flashed.** It repoints three stock busybox-applet symlinks at the from-source
@@ -62,7 +107,9 @@ behind those three symlinks. Artifact archived
 **br-0045** (proves service substitution). The transform is CUMULATIVE
 (br-0045 ⊃ br-0044), so they *could* be one trial, but separating them isolates
 a boot failure to either the from-source-binary swap (br-0044) or the
-syslogd/klogd/crond substitution (br-0045). Per-day flash budget applies.
+syslogd/klogd/crond substitution (br-0045). No daily trial cap; trials are
+gated only by the dead-man disarm harness (user removed the bogus budget
+2026-06-06).
 br-0045 gate adds: `ps` shows syslogd/klogd/crond running (argv unchanged) as
 busybox 1.37.0; new lines land in `/jffs/syslog.log`; klogd dmesg lines present;
 PID1 `check_services` does not relaunch a second crond (name-match satisfied).
@@ -100,11 +147,11 @@ path/mode deltas. Functional parity (qemu-arm): busybox v1.37.0 402 applets/
 v2025.89 (4 components), openssl 3.6.2 OPENSSLDIR=/usr/br/etc/ssl; all three
 fully static. Artifact archived `~/be98/artifacts-br/GT-BE98_br-0044_…pkgtb`.
 
-**TRIAL DEFERRED — 2026-06-06 budget spent (15 flashes today, MAX-1/day
-rule).** br-0044 is **trial-ready, flash deferred to the next budget day.**
+**TRIAL-READY.** No daily trial cap; trials are gated only by the dead-man
+disarm harness (user removed the bogus budget 2026-06-06).
 Functionally equivalent to the committed br-0043 baseline (same versions/
 components), so the trial is expected nominal; still owes one hardware
-trial cycle before it becomes the committed baseline. NOT flashed.
+trial cycle before it becomes the committed baseline.
 `board/gt-be98/phase3/` (graft-manifest generator) is unrelated WIP — left
 untracked. `docs/device` submodule shows untracked content — left for the
 operator.
