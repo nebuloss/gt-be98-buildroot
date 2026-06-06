@@ -1,0 +1,56 @@
+From: gt-be98 open-OS migration <noreply@anthropic.com>
+Date: 2026-06-06
+Subject: [PATCH] syslogd: honor default (auto) local logging in the read loop
+
+busybox 1.37.0 syslogd, when built with CONFIG_FEATURE_REMOTE_LOG=y,
+silently drops every message received on /dev/log from the local logfile
+unless -L (or -R) is given explicitly.
+
+syslogd_init() captures getopt32()'s result into the local `opts` and then
+auto-enables "log locally" when no -R was given via:
+
+        option_mask32 |= OPT_locallog;        (global only)
+
+but returns the *local* `opts`, which was snapshotted before that bit was
+set. The main read loop then gates local logging on the stale local copy:
+
+        if (!ENABLE_FEATURE_REMOTE_LOG || (opts & OPT_locallog))
+                split_escape_and_log(...)
+
+so the auto-locallog bit is never seen and split_escape_and_log() is never
+called for received messages (only the synchronous startup banner is
+written, via timestamp_and_log_internal()).
+
+This is a regression vs busybox 1.25.1, whose equivalent read-loop gate
+tested the *global* option_mask32 (and thus honored the auto bit). The
+sibling remote-forwarding check at line ~906 already uses option_mask32 in
+1.37.0; the local-logging gate was the only inconsistent reader.
+
+Effect on GT-BE98: ASUS rc start_syslogd() passes "-m 0 -S -O <logfile>
+[-s SIZE] [-l LEVEL]" and only adds -L when nvram log_ipaddr is set
+(remote syslog server configured). In the default case (no remote server),
+neither -R nor -L is present, so our substituted syslogd received messages
+on /dev/log but never appended them to /jffs/syslog.log.
+
+Fix: gate the read loop on option_mask32 (matches 1.25.1 and the sibling
+check), so the auto "log locally by default" actually takes effect.
+
+Verified under qemu-arm with the exact ASUS argv (no -L): both a raw
+/dev/log datagram and `busybox logger` output now append to the logfile.
+
+Signed-off-by: gt-be98 open-OS migration <noreply@anthropic.com>
+---
+ sysklogd/syslogd.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+--- a/sysklogd/syslogd.c
++++ b/sysklogd/syslogd.c
+@@ -1179,7 +1179,7 @@ int syslogd_main(int argc UNUSED_PARAM, char **argv)
+ 			}
+ 		}
+ #endif
+-		if (!ENABLE_FEATURE_REMOTE_LOG || (opts & OPT_locallog)) {
++		if (!ENABLE_FEATURE_REMOTE_LOG || (option_mask32 & OPT_locallog)) {
+ 			recvbuf[sz] = '\0'; /* ensure it *is* NUL terminated */
+ 			split_escape_and_log(recvbuf, sz);
+ 		}
