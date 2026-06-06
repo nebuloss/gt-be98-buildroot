@@ -40,15 +40,22 @@ story: `gt-be98-docs/flash-journal.md`. Slot 2 was neutralized with the
 br-0032 artifact; all trial flags cleared; final metadata
 booted=1=committed, valid 1,2.
 
-**br-0041 IS NOW THE COMMITTED BASELINE — M4 COMPLETE + M5 candidate 1**
-(2026-06-06 13:42: slot 1, gate 20/20 + M5 gate; slot 2 = br-0040
-fallback; artifact `7119b3a7…9ba6` archived; ONCE 11/11 lifetime).
-M5 candidate 1 = dropbear 2025.89 static at `/usr/br/sbin/dropbearmulti`
-(key-auth only), rail `S28br-dropbear`, parallel listener :2223, hostkey
-on /data/br/dropbear; stock :2222 untouched. **NB the M5 prefix is
-`/usr/br`, NOT /opt/br — /opt is a tmpfs symlink (opt -> tmp/opt) in this
-rootfs.** Promotion to primary deferred until multi-day soak. Next M5:
-busybox, openssl + dependents, lighttpd/webui-go (one trial each).
+**br-0043 IS NOW THE COMMITTED BASELINE — M4 COMPLETE + M5 candidates 1-3**
+(2026-06-06 14:50: slot 1, gate 20/20; slot 2 = br-0042 fallback; artifact
+`44eb9a01…01fe` archived; ONCE 13/13 lifetime). /usr/br now holds:
+dropbear 2025.89 (rail S28, :2223, key-only; hostkey /data/br/dropbear),
+busybox 1.37.0 + 401 applet links, openssl 3.6.2 CLI
+(OPENSSLDIR=/usr/br/etc/ssl). All static; stock binaries untouched.
+**M5 prefix is `/usr/br`, NOT /opt/br — /opt is a tmpfs symlink.**
+De-risk rule: live-test every new binary from /tmp over SSH BEFORE
+staging+trial (caught busybox argv0 + openssl OPENSSLDIR defects).
+Remaining M5: lighttpd/webui-go (needs admin-path validation first).
+dropbear promotion to primary: after multi-day soak.
+**⚠️ patch-0032 (docs repo, operator): blob-level envrams wrapper = the
+SAME design as the br-0033 wrapper — hardware evidence says gated-off
+envrams ⇒ BSP-MAC nvram poisoning on normal boots. DO NOT flash
+artifacts-0032 as-is; see the ADDENDUM in
+gt-be98-docs/plans/patch-0032-envrams-real-start.md.**
 
 Superseded baseline: **br-0040 — M4 STRIP COMPLETE**
 (2026-06-06 13:21: gate 20/20 + slice gate; artifact `730badb6…474b`).
