@@ -3,6 +3,91 @@
 You're working in the **Buildroot external tree** that will replace the
 asuswrt-merlin SDK build. Read `ARCHITECTURE.md` first.
 
+## State (2026-06-06 NIGHT-6 — br-0048 wanduck + USB-crew retire TRIALED + PASSED → NEW COMMITTED BASELINE (slot 2; slot 1 = br-0045 fallback))
+
+**COMMITTED BASELINE = br-0048** (slot 2; **committed 2 valid 1,2 seq 35,36,
+Booted Second, reset_reason 34, boot_failed_count 0**). Slot 1 = br-0045, still
+valid as the fallback baseline. The agent nvram key (`guillaume@dev-build` in
+`sshd_authkeys`) persisted across the whole cycle; NO `service restart_*` run.
+
+- **What br-0048 is:** the Phase-2 rc-drain **P2-3 wanduck + USB-crew retire**
+  slice — the **LAST pure-removal (Pattern-B) slice** in Phase 2. Removes 3 more
+  paths cumulatively on top of br-0047 (cumulative slice 8, **29 paths** in
+  `rootfs-remove.list`), everything else byte-identical to br-0047:
+  `/sbin/wanduck` + `/sbin/disk_monitor` (rc MULTICALL symlinks `-> rc`),
+  `/usr/bin/usbmuxd` (real bin, 211744 B in 0031). Artifact
+  `~/be98/artifacts-br/GT-BE98_br-0048_nand_squashfs.pkgtb`, sha256
+  `8b266ac453ac6b61a52141b2872c5af74d839ee4ac410916471a94ec3b1113b0`
+  (83223240 B). Release marker `br-0048+g7720c07c1d92`.
+
+- **wanduck_down=1 is now COMMITTED in device nvram (persists).** This is the
+  stock gate `no_need_to_start_wanduck()` covering BOTH the wanduck starter
+  (services.c) AND the watchdog respawn (watchdog.c) — set + committed BEFORE
+  the removal flash so the removed binary is never sought. disk_monitor/usbmuxd
+  have no watchdog respawner (disk_monitor has only an event-driven
+  `ntpd_synced → notify_rc restart_diskmon` verb, one-shot, not a loop).
+
+- **Pre-flight live kill-tests on the br-0047 baseline (dead-man-guarded, all
+  PASS):** with `wanduck_down=1` committed — `killall wanduck` → NO respawn over
+  2 watchdog periods (70 s), port :18017 CLOSED, zero syslog respawn (gate held);
+  `killall disk_monitor` → NO respawn over 70 s; `usbmuxd` already absent
+  (`pidof` empty). Only :18017 was ever listening (not :18018) on this AP.
+
+- **Slot-1-hop was REQUIRED first.** Device was on slot 2 (br-0047, committed 2)
+  at trial start → slot 2 unflashable. Hopped to slot 1 via `bcm_bootstate +1`
+  (committed 1 verified) → reboot → booted slot 1 (br-0045, cmdline 0,4,
+  booted==committed=1, stable). Standard slot-2-trial / GOOD=slot-1 pattern then
+  applied.
+
+- **TRIAL on hardware — PASS.** `trial-flash.sh --window 600` (no `--reboot`)
+  from slot 1: pre-check good=1 booted=1 committed=1 valid 1,2 RR 34; dead-man
+  armed (TRIAL_SLOT=2 GOOD_SLOT=1 WINDOW=600 SHA=8b266ac4…, read-back verified)
+  → hnd-write slot 2 (exit 99, auto-commit 2) → commit repaired to slot 1 →
+  ONCE (`bcm_bootstate 3`, RR→1) → plain `reboot`. SSH answered on slot 2 at
+  ~+126 s; auto-disarm poll touched `/tmp/deadman-disarm` → dead-man logged
+  **ARMED on trial slot 2 (sha=8b266ac4) → DISARMED at T+15s** (in
+  `/data/trial-deadman.log`). ASUS init self-committed slot 2.
+
+- **Gate 19/0 PASS** (slot==2, identity `br-0048+g7720c07c1d92`, 4 radios up,
+  Ramondia/Pagoa/DEV-SCEP present, 11 hostapd, br0 IP, jffs rw,
+  eapd/wlceventd/mcpd/watchdog up, boot_failed_count=0, dmesg clean, 3-min
+  daemon-pid soak stable). Identical to the br-0047 baseline.
+
+- **DIFF-PROOF GREEN** (rootfs.squashfs br-0047 vs br-0048, host unsquashfs):
+  content deltas EXACTLY = `/rom/etc/gt-be98-release` (CHANGED) +
+  `/usr/bin/usbmuxd` (REMOVED) + the 2 symlinks `wanduck`/`disk_monitor` (REMOVED,
+  listing-only). www/swanctl/parent-dir size deltas are benign directory-metadata
+  wobbles (ZERO content delta — same class documented for br-0047). /usr/br island
+  byte-identical (absent from diff). Typo-guard passed: all 29 listed paths
+  existed in the blob. rootfs 69,971,968 → 69,894,144 B = **77,824 B (~76 KB)**
+  recovered. Headroom under the slot-2 ceiling (71,106,560 B) ≈ 1.2 MB.
+
+- **SLICE CHECKS — all PASS:** the 3 binaries ABSENT; no wanduck/disk_monitor/
+  usbmuxd processes; ports :18017/:18018 CLOSED; `nvram get wanduck_down`=1.
+  **WIFI IDENTICAL to the br-0047 baseline** (decisive proof of no collateral):
+  wl0-3 isup all =1; `brctl show` br0/br20/br30/br50/br70 byte-identical; 11
+  hostapd (4 stock + 7 webui); 7 named BSSes all state=ENABLED (Ramondia/DEV-SCEP/
+  Pagoa); 4 stock primaries ENABLED — normalized diff vs
+  `job-tmp/br0047-posttrial-wifi.txt` = IDENTICAL (only volatile hostapd pids
+  differ). **10-min syslog soak: ZERO respawn/watchdog-restart/exec-fail matches
+  for the removed daemons** (syslog grew only benign dropbear-auth lines); the
+  feared `restart_diskmon` exec-fail never recurred. committed 2 stable throughout.
+
+- **ACCEPTED.** `rm /data/.trial-armed` (init had already self-committed slot 2);
+  no trial flag remains. Pre/post wifi captures + gate/diff/soak logs under
+  `~/.claude/jobs/178892d1/tmp/` (`br0048-posttrial-wifi.txt`, `gate-br0048.log`,
+  `rootfs-diff-br0048.log`, `trial-flash-br0048.log`, `build-br0048.log`).
+
+- **Forward queue:** br-0048 is the LAST Pattern-B pure-removal slice. Remaining
+  RETIRE = {sched_daemon} — UNGATED watchdog respawn, needs new merlin blob 0034
+  gate (Phase-2b) → br-0049. DRAIN {httpd, dnsmasq} need 0033 blob/rails (2b/2c).
+
+- **Submodule note:** `docs/device` is pinned at an old commit in the parent and
+  the live flash-journal lives in the **standalone `gt-be98-docs` repo**; the
+  br-0048 journal entry was committed there (precedent = br-0047 d07e659). The
+  parent's `docs/device` submodule pointer was left dirty/untouched on purpose —
+  do NOT commit the parent submodule pointer.
+
 ## State (2026-06-06 NIGHT-5 — br-0047 monitor-retire TRIALED + PASSED → NEW COMMITTED BASELINE (slot 2; slot 1 = br-0045 fallback))
 
 **COMMITTED BASELINE = br-0047** (slot 2; **committed 2 valid 1,2 seq 35,36,
