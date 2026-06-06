@@ -3,6 +3,70 @@
 You're working in the **Buildroot external tree** that will replace the
 asuswrt-merlin SDK build. Read `ARCHITECTURE.md` first.
 
+## State (2026-06-06, br-0045 — log/time/cron substitution; TRIAL-READY)
+
+**br-0045 = Phase 2 service substitution (Pattern A), built + diff-proven, NOT
+flashed.** It repoints three stock busybox-applet symlinks at the from-source
+`/usr/br` busybox 1.37.0 instead of the stock 1.25.1, leaving rc as the
+launcher (argv unchanged) and `/bin/busybox` untouched as fallback:
+- `/sbin/syslogd`, `/sbin/klogd`, `/usr/sbin/crond` → `/usr/br/bin/busybox`.
+
+**SLICE-A determination (P2-0, source + qemu-arm verified) — NO busybox respin
+needed, and ntp is EXCLUDED:**
+- **syslogd `-m` is a non-issue.** `-m` is in busybox 1.37.0's syslogd
+  `OPTION_STR` *unconditionally* (`"m:nO:l:St"`); it is parsed and its arg
+  consumed regardless of config. Only the periodic "-- MARK --" emission is
+  `#undef SYSLOGD_MARK` — a hardcoded source decision (comment: "bloat, and
+  broken"), NOT a Kconfig toggle, and ASUS launches with `-m 0` (MARK off)
+  anyway. The plan's "`-m` compiled out" was a `--help`-text artifact (the
+  usage line is commented out). qemu-arm: `syslogd -m 0 -S -O … -s 1024 -l 6`
+  is ACCEPTED (no "invalid option"; contrast `-Z` → rejected). `busybox.config`
+  is UNCHANGED; `br-busybox.links` UNCHANGED (401 links, parity guard green).
+- **ntpd `-t` is NOT satisfiable by upstream busybox 1.37 and ntp is EXCLUDED
+  from the slice.** `-t` is an ASUS-patched flag; upstream ntpd's getopt string
+  is `"nqNx"+"k:"+"wp:*S:"+"l"+"I:"+"d"+"46aAbgL"` (no `t`). qemu-arm:
+  `ntpd -t …` → `ntpd: invalid option -- 't'` (rejects, exits → no time sync,
+  `ntp_ready` never set). Substituting ntp would need a 2-line source patch on
+  our busybox accepting `-t` — deferred to its own de-risk/live-test cycle; we
+  did NOT ship a broken `/usr/sbin/ntp` symlink. Stock ntp stays.
+
+**Mechanism = Pattern A (plan §2/§3): no rail, no rename.** The plan's queue
+explicitly says substitution drains need NO `/rom/etc/init.d` rail (rc remains
+the launcher); the symlinks are static overlay files in effect from first exec.
+So br-0045 consumes NO new rail number (next free rail stays **S29**, reserved
+for the webui M5 candidate / P2-4). This is the plan's prescribed mechanism for
+syslogd/klogd/crond, distinct from the S28 br-dropbear *promotion* rail.
+
+**Transform fix folded in (correctness, umask-independence):** shipping
+`usr/sbin/crond` introduced a new `usr/sbin/` overlay dir whose mode is the
+builder's umask (git does not track dir modes), and `cp -a` was stamping it
+(0775) over the stock `/usr/sbin` (0755). `rootfs-transform.sh` step 2 now
+snapshots+restores the stock mode of shadowed stock system dirs (`SHADOWED`
+list = `usr/sbin`). `/sbin` and `/usr` are deliberately NOT restored — they are
+already overlay-provided (sbin/trial-deadman, usr/br) and 0775 in every
+baseline, so leaving them keeps the slice diff minimal.
+
+**Build + diff-proof GREEN, NOT flashed.** `make` produces the 77M pkgtb
+(sha256 `c4ccf907…5c108`); all harvest/parity/static guards pass. `rootfs-diff`
+vs the br-0044 artifact (`~/be98/artifacts-br/GT-BE98_br-0044_…pkgtb`, rootfs
+extracted): 3213 files both sides; the ONLY deltas are the 3 symlink repoints +
+the release stamp. (`www/mobile/js` shows a 12-byte directory-metadata size
+wobble with byte-identical entries/contents — a benign squashfs packing
+artifact, zero file deltas.) The `/usr/br` busybox binary is byte-identical to
+br-0044 (no respin), so the only functional change is the applet implementation
+behind those three symlinks. Artifact archived
+`~/be98/artifacts-br/GT-BE98_br-0045_nand_squashfs.pkgtb`.
+
+**RECOMMENDED TRIAL ORDER (both trial-ready, neither flashed):** hardware-trial
+**br-0044 FIRST** (proves the from-source `/usr/br` binaries boot), THEN
+**br-0045** (proves service substitution). The transform is CUMULATIVE
+(br-0045 ⊃ br-0044), so they *could* be one trial, but separating them isolates
+a boot failure to either the from-source-binary swap (br-0044) or the
+syslogd/klogd/crond substitution (br-0045). Per-day flash budget applies.
+br-0045 gate adds: `ps` shows syslogd/klogd/crond running (argv unchanged) as
+busybox 1.37.0; new lines land in `/jffs/syslog.log`; klogd dmesg lines present;
+PID1 `check_services` does not relaunch a second crond (name-match satisfied).
+
 ## State (2026-06-06, br-0044 — /usr/br built FROM SOURCE)
 
 **br-0044 = the /usr/br island rebuilt from upstream source, no longer
