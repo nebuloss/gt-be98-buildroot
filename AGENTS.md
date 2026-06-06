@@ -3,6 +3,58 @@
 You're working in the **Buildroot external tree** that will replace the
 asuswrt-merlin SDK build. Read `ARCHITECTURE.md` first.
 
+## State (2026-06-06 NIGHT-3 — webui-go `-no-apply` DONE + live-proven; br-0047 in-image webui **NAND-BLOCKED**, baseline STAYS br-0046)
+
+**COMMITTED BASELINE = br-0046** (unchanged; slot 2 committed, slot 1 = br-0045
+fallback, device healthy). The webui-go regression-fix slice was completed and
+the fix proven on hardware, but the in-image br-0047 image is **physically
+unflashable** — see below. No flash, no reboot occurred this session.
+
+- **webui-go `-no-apply` inert mode — DONE + PROVEN.** Source fix committed in
+  the webui-go repo on branch **`feat/no-apply-inert-mode` (80f38ec)**: a
+  `-no-apply` flag (also env `GTBE98_WEBUI_NO_APPLY=1`) that skips ALL 8
+  boot-time mutators in `main()` (ApplyBootHooks / StartVLANs /
+  ApplyPortForwards / StartBuiltinRadius / StartPortals / StartCaptive /
+  **StartDirectWifi** / StartAssocWatch — the `init()`s only register handlers,
+  so these 8 are the complete mutating set), plus `wifi.SetHapdDir` that
+  instance-scopes the hostapd dir for any non-default `-conf` (defense-in-depth
+  so it can never touch the live `/tmp/webui-hapd`). Host strace differential:
+  default run = 17 killall execs + opens the hapd dir; `-no-apply` = 0 mutating
+  execs, 0 hapd-dir touches, HTTP 200. **LIVE ON-DEVICE PROOF (the decisive
+  regression check, no flash):** ran the 80f38ec static-ARM binary with
+  `-no-apply` on `127.0.0.1:8089` beside the production webui for 18 s — hostapd
+  11→11, `/tmp/webui-hapd` confs 7→7 (intact), all 3 named nets
+  (Ramondia/Pagoa/DEV-SCEP across 7 BSS) stayed **ENABLED**, no scoped dir even
+  created, served HTTP 200 + logged `no-apply=true`. This is the EXACT scenario
+  the prior webui tore down → **fix confirmed**.
+
+- **br-0047 firmware slice — built + diff-proven, but NAND-BLOCKED (NOT a
+  baseline).** Preserved on branch **`slice/br-0047-webui-nand-blocked`
+  (3288054)** (NOT master). Adds `gt-be98-br-webui` (pins 80f38ec) + the
+  beta-aware S29 rail launching with `-no-apply`. Artifact
+  `~/be98/artifacts-br/GT-BE98_br-0047_nand_squashfs.pkgtb` (sha256
+  `e1dc5577…`). Diff vs br-0046 = `/usr/br/sbin/webui` + `br-webui.sh` + S29
+  symlink (ADDED) + stamp ONLY; the 8 carried binaries BYTE-IDENTICAL, 401
+  applet links both sides. **WHY BLOCKED:** the UBI rootfs volumes are
+  slot-asymmetric — **rootfs1 (slot 1) = 67,805,184 B; rootfs2 (slot 2) =
+  71,106,560 B** — and br-0047's rootfs squashfs = **73,703,424 B**, overflowing
+  BOTH slots (hnd-write → exit 5, no write). The OpenSSH baseline (69,988,352 B)
+  already sits near the slot-2 ceiling, so an in-image webui (~3.7 MB compressed)
+  cannot fit. **`CONFIG_XZ_DEC_ARM` is unset in the kernel**, so an xz ARM-BCJ
+  squashfs (which would recover the space) would NOT mount → that avenue is out.
+  NOTE the slot asymmetry means only ONE OpenSSH-sized image can be committed at
+  a time (always slot 2); br-0045 (small) is the permanent slot-1 fallback.
+
+- **FEASIBLE next step to actually flash-trial webui:** ship it via the **/jffs
+  beta channel** the rail already supports — keep the rail in-image (rootfs stays
+  br-0046-sized → fits slot 2), DON'T harvest the binary into `/usr/br`, and
+  `scp -P 2223` the `-no-apply` binary to `/jffs/webui/webui.next`. Then
+  flash-trial on **slot 2** with **GOOD = slot 1 (br-0045)** — the same
+  slot-2/good-slot-1 pattern the OpenSSH br-0046 trial used (trialing any
+  OpenSSH-sized image overwrites slot 2; restore br-0046 from the artifact if it
+  fails). The `feat/no-apply-inert-mode` branch must be merged in the webui-go
+  repo (its own workflow) and the package version re-pinned.
+
 ## State (2026-06-06 NIGHT-2 — br-0046 OpenSSH/scp/sftp TRIALED + PASSED, **NEW COMMITTED BASELINE**)
 
 **COMMITTED BASELINE = br-0046** (slot 2; committed=2 valid 1,2 seq 35,36,
