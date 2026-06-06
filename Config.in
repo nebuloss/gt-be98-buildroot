@@ -5,5 +5,8 @@ source "$BR2_EXTERNAL_GT_BE98_PATH/package/gt-be98-userspace-base/Config.in"
 source "$BR2_EXTERNAL_GT_BE98_PATH/package/gt-be98-samba/Config.in"
 source "$BR2_EXTERNAL_GT_BE98_PATH/package/gt-be98-bootfs/Config.in"
 source "$BR2_EXTERNAL_GT_BE98_PATH/package/gt-be98-rootfs/Config.in"
+source "$BR2_EXTERNAL_GT_BE98_PATH/package/gt-be98-br-busybox/Config.in"
+source "$BR2_EXTERNAL_GT_BE98_PATH/package/gt-be98-br-dropbear/Config.in"
+source "$BR2_EXTERNAL_GT_BE98_PATH/package/gt-be98-br-openssl/Config.in"
 
 endmenu

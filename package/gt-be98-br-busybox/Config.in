@@ -1,0 +1,9 @@
+config BR2_PACKAGE_GT_BE98_BR_BUSYBOX
+	bool "gt-be98-br-busybox"
+	help
+	  Static busybox 1.37.0 for the /usr/br island. Built from the
+	  hash-verified upstream tarball with the pinned config in this
+	  package directory; harvested into the ASUS rootfs at
+	  /usr/br/bin by board/gt-be98/rootfs-transform.sh (binary +
+	  applet symlinks). Never installed to Buildroot's throwaway
+	  target rootfs.

@@ -19,6 +19,10 @@
 #   board/gt-be98/rootfs-overlay-full/   copied over the unpacked tree
 #   board/gt-be98/rootfs-remove.list     one path per line, '#' comments;
 #                                        each must exist (typo guard)
+#   board/gt-be98/br-busybox.links       pinned /usr/br applet-symlink set
+#                                        (harvest parity guard, step 2b)
+# Plus the from-source /usr/br binaries harvested out of $BUILD_DIR (step 2b):
+# gt-be98-br-{busybox,dropbear,openssl} packages, never committed to git.
 set -e
 
 BINARIES_DIR="$1"
@@ -85,6 +89,56 @@ if [ -d "$OVL" ] && [ -n "$(find "$OVL" -type f -o -type l 2>/dev/null | head -1
     cp -a "$OVL"/. "$ROOT"/
     echo "rootfs-transform: overlay applied ($(find "$OVL" -type f | wc -l) files)"
 fi
+
+# 2b. harvest the /usr/br island binaries (M5, br-0044): built FROM SOURCE by
+#     the gt-be98-br-{busybox,dropbear,openssl} packages - the git overlay
+#     carries only config/rails, never binaries. Copies EXACTLY the intended
+#     files into the ASUS tree (no Buildroot skeleton/TARGET_DIR leakage):
+#       /usr/br/bin/busybox + applet symlinks (pinned by br-busybox.links),
+#       /usr/br/sbin/dropbearmulti, /usr/br/bin/openssl.
+BRDST="$ROOT/usr/br"
+mkdir -p "$BRDST/bin" "$BRDST/sbin"
+
+BB_INST=$(find "$BUILD_DIR" -maxdepth 2 -type d -name '_install' -path '*gt-be98-br-busybox*' | head -1)
+[ -n "$BB_INST" ] && [ -x "$BB_INST/bin/busybox" ] || { echo "rootfs-transform: FATAL - br-busybox _install not found (enable BR2_PACKAGE_GT_BE98_BR_BUSYBOX)"; exit 1; }
+[ ! -e "$BB_INST/linuxrc" ] || { echo "rootfs-transform: FATAL - stray linuxrc in busybox _install"; exit 1; }
+[ ! -d "$BB_INST/usr" ] || { echo "rootfs-transform: FATAL - busybox _install has usr/ (INSTALL_NO_USR lost)"; exit 1; }
+cp -a "$BB_INST/bin/." "$BRDST/bin/"
+cp -a "$BB_INST/sbin/." "$BRDST/sbin/"
+# match the committed br-0043 /usr/br dir modes: the overlay ships /usr/br and
+# /usr/br/etc at 0775, and `cp -a src/.` above stamps the busybox _install's
+# 0755 onto bin/sbin - reset them to 0775 so the only rootfs deltas vs the
+# baseline are the 3 rebuilt binaries + the release stamp.
+chmod 0775 "$BRDST/bin" "$BRDST/sbin"
+
+DBM=$(find "$BUILD_DIR" -maxdepth 2 -type f -name 'dropbearmulti' -path '*gt-be98-br-dropbear*' | head -1)
+[ -n "$DBM" ] || { echo "rootfs-transform: FATAL - br-dropbear dropbearmulti not found (enable BR2_PACKAGE_GT_BE98_BR_DROPBEAR)"; exit 1; }
+install -m 0755 "$DBM" "$BRDST/sbin/dropbearmulti"
+
+OSSL=$(find "$BUILD_DIR" -maxdepth 3 -type f -name 'openssl' -path '*gt-be98-br-openssl*/apps/*' | head -1)
+[ -n "$OSSL" ] || { echo "rootfs-transform: FATAL - br-openssl apps/openssl not found (enable BR2_PACKAGE_GT_BE98_BR_OPENSSL)"; exit 1; }
+install -m 0755 "$OSSL" "$BRDST/bin/openssl"
+
+# applet-parity guard: the produced symlink set must match the pinned
+# manifest EXACTLY (any busybox config drift fails the build).
+( cd "$BRDST" && find bin sbin -type l | sort ) > "$WORK/bb.links"
+if ! cmp -s "$WORK/bb.links" "$BOARD/br-busybox.links"; then
+    echo "rootfs-transform: FATAL - /usr/br applet links differ from br-busybox.links:"
+    diff "$BOARD/br-busybox.links" "$WORK/bb.links" | head -20
+    exit 1
+fi
+
+# static-linkage guard: none of the three may have PT_INTERP or DT_NEEDED.
+if command -v readelf >/dev/null 2>&1; then
+    for b in "$BRDST/bin/busybox" "$BRDST/sbin/dropbearmulti" "$BRDST/bin/openssl"; do
+        if readelf -l "$b" 2>/dev/null | grep -q 'INTERP' || \
+           readelf -d "$b" 2>/dev/null | grep -q 'NEEDED'; then
+            echo "rootfs-transform: FATAL - $b is not fully static"
+            exit 1
+        fi
+    done
+fi
+echo "rootfs-transform: /usr/br harvest OK (busybox $(stat -c%s "$BRDST/bin/busybox")B + $(wc -l < "$WORK/bb.links") links, dropbearmulti $(stat -c%s "$BRDST/sbin/dropbearmulti")B, openssl $(stat -c%s "$BRDST/bin/openssl")B)"
 
 # 3. release marker (image identity for the validation gate).
 #    NB /etc in this rootfs is a symlink to tmpfs (tmp/etc) - the marker must

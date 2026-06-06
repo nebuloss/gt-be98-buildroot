@@ -1,0 +1,8 @@
+config BR2_PACKAGE_GT_BE98_BR_OPENSSL
+	bool "gt-be98-br-openssl"
+	help
+	  Static openssl 3.6.2 CLI (OPENSSLDIR=/usr/br/etc/ssl) for the
+	  /usr/br island. Built from the hash-verified upstream tarball;
+	  only the apps/openssl binary is harvested into the ASUS rootfs
+	  at /usr/br/bin/openssl by board/gt-be98/rootfs-transform.sh.
+	  The openssl.cnf + ssl dirs ship via the git overlay.

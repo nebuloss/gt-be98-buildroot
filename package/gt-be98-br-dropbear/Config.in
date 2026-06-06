@@ -1,0 +1,9 @@
+config BR2_PACKAGE_GT_BE98_BR_DROPBEAR
+	bool "gt-be98-br-dropbear"
+	help
+	  Static dropbearmulti 2025.89 (dropbear/dbclient/ssh/
+	  dropbearkey/ssh-keygen/scp, key-auth only) for the /usr/br
+	  island, used by the S28 br-dropbear rail on port 2223. Built
+	  from the hash-verified upstream tarball; harvested into the
+	  ASUS rootfs at /usr/br/sbin/dropbearmulti by
+	  board/gt-be98/rootfs-transform.sh.

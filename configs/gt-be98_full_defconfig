@@ -53,6 +53,16 @@ BR2_PACKAGE_HOST_UBOOT_TOOLS_FIT_SUPPORT=y
 BR2_PACKAGE_GT_BE98_ROOTFS=y
 BR2_PACKAGE_GT_BE98_BOOTFS=y
 
+# --- /usr/br island (M5, br-0044: built from source, harvested by transform) --
+# Static busybox 1.37.0 / dropbearmulti 2025.89 / openssl 3.6.2, cross-built
+# from hash-verified upstream tarballs with the external gcc-10.3 toolchain.
+# rootfs-transform.sh harvests the binaries (+ regenerated applet symlinks)
+# into the ASUS rootfs at /usr/br/{bin,sbin}; the git overlay keeps only
+# config/rails (init.d scripts, openssl.cnf, ssl dirs) - never binaries.
+BR2_PACKAGE_GT_BE98_BR_BUSYBOX=y
+BR2_PACKAGE_GT_BE98_BR_DROPBEAR=y
+BR2_PACKAGE_GT_BE98_BR_OPENSSL=y
+
 # --- Board hooks -------------------------------------------------------------
 # Buildroot builds a throwaway minimal rootfs; post-image-full.sh then replaces
 # rootfs.squashfs with the gt-be98-rootfs package's rootfs.img VERBATIM (the
