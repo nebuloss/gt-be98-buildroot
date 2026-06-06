@@ -40,7 +40,16 @@ story: `gt-be98-docs/flash-journal.md`. Slot 2 was neutralized with the
 br-0032 artifact; all trial flags cleared; final metadata
 booted=1=committed, valid 1,2.
 
-**br-0034 IS NOW THE COMMITTED BASELINE** (2026-06-06: slot 2, gate 20/20;
+**br-0035 IS NOW THE COMMITTED BASELINE** (2026-06-06 11:57: slot 1,
+gate 20/20 + slice gate; M4 slice 1 = br-0034 − infosvr/awsiot/mastiff/
+asd/wsdd2; slot 2 = br-0034 fallback; artifact `fb909b7d…18d0` archived;
+ONCE 5/5 lifetime; diff-proof exact; **bisect: telemetry/cloud group is NOT
+the br-0033 culprit**). M4 next slices: networkmap/uamsrv → cfg_server/
+wlc_nt/lldpd → amas symlinks → bsd/roamast. Trial-cycle budget 2026-06-06:
+2 used (br-0034, br-0035).
+
+Previous baseline note (superseded):
+**br-0034** (2026-06-06: slot 2, gate 20/20;
 v2 dead-man verified running from the /data flag; S27 breadcrumb logger
 verified from uptime 9 s; slot 1 = br-0032 fallback). br-0033's collateral
 MAC poisoning (BSP default written to nvram) was repaired from the baseline
