@@ -24,3 +24,11 @@
 /usr/sbin/cfg_server
 /usr/sbin/wlc_nt
 /usr/sbin/lldpd
+
+# --- slice 4 (br-0038) ---
+# AiMesh rc-multicall symlinks (all -> rc, none running on br-0037; starters
+# re_mode/nvram-gated). The rc binary itself is untouched.
+/sbin/amas_lanctrl
+/sbin/amas_portstatus
+/sbin/amas_ssd_cd
+/sbin/conn_diag
