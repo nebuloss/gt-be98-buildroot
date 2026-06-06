@@ -47,3 +47,19 @@
 /sbin/amas_status
 /sbin/amas_misc
 /sbin/amas_wlcconnect
+
+# --- slice 7 (br-0047) — monitor-retire #1 (Phase-2 rc-drain P2-2) ---
+# All four carry RETIRE verdicts in docs/device/plans/plan-phase2-rc-drain.md
+# §1.1 (respawn column = "none found" for every one -> safe Pattern-B file
+# removal; no watchdog respawn-fail loop). netool/rtkmonitor are /sbin/rc
+# MULTICALL SYMLINKS (verified in 0031: "-> rc", 2 bytes) -- deleting the
+# symlink removes only that rc entry-point, the /sbin/rc binary is untouched
+# (same pattern as slices 4-6). sysstate/wlc_monitor are real /usr/sbin
+# binaries (42864 / 9780 B in 0031). wlc_monitor is wifi-ADJACENT by name but
+# start_wlc_monitor is a plain monitor with no respawner; the dead-man-guarded
+# live kill-test (radios/bridges intact) is owed at TRIAL time before this
+# becomes the committed baseline.
+/sbin/netool
+/sbin/rtkmonitor
+/usr/sbin/sysstate
+/usr/sbin/wlc_monitor
