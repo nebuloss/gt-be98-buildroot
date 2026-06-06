@@ -14,3 +14,11 @@
   this), NOT wrapper-based.
 - Future slices: ≤5 removals each, one subsystem per slice, breadcrumbs
   (br-0034+) mandatory before any slice trial.
+
+---
+M4 CLOSURE (2026-06-06): all batch-1 file removals adopted via six ≤5-path
+slices (br-0035..br-0040, each gate 20/20). rootfs-remove.list (cumulative,
+in board/gt-be98/) is the live source of truth; this staging dir is
+historical. rootfs-rename.list here (envrams rename) and envrams-wrapper
+remain BANNED — by elimination they are the br-0033 root cause (see
+flash-journal root-cause section). Do not re-apply.
