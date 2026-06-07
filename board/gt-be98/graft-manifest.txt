@@ -1,0 +1,93 @@
+# GT-BE98 irreducible CLOSED Broadcom graft manifest
+# ----------------------------------------------------------------------------
+# The hash-locked set of genuinely-irreducible closed/binary-only Broadcom
+# objects that MUST stay PINNED (grafted, not built from source) in the
+# from-source rootfs track. These are the driver / HW-datapath / closed-ABI
+# objects with no open source path on this SDK.
+#
+# blob:      gt-be98 rootfs-0034 rootfs.img
+#            sha256 76d4ad9e307383a323ce3f01f0e0d7ba83023bd01ecfb3c25d68e456926935cf
+#            (current production baseline; superset of 0031, same closed objects)
+# extracted: unsquashfs(4.0, xz)  ->  /tmp/be98-rootfs0034  (read-only RE)
+# kernel:    4.19.294 (wl.ko/dhd.ko version-locked to this kernel)
+# format:    <category> <bytes> <sha256> <path-in-rootfs>  # why-closed
+# scope:     34 objects, 36434228 bytes (34.75 MiB)
+#
+# CROSS-REF: the proprietary-userspace KEEP-AS-GRAFT set (~52). This manifest
+# is the ~30 genuinely-irreducible (driver/HW/closed-ABI) subset of that set.
+# The non-irreducible remainder of the 52 (libcurl/libssl/sqlite/json-c/openssl
+# /libnl and the rc multicall farm) are open upstream and either BR-built or
+# SDK-from-source; they are not pinned here. See the [now-open] note below for
+# what graduated OUT of the graft entirely.
+# ============================================================================
+
+## [kernel] WiFi/DHD kernel drivers + radio firmware (binary-only; no source)
+kernel        21141776 cfa7be40cd0208c7fcd252e5cccebcb0769bb3349ca3fe90c735473104a6fcfb /lib/modules/4.19.294/extra/wl.ko                  # closed NIC/wl driver; version-locked to kernel 4.19.294; no source in SDK
+kernel         2500248 3e81fc5a0c6ba1c7ee28f96acb62b5e6a2e77ec7bd694454ae2c1b48e8278227 /lib/modules/4.19.294/extra/dhd.ko                 # closed DHD (dongle host) driver; version-locked; no source
+fw             5365784 ad6f9433ed9c900f2545af9ffc8c4fb2ae12d00e28629e9117139cc9efc8a687 /rom/etc/wlan/dhd/6726b0/release/rtecdc.bin        # 6726b0 radio firmware blob (on-chip dongle code); pure binary
+fw             4091928 886ef632b567ab48028fad31a85302cf5344719811bdc6b124219caf0d21c8d5 /rom/etc/wlan/dhd/6717a0/release/rtecdc.bin        # 6717a0 radio firmware blob; pure binary
+
+## [wifi-daemon] closed WiFi glue daemons (link libwl/wlcsm closed ABI)
+wifi-daemon      55072 6ebd628c1bac90cd277f97ffd32ba5fdcbbcc70811eb6a1f611b49215fbc1ec0 /bin/eapd                                          # EAP/auth offload daemon; closed Broadcom wl glue
+wifi-daemon      59100 4f3afbe81cba75c2cacda407088dbcc94b537444e2b3e5f363de0eadbc8daf9b /usr/sbin/wlceventd                                # wl ioctl event pump; closed
+wifi-daemon     129500 85460026b2eb50c64d74fa4e0cd620f74ec0a9bd2b74fa3ddfe0a2d8e2e0641a /bin/mcpd                                          # IGMP/MLD multicast proxy (datapath); closed
+wifi-daemon     491476 35dfa36b2b969b72585d4c04aafbec5e5f42555bfe461a1ba80e47c1850666ae /usr/sbin/acsd2                                    # auto-channel-select daemon; closed (acs_disable=1 live but binary kept)
+wifi-daemon      67352 4f28f400bad2aca62068edf441e2ae1125a73e307aa6f38803c7eea51e6328a0 /sbin/wps_pbcd                                     # WPS push-button daemon; closed wl glue
+wifi-daemon     136796 dbb8f95c9aa8e6549055e60f96510218ed97e4c970abefe098d3d0f0c7b7a447 /usr/sbin/dhd                                      # DHD control/dongle-load CLI; closed
+
+## [wl-tool] closed wl control binaries
+wl-tool        1408716 356fb79f118d8104ca72181a321f1f9a4cccaeb7a5e936906af41dbac907b734 /usr/sbin/wl                                       # the wl ioctl tool; closed; ~1.4 MB of private ioctl tables
+wl-tool         112512 0e4a1268b849beb5df1f57ad88a7a062b0115e2768fc92625ee89aaf2dfa29a3 /usr/sbin/wlconf                                   # closed nvram->wl radio applier; SUPERSEDED LIVE by the open EnsureRadio path, PINNED until the from-source OS boots the open path
+
+## [hw-ctl] Broadcom HW datapath control binaries (Runner/Archer/Ethernet)
+hw-ctl           59136 9f73246c82d7c9da212ec13e3a0d8255e379532364541969d53da13eaaaf46ea /bin/ethctl                                        # PHY/MAC ctl ioctls; closed bcm HW
+hw-ctl           43664 91c42911ce5f02a33d841b31427d4647e418609b4840614d79035cad8ec5e36a /bin/ethswctl                                      # switch ctl ioctls; closed
+hw-ctl           34524 28e78f5e9c78fa3945046fc239671f5b5df30f92c386a068f4b0dc1fe8d5ca4d /bin/vlanctl                                       # VLAN datapath ctl; closed
+hw-ctl           39976 5850979a5e0ddddb9a7b0d854f7eb7e15128cac05cc20428b0b9fbcdc400aca2 /bin/fcctl                                         # flow-cache (HW accel) ctl; closed
+hw-ctl           50168 9aa2298499f89236d7344301676901ef65b35b4722f553cda633b61592b561be /bin/tmctl                                         # traffic-manager/QoS ctl; closed
+hw-ctl           16032 3be44840a196960ccd529cbd4aa11bd2d996429542afc5607d5f809d58a80549 /bin/pwrctl                                        # power/clock-gating ctl; closed
+hw-ctl           41264 c52ecce9cebdc46050ff023021e81f411d104f67ab858f10f100a6ea8d6db7a5 /bin/archerctl                                     # Archer accelerator ctl; closed
+hw-ctl           14248 5572b9722c290eb613455fa98809f768af7141e00351cbbd5e9328e2a1956e77 /bin/bcmmcastctl                                   # HW multicast offload ctl; closed
+
+## [hw-ctl-lib] the matching closed ctl shared libs (DT_NEEDED of the above + rc)
+hw-ctl-lib       18060 7c3e6c3650d02cbb56f1188a8e40bd50764d3b0fa82afe0b686c484c547649d3 /lib/libethctl.so                                  # closed ethctl ABI
+hw-ctl-lib       83648 321c819eb91244d35db44dca2968cf48855044b5d11f94cce2d116aff7da39cc /lib/libethswctl.so                                # closed ethswctl ABI
+hw-ctl-lib       34372 b57cc3e84076b6e4ebc9cf26177659d76ee7ac7befb70e4336a7fdca4b84ceda /lib/libvlanctl.so                                 # closed vlanctl ABI
+hw-ctl-lib       17724 5c4a25cac0e6f02fafae39532092667cf569341cb37e8b9d6547b772d29981ca /lib/libfcctl.so                                   # closed fcctl ABI
+hw-ctl-lib      117032 5d15ed652d115e3db955b6dd9c92afd6b799a63fe5fc2a3aafa84106a595af94 /lib/libtmctl.so                                   # closed tmctl ABI
+hw-ctl-lib       26436 77f9727cc9f9dff78e02c62a479ff6bc07efed238d8205cdea0249ecf96d2e07 /lib/libpwrctl.so                                  # closed pwrctl ABI
+hw-ctl-lib       13612 c948dd37ef5b01bebf3692955d7898ab5905a57582557d2d9b34cdda8da2cbab /lib/libarcher.so                                  # closed Archer accel ABI
+hw-ctl-lib       13644 d478b1f49e75b73b2ab70cf3ad4f79de5beac766c51195b50fe78662e5f8e796 /lib/librdpactl.so                                 # closed Runner/RDPA datapath ABI
+hw-ctl-lib        5404 32e17d2ea4bb99c0f6b665b62f665cd50969d689da2ecad182e4ce932c484019 /lib/libbdmf.so                                    # closed BDMF (Broadcom Device Mgmt Framework) ABI
+hw-ctl-lib       17776 852beeb7ce888d80a195cc12544ec7bb1c4d22a4db2cac61646fb3db2ff77a57 /lib/libbcmmcast.so                                # closed HW multicast offload ABI
+
+## [nvram] DECISION B: pin the stock nvram blob (do NOT use clean-room from-source)
+nvram            35912 6eb214a9e4de1269d5467c8ac5d9f3ed4fdfda535d6546ea222fba44d0e35c46 /lib/libnvram.so                                   # closed NETLINK_WLCSM client lib; pinned (clean-room gt-be98-nvram parked)
+nvram            23328 7ea7de4161b9b5e7ee27c3e7933467ce2bdb1b9374599b4c1953cfad87652e2f /bin/nvram                                         # closed nvram CLI; pinned per decision B
+
+## [flash] flash-boot writer (closed slot/UBI image writer ABI)
+flash           158428 18c98a3c45d78b7ccc26e82a94ea225ac3b422d123b6b783f71691f5639fb0d0 /lib/libbcm_flashutil.so                           # closed flash/boot image writer (hnd-write / bcm_flasher backend)
+
+## [wifi-ce] closed CE shared lib pulled by the (from-source) hostapd daemon
+wifi-ce           9580 b489be51bdd77eba557bb32ee9133b891f651fdccca81bfe6d5352d42e108c8e /usr/lib/libceshared.so                            # closed CEvent shared ABI; only remaining closed DT_NEEDED of the from-source hostapd
+
+# ============================================================================
+# TOTAL: 34 objects, 36434228 bytes (34.75 MiB) -- all hash-locked to 0034.
+#
+# [now-open] GRADUATED OUT of the graft (proven from-source, NOT pinned):
+#   /usr/sbin/hostapd      from-source DRIVER_BRCM daemon, BYTE-IDENTICAL to 0034
+#                          (sha256 7453000858a87738146fa0898d75036195a09e965e9b6f8a12e39ec0c7aede2d)
+#                          -> package/gt-be98-hostapd (BR2_PACKAGE_GT_BE98_HOSTAPD_DAEMON)
+#   /usr/sbin/hostapd_cli  from-source (vendor GPL hostapd v2.10+BRCM)
+#                          -> package/gt-be98-hostapd
+#   /usr/lib/libshared.so  from-source via SDK build-glue, BYTE-IDENTICAL to 0034
+#                          (sha256 b0ebf7af714048050ba390d458c138bc0d928ccf157d3c9a04ce13afcf4ee886,
+#                           strip-all; ABI 1449 exported / 197 undefined, 0 diff)
+#                          -> package/gt-be98-libshared
+#   /sbin/rc               from-source (ABI/closure-correct, NOT byte-identical by
+#                          design - different lib provenance) -> package/gt-be98-rc
+#
+# [note] libnvram.so + nvram were candidates to go open (clean-room gt-be98-nvram,
+#   ABI-compatible NETLINK_WLCSM client) but per DECISION B the clean-room recipe
+#   is PARKED and the stock blob stays pinned (above) until bench-validated.
+# ============================================================================
