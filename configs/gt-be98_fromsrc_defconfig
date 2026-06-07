@@ -1,0 +1,41 @@
+# From-source userspace defconfig for the GT-BE98 open-OS migration.
+#
+# Lives BESIDE gt-be98_full_defconfig (the production baseline) and never
+# replaces it. Selects the from-source recipes (libshared / nvram / hostapd)
+# built via the merlin SDK build-glue, IN PLACE OF the blob-grafted versions,
+# to measure the from-source vs pinned-Broadcom-graft split of the userspace.
+#
+# Toolchain identical to gt-be98_full_defconfig (cached external gcc-10.3).
+#
+# Build (isolated output, never clobbers the shared full build):
+#   make BR2_EXTERNAL=/home/guillaume/be98/gt-be98-buildroot \
+#        O=/home/guillaume/be98/buildroot/output-fromsrc gt-be98_fromsrc_defconfig
+#   make O=/home/guillaume/be98/buildroot/output-fromsrc
+
+BR2_arm=y
+BR2_cortex_a9=y
+BR2_ARM_EABI=y
+BR2_ARM_ENABLE_VFP=y
+BR2_ARM_FPU_VFPV3=y
+
+BR2_TOOLCHAIN_EXTERNAL=y
+BR2_TOOLCHAIN_EXTERNAL_CUSTOM=y
+BR2_TOOLCHAIN_EXTERNAL_DOWNLOAD=y
+BR2_TOOLCHAIN_EXTERNAL_URL="https://github.com/nebuloss/gt-be98-toolchain/releases/download/arm_softfp-gcc10.3/gt-be98-toolchain-arm_softfp-gcc10.3.tar.gz"
+BR2_TOOLCHAIN_EXTERNAL_CUSTOM_PREFIX="arm-buildroot-linux-gnueabi"
+BR2_TOOLCHAIN_EXTERNAL_GCC_10=y
+BR2_TOOLCHAIN_EXTERNAL_HEADERS_4_19=y
+BR2_TOOLCHAIN_EXTERNAL_CUSTOM_GLIBC=y
+BR2_TOOLCHAIN_EXTERNAL_CXX=y
+# BR2_TOOLCHAIN_EXTERNAL_INET_RPC is not set
+
+BR2_INIT_NONE=y
+# BR2_PACKAGE_BUSYBOX is not set
+BR2_SYSTEM_BIN_SH_NONE=y
+# BR2_TARGET_GENERIC_GETTY is not set
+BR2_ROOTFS_DEVICE_TABLE=""
+
+# From-source userspace recipes (the open half of the rootfs)
+BR2_PACKAGE_GT_BE98_LIBSHARED=y
+BR2_PACKAGE_GT_BE98_NVRAM=y
+BR2_PACKAGE_GT_BE98_HOSTAPD=y
