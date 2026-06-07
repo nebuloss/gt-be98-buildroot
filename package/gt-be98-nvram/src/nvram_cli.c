@@ -79,6 +79,12 @@ static int do_kernelset(const char *file)
 {
 	char line[LINE_MAX_LEN];
 	FILE *f;
+	/* Instrumentation: a populate over the full ~8000-var boot file is the
+	 * scenario the isolated bench never exercised. Tally what we process so a
+	 * boot-time caller (hndnvram.sh) can log scale + failures to /data. The
+	 * summary goes to stderr (one line) so it never pollutes a parsed stdout. */
+	unsigned long n_lines = 0, n_set = 0, n_fail = 0, n_skip = 0, n_long = 0;
+	int verbose = (getenv("NVRAM_KERNELSET_VERBOSE") != NULL);
 
 	if (!file)
 		file = KERNEL_NVRAM_FILE;
@@ -87,23 +93,46 @@ static int do_kernelset(const char *file)
 		return 1;
 	while (fgets(line, sizeof(line), f)) {
 		char *eq, *name, *value;
-		if (line[0] == '#')
+		size_t ll = strlen(line);
+		n_lines++;
+		/* A line that filled the buffer without a terminating newline was
+		 * longer than the parser's buffer (value would be truncated and its
+		 * tail re-parsed). The real boot file has none (max line 827B), but
+		 * flag it so a re-trial proves the assumption on the live /data file. */
+		if (ll == sizeof(line) - 1 && line[ll - 1] != '\n')
+			n_long++;
+		if (line[0] == '#') {
+			n_skip++;
 			continue;            /* comment */
+		}
 		eq = strchr(line, '=');
-		if (!eq)
+		if (!eq) {
+			n_skip++;
 			continue;            /* no name=value separator */
+		}
 		*eq = '\0';
 		value = eq + 1;
 		/* strip the trailing newline fgets keeps; preserve the rest verbatim */
 		value[strcspn(value, "\r\n")] = '\0';
 		name = trim(line);
-		if (!*name)
+		if (!*name) {
+			n_skip++;
 			continue;
-		nvram_set(name, value);
+		}
+		if (nvram_set(name, value) == 0)
+			n_set++;
+		else
+			n_fail++;          /* pair too large for the 1024B wire cap, etc. */
 	}
 	fclose(f);
 	printf("popuplate nvram from %s done!\n", file);
-	return 0;
+	if (verbose || n_fail || n_long)
+		fprintf(stderr,
+			"kernelset: file=%s lines=%lu set=%lu fail=%lu skip=%lu overlong=%lu\n",
+			file, n_lines, n_set, n_fail, n_skip, n_long);
+	/* Non-zero exit if any pair was rejected so the caller can detect a partial
+	 * populate (previously every outcome returned success). */
+	return n_fail ? 1 : 0;
 }
 
 /*
@@ -223,6 +252,7 @@ static void usage(void)
 {
 	fprintf(stderr,
 		"usage: nvram [get name] [set name=value] [unset name] "
+		"[kget name] [kset name=value] [kunset name] [kcommit] "
 		"[show|getall] [commit] [kernelset [file]] [restore_mfg [file]] "
 		"[getflag name bit] [setflag name bit=value] "
 		"[get_bitflag name bit] [set_bitflag name bit 0|1]\n");
@@ -245,6 +275,36 @@ int main(int argc, char **argv)
 	}
 	if (!strcmp(argv[1], "unset") && argc == 3)
 		return nvram_unset(argv[2]) ? 1 : 0;
+	/*
+	 * RAM-only ("k*") verbs. The in-kernel bcm_knvram tree IS the live store and
+	 * a netlink SET/GET/UNSET is already RAM-only (the file is only touched by an
+	 * explicit `commit`), so kget/kset/kunset are the get/set/unset operations and
+	 * kcommit is a no-op (it flushes nothing to flash - matches the vendor verb).
+	 *
+	 * These are NOT optional: the wl bring-up path uses them heavily and ONLY in
+	 * these spellings - hndnvram-adjacent scripts call `nvram kset` (apply CFE
+	 * uboot knvram overrides at S41 wluboot2knvram), and bcm-wlan-drivers.sh /
+	 * wifi.sh call `nvram kget`/`kset`/`kunset`/`kcommit` (radio unit list, DPD /
+	 * EDPD / MLO power-up, PCIe apon) right before the wl firmware load. Without
+	 * these verbs every such call fell through to usage() (exit 1, empty stdout),
+	 * so the uboot overrides were silently dropped and the DPD/MLO config never
+	 * applied - a boot-path break the isolated lib bench could not surface.
+	 */
+	if (!strcmp(argv[1], "kget") && argc == 3) {
+		char *v = nvram_get(argv[2]);
+		if (v) printf("%s\n", v);
+		return 0;
+	}
+	if (!strcmp(argv[1], "kset") && argc == 3) {
+		char *eq = strchr(argv[2], '=');
+		if (!eq) { usage(); return 1; }
+		*eq = '\0';
+		return nvram_set(argv[2], eq + 1) ? 1 : 0;
+	}
+	if (!strcmp(argv[1], "kunset") && argc == 3)
+		return nvram_unset(argv[2]) ? 1 : 0;
+	if (!strcmp(argv[1], "kcommit") && argc == 2)
+		return nvram_kcommit();   /* RAM-only: no flash write (returns 0) */
 	if (!strcmp(argv[1], "commit") && argc == 2)
 		/* explicit, cross-process commit: ALWAYS persist (stock semantics).
 		 * A standalone `nvram commit` runs in its own process with an empty
