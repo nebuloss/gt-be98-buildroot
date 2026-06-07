@@ -1,0 +1,23 @@
+config BR2_PACKAGE_GT_BE98_RC
+	bool "gt-be98-rc (rc, from source)"
+	select BR2_PACKAGE_GT_BE98_LIBSHARED
+	select BR2_PACKAGE_GT_BE98_NVRAM
+	help
+	  Builds the asuswrt-merlin router init/service engine (rc) FROM
+	  SOURCE via the merlin SDK build-glue (SRCBASE/HND_SRC + the
+	  fully-expanded -DGTBE98 CFLAGS) with
+	  ASUSWRT_BRCM_SDK_VERSION=WIFI7_SDK_20231126 (selects the GT-BE98
+	  _be prebuild .o variant). The 108 open .c are compiled and linked
+	  against: the from-source libshared (gt-be98-libshared), the
+	  from-source/clean-room libnvram (gt-be98-nvram), and the
+	  irreducible-core vendor libs (wpa_client/ethctl/gen_util/sys_util/
+	  wlcsm/bcm_flashutil/bcm_util/bcm_boardctl/bcm/wlc_nt_client/disk +
+	  json-c/sqlite/openssl) which are PINNED graft inputs sourced from
+	  the SDK build tree.
+
+	  Result: ELF32 ARM EABI5 executable, full DT_NEEDED closure (36
+	  libs) resolves; rc verbs (start_*/stop_*/notify_rc/sync_boot_state)
+	  present. This is the from-source rc that unblocks the OpenRC
+	  rc-demotion (reboot-site patches). Requires the firmware tree at
+	  $(BR2_EXTERNAL)/../gt-be98-firmware. Not wired into the production
+	  image.
