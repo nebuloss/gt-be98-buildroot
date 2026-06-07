@@ -1,0 +1,18 @@
+config BR2_PACKAGE_GT_BE98_HOSTAPD
+	bool "gt-be98-hostapd (hostapd_cli, vendor-source)"
+	help
+	  Builds hostapd_cli FROM the vendor GPL hostapd source (upstream
+	  hostapd v2.10 + Broadcom patches, impl103). hostapd_cli is the
+	  self-contained wpa_ctrl client (no driver / openssl / libnl / BRCM
+	  glue) and is the clean-from-source proof for the hostapd tree.
+
+	  The full hostapd DAEMON is NOT built here: its vendor brcm.config
+	  (DRIVER_BRCM + MLO/MAP) is gated behind the Broadcom SDK header
+	  graph (HND_SRC/SRCBASE) and links libceshared/libnl-3/openssl-1.1/
+	  libnvram/libshared - i.e. the merlin SDK build environment. See the
+	  package .mk and the RE wifi dossier for the daemon blocker detail.
+
+	  Requires the firmware tree at
+	  $(BR2_EXTERNAL)/../gt-be98-firmware (same dependency as the
+	  production rootfs/bootfs recipes). Not wired into the production
+	  image.

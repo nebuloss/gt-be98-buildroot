@@ -10,5 +10,6 @@ source "$BR2_EXTERNAL_GT_BE98_PATH/package/gt-be98-br-dropbear/Config.in"
 source "$BR2_EXTERNAL_GT_BE98_PATH/package/gt-be98-br-openssl/Config.in"
 source "$BR2_EXTERNAL_GT_BE98_PATH/package/gt-be98-br-openssh/Config.in"
 source "$BR2_EXTERNAL_GT_BE98_PATH/package/gt-be98-nvram/Config.in"
+source "$BR2_EXTERNAL_GT_BE98_PATH/package/gt-be98-hostapd/Config.in"
 
 endmenu
