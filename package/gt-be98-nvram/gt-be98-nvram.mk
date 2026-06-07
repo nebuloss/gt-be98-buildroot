@@ -1,6 +1,16 @@
 ################################################################################
 #
-# gt-be98-nvram
+# gt-be98-nvram   *** PARKED / EXPERIMENTAL (DECISION B) ***
+#
+# STATUS: PARKED. The from-source userspace track pins the STOCK nvram BLOB
+# (libnvram.so + nvram CLI, hash-locked in board/gt-be98/graft-manifest.txt)
+# rather than this clean-room reimplementation. On-device trials of the
+# from-source nvram caused an incomplete boot (see AGENTS / job-tmp nvram
+# retrials), so per DECISION B the stock blob is the supported path and the
+# from-source OS userspace = libshared + hostapd + rc (nvram = pinned blob).
+# This recipe is RETAINED (not deleted) as experimental: it still builds and
+# stages -lnvram for the other from-source packages at LINK time, and remains
+# the basis for a future open nvram once bench-validated against bcm_knvram.ko.
 #
 # Open libnvram.so + nvram CLI: a clean-room userspace client for the
 # NETLINK_WLCSM (proto 31) protocol of the OPEN in-kernel store bcm_knvram.ko.

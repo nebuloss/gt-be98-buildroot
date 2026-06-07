@@ -1,6 +1,11 @@
 config BR2_PACKAGE_GT_BE98_NVRAM
-	bool "gt-be98-nvram"
+	bool "gt-be98-nvram (PARKED/experimental - decision B pins the blob)"
 	help
+	  PARKED (DECISION B): the from-source rootfs pins the STOCK nvram
+	  blob (graft-manifest.txt); this clean-room recipe is retained as
+	  experimental (builds + stages -lnvram for link) but is NOT the
+	  supported on-device path - it caused an incomplete boot in trials.
+
 	  Open libnvram.so + nvram CLI for the GT-BE98. A clean-room
 	  userspace client for the NETLINK_WLCSM (proto 31) protocol of
 	  the OPEN in-kernel store bcm_knvram.ko, replacing the closed,
