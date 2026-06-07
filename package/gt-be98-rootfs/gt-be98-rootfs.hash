@@ -1,4 +1,5 @@
 # sha256 of the gt-be98-packages Release asset, from scripts/package-blob.sh
-# (reproducible tar: --sort=name --mtime=@0 + gzip -n). Contents extracted from
-# the validated 0031 pkgtb (scripts/extract-pkgtb.sh).
-sha256  26fa4540015346484e89d355a4fa608dce05b5085a657cf55d4c7dfab4754d5b  gt-be98-rootfs-0031.tar.gz
+# (reproducible tar: --sort=name --mtime=@0 + gzip -n). Contents: the Phase-2b
+# artifacts-0034 rootfs.img, byte-identical to the squashfs embedded in the
+# 0034 update pkgtb (verified via dumpimage FIT hash).
+sha256  8b9dcf7fc621851ab9eb40d5dabe9104aa0941d1abe090094cc50bec25437fc0  gt-be98-rootfs-0034.tar.gz
