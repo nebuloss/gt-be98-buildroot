@@ -3,6 +3,43 @@
 You're working in the **Buildroot external tree** that will replace the
 asuswrt-merlin SDK build. Read `ARCHITECTURE.md` first.
 
+## State (2026-06-07 — FROM-SOURCE NVRAM flash TRIAL → FAILED (boot incomplete) → ROLLED BACK to br-0049 baseline)
+
+**First flash-trial of a from-source core component (the clean-room open nvram
+client) — FAILED, clean automatic rollback, device safe on br-0049.** Image =
+br-0049 with EXACTLY the 2 nvram files swapped (`bin/nvram` + `lib/libnvram.so`,
+clean-room), sha256 `f39fda24…0b8692` (83,210,952 B), built WITH all 3 committed
+fix rounds (`de97993`+`deb4acc`+`3025f94`). Trialed on slot 2 with slot 1
+(br-0045) as the dead-man GOOD fallback (window 600s).
+
+- **Progress vs prior gate:** the from-source image **boots `rc` and drives early
+  init through dhd wifi-driver insmod at T+49s** (per `/data/boot-breadcrumb.log.prev`,
+  `ubi.block=0,6`). So the code-audit boot-breaker **"rc won't start (unresolved
+  `nvram_get_bitflag`)" is RESOLVED**. But the boot **dies between ~T+49s and
+  T+60s** — the S40 `hndnvram.sh` `nvram kernelset` kernel-tree-populate +
+  nvram-driven service/wifi bring-up stage — and **never becomes SSH/network
+  reachable on slot 2**.
+- **Recovery:** bootloader fell back to the committed GOOD slot 1 (ONCE consumed,
+  `reset_reason=34`, `bfc=0`); device up on br-0045 in ~3 min. The 600s dead-man
+  didn't need to fire (boot self-terminated early → committed-slot fallback).
+- **Rollback:** re-flashed slot 2 with br-0049 RESTORE (sha `d989aa3a…`),
+  committed 2, rebooted. **END STATE = pre-trial baseline:** booted slot 2
+  br-0049, **committed 2 valid 1,2 seq 35,36**, no flag; **gate 18/0**; nvram ==
+  pre-trial (lan_ipaddr=10.0.0.8); wifi identical (4 radios, 11 hostapd, 7 named
+  BSSes); SSH :2222+:2223 + webui :80→200. **`/jffs` UNTOUCHED** (webui md5
+  `a4857fce…` unchanged pre/post); no MAC read/printed.
+- **VERDICT: FAIL documented; from-source flash STILL gated.** rc-start fixed;
+  remaining breaker is the on-boot nvram populate / service-config stage. Fix
+  path: capture **serial console** on a slot-2 boot (20s breadcrumb cadence too
+  coarse) + instrument S40 to log `nvram kernelset` result + dmesg to /data at
+  T+50-70s; re-confirm the cross-process-commit + getall-paging fixes are exercised
+  by the *real* S40 populate on hardware (not just the isolated bench); re-trial
+  once instrumented + green. See flash-journal 2026-06-07 from-source entry +
+  [[from-source-rootfs-rebuild]]. (Benign `nvram getall` enumeration caveat still
+  worth a watch.) Buildroot tree itself UNCHANGED by the trial (no .mk/overlay/blob
+  edit); RELEASE NOT bumped (no new baseline). docs/device submodule pointer left
+  dirty (operator to commit).
+
 ## State (2026-06-07 — wave-1 webui (per-key scopes + portmap + inert hygiene + direct :80) DEPLOYED + VALIDATED LIVE on br-0049 — NOT merged to main)
 
 **webui-go-only change, deployed live to /jffs on br-0049 (no flash/reboot,
