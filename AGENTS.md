@@ -3,6 +3,65 @@
 You're working in the **Buildroot external tree** that will replace the
 asuswrt-merlin SDK build. Read `ARCHITECTURE.md` first.
 
+## State (2026-06-07 — P2-6 (:80 cutover, option 1a): webui binds :80 DIRECTLY, :80→:8080 redirect DROPPED — LIVE on br-0049, no flash/reboot)
+
+**NOT a buildroot/firmware change — a webui-go source change, deployed live to
+/jffs on the committed br-0049 baseline.** Buildroot tree UNCHANGED (no .mk, no
+overlay, no blob bump). The redirect lived only in the webui-go binary (boothooks
+`applyFirewallRules`), never in buildroot — repo-wide grep for `REDIRECT`/
+`--to-ports`/`dport 80` is still zero hits here.
+
+- **What P2-6 1a is:** the cleanup after br-0049's "httpd gated off, :80 served by
+  the webui-owned `:80→:8080` REDIRECT" finding. The Go webui now **binds :80
+  directly** (`-listen :80`) and the redirect `-A` add is removed (a delete-only
+  scrub of any stale rule is kept so an in-place upgrade flushes it). Functional
+  goal (webui owns :80) was already met via the redirect; this removes the NAT hop.
+
+- **webui-go branch `feat/p2-6-bind-80` (commit `eb80aa7`), NOT merged/pushed —
+  left for the webui owners.** Edits: `scripts/services-start` `-listen :8080`→`:80`;
+  `internal/api/boothooks.go applyFirewallRules()` drop redirect add, keep delete
+  scrub; `internal/api/adminbind_actions.go validAdminPort()` stop refusing port 80
+  (the ban only existed for the redirect); lockstep loopback notify port→:80 in
+  `scripts/{firewall-start,service-event}` + `deploy/push.sh`. Tests updated; full
+  `go test ./internal/api/` PASS.
+
+- **Spec gaps found + handled (the spec assumed `-listen :80` alone suffices):**
+  (1) the public admin bind comes from the persisted `admin.conf` AP row
+  (`AP_1_PORT`), NOT `-listen` — `-listen` only drives the loopback lifeline +
+  the default-for-new-portals. After deploy the portal still bound `:8080`; fixed
+  by `update_admin_portal id=1 port=80` (persisted in webui.db, survives reboot).
+  (2) `validAdminPort` hard-refused 80 — relaxed in source (above).
+
+- **Live deploy (device 10.0.0.8, /jffs, no flash, no reboot):** new static
+  ARMv7 binary sha256 `0f3c6c7a9e071e9ed87c207bc2904bfe5fe29c6da2ef879e5b59695e1acb67bc`
+  (built `CGO_ENABLED=0 GOARCH=arm GOARM=7`, ver `eb80aa7`) → `/jffs/webui/webui`;
+  edited `services-start` (preserving the device-local `trial-deadman` line) +
+  `firewall-start`/`service-event`. Restart via the `services-start` rail (kill
+  webui pid + relaunch on :80) — NEVER `service restart_*`, NEVER reboot. Backups
+  on device: `/jffs/webui/webui.p2-6-bak` + `/jffs/scripts/*.p2-6-bak` (rollback =
+  file copy + re-run services-start → reverts to :8080 + redirect re-add).
+
+- **VALIDATION — all PASS:** `ss/netstat`: webui pid owns **10.0.0.8:80** +
+  127.0.0.1:80 directly (`:8080` closed); `iptables -t nat -L PREROUTING`: **no
+  REDIRECT** (only the captive `br70 dport80→10.0.70.55:8082` DNAT, unaffected —
+  position-1 PREROUTING DNAT fires before local delivery). Host `curl :80` → 200
+  `<title>GT-BE98</title>`, **0 redirect hops**; Bearer API `get_sysinfo`/
+  `auth_status` on :80 → 200 authed. httpd ABSENT, `last_httpd_handle_request`
+  FROZEN empty. WIFI INTACT: 4 radios up, 11 hostapd (4 stock + 7 webui-hapd),
+  7 named BSSes (Ramondia x3/Pagoa x1/DEV-SCEP x3) + test/captive br70,
+  `/tmp/webui-hapd` 7 confs intact. SSH :2222 + :2223 both up. Loopback notify on
+  :80 proven (firewall-start stub → `firewall-event` logged; no redirect re-added).
+
+- **SOAK ~10 min (09:55→10:04, 6 samples): clean** — webui pid stable on :80, no
+  flap, hostapd 11 steady, redirect stays absent, httpd churn stays dead.
+
+- **VERDICT: LIVE on :80 (direct bind), accepted.** What's left for the webui
+  owners: review/merge/push `feat/p2-6-bind-80` (this session did NOT merge or
+  push). Note the persisted device-state change (`AP_1_PORT=80` in webui.db) — a
+  fresh deploy to a device whose admin.conf still has a non-80 AP row needs the
+  same `update_admin_portal …port=80` (or clear the AP row to fall back to the
+  `-listen` default). Submodule `docs/device` pointer left dirty (do NOT commit).
+
 ## State (2026-06-07 — br-0049 Phase-2b blob 0034 (httpd + sched_daemon SOURCE-GATED OFF) TRIALED + PASSED → NEW COMMITTED BASELINE (slot 2; slot 1 = br-0045 fallback))
 
 **COMMITTED BASELINE = br-0049** (slot 2; **committed 2 valid 1,2 seq 35,36,
