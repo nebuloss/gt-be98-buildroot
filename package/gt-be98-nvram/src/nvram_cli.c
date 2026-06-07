@@ -182,11 +182,50 @@ static int do_restore_mfg(const char *file)
 	return overflow ? 1 : 0;
 }
 
+/*
+ * Bitflag verbs over a hex-string nvram var (one bit of bits 0..31).
+ *
+ * The stock /bin/nvram (confirmed by disassembly of the closed binary) exposes
+ * these as `getflag`/`setflag` with this exact arg shape:
+ *     nvram getflag <name> <bit>          -> get_bitflag(name, atoi(bit))
+ *     nvram setflag <name> <bit>=<value>  -> set_bitflag(name, atoi(bit), atoi(value))
+ * setflag's second token is a single "bit=value" argument (strsep on '='), and
+ * the verb prints the resulting var value. We reproduce both verbs faithfully.
+ *
+ * For completeness we ALSO accept the conventional separated-argument spellings
+ * `get_bitflag`/`set_bitflag` (the library symbol names) so callers/scripts that
+ * use either form dispatch correctly instead of falling through to usage:
+ *     nvram get_bitflag <name> <bit>
+ *     nvram set_bitflag <name> <bit> <0|1>
+ * NOTE: no boot/rootfs script invokes any of these CLI verbs (grep of
+ * p3step0/root + hndnvram.sh + services-start found none) - they are not
+ * boot-critical; the in-process consumers use the library symbols directly.
+ */
+static int do_getflag(const char *name, const char *bit)
+{
+	char *v = nvram_get_bitflag(name, atoi(bit));
+	if (v)
+		printf("%s\n", v);
+	return 0;
+}
+
+static int do_setflag(const char *name, int bit, int value)
+{
+	char *v;
+	(void)nvram_set_bitflag(name, bit, value ? 1 : 0);
+	v = nvram_get(name);
+	if (v)
+		printf("%s\n", v);
+	return 0;
+}
+
 static void usage(void)
 {
 	fprintf(stderr,
 		"usage: nvram [get name] [set name=value] [unset name] "
-		"[show|getall] [commit] [kernelset [file]] [restore_mfg [file]]\n");
+		"[show|getall] [commit] [kernelset [file]] [restore_mfg [file]] "
+		"[getflag name bit] [setflag name bit=value] "
+		"[get_bitflag name bit] [set_bitflag name bit 0|1]\n");
 }
 
 int main(int argc, char **argv)
@@ -207,13 +246,32 @@ int main(int argc, char **argv)
 	if (!strcmp(argv[1], "unset") && argc == 3)
 		return nvram_unset(argv[2]) ? 1 : 0;
 	if (!strcmp(argv[1], "commit") && argc == 2)
-		return nvram_commit() ? 1 : 0;
+		/* explicit, cross-process commit: ALWAYS persist (stock semantics).
+		 * A standalone `nvram commit` runs in its own process with an empty
+		 * dirty flag, so the plain nvram_commit() early-return would write
+		 * nothing and silently lose an earlier `nvram set`. */
+		return nvram_commit_force() ? 1 : 0;
 	if ((!strcmp(argv[1], "show") || !strcmp(argv[1], "getall")) && argc == 2)
 		return do_show();
 	if (!strcmp(argv[1], "kernelset") && (argc == 2 || argc == 3))
 		return do_kernelset(argc == 3 ? argv[2] : NULL);
 	if (!strcmp(argv[1], "restore_mfg") && (argc == 2 || argc == 3))
 		return do_restore_mfg(argc == 3 ? argv[2] : NULL);
+	/* stock-exact: getflag <name> <bit> */
+	if (!strcmp(argv[1], "getflag") && argc == 4)
+		return do_getflag(argv[2], argv[3]);
+	/* stock-exact: setflag <name> <bit>=<value> (one "bit=value" token) */
+	if (!strcmp(argv[1], "setflag") && argc == 4) {
+		char *eq = strchr(argv[3], '=');
+		if (!eq) { usage(); return 1; }
+		*eq = '\0';
+		return do_setflag(argv[2], atoi(argv[3]), atoi(eq + 1));
+	}
+	/* conventional aliases (library symbol names): separated args */
+	if (!strcmp(argv[1], "get_bitflag") && argc == 4)
+		return do_getflag(argv[2], argv[3]);
+	if (!strcmp(argv[1], "set_bitflag") && argc == 5)
+		return do_setflag(argv[2], atoi(argv[3]), atoi(argv[4]));
 
 	usage();
 	return 1;

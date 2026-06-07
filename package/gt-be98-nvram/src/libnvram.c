@@ -377,19 +377,44 @@ int nvram_getall(char *buf, int count)
 }
 
 /*
- * nvram_commit: persist the live kernel tree to NVRAM_FILE (whole-file atomic
- * rewrite). The kernel COMMIT message is a no-op notification; persistence is
- * userspace. Batches: only writes when something changed (commit_reqd).
- * One commit == one full NAND rewrite - never call in a poll loop.
+ * nvram_commit / nvram_commit_force: persist the live kernel tree to NVRAM_FILE
+ * (whole-file atomic rewrite). The kernel COMMIT message is a no-op
+ * notification; persistence is userspace. One commit == one full NAND rewrite -
+ * never call in a poll loop.
+ *
+ * Persistence semantics (force):
+ *   force == 0 (nvram_commit): honour the process-local g_commit_reqd dirty
+ *     flag and early-return when nothing was set/unset in THIS process. This is
+ *     the in-process batching optimization the same-process consumers
+ *     (rc/libshared/hostapd) and the stock watchdog rely on: a consumer that
+ *     calls nvram_commit() every tick without having changed anything must NOT
+ *     trigger a full NAND rewrite per tick (flash-wear hazard). It is safe
+ *     because a same-process set/unset always raises g_commit_reqd first, so
+ *     this path can never MISS a change made in its own process.
+ *
+ *   force == 1 (nvram_commit_force): ALWAYS drain the full kernel tree and
+ *     rewrite the file, regardless of g_commit_reqd. This matches stock
+ *     `nvram commit` semantics and is what the CLI `commit` verb uses. It is
+ *     the fix for the cross-process bug: the standard two-process workflow
+ *     `nvram set x=y` (process A) then `nvram commit` (process B) leaves
+ *     process B with g_commit_reqd == 0, so the dirty-flag early-return would
+ *     persist NOTHING and silently lose the change on reboot. A force commit is
+ *     explicit and idempotent (it re-drains via GETALL_DONE and writes the
+ *     whole tree byte-for-byte), so the only cost of an unnecessary force is
+ *     one extra write - never a missed persist.
+ *
+ * Both paths share the de97993 safe-abort-on-incomplete-drain behaviour: if the
+ * full tree cannot be captured (GETALL_DONE never seen), the commit is ABORTED
+ * and the existing file is left untouched rather than truncated.
  */
-int nvram_commit(void)
+static int nvram_commit_locked(int force)
 {
 	char *all;
 	int n, fd, p;
 	unsigned short rt;
 
 	pthread_mutex_lock(&g_lock);
-	if (!g_commit_reqd) { pthread_mutex_unlock(&g_lock); return 0; }
+	if (!force && !g_commit_reqd) { pthread_mutex_unlock(&g_lock); return 0; }
 	if (nl_ensure() < 0) { pthread_mutex_unlock(&g_lock); return -1; }
 
 	/* notify the kernel/listeners (matches vendor behaviour) */
@@ -455,6 +480,14 @@ int nvram_commit(void)
 	return 0;
 }
 
+/* Dirty-flag-honouring commit: in-process batching optimization (see above). */
+int nvram_commit(void) { return nvram_commit_locked(0); }
+
+/* Unconditional commit: always persists the whole tree. Used by the CLI
+ * `commit` verb so a standalone, cross-process `nvram commit` matches stock and
+ * never silently drops a change staged by an earlier `nvram set` process. */
+int nvram_commit_force(void) { return nvram_commit_locked(1); }
+
 /* RAM-only variants (no flash write) - per vendor symbol table. */
 int nvram_kset(const char *name, const char *value) { return nvram_set(name, value); }
 int nvram_kcommit(void) { return 0; }
@@ -514,5 +547,6 @@ int   wlcsm_nvram_set(const char *n, const char *v)  { return nvram_set(n, v); }
 int   wlcsm_nvram_unset(const char *name)            { return nvram_unset(name); }
 int   wlcsm_nvram_getall(char *buf, int count)       { return nvram_getall(buf, count); }
 int   wlcsm_nvram_commit(void)                       { return nvram_commit(); }
+int   wlcsm_nvram_commit_force(void)                 { return nvram_commit_force(); }
 char *wlcsm_nvram_get_bitflag(const char *n, int b)  { return nvram_get_bitflag(n, b); }
 int   wlcsm_nvram_set_bitflag(const char *n, int b, int s) { return nvram_set_bitflag(n, b, s); }

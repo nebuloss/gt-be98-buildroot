@@ -15,6 +15,9 @@ int   nvram_set(const char *name, const char *value);
 int   nvram_unset(const char *name);
 int   nvram_getall(char *buf, int count);
 int   nvram_commit(void);
+/* Unconditional persist (ignores the process-local dirty flag) - the CLI
+ * `commit` verb uses this so a standalone cross-process commit always writes. */
+int   nvram_commit_force(void);
 int   nvram_kset(const char *name, const char *value);
 int   nvram_kcommit(void);
 int   nvram_commit_reqd(void);
@@ -30,6 +33,7 @@ int   wlcsm_nvram_set(const char *name, const char *value);
 int   wlcsm_nvram_unset(const char *name);
 int   wlcsm_nvram_getall(char *buf, int count);
 int   wlcsm_nvram_commit(void);
+int   wlcsm_nvram_commit_force(void);
 char *wlcsm_nvram_get_bitflag(const char *name, int bit);
 int   wlcsm_nvram_set_bitflag(const char *name, int bit, int set);
 
