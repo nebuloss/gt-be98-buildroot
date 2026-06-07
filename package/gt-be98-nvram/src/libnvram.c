@@ -63,6 +63,32 @@ static int g_commit_reqd = 0;
 static pthread_mutex_t g_lock = PTHREAD_MUTEX_INITIALIZER;
 static __thread char g_get_buf[WLCSM_NAMEVALUEPAIR_MAX];
 
+/* fsync the directory that contains PATH so a rename/create is durable across
+ * power loss (the rename's metadata lives in the parent dir's data, not the
+ * file). Best-effort: failure to open/fsync the dir is non-fatal. */
+static void fsync_parent_dir(const char *path)
+{
+	char dir[256];
+	int fd;
+	const char *slash = strrchr(path, '/');
+
+	if (!slash || slash == path) {
+		dir[0] = '/';
+		dir[1] = '\0';
+	} else {
+		size_t n = (size_t)(slash - path);
+		if (n >= sizeof(dir))
+			return;
+		memcpy(dir, path, n);
+		dir[n] = '\0';
+	}
+	fd = open(dir, O_RDONLY | O_DIRECTORY);
+	if (fd < 0)
+		return;
+	(void)fsync(fd);
+	close(fd);
+}
+
 /* ---- transport ---------------------------------------------------------- */
 
 static int nl_open(void)
@@ -248,6 +274,12 @@ int nvram_unset(const char *name)
 
 	if (!name || !*name)
 		return -1;
+	/* Bound the packed size BEFORE packing into pkt[] - mirror nvram_set.
+	 * A name >= ~1016B would otherwise overflow the 1024-byte stack buffer
+	 * inside wlcsm_pair_pack (memset/strcpy). */
+	len = wlcsm_pair_total_len(name, NULL);
+	if (len >= WLCSM_NAMEVALUEPAIR_MAX)
+		return -1;
 	pthread_mutex_lock(&g_lock);
 	if (nl_ensure() < 0) { pthread_mutex_unlock(&g_lock); return -1; }
 	/* UNSET payload = packed pair (kernel uses VALUEPAIR_NAME(buf) = buf+4). */
@@ -414,6 +446,10 @@ int nvram_commit(void)
 		pthread_mutex_unlock(&g_lock);
 		return -1;
 	}
+	/* Persist the directory entry change (the two renames) so a crash right
+	 * after this returns cannot lose the new live file on FS configs that do
+	 * not journal renames. */
+	fsync_parent_dir(NVRAM_FILE);
 	g_commit_reqd = 0;
 	pthread_mutex_unlock(&g_lock);
 	return 0;
@@ -424,9 +460,59 @@ int nvram_kset(const char *name, const char *value) { return nvram_set(name, val
 int nvram_kcommit(void) { return 0; }
 int nvram_commit_reqd(void) { return g_commit_reqd; }
 
+/*
+ * Bitflag accessors - reproduce the closed libnvram.so ABI byte-for-byte (the
+ * getter is a hard DT_NEEDED import of sbin/rc). The backing nvram var holds a
+ * hex-encoded bitmask string; bit selects one of bits 0..31.
+ *
+ * Semantics recovered from the vendor wlcsm_nvram_{get,set}_bitflag:
+ *   get(name,bit): bit>31 -> NULL; var unset -> NULL; else parse strtoul(.,.,16)
+ *                  and return the static string "1" if (1<<bit) is set, else "0"
+ *                  (a value that parses to 0 also yields "0").
+ *   set(name,bit,set): bit>31 -> no-op (return 0); read current mask (0 if
+ *                  unset), set/clear bit, write back as "%lx" via nvram_set.
+ * The vendor names nvram_get_bitflag/nvram_set_bitflag are plain branches to
+ * the wlcsm_* implementations, so both are exported here as well.
+ */
+char *nvram_get_bitflag(const char *name, int bit)
+{
+	char *v;
+	unsigned long n;
+
+	if ((unsigned)bit > 31u)
+		return NULL;
+	v = nvram_get(name);
+	if (!v)
+		return NULL;
+	n = strtoul(v, NULL, 16);
+	if (n == 0)
+		return "0";
+	return ((1UL << bit) & n) ? "1" : "0";
+}
+
+int nvram_set_bitflag(const char *name, int bit, int set)
+{
+	char *v;
+	unsigned long n;
+	char buf[16];
+
+	if ((unsigned)bit > 31u)
+		return 0;
+	v = nvram_get(name);
+	n = v ? strtoul(v, NULL, 16) : 0UL;
+	if (set)
+		n |= (1UL << bit);
+	else
+		n &= ~(1UL << bit);
+	snprintf(buf, sizeof(buf), "%lx", n);
+	return nvram_set(name, buf);
+}
+
 /* wlcsm_* aliases so closed consumers / libshared link unchanged. */
 char *wlcsm_nvram_get(const char *name)              { return nvram_get(name); }
 int   wlcsm_nvram_set(const char *n, const char *v)  { return nvram_set(n, v); }
 int   wlcsm_nvram_unset(const char *name)            { return nvram_unset(name); }
 int   wlcsm_nvram_getall(char *buf, int count)       { return nvram_getall(buf, count); }
 int   wlcsm_nvram_commit(void)                       { return nvram_commit(); }
+char *wlcsm_nvram_get_bitflag(const char *n, int b)  { return nvram_get_bitflag(n, b); }
+int   wlcsm_nvram_set_bitflag(const char *n, int b, int s) { return nvram_set_bitflag(n, b, s); }
