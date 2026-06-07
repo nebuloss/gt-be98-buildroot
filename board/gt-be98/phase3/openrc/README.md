@@ -54,24 +54,42 @@ default:  wifi-radio      <- eapd/wlceventd/mcpd glue; radios via webui      [gr
 
 Service scripts: `init.d/*` (openrc-run format, with `depend()` ordering).
 
-## 3. BUILD state
+## 3. BUILD state  — SQUASHFS PRODUCED [V] (2026-06-07, online)
 
-`openrc-assemble.sh <baseline-rootfs.img> <out> [openrc-stage]` unsquashes the
-br-0050 baseline, overlays the service scripts into **`/rom/etc/{init.d,runlevels}`**
-(see Blocker A), overlays OpenRC binaries from a stage dir, swaps
-`/sbin/init -> /sbin/openrc-init`, re-squashes.
+Cross-build of OpenRC (the prior build blocker) is CLEARED. Isolated build:
+`configs/gt-be98_openrc-init_defconfig` (copy of `gt-be98_full_defconfig` with
+`BR2_INIT_OPENRC=y` + `BR2_PACKAGE_OPENRC=y`; production config UNTOUCHED), built
+in `output-openrc-init/` (`make ... openrc` only — no full firmware rebuild).
 
-- **BUILT [V]:** the full overlay TREE — 8 custom services + runlevel layout
-  installed into `/rom/etc`; graft verified intact (`bcm_boot_launcher`, `wl.ko`,
-  `dhd.ko`, `bcm_knvram.ko`, `nvram`, `bcm-base-drivers.sh` all present); all 8
-  custom runlevel symlinks resolve. Output:
-  `job-tmp/openrc-init-build/openrc-rootfs/` (195 MB unpacked).
-- **BLOCKED [build]:** the squashfs is NOT produced — OpenRC binaries are
-  absent. **OpenRC 0.56 source is not cached in `dl/` and the box is OFFLINE; no
-  `meson`/`ninja` host tool** (OpenRC 0.56 is a meson build). So `openrc-init` /
-  `openrc-run` / `librc.so` and the stock `devfs/procfs/sysfs/dmesg/bootmisc`
-  scripts cannot be compiled this session. The tree is build-ready: provide an
-  `OPENRC_STAGE` dir and re-run to get a coherent squashfs.
+- **OpenRC version:** 0.56 (`package/openrc`, github OpenRC/openrc, glibc
+  arm-buildroot-linux-gnueabi gcc-10.3). Deps pulled: host-python3/meson/ninja,
+  libcap, ncurses, libxcrypt.
+- **sysconfdir=/rom/etc [V] (blocker A resolved-in-build):** OpenRC built with
+  `--sysconfdir=/rom/etc` via `OPENRC_CONF_OPTS += --sysconfdir=/rom/etc`
+  (`0001-openrc-build-sysconfdir-rom-etc.patch`, appended last so it wins over
+  the meson default `/etc`). Verified in the binary strings: `librc.so.1` carries
+  `/rom/etc/runlevels`, `/rom/etc/init.d`, `/rom/etc/conf.d/rc`.
+- **REAL 0.56 layout** (the speculative paths in the old assemble.sh were wrong):
+  bins in `/sbin` (openrc-init, openrc [== the old `rc`], openrc-run,
+  openrc-shutdown, rc-update, rc-service) + `/bin/rc-status`; libs in
+  `/usr/lib/lib{rc,einfo}.so*`; helpers in `/usr/libexec/rc/**`; stock config in
+  `/rom/etc/{rc.conf,conf.d,init.d,local.d,sysctl.d}`.
+- **`openrc-assemble.sh <baseline> <out> [stage]`** unsquashes the br-0050
+  baseline, overlays the full OpenRC footprint from `output-openrc-init/target`,
+  adds the stock VFS service scripts + the 8 custom services into
+  `/rom/etc/init.d`, rebuilds `/rom/etc/runlevels/{sysinit,boot,default}`, swaps
+  `/sbin/init -> /sbin/openrc-init`, and re-squashes merlin-exact
+  (`-noappend -all-root -comp xz -b 131072`).
+- **BUILT [V]:** squashfs `64,245,760 B` (base `64,036,864` + `208,896` OpenRC),
+  under the slot-2 ceiling `71,106,560` (6.86 MB headroom). All 8 custom + the
+  4 stock sysinit symlinks resolve. Graft byte-identical (`bcm_boot_launcher`,
+  `wl.ko`, `dhd.ko`, `bcm_knvram.ko`, `nvram`, `bcm-base-drivers.sh`, `rc3.d`).
+  Image-diff vs br-0050: expected deltas only (174 OpenRC-owned adds; sole
+  removal = old `/sbin/init -> rc`). pkgtb (br-0050 boot-chain FIT):
+  `~/be98/artifacts-br/GT-BE98_openrc-init_nand_squashfs.pkgtb`.
+- **NOT VERIFIED (bench-only):** that openrc-init-as-PID1 actually boots the
+  closed bcm stack (blocker F), glibc ABI of the merlin libc against these
+  binaries at runtime, and runlevel execution order live. Build-buildable only.
 
 ## 4. Blocker map (honest)
 
@@ -81,8 +99,9 @@ br-0050 baseline, overlays the service scripts into **`/rom/etc/{init.d,runlevel
   assumes a persistent `/etc` that does NOT exist when PID1 starts. **Resolution
   (implemented here):** install OpenRC config in `/rom/etc`, build OpenRC with
   `--sysconfdir=/rom/etc`, and run `etc-farm` as the 2nd sysinit service to
-  rebuild the writable `/etc` farm. The `--sysconfdir` build flag is REQUIRED and
-  unverified end-to-end.
+  rebuild the writable `/etc` farm. **The `--sysconfdir=/rom/etc` build flag is
+  now APPLIED + confirmed compiled into `librc.so.1` [V] (resolved-in-build).**
+  The `etc-farm` runtime rebuild of the writable `/etc` remains bench-unverified.
 - **B. `start_lan` is not a standalone applet [V-src].** `config_switch`/
   `config_extwan` ARE reachable rc applets (run in-process), but bridge/eth
   bring-up (`start_lan`) is rc-internal to the START state. A faithful open

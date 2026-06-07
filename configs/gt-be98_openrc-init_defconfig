@@ -1,0 +1,53 @@
+# GT-BE98 phase3 OpenRC open-init defconfig (BUILD-ONLY, ISOLATED).
+#
+# Copy of gt-be98_full_defconfig with the ASUS rc PID1 replaced by OpenRC
+# (openrc-init). This config exists solely to CROSS-BUILD the OpenRC package
+# (openrc-init/librc/libeinfo + stock service scripts) for the phase3 open-init
+# rootfs assembly (board/gt-be98/phase3/openrc/openrc-assemble.sh). It is NOT a
+# production firmware config and must never replace gt-be98_full_defconfig.
+#
+# Build only the openrc package (do NOT run a full `make`):
+#   make BR2_EXTERNAL=/path/to/gt-be98-buildroot O=output-openrc-init \
+#        gt-be98_openrc-init_defconfig
+#   make BR2_EXTERNAL=/path/to/gt-be98-buildroot O=output-openrc-init openrc
+#
+# The OpenRC package is patched (package/openrc/openrc.mk) to build with
+# --sysconfdir=/rom/etc (blocker A: merlin /etc is a tmpfs, persistent config
+# lives in read-only /rom/etc), so openrc-init looks for /rom/etc/runlevels.
+
+# --- Target architecture (confirmed) -----------------------------------------
+BR2_arm=y
+BR2_cortex_a9=y
+BR2_ARM_EABI=y
+BR2_ARM_ENABLE_VFP=y
+BR2_ARM_FPU_VFPV3=y
+
+# --- External toolchain (download from Release) ------------------------------
+BR2_TOOLCHAIN_EXTERNAL=y
+BR2_TOOLCHAIN_EXTERNAL_CUSTOM=y
+BR2_TOOLCHAIN_EXTERNAL_DOWNLOAD=y
+BR2_TOOLCHAIN_EXTERNAL_URL="https://github.com/nebuloss/gt-be98-toolchain/releases/download/arm_softfp-gcc10.3/gt-be98-toolchain-arm_softfp-gcc10.3.tar.gz"
+BR2_TOOLCHAIN_EXTERNAL_CUSTOM_PREFIX="arm-buildroot-linux-gnueabi"
+BR2_TOOLCHAIN_EXTERNAL_GCC_10=y
+BR2_TOOLCHAIN_EXTERNAL_HEADERS_4_19=y
+BR2_TOOLCHAIN_EXTERNAL_CUSTOM_GLIBC=y
+BR2_TOOLCHAIN_EXTERNAL_CXX=y
+# BR2_TOOLCHAIN_EXTERNAL_INET_RPC is not set
+
+# --- Init: OpenRC (the open-init milestone) ----------------------------------
+# Replaces BR2_INIT_NONE from the production config. BR2_PACKAGE_OPENRC depends
+# on BR2_INIT_OPENRC, which pulls openrc + libcap + ncurses + kmod (+ libxcrypt
+# on glibc). We only `make openrc` to stage binaries; we do NOT assemble a
+# Buildroot rootfs (the open-init rootfs is assembled from the br-0050 baseline
+# by openrc-assemble.sh).
+BR2_INIT_OPENRC=y
+BR2_PACKAGE_OPENRC=y
+
+# --- Root filesystem ---------------------------------------------------------
+BR2_TARGET_ROOTFS_SQUASHFS=y
+BR2_TARGET_ROOTFS_SQUASHFS4_XZ=y
+BR2_ROOTFS_DEVICE_TABLE=""
+
+# --- Image tooling -----------------------------------------------------------
+BR2_PACKAGE_HOST_UBOOT_TOOLS=y
+BR2_PACKAGE_HOST_UBOOT_TOOLS_FIT_SUPPORT=y

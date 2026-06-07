@@ -1,0 +1,18 @@
+diff --git a/package/openrc/openrc.mk b/package/openrc/openrc.mk
+index 67846ce0..25870efb 100644
+--- a/package/openrc/openrc.mk
++++ b/package/openrc/openrc.mk
+@@ -19,6 +19,13 @@ OPENRC_CONF_OPTS = \
+ 	-Dsysvinit=true \
+ 	-Dbranding="\"Buildroot $(BR2_VERSION_FULL)\""
+ 
++# GT-BE98 phase3 open-init (blocker A): the merlin rootfs has no persistent
++# /etc (/etc -> tmp/etc tmpfs); persistent config lives in read-only /rom/etc.
++# openrc-init must therefore look for runlevels/init.d under /rom/etc, so build
++# OpenRC with sysconfdir=/rom/etc. The buildroot meson target setup does not
++# pass --sysconfdir, and CONF_OPTS are appended last, so this wins.
++OPENRC_CONF_OPTS += --sysconfdir=/rom/etc
++
+ ifeq ($(BR2_PACKAGE_AUDIT),y)
+ OPENRC_CONF_OPTS += -Daudit=enabled
+ OPENRC_DEPENDENCIES += audit
