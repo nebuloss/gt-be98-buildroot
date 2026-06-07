@@ -1,0 +1,33 @@
+#!/sbin/openrc-run
+# Build the runtime /etc tmpfs farm — replicates the ASUS sysinit() symlink farm
+# (init.c:25184-25201). CRITICAL on this rootfs layout: the merlin image has NO
+# persistent /etc; instead `/etc -> tmp/etc` (a tmpfs path) and the persistent
+# config lives in the read-only /rom/etc. ASUS rc-as-PID1 hand-built /etc in
+# sysinit. OpenRC must do the same EARLY so the rest of userspace gets a writable
+# /etc.  (OpenRC ITSELF must be built with --sysconfdir=/rom/etc so openrc-init
+# can read /rom/etc/runlevels BEFORE this farm exists — see openrc-assemble.sh.)
+description="Runtime /etc tmpfs farm (symlink /rom/etc/* -> /etc)"
+
+depend() {
+	after deadman-early
+	before bcm-knvram bcm-platform
+	keyword -timeout
+}
+
+start() {
+	# /tmp must be a tmpfs first (OpenRC 'devfs'/sysinit usually mounts it; mount
+	# defensively here in case it is not yet present).
+	mountpoint -q /tmp 2>/dev/null || mount -t tmpfs tmpfs /tmp
+	mkdir -p /tmp/etc /tmp/var /tmp/home
+	ebegin "Populating /etc from /rom/etc"
+	for s in /rom/etc/*; do
+		n="/etc/${s##*/}"
+		[ -e "$n" ] || ln -sf "$s" "$n"
+	done
+	# Writable compatibility files the stock sysinit also creates.
+	: > /etc/hosts 2>/dev/null
+	: > /etc/fstab 2>/dev/null
+	ln -sf /proc/mounts /etc/mtab 2>/dev/null
+	ln -sf /tmp/resolv.conf /etc/resolv.conf 2>/dev/null
+	eend 0
+}

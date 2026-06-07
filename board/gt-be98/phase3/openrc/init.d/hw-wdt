@@ -1,0 +1,30 @@
+#!/sbin/openrc-run
+# Arm the SoC hardware watchdog — replicates init.c start_hw_wdt() (init.c:24728):
+#   wdt = nvram watchdog_new (BE_4916) ; wdtctl -d -t <wdt/1000> start
+# GRAFT-DEPENDENT: wdtctl is a closed Broadcom HW-control binary (*ctl family).
+#
+# BENCH-UNRESOLVED single-open conflict (per [[early-deadman-when-replacing-pid1]]):
+# /dev/watchdog is single-open on most Linux WDT drivers. If deadman-early arms a
+# Layer-2 /dev/watchdog backstop, it and wdtctl cannot both own the device.
+# Resolution (decide on bench): EITHER (a) dead-man owns /dev/watchdog during the
+# trial window and hands off to wdtctl after the health gate, OR (b) keep this
+# service the sole owner and let the dead-man rely on the bootloader ONCE-revert
+# + bcm_bootstate, OR (c) neutralize this service entirely during trials.
+description="SoC hardware watchdog (wdtctl)"
+
+depend() {
+	need nvram
+	after bcm-platform
+}
+
+start() {
+	local wdt
+	wdt=$(nvram get watchdog_new 2>/dev/null)
+	[ -z "$wdt" ] && wdt=$(nvram get watchdog 2>/dev/null)
+	case "$wdt" in ''|*[!0-9]*) einfo "no watchdog nvram -> skip"; return 0;; esac
+	[ "$wdt" -lt 1 ] && return 0
+	wdt=$((wdt / 1000))
+	ebegin "Arming HW watchdog: wdtctl -d -t $wdt start"
+	wdtctl -d -t "$wdt" start
+	eend $?
+}

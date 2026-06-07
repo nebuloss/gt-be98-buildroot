@@ -1,0 +1,39 @@
+#!/sbin/openrc-run
+# Run the Broadcom platform init VERBATIM. bcm_boot_launcher (an ELF, /bin/) runs
+# /rom/etc/rc3.d/S25..S50 in numeric order — exactly what sysinit() invokes at
+# init.c:25000. That sequence is:
+#   S25mount-fs       mount -a, /proc/bootstate reset_reason+boot_failed_count,
+#                     mdev -s coldplug, make_static_devnodes.sh, mount /data
+#   S32/33/35/39      check-and-restore, init-defaults, system-config, hndmfg
+#   S40hndnvram       `nvram kernelset /data/.kernel_nvram.setting` (populate the
+#                     kernel nvram tree) + restore_mfg            [GRAFT: nvram CLI]
+#   S41wluboot2knvram wl uboot params -> knvram                   [GRAFT]
+#   S45bcm-base-drivers  the CLOSED HW-datapath .ko load ORDER:
+#                     bcmlibs, bcm_knvram, bdmf, rdpa_gpl, bcm_mpm, bcm_bpm,
+#                     bcmvlan, rdpa(_prv), rdpa_usr, rdpa_mw, bcm_bp3drv,
+#                     bcm_ingqos, pktflow, cmdlist, gdx, sw_gso, bcm_enet, pcap,
+#                     rdpa_cmd, pktrunner, bcmmcast, bcm_pcie_hcd, wfd,
+#                     hs_uart_drv, bcmflex, bcmspu, bcm_thermal + rdpa_init.sh
+#   S45bcm-wlan-drivers  wl.ko/dhd.ko + radio firmware (per nvram wl_unitlist)
+#   S45gre-tunnel-drivers, S50ssl
+# GRAFT-DEPENDENT and SELF-CONTAINED: OpenRC INVOKES it, never reimplements it.
+# This is the single service that replicates ~90% of the ASUS rc graft early-init.
+description="BCM platform bring-up (bcm_boot_launcher -> rc3.d S25-S50)"
+
+depend() {
+	need nvram
+	after bcm-knvram
+	before net-switch hw-wdt
+}
+
+start() {
+	ebegin "bcm_boot_launcher start (rc3.d S25-S50: mounts, nvram, HW + wl drivers)"
+	/bin/bcm_boot_launcher start
+	eend $?
+}
+
+stop() {
+	ebegin "bcm_boot_launcher stop"
+	/bin/bcm_boot_launcher stop
+	eend $?
+}

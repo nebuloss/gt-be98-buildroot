@@ -1,0 +1,41 @@
+#!/sbin/openrc-run
+# EARLY DEAD-MAN — MUST be the FIRST sysinit-runlevel service, before any
+# graft/risky step. Implements [[early-deadman-when-replacing-pid1]]:
+# when OpenRC replaces the ASUS rc PID1, rc's sync_boot_state() ONCE
+# auto-commit is GONE, so the dead-man becomes the SOLE committer/healer.
+# It MUST arm before anything that can hang/panic, and it must NOT live
+# downstream of the component under test (it is the safety net).
+description="GT-BE98 early trial dead-man (PID1-replacement self-heal)"
+
+depend() {
+	# Run before every other service in this runlevel.
+	before *
+	keyword -timeout
+}
+
+start() {
+	# Layer 0: /data holds the dead-man state — mount it first of all.
+	if ! mountpoint -q /data 2>/dev/null; then
+		ebegin "Mounting /data (dead-man state volume)"
+		mount -t ubifs ubi:data /data 2>/dev/null \
+			|| mount -t ext4 /dev/data /data 2>/dev/null
+		eend $? || ewarn "could not mount /data — dead-man state unavailable"
+	fi
+
+	# Layer 1: if a trial is armed, fork the SHIPPING dead-man (reuse the
+	# /sbin/trial-deadman artifact, do NOT author a new one). It drives the
+	# bootstate commit/heal from pure shell via bcm_bootstate + /proc/cmdline.
+	if [ -f /data/.trial-armed ]; then
+		ebegin "Trial armed -> launching /sbin/trial-deadman"
+		/sbin/trial-deadman &
+		eend 0
+	else
+		einfo "No /data/.trial-armed -> dead-man idle (committed boot)"
+	fi
+
+	# Layer 2 (bench-gated): a bounded /dev/watchdog backstop petted only after
+	# a health gate could be armed here. DEFERRED: /dev/watchdog is single-open
+	# on most drivers and the hw-wdt service (wdtctl) also opens it. Resolve the
+	# single-owner conflict on the bench before enabling Layer 2 (see hw-wdt).
+	return 0
+}

@@ -1,0 +1,29 @@
+#!/sbin/openrc-run
+# Open WiFi bring-up. The radios themselves are driven by the webui-go controller
+# (EnsureRadio: wl ioctls + from-source hostapd, NO wlconf), VALIDATED LIVE on
+# br-0049/br-0050 ([[wl-ioctl-rc-boundary]]). This service starts the CLOSED wifi
+# glue daemons the datapath needs (pinned graft), then leaves radio init to the
+# webui boot-reconcile (webui_radio_init=1 + gtbe98_wifi_extsup=1, the br-0050
+# gates that make the controller the sole hostapd supervisor).
+# GRAFT consumed: wl.ko/dhd.ko + firmware (loaded by bcm-platform) +
+# eapd/wlceventd/mcpd/acsd2 (pinned blobs, no open source).
+description="Open WiFi glue + controller-owned radio bring-up"
+
+depend() {
+	need net nvram
+	after bcm-platform net-switch
+	before webui
+}
+
+start() {
+	# Closed wifi glue daemons (mux EAPOL/BRCM events, multicast, channel-select).
+	ebegin "Starting wifi glue (eapd / wlceventd / mcpd)"
+	pgrep -x eapd      >/dev/null 2>&1 || eapd       2>/dev/null &
+	pgrep -x wlceventd >/dev/null 2>&1 || wlceventd  2>/dev/null &
+	pgrep -x mcpd      >/dev/null 2>&1 || mcpd        2>/dev/null &
+	eend 0
+	# acsd2 (auto-channel) is started on demand by the controller/hostapd path.
+	# Radio primaries + named BSSes: owned by the webui controller (see webui).
+	einfo "Radio init delegated to webui controller (EnsureRadio)"
+	return 0
+}

@@ -1,0 +1,55 @@
+#!/sbin/openrc-run
+# LAN + HW-switch bring-up. Replaces the START-state block in ASUS rc init_main
+# (init.c:26581 config_switch / 26584 config_extwan / 26594 start_lan).
+#
+# MIXED graft + open + BLOCKER:
+#   - `rc config_switch` and `rc config_extwan` are STANDALONE rc applets
+#     (rc.c:4388 / rc.c:4394) that call config_switch()/config_extwan()
+#     IN-PROCESS — they do NOT signal PID1, so they work with OpenRC as PID1.
+#     [V-src] VERIFIED reachable. They program the CLOSED Broadcom HW switch via
+#     the ethswctl/vlanctl ABI (pinned graft) — invokable, not reimplemented.
+#   - start_lan() (bridge creation br0 + eth ports + LAN IP, runner enet attach)
+#     is NOT a standalone applet — it is rc-internal to init_main's START state.
+#     ==> CONCRETE BLOCKER: a faithful open start_lan replacement (brctl/ip per
+#         nvram lanX_ifnames + the bcm enet/runner netdev attach order) is OWED.
+#         The first-cut br0 bring-up below is NOT a verified start_lan equivalent.
+#         Recommended owner: the webui-go controller (already does port/bridge
+#         management — get_portmap), or an RE'd open start_lan script.
+description="LAN + HW switch bring-up"
+
+depend() {
+	need nvram
+	after bcm-platform
+	before wifi-radio webui
+	provide net
+}
+
+start() {
+	ebegin "HW switch programming (rc config_switch)"
+	rc config_switch
+	eend $?
+	ebegin "Ext-WAN port config (rc config_extwan)"
+	rc config_extwan
+	eend $?
+
+	# --- FIRST-CUT open bridge bring-up (start_lan stand-in; BLOCKER surface) ---
+	# WARNING: not a verified start_lan reproduction. br0 + lan_ifnames only.
+	local br="br0" ifs ip nm
+	ifs=$(nvram get lan_ifnames 2>/dev/null)
+	ip=$(nvram get lan_ipaddr 2>/dev/null)
+	nm=$(nvram get lan_netmask 2>/dev/null)
+	if [ -n "$ifs" ]; then
+		ebegin "Bringing up $br ($ifs)"
+		brctl addbr "$br" 2>/dev/null
+		for i in $ifs; do
+			ip link set "$i" up 2>/dev/null
+			brctl addif "$br" "$i" 2>/dev/null
+		done
+		ip link set "$br" up 2>/dev/null
+		[ -n "$ip" ] && ifconfig "$br" "$ip" netmask "${nm:-255.255.255.0}" 2>/dev/null
+		eend 0
+	else
+		ewarn "lan_ifnames empty — LAN bring-up owed to webui controller"
+	fi
+	return 0
+}

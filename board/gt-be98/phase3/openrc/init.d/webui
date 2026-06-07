@@ -1,0 +1,25 @@
+#!/sbin/openrc-run
+# The open management plane + WiFi controller (webui-go). With the br-0050 gates
+# armed (gtbe98_wifi_extsup=1 + webui_radio_init=1) it is the SOLE hostapd
+# supervisor and owns EnsureRadio radio bring-up + named BSSes at boot
+# (reconcileDirect). Binds :80 directly (P2-6). Beta channel: /jffs/webui/webui.
+description="GT-BE98 open webui controller (mgmt plane + wifi owner)"
+
+command="/jffs/webui/webui"
+command_args="-listen :80 -www /jffs/webui/www -conf /data/br/webui"
+command_background="yes"
+pidfile="/run/webui.pid"
+output_log="/var/log/webui.log"
+error_log="/var/log/webui.log"
+
+depend() {
+	need net
+	after wifi-radio net-switch
+	use logger
+}
+
+start_pre() {
+	# Prefer the in-image binary if the beta channel one is absent.
+	[ -x "$command" ] || command="/usr/br/sbin/webui"
+	checkpath -d -m 0755 /run /var/log
+}

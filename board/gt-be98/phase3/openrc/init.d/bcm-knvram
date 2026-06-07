@@ -1,0 +1,28 @@
+#!/sbin/openrc-run
+# Mount the persistent /data UBI volume and load the closed kernel-NVRAM module.
+# Replicates init.c:26149-26151 — the ASUS rc inline early step run at the very
+# top of init_main(), BEFORE sysinit(), so nvram_*() works for the rest of boot.
+# GRAFT-DEPENDENT: bcm_knvram.ko is a pinned closed Broadcom kernel module
+# (graft-manifest.txt). nvram CLI + libnvram are the pinned blob (decision B).
+description="BCM kernel NVRAM (/data + bcm_knvram.ko)"
+
+depend() {
+	after deadman-early
+	before bcm-platform
+	provide nvram
+}
+
+start() {
+	if ! mountpoint -q /data 2>/dev/null; then
+		ebegin "Mounting ubi:data -> /data"
+		mount -t ubifs ubi:data /data 2>/dev/null \
+			|| mount -t ext4 /dev/data /data
+		eend $?
+	fi
+	if ! grep -q '^bcm_knvram ' /proc/modules 2>/dev/null; then
+		ebegin "insmod bcm_knvram.ko"
+		insmod /lib/modules/4.19.294/extra/bcm_knvram.ko
+		eend $?
+	fi
+	return 0
+}
