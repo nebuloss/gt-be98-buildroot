@@ -80,6 +80,66 @@ for f in $OPENRC_LIBS; do
 	else echo "  ! MISSING lib: /$f"; MISSING=1; fi
 done
 
+# --- v4 CHANGE 1: ALSO place librc.so.1 + libeinfo.so.1 in /lib ---------------
+# DIAGNOSIS (v3 trial): openrc-init.real EXEC'd but DIED before any service, with
+# an EMPTY /data/openrc-rc.log + zero breadcrumbs. NOT glibc (merlin libc.so.6 =
+# Buildroot glibc 2.32 >= openrc-init's max req GLIBC_2.28). PRIME SUSPECT: the
+# merlin dynamic linker (/lib/ld-linux.so.3) cannot FIND librc.so.1/libeinfo.so.1
+# in /usr/lib because there is NO /etc/ld.so.cache and NO /etc/ld.so.conf, and the
+# loader's hard-wired trusted dir is /lib (where libc.so.6 + ld-linux.so.3 live),
+# NOT /usr/lib -> openrc-init fails at load before running anything.
+# FIX (primary): copy the two OpenRC libs (32-bit ARM EABI5, matching
+# /lib/libc.so.6 + /lib/ld-linux.so.3) into /lib, the always-searched glibc dir,
+# and recreate the unversioned .so dev symlinks there. KEEP the /usr/lib copies.
+echo "== v4 change 1: ALSO place librc.so.1 + libeinfo.so.1 in /lib (always-searched) =="
+mkdir -p "$FS/lib"
+for soname in librc.so.1 libeinfo.so.1; do
+	if [ -e "$OPENRC_STAGE/usr/lib/$soname" ]; then
+		install -m 0755 "$OPENRC_STAGE/usr/lib/$soname" "$FS/lib/$soname"
+		echo "  + /lib/$soname"
+	else
+		echo "  ! MISSING for /lib: usr/lib/$soname"; MISSING=1
+	fi
+done
+ln -sf librc.so.1    "$FS/lib/librc.so"
+ln -sf libeinfo.so.1 "$FS/lib/libeinfo.so"
+echo "  + /lib/librc.so -> librc.so.1 ; /lib/libeinfo.so -> libeinfo.so.1"
+
+# --- v4 CHANGE 1 (belt-and-suspenders): ld.so.conf lists /lib+/usr/lib + cache --
+# merlin /etc is a tmpfs (/etc -> tmp/etc) and /etc/ld.so.conf -> /rom/etc/ld.so.conf,
+# so the PERSISTENT loader conf lives in read-only /rom/etc. The merlin base ALREADY
+# ships /rom/etc/ld.so.conf listing /opt/lib /opt/usr/lib /lib /usr/lib — so the conf
+# was never the gap; the missing piece at openrc-init load was the COMPILED
+# /etc/ld.so.cache (ASUS rc builds it in sysinit, which openrc-init never reached).
+# We ensure /lib + /usr/lib are listed and pre-build the cache. These are NOT relied
+# on for the initial load (the /lib copy above is the primary, load-time fix), but
+# the pre-built cache (baked into the squashfs /tmp/etc, visible before any tmpfs
+# mount shadows it) is a genuine second path to resolving librc/libeinfo.
+LDC="$FS/rom/etc/ld.so.conf"
+mkdir -p "$FS/rom/etc"
+[ -f "$LDC" ] || : > "$LDC"
+for d in /usr/lib /lib; do
+	grep -qxF "$d" "$LDC" 2>/dev/null || printf '%s\n' "$d" >> "$LDC"
+done
+echo "  + /rom/etc/ld.so.conf ensures /usr/lib + /lib (= $(tr '\n' ' ' < "$LDC"))"
+TGT_LDCONFIG="${TGT_LDCONFIG:-/home/guillaume/be98/buildroot/output-openrc-init/host/arm-buildroot-linux-gnueabi/sysroot/sbin/ldconfig}"
+QEMU_ARM="${QEMU_ARM:-$(command -v qemu-arm-static || command -v qemu-arm || true)}"
+if [ -x "$TGT_LDCONFIG" ] && [ -n "$QEMU_ARM" ]; then
+	# -X = build the cache ONLY, do NOT create/update soname symlinks (otherwise
+	# ldconfig would mint stray links like /lib/libexpat.so.1 -> drift from base).
+	# verify by grepping the compiled cache FILE directly (a piped `ldconfig -p |
+	# grep -q` would SIGPIPE ldconfig and trip `pipefail` despite a valid cache).
+	if "$QEMU_ARM" "$TGT_LDCONFIG" -X -r "$FS" -f /rom/etc/ld.so.conf -C /etc/ld.so.cache 2>/dev/null \
+	   && [ -s "$FS/etc/ld.so.cache" ] \
+	   && grep -qa 'librc\.so\.1' "$FS/etc/ld.so.cache"; then
+		echo "  + /etc/ld.so.cache pre-built via qemu-arm + target ldconfig (contains librc.so.1) [V]"
+	else
+		echo "  ~ /etc/ld.so.cache not pre-built (non-fatal; /lib copy is the primary fix)"
+	fi
+else
+	echo "  ~ no target ldconfig/qemu-arm -> /etc/ld.so.cache skipped (non-fatal; /lib copy is the fix)"
+fi
+
 echo "== overlay /usr/libexec/rc (librcdir helpers) =="
 if [ -d "$OPENRC_STAGE/usr/libexec/rc" ]; then
 	mkdir -p "$FS/usr/libexec"
@@ -175,9 +235,30 @@ if [ -f "$FS/sbin/openrc-init" ] && [ ! -L "$FS/sbin/openrc-init" ] && [ -f "$WR
 		&& [ -f "$FS/sbin/openrc-init.real" ] \
 		&& echo "  wrapper -> exec /sbin/openrc-init.real [V]" \
 		|| { echo "  ! wrapper wiring FAILED"; MISSING=1; }
+	# v4 change 2 guard: the wrapper must redirect openrc-init's own stdout+stderr
+	# to persistent /data so a load failure is RECORDED.
+	grep -q 'exec /sbin/openrc-init.real "\$@" >> /data/openrc-init-out.log 2>&1' "$FS/sbin/init" \
+		&& echo "  wrapper stderr-redirect -> /data/openrc-init-out.log [V]" \
+		|| { echo "  ! wrapper stderr-redirect MISSING"; MISSING=1; }
 else
 	echo "  ! /sbin/openrc-init binary or wrapper absent — init wiring FAILED"; MISSING=1
 fi
+
+# v4 change 1 guard: librc.so.1 + libeinfo.so.1 must ALSO be present in /lib
+# (next to libc.so.6 / ld-linux.so.3), with the unversioned dev symlinks.
+echo "== v4 verify: OpenRC libs ALSO in /lib =="
+for soname in librc.so.1 libeinfo.so.1; do
+	[ -f "$FS/lib/$soname" ] \
+		&& echo "  /lib/$soname [V]" \
+		|| { echo "  ! /lib/$soname MISSING"; MISSING=1; }
+done
+[ -L "$FS/lib/librc.so" ] && [ -L "$FS/lib/libeinfo.so" ] \
+	&& echo "  /lib/{librc.so,libeinfo.so} dev symlinks [V]" \
+	|| { echo "  ! /lib dev symlinks MISSING"; MISSING=1; }
+# and the /usr/lib copies must be KEPT (belt-and-suspenders)
+[ -f "$FS/usr/lib/librc.so.1" ] && [ -f "$FS/usr/lib/libeinfo.so.1" ] \
+	&& echo "  /usr/lib copies KEPT [V]" \
+	|| { echo "  ! /usr/lib copies missing"; MISSING=1; }
 
 echo
 echo "== overlay tree assembled at: $FS =="
