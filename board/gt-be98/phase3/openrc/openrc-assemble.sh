@@ -147,6 +147,73 @@ if [ -d "$OPENRC_STAGE/usr/libexec/rc" ]; then
 	echo "  + /usr/libexec/rc ($(find "$FS/usr/libexec/rc" -type f | wc -l) files)"
 else echo "  ! MISSING /usr/libexec/rc"; MISSING=1; fi
 
+# === v6 THE FIX: a command-capable /bin/sh for OpenRC ========================
+# DIAGNOSIS (v5 trial): OpenRC 0.56 now boots, mounts /proc, caches deps, and
+# runs sysinit->boot->default — but EVERY service fails `command: not found`:
+#   /usr/libexec/rc/sh/openrc-run.sh: line 292/407: command: not found
+#   /usr/libexec/rc/sh/init.sh:        line 22:      command: not found
+# Those are `#!/bin/sh` scripts, and the merlin /bin/busybox is BusyBox v1.25.1
+# built WITHOUT CONFIG_ASH_CMDCMD -> the ash `command` builtin is ABSENT
+# (confirmed: `busybox sh -c 'command -v ls'` -> "command: not found"). init.sh
+# line 15 `command -v md5sum` then errored and fell through to the MISLEADING
+# "md5sum is missing" eerror — md5sum is NOT actually missing (the merlin busybox
+# HAS the md5sum applet and /usr/bin/md5sum -> ../../bin/busybox exists; `command`
+# was the real failure). The Buildroot busybox 1.37.0 HAS both (CONFIG_ASH_CMDCMD=y
+# + CONFIG_MD5SUM=y; GLIBC req <=2.28 <= merlin glibc 2.32 — ABI-compatible).
+#
+# WHY NOT replace /bin/busybox globally: the merlin busybox carries 25 applets the
+# Buildroot busybox does NOT (depmod, bash, logread, nc, ntpd, zcip, blockdev,
+# chpasswd, add-shell/remove-shell, mkfs.vfat, traceroute6, ...) that the closed
+# graft early-init (bcm_boot_launcher children, S45bcm-*-drivers, /rom/etc/rc3.d)
+# may invoke. A global swap would strip those from the graft's PATH applets and
+# is NOT graft-safe. So we install the Buildroot busybox as a SEPARATE
+# /bin/busybox.openrc (shadows nothing) and repoint ONLY OpenRC's own
+# directly-exec'd librcdir shell scripts (#!/bin/sh) at it via
+# `#!/bin/busybox.openrc sh`. openrc-run (C) execl()s openrc-run.sh, so EVERY
+# service (incl. the 8 custom + stock VFS, all #!/sbin/openrc-run) inherits the
+# command-capable shell; the openrc/rc binaries exec init.sh/init-early.sh the
+# same way. The merlin /bin/sh + every graft #!/bin/sh script stay byte-untouched,
+# and md5sum stays reachable via the existing /usr/bin/md5sum symlink. busybox is
+# OPEN/GPL -> a legit from-source addition.
+echo "== v6 fix: command-capable OpenRC shell (/bin/busybox.openrc) =="
+BB_OPENRC_SRC="${BB_OPENRC_SRC:-$OPENRC_STAGE/bin/busybox}"
+STRIP="${STRIP:-/home/guillaume/be98/buildroot/output-openrc-init/host/bin/arm-buildroot-linux-gnueabi-strip}"
+if [ -x "$BB_OPENRC_SRC" ]; then
+	install -D -m 0755 "$BB_OPENRC_SRC" "$FS/bin/busybox.openrc"
+	if [ -x "$STRIP" ]; then
+		"$STRIP" --strip-unneeded "$FS/bin/busybox.openrc" \
+			&& echo "  + /bin/busybox.openrc (stripped, $(stat -c%s "$FS/bin/busybox.openrc") B)"
+	else
+		echo "  + /bin/busybox.openrc ($(stat -c%s "$FS/bin/busybox.openrc") B, NOT stripped — no target strip)"
+	fi
+	# repoint ONLY the directly-exec'd librcdir #!/bin/sh scripts (openrc-run.sh,
+	# init.sh, init-early.sh, gendepends.sh, binfmt.sh, cgroup-release-agent.sh).
+	# Sourced helpers (functions.sh, rc-*.sh, *-daemon.sh) carry NO shebang and
+	# inherit the parent shell, so they need no change.
+	nrw=0
+	for f in "$FS"/usr/libexec/rc/sh/*.sh; do
+		[ -f "$f" ] || continue
+		if [ "$(head -1 "$f")" = "#!/bin/sh" ]; then
+			sed -i '1s|^#!/bin/sh$|#!/bin/busybox.openrc sh|' "$f"
+			nrw=$((nrw+1))
+		fi
+	done
+	echo "  + rewrote $nrw /usr/libexec/rc/sh/*.sh shebangs -> #!/bin/busybox.openrc sh"
+	# guards: busybox.openrc must be ELF; the two scripts in the v5 failure trace
+	# (openrc-run.sh + init.sh) must now name busybox.openrc.
+	head -c4 "$FS/bin/busybox.openrc" | grep -q $'\x7fELF' \
+		&& echo "  /bin/busybox.openrc is ELF [V]" \
+		|| { echo "  ! /bin/busybox.openrc not ELF"; MISSING=1; }
+	grep -qx '#!/bin/busybox.openrc sh' "$FS/usr/libexec/rc/sh/openrc-run.sh" \
+	  && grep -qx '#!/bin/busybox.openrc sh' "$FS/usr/libexec/rc/sh/init.sh" \
+		&& echo "  openrc-run.sh + init.sh now use the command-capable shell [V]" \
+		|| { echo "  ! shebang rewrite FAILED (openrc-run.sh/init.sh)"; MISSING=1; }
+else
+	echo "  ! busybox.openrc source MISSING at $BB_OPENRC_SRC"
+	echo "    build it: make ... O=output-openrc-init busybox"
+	MISSING=1
+fi
+
 echo "== overlay stock OpenRC /rom/etc config (rc.conf, conf.d, init.d, *.d) =="
 mkdir -p "$ETC/init.d" "$ETC/conf.d"
 [ -f "$OPENRC_STAGE/rom/etc/rc.conf" ] && { cp -a "$OPENRC_STAGE/rom/etc/rc.conf" "$ETC/rc.conf"; echo "  + /rom/etc/rc.conf"; }
@@ -293,6 +360,76 @@ if [ -f "$FSTAB" ]; then
 	grep -qE '[[:space:]]/run[[:space:]]' "$FSTAB" && echo "  + fstab /run entry present [V]" || { echo "  ! fstab /run entry missing"; MISSING=1; }
 else
 	echo "  ! /rom/etc/fstab absent (skipped fstab entry; wrapper mount is primary)"
+fi
+
+# --- v6 minor: make /etc/fstab resolve at do_sysinit (before etc-farm) -------
+# v5 trial note: "/etc/fstab does not exist". OpenRC's init.sh do_sysinit runs
+# `fstabinfo --mount /proc` + `/run` (lines 48/75) BEFORE any sysinit service, so
+# it runs before etc-farm rebuilds /etc. At that point /etc -> tmp/etc is the
+# BAKED skeleton, which has no fstab entry -> fstabinfo finds no /etc/fstab and
+# warns (non-fatal: init.sh then mounts /proc//run directly; v5 confirmed /proc
+# mounted). Bake a /tmp/etc/fstab -> /rom/etc/fstab symlink so fstabinfo resolves
+# the real fstab (now incl. the /run line) at do_sysinit too. etc-farm's tmpfs
+# rebuild re-creates the same symlink afterwards (its `for s in /rom/etc/*` loop).
+if [ -d "$FS/tmp/etc" ] && [ ! -e "$FS/tmp/etc/fstab" ]; then
+	ln -sf /rom/etc/fstab "$FS/tmp/etc/fstab"
+	[ -L "$FS/tmp/etc/fstab" ] && echo "  + baked /tmp/etc/fstab -> /rom/etc/fstab (/etc/fstab at do_sysinit) [V]"
+else
+	echo "  ~ /tmp/etc/fstab already present or /tmp/etc absent (skipped)"
+fi
+
+# === v6 minor fix: daemon group/user for checkpath ===========================
+# v5 trial: `checkpath: owner root:daemon not found`. The merlin rootfs ships NO
+# /rom/etc/{passwd,group}; instead /etc/{passwd,group} -> /var/{passwd,group}
+# were hand-built at runtime by ASUS rc's setup_passwd (GONE under OpenRC) on the
+# tmpfs /var. So under OpenRC there is no group db at all -> getgrnam("daemon")
+# fails -> checkpath cannot resolve root:daemon. FIX: provide a static, persistent
+# group+passwd in READ-ONLY /rom/etc. etc-farm's `for s in /rom/etc/*` loop then
+# symlinks /etc/{group,passwd} -> these, and because they live in /rom (never
+# shadowed by the `mount -a` tmpfs /var that bcm-platform triggers) the daemon
+# group stays resolvable through every runlevel. Minimal standard set incl. the
+# reported `daemon` group/user. (Additive to /rom/etc — touches no graft object.)
+echo "== v6 minor: bake /rom/etc/{group,passwd} (daemon group for checkpath) =="
+if [ ! -e "$ETC/group" ]; then
+	cat > "$ETC/group" <<'EOF'
+root:x:0:
+daemon:x:1:
+bin:x:2:
+sys:x:3:
+adm:x:4:
+tty:x:5:
+disk:x:6:
+lp:x:7:
+mail:x:8:
+kmem:x:9:
+wheel:x:10:
+audio:x:11:
+cdrom:x:15:
+dialout:x:18:
+www-data:x:33:
+operator:x:37:
+ftp:x:45:
+nogroup:x:65534:
+EOF
+	chmod 0644 "$ETC/group"
+	grep -q '^daemon:x:1:' "$ETC/group" && echo "  + /rom/etc/group (incl daemon:x:1:) [V]" || { echo "  ! /rom/etc/group write failed"; MISSING=1; }
+else
+	echo "  ~ /rom/etc/group already present (left untouched)"
+fi
+if [ ! -e "$ETC/passwd" ]; then
+	cat > "$ETC/passwd" <<'EOF'
+root:x:0:0:root:/root:/bin/sh
+daemon:x:1:1:daemon:/usr/sbin:/bin/false
+bin:x:2:2:bin:/bin:/bin/false
+sys:x:3:3:sys:/dev:/bin/false
+www-data:x:33:33:www-data:/var/www:/bin/false
+operator:x:37:37:Operator:/var:/bin/false
+nobody:x:65534:65534:nobody:/:/bin/false
+EOF
+	chmod 0644 "$ETC/passwd"
+	grep -q '^daemon:x:1:1:' "$ETC/passwd" && echo "  + /rom/etc/passwd (incl daemon) [V]" || { echo "  ! /rom/etc/passwd write failed"; MISSING=1; }
+else
+	echo "  ~ /rom/etc/passwd already present (left untouched)"
 fi
 
 echo

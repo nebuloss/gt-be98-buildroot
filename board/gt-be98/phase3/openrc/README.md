@@ -183,6 +183,58 @@ in `output-openrc-init/` (`make ... openrc` only — no full firmware rebuild).
   (`83,440,328 B`, sha `38959617…`; rootfs Image 1 sha `eddd5bed…`). NOT flashed.
   **This SHOULD let OpenRC sysinit proceed → services run → `openrc-init` gets its
   FIFO → boots reachable. The conclusive open-init for the re-trial.**
+- **v6 = v5 + a COMMAND-CAPABLE OpenRC shell [V] (2026-06-07).** v5 trial
+  result (from /data logs): the /run fix WORKED — OpenRC 0.56 boots, mounts
+  /proc, caches deps, runs sysinit→boot→default (`rc default logging stopped`),
+  but EVERY service failed `command: not found`
+  (`openrc-run.sh: line 292/407`, `init.sh: line 22`) and a misleading
+  `md5sum is missing`. ROOT CAUSE (confirmed by extracting the merlin
+  `/bin/busybox` from the base): it is **BusyBox v1.25.1 built WITHOUT
+  `CONFIG_ASH_CMDCMD`** → the ash `command` builtin is ABSENT
+  (`busybox sh -c 'command -v ls'` → `command: not found`). The `md5sum is
+  missing` was a *symptom*, not real: `init.sh:15` does `command -v md5sum`,
+  which errored on the missing builtin and fell to the eerror; the merlin
+  busybox DOES carry the `md5sum` applet and `/usr/bin/md5sum → ../../bin/busybox`
+  exists. **THE FIX (graft-safe, NOT a global busybox swap):** an applet diff
+  showed the merlin busybox has **25 applets the Buildroot busybox lacks**
+  (`depmod, bash, logread, nc, ntpd, zcip, blockdev, chpasswd,
+  add-shell/remove-shell, mkfs.vfat, traceroute6, …`) that the closed graft
+  early-init may invoke → replacing `/bin/busybox` globally is UNSAFE. Instead
+  v6 installs the from-source Buildroot **busybox 1.37.0**
+  (`CONFIG_ASH_CMDCMD=y` + `CONFIG_MD5SUM=y`; built in `output-openrc-init`,
+  stripped 874,212 B, max `GLIBC_2.28` ≤ merlin glibc 2.32 — ABI-compatible) as
+  a SEPARATE `/bin/busybox.openrc`, and repoints ONLY OpenRC's own
+  directly-exec'd librcdir `#!/bin/sh` scripts at it via
+  `#!/bin/busybox.openrc sh` (6 scripts: openrc-run.sh, init.sh, init-early.sh,
+  gendepends.sh, binfmt.sh, cgroup-release-agent.sh). `openrc-run` (C) `execl()`s
+  `openrc-run.sh`, so EVERY service (8 custom + stock VFS, all
+  `#!/sbin/openrc-run`) inherits the command-capable shell; init.sh/init-early.sh
+  are exec'd the same way. The merlin `/bin/sh` + every graft `#!/bin/sh` script
+  are byte-UNTOUCHED, and `md5sum` stays reachable via `/usr/bin/md5sum`.
+  **Minor fixes:** (1) bake static `/rom/etc/{group,passwd}` incl. `daemon:x:1:`
+  (the merlin rootfs has NO group db — `/etc/{group,passwd} → /var/*` were
+  runtime-built by ASUS rc's `setup_passwd`, gone under OpenRC → `checkpath:
+  owner root:daemon not found`); etc-farm's `for s in /rom/etc/*` loop symlinks
+  `/etc/{group,passwd}` → them, and `/rom` is never shadowed by `mount -a`'s
+  tmpfs `/var`. (2) bake `/tmp/etc/fstab → /rom/etc/fstab` so `init.sh`
+  do_sysinit's `fstabinfo --mount /proc//run` finds `/etc/fstab` BEFORE etc-farm
+  runs (v5's `/etc/fstab does not exist` was a non-fatal do_sysinit warning).
+  All v5 fixes KEPT. **Image-diff vs FULL br-0050: ZERO removals; 185 adds (all
+  OpenRC-owned + `/bin/busybox.openrc`, `/run`, `/rom/etc/{group,passwd}`,
+  `/tmp/etc/fstab`); mods = `/sbin/init` (symlink→wrapper), `/rom/etc/fstab`
+  (+tmpfs /run line), `tmp/etc/ld.so.cache` (dangling symlink→compiled cache).**
+  Graft byte-identical (`bcm_boot_launcher`, `nvram`, `wl.ko`, `dhd.ko`,
+  `bcm_knvram.ko`, `wdtctl`, full `/rom/etc/rc3.d`); **merlin `/bin/busybox`
+  byte-IDENTICAL** (not touched); safety net byte-identical
+  (`/usr/br/sbin/dropbearmulti`, `/sbin/trial-deadman`). **Verified the OpenRC
+  shell now HAS `command`** (`busybox.openrc sh -c 'command -v command'` → OK,
+  loads against the merlin libc in the v6 FS) and **`md5sum` reachable**
+  (`/usr/bin/md5sum → busybox`; applet present). New squashfs `70,500,352 B`
+  (67.23 MiB), under the slot-2 ceiling `71,106,560` (`606,208 B` headroom).
+  pkgtb (br-0050 boot-chain FIT, bootfs Image 0 byte-identical, sha `81f38fe0…`):
+  `~/be98/artifacts-br/GT-BE98_openrc-init-v6_nand_squashfs.pkgtb`
+  (`83,829,448 B`, sha `2656b66a…`; rootfs Image 1 sha `341cd071…`). NOT flashed.
+  **This SHOULD let OpenRC's services actually run → network/sshd → reachable.**
 - **NOT VERIFIED (bench-only):** that openrc-init-as-PID1 actually boots the
   closed bcm stack (blocker F), glibc ABI of the merlin libc against these
   binaries at runtime, and runlevel execution order live. Build-buildable only.
