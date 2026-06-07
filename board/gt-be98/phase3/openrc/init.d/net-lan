@@ -1,0 +1,115 @@
+#!/sbin/openrc-run
+# === v7 ★REACHABILITY★: early wired LAN + sshd (replaces v6 net-switch) =========
+# v6 HUNG hard-unreachable: openrc-init booted further (services ran) but NO network
+# came up (v6's net-switch was a stub: config_switch/config_extwan only, no real
+# start_lan) -> no ping / no :2222 / no :2223 -> undebuggable. The :2223 rescue
+# dropbear IS actually launched in v6 (rc3.d S28br-dropbear runs inside
+# bcm_boot_launcher via the bcm-platform service) but was UNREACHABLE because the
+# wired LAN (br0 + eth + the 10.0.0.8 management IP) was never brought up.
+#
+# v7's #2 job: bring up the WIRED LAN EARLY via the OPEN path so a booting open-init
+# is REACHABLE (debuggable) on :2222 (and :2223 rescue) even if a LATER service hangs
+# (the HW watchdog armed by the PID1 wrapper still guarantees reset-on-hang).
+#
+# Open-path bring-up:
+#   1. `rc config_switch` + `rc config_extwan` — standalone in-proc rc applets
+#      (rc.c:4388/4394) that program the CLOSED Broadcom HW switch via the
+#      ethswctl/vlanctl ABI. They do NOT signal PID1 -> work under OpenRC [V-src].
+#   2. open start_lan stand-in: `brctl addbr br0` + add lan_ifnames members +
+#      `ip addr add <lan_ipaddr>/<cidr> dev br0` + `ip link set br0 up`, all derived
+#      from nvram (lan_ifnames / lan_ipaddr / lan_netmask; nvram is up — bcm-platform
+#      ran S40hndnvram). This is the [[wl-ioctl-rc-boundary]] open wired path.
+#   3. sshd reachability: relaunch the :2223 RESCUE (dropbearmulti, /data hostkey;
+#      replicates br-dropbear.sh — defensive, in case rc3.d ordering differs) and
+#      start the merlin dropbear on :2222. Both key-auth, /data-persisted hostkey.
+# Ordered AFTER bcm-platform (drivers + nvram loaded), BEFORE the rest.
+description="GT-BE98 wired LAN bring-up + sshd (open-init reachability)"
+
+depend() {
+	need nvram
+	after bcm-platform
+	before wifi-radio webui
+	provide net
+}
+
+blog() { echo "$(cat /proc/uptime) net-lan: $*" >> /data/openrc-boot.log 2>/dev/null; }
+
+# netmask dotted-quad -> CIDR prefix length (fallback 24).
+nm2cidr() {
+	local nm="$1" b n=0
+	case "$nm" in *.*.*.*) ;; *) echo 24; return;; esac
+	local IFS=.
+	for b in $nm; do
+		while [ "$b" -gt 0 ] 2>/dev/null; do n=$((n + (b & 1))); b=$((b >> 1)); done
+	done
+	[ "$n" -ge 1 ] && [ "$n" -le 32 ] && echo "$n" || echo 24
+}
+
+# Launch a dropbear listener on $1, binary $2, with a /data-persisted ed25519
+# hostkey (stable fingerprint across boots/slots — same as br-dropbear.sh). A
+# capped babysitter loop respawns it (OpenRC does not supervise it). Skip if the
+# port is already bound (e.g. :2223 already up via rc3.d S28br-dropbear).
+KEYDIR=/data/br/dropbear
+start_dropbear() {
+	local port="$1" dbin="$2" pidf="/tmp/dropbear-${port}.pid"
+	[ -x "$dbin" ] || { blog "dropbear bin $dbin missing -> skip :$port"; return; }
+	if netstat -ltn 2>/dev/null | grep -q ":${port} "; then
+		blog "port :$port already listening -> not relaunching"
+		return
+	fi
+	mkdir -p "$KEYDIR" 2>/dev/null
+	[ -f "$KEYDIR/hostkey" ] || "$dbin" dropbearkey -t ed25519 -f "$KEYDIR/hostkey" >/dev/null 2>&1
+	(
+		N=0
+		while [ "$N" -lt 20 ]; do
+			"$dbin" dropbear -F -r "$KEYDIR/hostkey" -p "$port" -P "$pidf" >/dev/null 2>&1
+			N=$((N + 1))
+			sleep 5
+		done
+	) &
+	blog "launched dropbear on :$port ($dbin, /data hostkey)"
+}
+
+start() {
+	blog "START"
+
+	# 1. HW switch + ext-WAN port programming (in-proc rc applets; graft-safe).
+	ebegin "HW switch programming (rc config_switch)"
+	rc config_switch >> /data/openrc-boot.log 2>&1
+	eend $?
+	ebegin "Ext-WAN port config (rc config_extwan)"
+	rc config_extwan >> /data/openrc-boot.log 2>&1
+	eend $?
+
+	# 2. Open start_lan stand-in: br0 + lan_ifnames members + management IP.
+	local br="br0" ifs ip nm cidr i
+	ifs=$(nvram get lan_ifnames 2>/dev/null)
+	ip=$(nvram get lan_ipaddr 2>/dev/null);  [ -n "$ip" ] || ip=10.0.0.8
+	nm=$(nvram get lan_netmask 2>/dev/null); [ -n "$nm" ] || nm=255.255.255.0
+	cidr=$(nm2cidr "$nm")
+	blog "lan_ifnames='$ifs' lan_ipaddr=$ip lan_netmask=$nm (/$cidr)"
+	ebegin "Bringing up $br ($ifs) -> $ip/$cidr"
+	if ! brctl show 2>/dev/null | grep -q "^${br}[[:space:]]"; then
+		brctl addbr "$br" 2>/dev/null && blog "created bridge $br"
+	fi
+	for i in $ifs; do
+		[ "$i" = "$br" ] && continue
+		ip link set "$i" up 2>/dev/null
+		brctl addif "$br" "$i" 2>/dev/null && blog "added $i to $br"
+	done
+	ip link set "$br" up 2>/dev/null
+	# assign the management IP (idempotent; ip first, ifconfig fallback)
+	ip addr add "$ip/$cidr" dev "$br" 2>/dev/null \
+		|| ifconfig "$br" "$ip" netmask "$nm" 2>/dev/null
+	eend 0
+	blog "bridge $br up with $ip/$cidr"
+
+	# 3. sshd reachability: :2223 rescue (defensive; rc3.d may already have it) + :2222.
+	ebegin "Starting sshd (:2223 rescue + :2222)"
+	start_dropbear 2223 /usr/br/sbin/dropbearmulti
+	start_dropbear 2222 /usr/sbin/dropbear
+	eend 0
+
+	blog "DONE — open-init reachable on :2222 (+ :2223 rescue) at $ip"
+	return 0
+}

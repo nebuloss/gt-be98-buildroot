@@ -259,8 +259,17 @@ mkdir -p "$ETC/runlevels/sysinit" "$ETC/runlevels/boot" "$ETC/runlevels/default"
 for n in deadman-early etc-farm sysfs procfs devfs dmesg; do
 	ln -sf "/rom/etc/init.d/$n" "$ETC/runlevels/sysinit/$n"
 done
-# boot: nvram -> platform graft -> hw-wdt -> lan/switch
-for n in bcm-knvram bcm-platform hw-wdt net-switch; do
+# boot: nvram -> platform graft -> EARLY wired LAN + sshd reachability.
+# v7 CHANGE: drop hw-wdt and net-switch from this runlevel; add net-lan.
+#  - hw-wdt is REMOVED because it arms the watchdog in DAEMON mode (`wdtctl -d`)
+#    which spawns wdtd to PING the HW watchdog every timeout/4 -> a hang would
+#    NEVER reset (the v6 failure mode). v7 arms the watchdog in the PID1 wrapper
+#    in DIRECT, NON-petting mode instead, so ANY hang resets. Petting MUST stay
+#    off for the trial; the wrapper owns /dev/watchdog (single-open).
+#  - net-switch (v6 stub: config_switch/config_extwan only) is SUPERSEDED by
+#    net-lan, which also brings up br0 + the management IP + sshd :2222/:2223 so
+#    the open-init is REACHABLE even if a later service hangs.
+for n in bcm-knvram bcm-platform net-lan; do
 	ln -sf "/rom/etc/init.d/$n" "$ETC/runlevels/boot/$n"
 done
 # default: wifi glue + webui controller
@@ -268,7 +277,7 @@ for n in wifi-radio webui; do
 	ln -sf "/rom/etc/init.d/$n" "$ETC/runlevels/default/$n"
 done
 echo "  sysinit: deadman-early etc-farm sysfs procfs devfs dmesg"
-echo "  boot:    bcm-knvram bcm-platform hw-wdt net-switch"
+echo "  boot:    bcm-knvram bcm-platform net-lan   (v7: hw-wdt/net-switch dropped)"
 echo "  default: wifi-radio webui"
 # verify every runlevel symlink resolves to a real init.d script
 DANGLE=0
@@ -277,6 +286,27 @@ for l in "$ETC"/runlevels/*/*; do
 	[ -e "$tgt" ] || { echo "  ! DANGLING runlevel symlink: $l"; DANGLE=1; }
 done
 [ "$DANGLE" -eq 0 ] && echo "  all runlevel symlinks resolve [V]"
+
+# v7 REACHABILITY guards: net-lan must be present + linked into boot; the petting
+# hw-wdt and the v6 net-switch stub must NOT be in any runlevel (they would defeat
+# the non-petting watchdog / leave the LAN down).
+echo "== v7 verify: net-lan service + runlevel wiring =="
+[ -f "$ETC/init.d/net-lan" ] && echo "  /rom/etc/init.d/net-lan present [V]" \
+	|| { echo "  ! net-lan service MISSING"; MISSING=1; }
+[ -L "$ETC/runlevels/boot/net-lan" ] && echo "  net-lan linked into boot runlevel [V]" \
+	|| { echo "  ! net-lan NOT in boot runlevel"; MISSING=1; }
+if [ -e "$ETC/runlevels/boot/hw-wdt" ] || [ -e "$ETC/runlevels/boot/net-switch" ]; then
+	echo "  ! v7: hw-wdt/net-switch still in boot runlevel (would pet wdt / no LAN)"; MISSING=1
+else
+	echo "  v7: hw-wdt + net-switch absent from runlevels (no watchdog petting) [V]"
+fi
+grep -q 'start_dropbear 2223' "$ETC/init.d/net-lan" && grep -q 'start_dropbear 2222' "$ETC/init.d/net-lan" \
+	&& echo "  net-lan starts sshd :2222 + :2223 rescue [V]" \
+	|| { echo "  ! net-lan sshd launch MISSING"; MISSING=1; }
+# the deadman-early backstop must also (re)arm the watchdog
+grep -q 'wdtctl -t 240 start' "$ETC/init.d/deadman-early" \
+	&& echo "  deadman-early HW-watchdog backstop arm [V]" \
+	|| { echo "  ! deadman-early watchdog backstop MISSING"; MISSING=1; }
 
 echo "== v3 logging layer 2: PID1 wrapper /sbin/init (+/sbin/openrc-init) =="
 # The kernel exec()s /sbin/init (and the cmdline may name /sbin/openrc-init).
@@ -312,6 +342,11 @@ if [ -f "$FS/sbin/openrc-init" ] && [ ! -L "$FS/sbin/openrc-init" ] && [ -f "$WR
 	   && grep -q 'mkdir -p /run/openrc' "$FS/sbin/init" \
 		&& echo "  wrapper pre-mounts tmpfs /run + creates /run/openrc [V]" \
 		|| { echo "  ! wrapper /run pre-mount MISSING"; MISSING=1; }
+	# v7 SAFETY guard: the wrapper must arm the HW watchdog (direct, NON-petting)
+	grep -q 'wdtctl -t "\$WDT_TIMEOUT" start' "$FS/sbin/init" \
+	   && grep -q '/dev/watchdog' "$FS/sbin/init" \
+		&& echo "  v7: wrapper arms HW watchdog (wdtctl direct, no petting) [V]" \
+		|| { echo "  ! v7 wrapper watchdog-arm MISSING"; MISSING=1; }
 else
 	echo "  ! /sbin/openrc-init binary or wrapper absent — init wiring FAILED"; MISSING=1
 fi

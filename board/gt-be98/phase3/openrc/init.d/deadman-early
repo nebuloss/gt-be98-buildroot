@@ -17,6 +17,19 @@ start() {
 	# v3 persistent boot breadcrumb (layer 3) — /data already mounted by the
 	# /sbin/init wrapper; this service re-mounts it defensively below regardless.
 	echo "$(cat /proc/uptime) svc deadman-early START" >> /data/openrc-boot.log 2>/dev/null
+
+	# === v7 ★SAFETY backstop★: re-arm the HW watchdog FIRST ==================
+	# The PID1 wrapper already armed the HW watchdog (direct, NO petting) — this
+	# is the EARLIEST-service backstop in case /dev/watchdog was not yet present
+	# at the wrapper (re-arming just refreshes the HW timer; idempotent & safe).
+	# This GUARANTEES reset-on-hang -> committed slot1 (GOOD), replacing the
+	# unreliable shell dead-man as the trial auto-revert.
+	# DISARM (orchestrator, after a healthy reachable boot): `wdtctl stop`.
+	if [ -e /dev/watchdog ] && [ -x /bin/wdtctl ]; then
+		if /bin/wdtctl -t 240 start >> /data/openrc-boot.log 2>&1; then
+			echo "$(cat /proc/uptime) svc deadman-early: HW watchdog (re)ARMED 240s (wdtctl direct, NO petting; disarm: 'wdtctl stop')" >> /data/openrc-boot.log 2>/dev/null
+		fi
+	fi
 	# Layer 0: /data holds the dead-man state — mount it first of all.
 	if ! mountpoint -q /data 2>/dev/null; then
 		ebegin "Mounting /data (dead-man state volume)"

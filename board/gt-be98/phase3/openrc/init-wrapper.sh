@@ -11,6 +11,36 @@
 mount -t ubifs ubi:data /data 2>/dev/null || mount -t ext4 /dev/data /data 2>/dev/null
 echo "$(cat /proc/uptime) PID1-wrapper: kernel exec-d init; mounting /data; about to exec openrc-init" >> /data/openrc-boot.log 2>/dev/null
 dmesg > /data/openrc-dmesg-early.log 2>/dev/null
+
+# === v7 ★SAFETY★: arm the HW watchdog EARLY (guaranteed reset-on-hang) =========
+# v6 HUNG with NO auto-recovery: openrc-init booted further but the network never
+# came up and the shell dead-man did NOT fire (a hung PID1 cannot reboot) -> the
+# device was stuck on slot2 needing a physical power-cycle. v7's #1 job is a
+# GUARANTEED reset-on-hang. We arm the SoC HW watchdog here, the EARLIEST userspace
+# point (the kernel auto-mounts devtmpfs on /dev — fstab mounts only proc/var/mnt/sys
+# — so /dev/watchdog, the built-in BCM HW wdt, is already present), in DIRECT mode
+# with NO petting daemon: `wdtctl -t <T> start` (NOT `-d`, which would spawn wdtd to
+# ping it). The BCM HW timer latches in hardware and keeps counting after wdtctl
+# exits (the documented "wdtctl ... start / wdtctl stop" direct-control pair proves
+# it persists across process exit). Nothing pets it -> ANY hang anywhere in boot
+# resets the SoC within <T> seconds -> the ONCE trial slot is consumed -> the
+# bootloader returns to the COMMITTED slot1 (GOOD = br-0045). This REPLACES the
+# unreliable shell dead-man as the trial auto-revert.
+# Timeout: wdtctl accepts [4..600]s (verified: validation is `timeout-4 <= 596`).
+# We use 240s (generous: lets a healthy boot reach the orchestrator's disarm).
+# ★DISARM (orchestrator, ONLY after a healthy+reachable boot is confirmed)★:
+#     wdtctl stop          # stops the HW timer (direct-mode disarm)
+# Re-armed idempotently as a backstop in the deadman-early sysinit service.
+WDT_TIMEOUT=240
+if [ -e /dev/watchdog ] && [ -x /bin/wdtctl ]; then
+	if /bin/wdtctl -t "$WDT_TIMEOUT" start >> /data/openrc-boot.log 2>&1; then
+		echo "$(cat /proc/uptime) PID1-wrapper: HW watchdog ARMED ${WDT_TIMEOUT}s (wdtctl direct, NO petting; disarm: 'wdtctl stop')" >> /data/openrc-boot.log 2>/dev/null
+	else
+		echo "$(cat /proc/uptime) PID1-wrapper: wdtctl arm FAILED (deadman-early will retry)" >> /data/openrc-boot.log 2>/dev/null
+	fi
+else
+	echo "$(cat /proc/uptime) PID1-wrapper: /dev/watchdog or /bin/wdtctl absent here -> deferring arm to deadman-early" >> /data/openrc-boot.log 2>/dev/null
+fi
 # v5 THE FIX: pre-mount /run BEFORE handing off to openrc-init. CONCLUSIVE v4
 # diagnosis (source+strace): openrc-init loops forever on
 # fopen("/run/openrc/init.ctl") — OpenRC's RC_INIT_FIFO is hardcoded to /run on
