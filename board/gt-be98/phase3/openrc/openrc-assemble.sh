@@ -240,6 +240,11 @@ if [ -f "$FS/sbin/openrc-init" ] && [ ! -L "$FS/sbin/openrc-init" ] && [ -f "$WR
 	grep -q 'exec /sbin/openrc-init.real "\$@" >> /data/openrc-init-out.log 2>&1' "$FS/sbin/init" \
 		&& echo "  wrapper stderr-redirect -> /data/openrc-init-out.log [V]" \
 		|| { echo "  ! wrapper stderr-redirect MISSING"; MISSING=1; }
+	# v5 fix guard: the wrapper must pre-mount /run + create /run/openrc before exec
+	grep -q 'mount -t tmpfs .* /run' "$FS/sbin/init" \
+	   && grep -q 'mkdir -p /run/openrc' "$FS/sbin/init" \
+		&& echo "  wrapper pre-mounts tmpfs /run + creates /run/openrc [V]" \
+		|| { echo "  ! wrapper /run pre-mount MISSING"; MISSING=1; }
 else
 	echo "  ! /sbin/openrc-init binary or wrapper absent — init wiring FAILED"; MISSING=1
 fi
@@ -259,6 +264,36 @@ done
 [ -f "$FS/usr/lib/librc.so.1" ] && [ -f "$FS/usr/lib/libeinfo.so.1" ] \
 	&& echo "  /usr/lib copies KEPT [V]" \
 	|| { echo "  ! /usr/lib copies missing"; MISSING=1; }
+
+# --- v5 THE FIX: bake the /run mountpoint + fstab entry -----------------------
+# CONCLUSIVE v4 diagnosis: openrc-init loops on fopen("/run/openrc/init.ctl")
+# (OpenRC RC_INIT_FIFO, hardcoded to /run on Linux). The merlin RO-squashfs root
+# has NO /run, so OpenRC's init.sh sysinit ABORTS ("The /run directory does not
+# exist. Unable to continue.") -> no service -> init() returns -> mkfifo/fopen
+# ENOENT loops forever. FIX: bake an empty /run dir into the image so init.sh's
+# `[ -d /run ]` passes and a tmpfs can be mounted there. (The PID1 wrapper
+# pre-mounts the tmpfs + creates /run/openrc before openrc-init's init().)
+echo "== v5 fix: bake /run mountpoint into the rootfs =="
+mkdir -p "$FS/run" && chmod 0755 "$FS/run"
+[ -d "$FS/run" ] && echo "  + /run (0755) baked into image [V]" || { echo "  ! /run NOT baked"; MISSING=1; }
+# belt-and-suspenders: add a tmpfs /run line to /rom/etc/fstab (base mounts only
+# proc/var/mnt/sys). Idempotent; the wrapper mount is the primary path.
+FSTAB="$FS/rom/etc/fstab"
+if [ -f "$FSTAB" ]; then
+	if grep -qE '^[^#]*[[:space:]]/run[[:space:]]' "$FSTAB"; then
+		echo "  ~ /rom/etc/fstab already has a /run entry"
+	else
+		# the unsquashed fstab is read-only; restore the original mode afterwards
+		FSTAB_MODE="$(stat -c '%a' "$FSTAB")"
+		chmod u+w "$FSTAB"
+		printf 'tmpfs\t\t/run\ttmpfs\tmode=0755,nosuid,nodev\t\t0\t0\n' >> "$FSTAB"
+		chmod "$FSTAB_MODE" "$FSTAB"
+		echo "  + /rom/etc/fstab: tmpfs /run entry appended (mode preserved $FSTAB_MODE)"
+	fi
+	grep -qE '[[:space:]]/run[[:space:]]' "$FSTAB" && echo "  + fstab /run entry present [V]" || { echo "  ! fstab /run entry missing"; MISSING=1; }
+else
+	echo "  ! /rom/etc/fstab absent (skipped fstab entry; wrapper mount is primary)"
+fi
 
 echo
 echo "== overlay tree assembled at: $FS =="

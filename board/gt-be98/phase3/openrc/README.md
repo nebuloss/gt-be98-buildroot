@@ -143,6 +143,46 @@ in `output-openrc-init/` (`make ... openrc` only — no full firmware rebuild).
   `~/be98/artifacts-br/GT-BE98_openrc-init-v3_nand_squashfs.pkgtb`
   (`83,436,232 B`, sha `1e359107…`; rootfs Image 1 sha `17d30bb5…`). NOT flashed.
   **This is the self-diagnosing open-init for the re-trial.**
+- **v4 = v3 + the early-load fix [V] (2026-06-07):** the v3 trial proved
+  `openrc-init.real` EXEC'd but DIED before any service (empty rc.log). v4 placed
+  `librc.so.1`+`libeinfo.so.1` ALSO in `/lib` (the loader's always-searched dir;
+  merlin has no `/etc/ld.so.cache`), pre-built `/etc/ld.so.cache`, and redirected
+  `openrc-init.real`'s own stdout+stderr to `/data/openrc-init-out.log`. pkgtb
+  `~/be98/artifacts-br/GT-BE98_openrc-init-v4_nand_squashfs.pkgtb` (`83,440,328 B`).
+  Commit `6924c9c`.
+- **v5 = v4 + THE /run FIX [V] (2026-06-07) — CONCLUSIVE ROOT CAUSE.** v4
+  source+strace diagnosis: `openrc-init` loops forever on
+  `fopen("/run/openrc/init.ctl")` — OpenRC's `RC_INIT_FIFO` is hardcoded to `/run`
+  on Linux (`src/librc/rc.h`). The merlin RO-squashfs root has **NO `/run`**
+  (`/var->tmp/var`, `/etc->tmp/etc`; fstab mounts only proc/var/mnt/sys — verified:
+  base has no `/run` dir, fstab has no `/run` line). OpenRC's
+  `/usr/libexec/rc/sh/init.sh` (sysinit `do_sysinit`) **ABORTS** when `/run` is
+  absent (`"The /run directory does not exist. Unable to continue."`) → no service
+  runs (empty rc.log) → `init()` returns → `mkfifo`/`fopen(/run/openrc/init.ctl)`
+  ENOENT loops forever, filling `/data`. THE FIX (delta on v4):
+  1. `openrc-assemble.sh` bakes an empty `/run` (0755) into the squashfs so
+     `init.sh`'s `[ -d /run ]` passes.
+  2. `init-wrapper.sh` (PID1) pre-mounts `tmpfs /run` + creates `/run/openrc`
+     + `/run/lock` just before `exec openrc-init.real`, so the FIFO can be created;
+     `init.sh` sees `/run` already mounted (`mountinfo -q /run`) and skips re-mount.
+  3. belt-and-suspenders `tmpfs /run` line appended to `/rom/etc/fstab`.
+  All v4 fixes KEPT (librc/libeinfo in `/lib`, ld.so.cache, 3-layer `/data` logging,
+  wrapper stderr-redirect). Re-assembled on the FULL br-0050 base (Image 1 of
+  `GT-BE98_blob0035`, `69,894,144 B`, sha `a5179579…`). New squashfs
+  `70,111,232 B` (66.86 MiB), under the slot-2 ceiling `71,106,560`
+  (`995,328 B` headroom; +4,096 B vs v4 = the `/run` dir block + fstab line).
+  **Image-diff vs FULL br-0050: ZERO removals; 179 adds (all OpenRC-owned + the
+  baked `/run`); 3 mods — `/sbin/init` (symlink→`rc` ⇒ wrapper), `/rom/etc/fstab`
+  (+`tmpfs /run` line), `tmp/etc/ld.so.cache` (dangling symlink ⇒ compiled cache).**
+  Graft byte-identical (`bcm_boot_launcher`, `nvram`, `wl.ko`, `dhd.ko`,
+  `bcm_knvram.ko`, full `/rom/etc/rc3.d`). Safety net byte-identical to base
+  (`/usr/br/sbin/dropbearmulti`, `/sbin/trial-deadman`); `/run` baked + wrapper
+  `/run` mount + `librc.so.1`/`libeinfo.so.1` in `/lib` all confirmed present.
+  pkgtb (br-0050 boot-chain FIT, bootfs Image 0 byte-identical, sha `81f38fe0…`):
+  `~/be98/artifacts-br/GT-BE98_openrc-init-v5_nand_squashfs.pkgtb`
+  (`83,440,328 B`, sha `38959617…`; rootfs Image 1 sha `eddd5bed…`). NOT flashed.
+  **This SHOULD let OpenRC sysinit proceed → services run → `openrc-init` gets its
+  FIFO → boots reachable. The conclusive open-init for the re-trial.**
 - **NOT VERIFIED (bench-only):** that openrc-init-as-PID1 actually boots the
   closed bcm stack (blocker F), glibc ABI of the merlin libc against these
   binaries at runtime, and runlevel execution order live. Build-buildable only.

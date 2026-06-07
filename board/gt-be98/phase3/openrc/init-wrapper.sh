@@ -11,6 +11,21 @@
 mount -t ubifs ubi:data /data 2>/dev/null || mount -t ext4 /dev/data /data 2>/dev/null
 echo "$(cat /proc/uptime) PID1-wrapper: kernel exec-d init; mounting /data; about to exec openrc-init" >> /data/openrc-boot.log 2>/dev/null
 dmesg > /data/openrc-dmesg-early.log 2>/dev/null
+# v5 THE FIX: pre-mount /run BEFORE handing off to openrc-init. CONCLUSIVE v4
+# diagnosis (source+strace): openrc-init loops forever on
+# fopen("/run/openrc/init.ctl") — OpenRC's RC_INIT_FIFO is hardcoded to /run on
+# Linux (src/librc/rc.h). The merlin rootfs has NO /run (RO squashfs root;
+# /var->tmp/var, /etc->tmp/etc; fstab mounts only proc/var/mnt/sys), and OpenRC's
+# /usr/libexec/rc/sh/init.sh (sysinit do_sysinit) ABORTS if /run is absent:
+# "The /run directory does not exist. Unable to continue." -> no service runs
+# (empty rc.log) -> init() returns -> mkfifo/fopen(/run/openrc/init.ctl) ENOENT
+# loops forever, filling /data. We mount a tmpfs on /run (the baked-in mountpoint
+# now exists in the squashfs) and pre-create /run/openrc + /run/lock so the FIFO
+# can be created. init.sh sees /run already mounted (mountinfo -q /run) and skips
+# its own re-mount -> no conflict.
+mount -t tmpfs -o mode=0755,nosuid,nodev tmpfs /run 2>/dev/null
+mkdir -p /run/openrc /run/lock 2>/dev/null
+echo "$(cat /proc/uptime) PID1-wrapper: mounted tmpfs /run; created /run/openrc + /run/lock" >> /data/openrc-boot.log 2>/dev/null
 # v4 CHANGE 2: capture openrc-init.real's OWN stdout+stderr to persistent /data.
 # The v3 trial proved openrc-init.real EXEC'd but DIED before any service with an
 # EMPTY rc.log + zero breadcrumbs — so the failure message went to a console we
