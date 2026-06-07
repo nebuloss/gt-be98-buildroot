@@ -58,6 +58,32 @@
 #define NVRAM_COMMIT_INIT_CAP   (256 * 1024)   /* initial commit dump buffer */
 #define NVRAM_COMMIT_MAX_CAP    (8  * 1024 * 1024) /* refuse to grow past this */
 
+/*
+ * Lost-reply resilience (the from-source boot-hang fix).
+ *
+ * The bcm_knvram netlink reply is UNRELIABLE: wlcsm_sendup_response() ->
+ * netlink_unicast() can drop the reply silently when the destination socket's
+ * receive buffer is momentarily full or the peer is busy - exactly the
+ * condition produced at wl bring-up, when a consumer enumerates the whole
+ * ~8000-var tree (177 sequential GETALL pages = `nvram show`) while many other
+ * clients hammer the same family concurrently. A plain blocking recvmsg() with
+ * no timeout then waits for a reply that will never arrive and HANGS the calling
+ * boot process forever (the observed T+20-70s from-source hang; the isolated
+ * single quiescent getall never hit it because nothing else contended).
+ *
+ * Fix: arm SO_RCVTIMEO so recvmsg() returns instead of blocking forever, enlarge
+ * SO_RCVBUF to make the drop far less likely in the first place, and on a
+ * timeout resend the (idempotent) request a bounded number of times before
+ * failing cleanly. A clean failure lets the caller fall back (e.g.
+ * bcm-wlan-drivers.sh treats an empty `nvram show` as "no module list" and uses
+ * defaults) rather than wedging the boot. The timeout is generous (seconds) vs
+ * the sub-ms per-page service time, so a timeout effectively only ever means a
+ * genuinely lost reply - a slow-but-alive kernel is never mistaken for a drop.
+ */
+#define NVRAM_RECV_TIMEO_S      4              /* per-reply wait cap (seconds) */
+#define NVRAM_NL_RETRIES        4              /* bounded resends of a lost req */
+#define NVRAM_RCVBUF_BYTES      (512 * 1024)   /* enlarge to resist drops */
+
 static int g_sock = -1;
 static int g_commit_reqd = 0;
 static pthread_mutex_t g_lock = PTHREAD_MUTEX_INITIALIZER;
@@ -105,6 +131,20 @@ static int nl_open(void)
 	if (bind(s, (struct sockaddr *)&sa, sizeof(sa)) < 0) {
 		close(s);
 		return -1;
+	}
+	/*
+	 * A lost netlink reply must never block a boot consumer forever: bound the
+	 * wait (recvmsg then returns EAGAIN -> nl_recv -2 -> nl_xchg resends) and
+	 * enlarge the receive buffer so the kernel's unicast reply is far less
+	 * likely to be dropped under concurrent boot load in the first place. Both
+	 * are best-effort - a kernel that rejects the options still works (it just
+	 * keeps the old, hang-prone blocking behaviour).
+	 */
+	{
+		struct timeval tv = { NVRAM_RECV_TIMEO_S, 0 };
+		int rcvbuf = NVRAM_RCVBUF_BYTES;
+		(void)setsockopt(s, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+		(void)setsockopt(s, SOL_SOCKET, SO_RCVBUF, &rcvbuf, sizeof(rcvbuf));
 	}
 	return s;
 }
@@ -180,6 +220,8 @@ static int nl_recv(unsigned short *rtype, void *out, int outlen)
 	do {
 		n = recvmsg(g_sock, &msg, 0);
 	} while (n < 0 && errno == EINTR);  /* a transient signal must not truncate the stream */
+	if (n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK))
+		return -2;                  /* SO_RCVTIMEO fired: reply lost, caller resends */
 	if (n <= 0)
 		return -1;
 	if (msg.msg_flags & MSG_TRUNC)      /* page larger than rbuf: bail, never assemble garbage */
@@ -201,6 +243,50 @@ static int nl_recv(unsigned short *rtype, void *out, int outlen)
 		return cp;
 	}
 	return plen;
+}
+
+/*
+ * Discard any datagrams already queued on the socket (best-effort, non-blocking).
+ * Called before a resend so a LATE straggler from a previous (timed-out) request
+ * cannot be mismatched against the resend's reply and desync the stream. With a
+ * multi-second timeout vs sub-ms service time a straggler is vanishingly rare,
+ * but the flush makes the resend path provably re-synchronising.
+ */
+static void nl_drain_stale(void)
+{
+	char rbuf[2 * MAX_NLRCV_BUF_SIZE + NLMSG_HDRLEN];
+	while (recv(g_sock, rbuf, sizeof(rbuf), MSG_DONTWAIT) > 0)
+		;
+}
+
+/*
+ * nl_xchg: one request/reply exchange that can never hang on a lost reply.
+ *
+ * nl_recv returns -2 when SO_RCVTIMEO fires (the reply was dropped - see the
+ * boot-hang note above). On that path we flush any stale straggler, resend the
+ * IDEMPOTENT request (a GET/GETALL is pure; a re-applied SET/UNSET writes the
+ * same value; the COMMIT message is a no-op notification), and retry a bounded
+ * number of times. After NVRAM_NL_RETRIES we give up and return -1 so the caller
+ * fails cleanly instead of wedging the boot. In the normal (no-drop) case this
+ * is exactly one send + one recv, identical to the old code.
+ *
+ * Caller must hold g_lock (every public op does).
+ */
+static int nl_xchg(unsigned short type, const void *payload, int len,
+		   unsigned short *rtype, void *out, int outlen)
+{
+	int tries, r;
+
+	for (tries = 0; ; tries++) {
+		if (nl_send(type, payload, len) < 0)
+			return -1;
+		r = nl_recv(rtype, out, outlen);
+		if (r != -2)
+			return r;                   /* reply (>=0) or hard error (-1) */
+		if (tries >= NVRAM_NL_RETRIES)
+			return -1;                  /* lost reply, retries spent: do NOT hang */
+		nl_drain_stale();                   /* clear a late straggler, then resend */
+	}
 }
 
 /* ---- public API --------------------------------------------------------- */
@@ -227,11 +313,8 @@ char *nvram_get(const char *name)
 	if (nl_ensure() < 0) { pthread_mutex_unlock(&g_lock); return NULL; }
 
 	/* GET payload = plain name string (kernel wlcsm_nvram_get uses it raw). */
-	if (nl_send(WLCSM_MSG_NVRAM_GET, name, (int)strlen(name) + 1) < 0) {
-		pthread_mutex_unlock(&g_lock);
-		return NULL;
-	}
-	plen = nl_recv(&rt, g_get_buf, sizeof(g_get_buf));
+	plen = nl_xchg(WLCSM_MSG_NVRAM_GET, name, (int)strlen(name) + 1,
+		       &rt, g_get_buf, sizeof(g_get_buf));
 	if (plen <= 0 || rt != WLCSM_MSG_NVRAM_GET) {
 		pthread_mutex_unlock(&g_lock);
 		return NULL;          /* unset => kernel replies len 0 */
@@ -260,7 +343,10 @@ int nvram_set(const char *name, const char *value)
 		pthread_mutex_unlock(&g_lock);
 		return -1;
 	}
-	(void)nl_recv(&rt, NULL, 0);   /* kernel echoes the request */
+	/* Consume the kernel's echo, but never block forever on it: a lost echo
+	 * does not undo the set (the kernel already applied it), so a timed-out
+	 * recv is harmless here - we simply proceed. */
+	(void)nl_recv(&rt, NULL, 0);
 	g_commit_reqd = 1;
 	pthread_mutex_unlock(&g_lock);
 	return 0;
@@ -333,9 +419,12 @@ static int nl_getall_drain(char *buf, int cap, int *complete)
 
 		req[0] = room;                      /* size hint (kernel ignores) */
 		req[1] = index;                     /* page index */
-		if (nl_send(WLCSM_MSG_NVRAM_GETALL, req, sizeof(req)) < 0)
-			return -1;
-		plen = nl_recv(&rt, buf + off, room - 2);
+		/* nl_xchg resends this page on a lost reply (the GETALL page request is
+		 * pure in `index`, so a resend returns the identical bytes) and fails
+		 * cleanly after the bounded retries rather than blocking the boot
+		 * forever - the core of the from-source hang fix. */
+		plen = nl_xchg(WLCSM_MSG_NVRAM_GETALL, req, sizeof(req),
+			       &rt, buf + off, room - 2);
 		if (plen < 0)
 			return -1;                  /* never assemble a partial page */
 		off += plen;                        /* nl_recv returns bytes placed */
