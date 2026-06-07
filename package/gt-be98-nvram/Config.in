@@ -1,0 +1,14 @@
+config BR2_PACKAGE_GT_BE98_NVRAM
+	bool "gt-be98-nvram"
+	help
+	  Open libnvram.so + nvram CLI for the GT-BE98. A clean-room
+	  userspace client for the NETLINK_WLCSM (proto 31) protocol of
+	  the OPEN in-kernel store bcm_knvram.ko, replacing the closed,
+	  prebuilt vendor libnvram.so / nvram. Built entirely from the
+	  open GPL kernel protocol (wlcsm_linux.h + wlcsm_netlink.c +
+	  wlcsm_nvram.c); zero closed surface.
+
+	  NOTE: protocol-verified against the open kernel source but NOT
+	  yet bench-validated against a live bcm_knvram.ko. Not wired into
+	  the production image. MAC-class vars (et0macaddr, *_hwaddr,
+	  label_mac) must never be set/committed (owned by envrams).
