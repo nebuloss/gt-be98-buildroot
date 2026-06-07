@@ -16,3 +16,24 @@ config BR2_PACKAGE_GT_BE98_HOSTAPD
 	  $(BR2_EXTERNAL)/../gt-be98-firmware (same dependency as the
 	  production rootfs/bootfs recipes). Not wired into the production
 	  image.
+
+if BR2_PACKAGE_GT_BE98_HOSTAPD
+
+config BR2_PACKAGE_GT_BE98_HOSTAPD_DAEMON
+	bool "build the full hostapd daemon (DRIVER_BRCM, from source)"
+	select BR2_PACKAGE_GT_BE98_LIBSHARED
+	select BR2_PACKAGE_GT_BE98_NVRAM
+	help
+	  Also build the full hostapd DAEMON from source via the merlin
+	  SDK build-glue (the vendor router target with brcm.config:
+	  DRIVER_BRCM + NL80211 + MLO/MAP/SAE/OWE/HS20/WPS, TLS=openssl,
+	  CEVENT). Links the from-source libshared + libnvram, the SDK
+	  from-source openssl-1.1 + libnl, and the pinned closed
+	  libceshared.so (KEEP-AS-GRAFT).
+
+	  The resulting binary, stripped, is BYTE-IDENTICAL to the shipped
+	  device hostapd (sha256 7453000858a8..., DT_NEEDED identical) -- a
+	  reproducible-build match. Installs hostapd + its openssl-1.1 /
+	  libnl / libceshared runtime deps into the rootfs.
+
+endif
