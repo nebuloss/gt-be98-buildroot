@@ -15,6 +15,7 @@ depend() {
 }
 
 start() {
+	echo "$(cat /proc/uptime) svc etc-farm START" >> /data/openrc-boot.log 2>/dev/null
 	# /tmp must be a tmpfs first (OpenRC 'devfs'/sysinit usually mounts it; mount
 	# defensively here in case it is not yet present).
 	mountpoint -q /tmp 2>/dev/null || mount -t tmpfs tmpfs /tmp

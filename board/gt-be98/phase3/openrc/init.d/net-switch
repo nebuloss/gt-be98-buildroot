@@ -25,6 +25,7 @@ depend() {
 }
 
 start() {
+	echo "$(cat /proc/uptime) svc net-switch START" >> /data/openrc-boot.log 2>/dev/null
 	ebegin "HW switch programming (rc config_switch)"
 	rc config_switch
 	eend $?

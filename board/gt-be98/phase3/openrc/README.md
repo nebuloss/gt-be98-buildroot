@@ -106,6 +106,43 @@ in `output-openrc-init/` (`make ... openrc` only — no full firmware rebuild).
   `~/be98/artifacts-br/GT-BE98_openrc-init-v2_nand_squashfs.pkgtb`
   (`83,436,232 B`, sha `697e5477…`; rootfs Image 1 sha `301f3a63…`).
   **This is the SAFE-to-flash open-init image.**
+- **v3 = v2 + SELF-DIAGNOSING persistent /data boot logging [V] (2026-06-07):**
+  the v2 trial FAILED to boot with ZERO diagnostic — OpenRC does not run the ASUS
+  `rc3.d` breadcrumb rail, so nothing recorded how far boot got. v3 adds 3
+  persistent-`/data` logging layers so the re-trial reveals WHERE `openrc-init`
+  dies, surviving the reboot/revert:
+  1. **OpenRC built-in logger -> `/data`** — appended to the OpenRC `/rom/etc/rc.conf`:
+     `rc_logger="YES"` + `rc_log_path="/data/openrc-rc.log"` (full
+     service-execution log persisted to `/data`).
+  2. **PID1 wrapper (`init-wrapper.sh`)** — the REAL OpenRC PID1 ELF is renamed
+     `/sbin/openrc-init.real`; a tiny `#!/bin/sh` wrapper is installed at BOTH
+     `/sbin/init` AND `/sbin/openrc-init`. It `mount`s `ubi:data /data` (ubifs,
+     ext4 fallback), appends a `PID1-wrapper: kernel exec-d init … about to exec
+     openrc-init` line + `$(cat /proc/uptime)` to `/data/openrc-boot.log`, dumps
+     `dmesg > /data/openrc-dmesg-early.log`, then `exec /sbin/openrc-init.real
+     "$@"`. Earliest-possible userspace capture (busybox `sh`/`mount`/`dmesg`/`cat`
+     applets confirmed in the full base). No exec loop: the wrapper execs the
+     `.real` ELF, never the other wrapper.
+  3. **Per-service breadcrumb** — each of the 8 services prepends
+     `echo "$(cat /proc/uptime) svc <name> START" >> /data/openrc-boot.log` as the
+     first line of `start()` (webui is `command`-based, so its breadcrumb lives in
+     `start_pre()`). Traces runlevel progress even if `rc_logger` inits late.
+     `deadman-early` keeps mounting `/data` first.
+  Re-ran `openrc-assemble.sh` on the same FULL br-0050 base (Image 1 of
+  `GT-BE98_blob0035`, `69,894,144 B`, sha `a5179579…`). New squashfs
+  `70,107,136 B` (66.86 MiB), under the slot-2 ceiling `71,106,560` (`999,424 B`
+  headroom). **Image-diff vs FULL br-0050: ZERO removals; 174 adds (162 files/links
+  + 12 dirs, all OpenRC-owned) + 1 mod (`/sbin/init`: `-> rc` ⇒ wrapper).** Graft
+  byte-identical (`bcm_boot_launcher`, `wl.ko`, `dhd.ko`, `bcm_knvram.ko`,
+  `/bin/nvram`, `S45bcm-base-drivers`, `/rom/etc/rc3.d`). **Safety net + new
+  artifacts CONFIRMED present (sha-match base where applicable):
+  `/usr/br/sbin/dropbearmulti`, `/sbin/trial-deadman`, `br-dropbear.sh`,
+  `boot-breadcrumb.sh`, `trial-deadman.sh`, AND `/sbin/openrc-init.real` (ELF) +
+  the wrapper `/sbin/init` + `/sbin/openrc-init` (shell).** pkgtb (br-0050
+  boot-chain FIT, bootfs Image 0 byte-identical, sha `81f38fe0…`):
+  `~/be98/artifacts-br/GT-BE98_openrc-init-v3_nand_squashfs.pkgtb`
+  (`83,436,232 B`, sha `1e359107…`; rootfs Image 1 sha `17d30bb5…`). NOT flashed.
+  **This is the self-diagnosing open-init for the re-trial.**
 - **NOT VERIFIED (bench-only):** that openrc-init-as-PID1 actually boots the
   closed bcm stack (blocker F), glibc ABI of the merlin libc against these
   binaries at runtime, and runlevel execution order live. Build-buildable only.

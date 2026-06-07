@@ -13,6 +13,7 @@ depend() {
 }
 
 start() {
+	echo "$(cat /proc/uptime) svc bcm-knvram START" >> /data/openrc-boot.log 2>/dev/null
 	if ! mountpoint -q /data 2>/dev/null; then
 		ebegin "Mounting ubi:data -> /data"
 		mount -t ubifs ubi:data /data 2>/dev/null \

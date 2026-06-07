@@ -19,6 +19,9 @@ depend() {
 }
 
 start_pre() {
+	# v3 breadcrumb (layer 3) — webui is command-based (no start()); start_pre
+	# is the earliest per-service hook, so the breadcrumb lives here.
+	echo "$(cat /proc/uptime) svc webui START" >> /data/openrc-boot.log 2>/dev/null
 	# Prefer the in-image binary if the beta channel one is absent.
 	[ -x "$command" ] || command="/usr/br/sbin/webui"
 	checkpath -d -m 0755 /run /var/log

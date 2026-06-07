@@ -16,6 +16,7 @@ depend() {
 }
 
 start() {
+	echo "$(cat /proc/uptime) svc wifi-radio START" >> /data/openrc-boot.log 2>/dev/null
 	# Closed wifi glue daemons (mux EAPOL/BRCM events, multicast, channel-select).
 	ebegin "Starting wifi glue (eapd / wlceventd / mcpd)"
 	pgrep -x eapd      >/dev/null 2>&1 || eapd       2>/dev/null &

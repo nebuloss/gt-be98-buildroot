@@ -14,6 +14,9 @@ depend() {
 }
 
 start() {
+	# v3 persistent boot breadcrumb (layer 3) — /data already mounted by the
+	# /sbin/init wrapper; this service re-mounts it defensively below regardless.
+	echo "$(cat /proc/uptime) svc deadman-early START" >> /data/openrc-boot.log 2>/dev/null
 	# Layer 0: /data holds the dead-man state — mount it first of all.
 	if ! mountpoint -q /data 2>/dev/null; then
 		ebegin "Mounting /data (dead-man state volume)"

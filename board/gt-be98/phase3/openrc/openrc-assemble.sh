@@ -90,6 +90,21 @@ else echo "  ! MISSING /usr/libexec/rc"; MISSING=1; fi
 echo "== overlay stock OpenRC /rom/etc config (rc.conf, conf.d, init.d, *.d) =="
 mkdir -p "$ETC/init.d" "$ETC/conf.d"
 [ -f "$OPENRC_STAGE/rom/etc/rc.conf" ] && { cp -a "$OPENRC_STAGE/rom/etc/rc.conf" "$ETC/rc.conf"; echo "  + /rom/etc/rc.conf"; }
+
+# --- v3 LOGGING LAYER 1: OpenRC built-in service logger -> persistent /data ----
+# rc.conf is sourced shell; appending wins over the stock commented defaults.
+# This persists OpenRC's full service-execution log across the reboot/revert so
+# a failed re-trial shows exactly which runlevel/service OpenRC reached.
+echo "== v3 logging layer 1: rc_logger -> /data/openrc-rc.log (append to rc.conf) =="
+{
+	echo ''
+	echo '# --- GT-BE98 open-init-v3 persistent boot logging (appended; last wins) ---'
+	echo 'rc_logger="YES"'
+	echo 'rc_log_path="/data/openrc-rc.log"'
+} >> "$ETC/rc.conf"
+grep -q '^rc_logger="YES"' "$ETC/rc.conf" && grep -q '^rc_log_path="/data/openrc-rc.log"' "$ETC/rc.conf" \
+	&& echo "  + rc_logger=YES + rc_log_path=/data/openrc-rc.log [V]" \
+	|| { echo "  ! rc.conf logging settings NOT applied"; MISSING=1; }
 for d in conf.d local.d sysctl.d; do
 	[ -d "$OPENRC_STAGE/rom/etc/$d" ] && { cp -a "$OPENRC_STAGE/rom/etc/$d/." "$ETC/$d/" 2>/dev/null || mkdir -p "$ETC/$d" && cp -a "$OPENRC_STAGE/rom/etc/$d/." "$ETC/$d/"; echo "  + /rom/etc/$d/"; }
 done
@@ -136,12 +151,32 @@ for l in "$ETC"/runlevels/*/*; do
 done
 [ "$DANGLE" -eq 0 ] && echo "  all runlevel symlinks resolve [V]"
 
-echo "== /sbin/init swap =="
-if [ -e "$FS/sbin/openrc-init" ]; then
-	ln -sf /sbin/openrc-init "$FS/sbin/init"
-	echo "  /sbin/init -> $(readlink "$FS/sbin/init")"
+echo "== v3 logging layer 2: PID1 wrapper /sbin/init (+/sbin/openrc-init) =="
+# The kernel exec()s /sbin/init (and the cmdline may name /sbin/openrc-init).
+# Wire BOTH to a tiny #!/bin/sh wrapper that mounts /data, records "kernel
+# reached userspace + about to exec init" + an early dmesg, then exec()s the
+# REAL OpenRC PID1. The real ELF is renamed /sbin/openrc-init.real. This is the
+# earliest-possible userspace capture — the layer the v2 trial (zero diagnostic)
+# entirely lacked.
+WRAP="$HERE/init-wrapper.sh"
+if [ -f "$FS/sbin/openrc-init" ] && [ ! -L "$FS/sbin/openrc-init" ] && [ -f "$WRAP" ]; then
+	# 1. preserve the real OpenRC PID1 binary
+	mv "$FS/sbin/openrc-init" "$FS/sbin/openrc-init.real"
+	chmod 0755 "$FS/sbin/openrc-init.real"
+	# 2. wrapper at BOTH entry points (kernel /sbin/init AND any /sbin/openrc-init ref)
+	rm -f "$FS/sbin/init"            # was a symlink -> openrc-init
+	install -m 0755 "$WRAP" "$FS/sbin/init"
+	install -m 0755 "$WRAP" "$FS/sbin/openrc-init"
+	echo "  /sbin/openrc-init.real = real OpenRC PID1 (ELF)"
+	echo "  /sbin/init             = wrapper ($(head -1 "$FS/sbin/init"))"
+	echo "  /sbin/openrc-init      = wrapper (same)"
+	# guard: wrapper must exec the .real, and the .real must exist + be ELF
+	grep -q 'exec /sbin/openrc-init.real' "$FS/sbin/init" \
+		&& [ -f "$FS/sbin/openrc-init.real" ] \
+		&& echo "  wrapper -> exec /sbin/openrc-init.real [V]" \
+		|| { echo "  ! wrapper wiring FAILED"; MISSING=1; }
 else
-	echo "  ! /sbin/openrc-init absent — init swap FAILED"; MISSING=1
+	echo "  ! /sbin/openrc-init binary or wrapper absent — init wiring FAILED"; MISSING=1
 fi
 
 echo

@@ -18,6 +18,7 @@ depend() {
 }
 
 start() {
+	echo "$(cat /proc/uptime) svc hw-wdt START" >> /data/openrc-boot.log 2>/dev/null
 	local wdt
 	wdt=$(nvram get watchdog_new 2>/dev/null)
 	[ -z "$wdt" ] && wdt=$(nvram get watchdog 2>/dev/null)
