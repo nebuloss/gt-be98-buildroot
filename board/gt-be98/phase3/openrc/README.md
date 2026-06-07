@@ -80,13 +80,32 @@ in `output-openrc-init/` (`make ... openrc` only — no full firmware rebuild).
   `/rom/etc/init.d`, rebuilds `/rom/etc/runlevels/{sysinit,boot,default}`, swaps
   `/sbin/init -> /sbin/openrc-init`, and re-squashes merlin-exact
   (`-noappend -all-root -comp xz -b 131072`).
-- **BUILT [V]:** squashfs `64,245,760 B` (base `64,036,864` + `208,896` OpenRC),
-  under the slot-2 ceiling `71,106,560` (6.86 MB headroom). All 8 custom + the
-  4 stock sysinit symlinks resolve. Graft byte-identical (`bcm_boot_launcher`,
-  `wl.ko`, `dhd.ko`, `bcm_knvram.ko`, `nvram`, `bcm-base-drivers.sh`, `rc3.d`).
-  Image-diff vs br-0050: expected deltas only (174 OpenRC-owned adds; sole
-  removal = old `/sbin/init -> rc`). pkgtb (br-0050 boot-chain FIT):
-  `~/be98/artifacts-br/GT-BE98_openrc-init_nand_squashfs.pkgtb`.
+- **BUILT — v1 SUPERSEDED (wrong base) [defect]:** the first open-init rootfs
+  (`GT-BE98_openrc-init_nand_squashfs.pkgtb`, rootfs `64,245,760 B`, sha
+  `77c041ec…`) was assembled on the RAW base `artifacts-0035/rootfs.img` (64 MB)
+  instead of the FULL deployed br-0050 (`69,894,144 B`). It was MISSING 28 br-0050
+  entries — CRITICALLY the entire `/usr/br` tree (`dropbearmulti` = the `:2223`
+  RESCUE SSH, busybox, openssl, ssh/scp/sftp, ssl certs), `/sbin/trial-deadman`
+  (the DEAD-MAN), and `/rom/etc/init.d/{trial-deadman.sh,br-dropbear.sh,
+  boot-breadcrumb.sh}` — i.e. the trial SAFETY NET. DO NOT FLASH v1.
+- **REBUILT [V] (2026-06-07, v2, CORRECT FULL base):** re-ran `openrc-assemble.sh`
+  against the FULL br-0050 rootfs (Image 1 of `GT-BE98_blob0035_nand_squashfs.pkgtb`,
+  `69,894,144 B`, sha `a5179579…`). New squashfs `70,107,136 B` (66.86 MiB; base
+  `69,894,144` + `212,992` OpenRC), under the slot-2 ceiling `71,106,560`
+  (`999,424 B` headroom). Exceeds slot-1's ~67.8 MB so it trials on slot-2 — fits.
+  All 8 custom + 4 stock sysinit symlinks resolve. **Image-diff vs FULL br-0050:
+  ONLY 173 OpenRC-owned adds + the single `/sbin/init: rc -> /sbin/openrc-init`
+  swap; ZERO br-0050 removals — all 28 previously-missing entries PRESENT.** Graft
+  byte-identical (`bcm_boot_launcher`, `wl.ko`, `dhd.ko`, `bcm_knvram.ko`, `nvram`,
+  `bcm-base-drivers.sh`, `/rom/etc/rc3.d`). **Safety net CONFIRMED present:
+  `/usr/br/sbin/dropbearmulti`, `/sbin/trial-deadman` (4413 B, sha-match base),
+  `/rom/etc/init.d/{br-dropbear.sh,boot-breadcrumb.sh,trial-deadman.sh}`.**
+  Dead-man fork verified: `deadman-early` forks `/sbin/trial-deadman`, which EXISTS
+  in this rootfs (no fix needed). pkgtb (br-0050 boot-chain FIT, bootfs Image 0
+  byte-identical, sha `81f38fe0…`):
+  `~/be98/artifacts-br/GT-BE98_openrc-init-v2_nand_squashfs.pkgtb`
+  (`83,436,232 B`, sha `697e5477…`; rootfs Image 1 sha `301f3a63…`).
+  **This is the SAFE-to-flash open-init image.**
 - **NOT VERIFIED (bench-only):** that openrc-init-as-PID1 actually boots the
   closed bcm stack (blocker F), glibc ABI of the merlin libc against these
   binaries at runtime, and runlevel execution order live. Build-buildable only.
