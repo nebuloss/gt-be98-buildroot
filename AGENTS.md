@@ -3,6 +3,40 @@
 You're working in the **Buildroot external tree** that will replace the
 asuswrt-merlin SDK build. Read `ARCHITECTURE.md` first.
 
+## State (2026-06-07 — wave-1 webui (per-key scopes + portmap + inert hygiene + direct :80) DEPLOYED + VALIDATED LIVE on br-0049 — NOT merged to main)
+
+**webui-go-only change, deployed live to /jffs on br-0049 (no flash/reboot,
+buildroot tree UNCHANGED).** Integration of the `integration/wave-1` branch
+(per-key API-key SCOPES, get_portmap, inert/no-apply hygiene, direct :80 bind).
+Binary: static ARMv7 `/jffs/webui/webui` sha256 **`16c606a3…`**. Rollback backup
+on device: **`/jffs/webui/webui.wave1-bak`**. Restart only via the
+`services-start` rail (kill webui pid + relaunch) — NEVER `service restart_*`,
+NEVER reboot; SSH :2222/:2223 are the rescue.
+
+- **VALIDATION — all 6 PASS (validated-live):**
+  1. **No-lockout:** the live agent key (scope-less → legacy=`exec` tier) still
+     works — `get_sysinfo` on :80 → 200 + data.
+  2. **Per-key scope enforcement (headline):** minted a `scope=readonly` test key
+     via `add_api_key`; with it: read (`get_sysinfo`) → 200 ok; mutating
+     (`add_dhcp_static`) → `{ok:false,forbidden:true,"…scope too low…requires
+     admin"}`; `exec` → `{ok:false,forbidden:true,"…requires exec"}`. (Forbidden
+     envelope is HTTP 200 with `"forbidden":true`, denied at the dispatch gate
+     BEFORE the handler — no side effect.) Test key DELETED after; `get_api_keys`
+     confirms only the 2 real keys (both legacy→`exec`) remain.
+  3. **portmap:** `get_portmap` → 200, `management_port=eth0`, eth0 (uplink) +
+     eth1 (live cable) not assignable, eth2/eth3 assignable. No port moved.
+  4. **WIFI INTACT:** 4 radios (wl0-3) enabled + `isup=1`; **11 hostapd**
+     (4 per-radio primaries + 7 webui-hapd named BSSes), 7 `/tmp/webui-hapd`
+     confs (Ramondia x3 / Pagoa x1 / DEV-SCEP x3); open `test` net driver-only.
+  5. **Rescue:** SSH :2222 (`SSH-2.0-dropbear`) + :2223 (`dropbear_2025.89`) both
+     answer.
+  6. **Stability (~3.7 min, 3 samples):** webui pid 29533 constant (no flap/
+     crash-loop), hostapd 11 steady, :80 + 127.0.0.1:80 bound, auth_status 200.
+
+- **VERDICT: validated-live on br-0049, accepted.** `integration/wave-1` NOT
+  merged to main and NOT pushed — owner decision. Submodule `docs/device` pointer
+  left dirty (do NOT commit).
+
 ## State (2026-06-07 — P2-6 (:80 cutover, option 1a): webui binds :80 DIRECTLY, :80→:8080 redirect DROPPED — LIVE on br-0049, no flash/reboot)
 
 **NOT a buildroot/firmware change — a webui-go source change, deployed live to
