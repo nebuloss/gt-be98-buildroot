@@ -3,6 +3,81 @@
 You're working in the **Buildroot external tree** that will replace the
 asuswrt-merlin SDK build. Read `ARCHITECTURE.md` first.
 
+## State (2026-06-07 — br-0049 Phase-2b blob 0034 (httpd + sched_daemon SOURCE-GATED OFF) TRIALED + PASSED → NEW COMMITTED BASELINE (slot 2; slot 1 = br-0045 fallback))
+
+**COMMITTED BASELINE = br-0049** (slot 2; **committed 2 valid 1,2 seq 35,36,
+Booted Second, reset_reason 34, boot_failed_count 0**). Slot 1 = br-0045, still
+the fallback. Agent nvram key persisted; NO `service restart_*`.
+
+- **What br-0049 is:** the Phase-2b **P2-5** slice — the FIRST image on the new
+  merlin rootfs **blob 0034** (`GT_BE98_ROOTFS_VERSION 0031→0034`; bootfs stays
+  0031). Blob = patches 0024-0031 + **0033 (gtbe98_httpd gate)** + **0034
+  (gtbe98_sched_daemon gate)**, 0032 excluded. Both gates default-OFF: stock
+  `/usr/sbin/httpd` + `/sbin/sched_daemon` ELFs stay present but their start
+  funnels AND watchdog respawns early-return — **kills the watchdog
+  `httpd_check()` nvram_commit() flash-wear churn at the source**. Artifact
+  `~/be98/artifacts-br/GT-BE98_br-0049_nand_squashfs.pkgtb`, sha256
+  `d989aa3a05d1f3c4444808494d5d2551813c14d602cc859202bef38605552a4a`
+  (83223240 B). Marker `br-0049+gf6d8e4f63427`, `rootfs_blob=0034 bootfs_blob=0031`.
+
+- **PUBLISH (operator-authorized, done this run):** GitHub release
+  **`rootfs-0034`** on nebuloss/gt-be98-packages, asset
+  `gt-be98-rootfs-0034.tar.gz` (sha256 `8b9dcf7f…37fc0`); public download-URL sha
+  re-verified == staged sha before any .mk edit. Local dl cache seeded
+  (`~/be98/buildroot/dl/gt-be98-rootfs/`). Manifest updated + committed in the
+  gt-be98-packages checkout (`manifests/gt-be98-rootfs.yaml`). Bootfs NOT
+  re-published (0031 boot chain unchanged).
+
+- **DIFF-PROOF GREEN.** (a) vs blob 0034: 29/29 remove.list paths removed,
+  `/usr/br` island byte-identical to br-0048, rails intact. (b) vs br-0048: 10
+  content deltas, all classified — release stamp + **`/sbin/rc`** (THE SLICE:
+  `gtbe98_httpd`+`gtbe98_sched_daemon` strings present in br-0049 rc `768e18a5…`,
+  absent in br-0048 `98fb44fe…`) + benign blob-rebuild compile-date noise
+  (busybox/libshared.so/lighttpd/miniupnpd + build_time/image_version/motd) +
+  modules.dep dep-ordering (sorted-identical). **WIFI-CORE BYTE-IDENTICAL**
+  (eapd/mcpd/wlceventd/hostapd + all .ko). rootfs 69,894,144 B (1.2 MB under the
+  slot-2 ceiling). **Build gotcha:** dirclean the OLD blob dir on a version bump
+  (`make gt-be98-rootfs-dirclean`); a stale `gt-be98-rootfs-0031` build dir made
+  the transform pick the old blob (unchanged rc) on the first build.
+
+- **REGRESSION (NOT a 0033/0034 issue) — root-caused + fixed:** first trial boot
+  had **wlceventd not running**. Cause: in the freshly built blob 0034, **patch
+  0029's `wlc_nt_enable` gate fuzzily mis-applied** (offset -178, fuzz 2) and
+  landed in `start_wlceventd()` + `start_wlc_monitor()` (near-identical bodies),
+  not only `start_wlc_nt()`. blob 0031 (br-0048) was extracted from a clean
+  merlin build and lacked this → genuine blob-rebuild divergence. **Fix:** `nvram
+  set wlc_nt_enable=1; nvram commit` (committed, persists; wlc_nt/wlc_monitor
+  binaries already removed in br-0047 so their ungated start attempts no-op). A
+  future **blob 0035** should re-apply 0029 with tighter context to land the gate
+  only in start_wlc_nt(); then `wlc_nt_enable=1` can be dropped.
+
+- **Trial (proven harness):** slot-1 hop first (device was slot 2). `trial-flash.sh
+  --window 600` (no --reboot) from slot 1 → hnd-write slot 2 → commit-repair to
+  slot 1 → ONCE → reboot; SSH on slot 2 ~+112 s, dead-man DISARMED T+10s, init
+  self-committed slot 2.
+
+- **Gate 19/0 PASS** (post-fix boot). **P2-5 SLICE CHECKS — all PASS:**
+  **`last_httpd_handle_request` FROZEN empty** boot+1min AND after 10-min soak
+  (the load-bearing flash-wear check); httpd + sched_daemon ABSENT, ZERO respawn
+  spam over the soak; **`:80` STILL SERVES THE WEBUI** (host curl :80 → 200, the
+  webui-go page — the `PREROUTING --dport 80 -j REDIRECT --to-ports 8080` rule is
+  webui-owned, never httpd's, so gating httpd does NOT break :80); webui :8080 →
+  200; **WIFI IDENTICAL to the br-0048 baseline** (4 radios isup, bridges
+  identical, 11 hostapd, 7 named BSSes ENABLED).
+
+- **Committed device nvram now:** `wlc_nt_enable=1` (wlceventd workaround) +
+  pre-existing `wanduck_down=1`.
+
+- **HANDOFF for P2-6 (:80 cutover):** **UNBLOCKED.** Stock httpd is gone with NO
+  :80 regression — the :80→:8080 redirect is webui-owned and already serves the
+  UI; SSH :2222 is the rescue path. Carry the blob-0034 patch-0029 wart (needs
+  `wlc_nt_enable=1` until a blob 0035 fix).
+
+- **Submodule note:** `docs/device` pinned at an old commit in the parent; live
+  flash-journal lives in the standalone `gt-be98-docs` repo (br-0049 entry
+  committed there, 1d9a445). Parent `docs/device` pointer left dirty on purpose —
+  do NOT commit the parent submodule pointer.
+
 ## State (2026-06-06 NIGHT-6 — br-0048 wanduck + USB-crew retire TRIALED + PASSED → NEW COMMITTED BASELINE (slot 2; slot 1 = br-0045 fallback))
 
 **COMMITTED BASELINE = br-0048** (slot 2; **committed 2 valid 1,2 seq 35,36,
