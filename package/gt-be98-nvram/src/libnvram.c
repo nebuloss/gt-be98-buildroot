@@ -36,6 +36,7 @@
 #include <sys/socket.h>
 #include <sys/types.h>
 #include <sys/stat.h>
+#include <sys/uio.h>
 #include <linux/netlink.h>
 
 #include "nvram_wlcsm.h"
@@ -48,6 +49,14 @@
 #endif
 #define NVRAM_FILE_NEW  NVRAM_FILE "_new"
 #define NVRAM_FILE_OLD  NVRAM_FILE "_old"
+
+/* getall drain bounds. The kernel pages the tree in fixed chunks and signals
+ * end only via a GETALL_DONE message type (NOT via a short page), so the drain
+ * loops on index until DONE. These guards keep a misbehaving/streaming kernel
+ * from spinning forever or overflowing the destination buffer. */
+#define NVRAM_GETALL_MAX_PAGES  65536          /* runaway-loop guard */
+#define NVRAM_COMMIT_INIT_CAP   (256 * 1024)   /* initial commit dump buffer */
+#define NVRAM_COMMIT_MAX_CAP    (8  * 1024 * 1024) /* refuse to grow past this */
 
 static int g_sock = -1;
 static int g_commit_reqd = 0;
@@ -117,28 +126,53 @@ static int nl_send(unsigned short type, const void *payload, int len)
 }
 
 /* Receive one reply; copies up to *outlen payload bytes into out, sets *rtype.
- * Returns payload length (>=0) or -1 on error. */
+ * Returns the number of payload bytes placed into out (>=0), or -1 on error.
+ *
+ * Hardened vs the original: (1) the receive buffer is sized well above any
+ * single kernel page (the kernel header itself warns MAX_NLRCV_BUF_SIZE must
+ * exceed NL_PACKET_SIZE) and recvmsg's MSG_TRUNC flag is checked so a datagram
+ * is never silently chopped; (2) the claimed payload length (t_WLCSM_MSG_HDR.len)
+ * is clamped to the bytes actually delivered so we can never over-read stale
+ * stack into the caller's stream; (3) the return value is the count actually
+ * copied, so the drain's running offset always matches the bytes assembled. */
 static int nl_recv(unsigned short *rtype, void *out, int outlen)
 {
-	char rbuf[MAX_NLRCV_BUF_SIZE + NLMSG_HDRLEN];
+	char rbuf[2 * MAX_NLRCV_BUF_SIZE + NLMSG_HDRLEN];
+	struct iovec iov = { rbuf, sizeof(rbuf) };
+	struct sockaddr_nl sa;
+	struct msghdr msg;
 	struct nlmsghdr *nlh = (struct nlmsghdr *)rbuf;
 	t_WLCSM_MSG_HDR *mh;
-	int n, plen;
+	int n, plen, avail;
 
-	n = recv(g_sock, rbuf, sizeof(rbuf), 0);
+	memset(&msg, 0, sizeof(msg));
+	msg.msg_name    = &sa;
+	msg.msg_namelen = sizeof(sa);
+	msg.msg_iov     = &iov;
+	msg.msg_iovlen  = 1;
+
+	do {
+		n = recvmsg(g_sock, &msg, 0);
+	} while (n < 0 && errno == EINTR);  /* a transient signal must not truncate the stream */
 	if (n <= 0)
+		return -1;
+	if (msg.msg_flags & MSG_TRUNC)      /* page larger than rbuf: bail, never assemble garbage */
 		return -1;
 	if (!NLMSG_OK(nlh, (unsigned)n))
 		return -1;
 	mh = (t_WLCSM_MSG_HDR *)NLMSG_DATA(nlh);
 	if (rtype)
 		*rtype = mh->type;
-	plen = mh->len;
-	if (plen < 0)
-		return -1;
+	plen  = (int)mh->len;               /* unsigned short field, always >= 0 */
+	avail = n - NLMSG_HDRLEN - (int)sizeof(*mh);
+	if (avail < 0)
+		avail = 0;
+	if (plen > avail)                   /* header claims more than was delivered */
+		plen = avail;
 	if (out && outlen > 0) {
 		int cp = plen < outlen ? plen : outlen;
 		memcpy(out, (char *)mh + sizeof(*mh), cp);
+		return cp;
 	}
 	return plen;
 }
@@ -229,44 +263,83 @@ int nvram_unset(const char *name)
 }
 
 /*
+ * nl_getall_drain: assemble the kernel's whole NUL-separated tree into buf.
+ *
+ * Protocol (bcm_knvram/impl1 wlcsm_netlink.c:484, wlcsm_nvram.c:511): the kernel
+ * pages the tree as a flat byte stream. req[1] is the PAGE INDEX; the kernel
+ * reads at byte offset index*pagesize and reconstructs the tail of any entry
+ * straddling the page boundary, so raw concatenation of page payloads is
+ * byte-exact. The ONLY end condition is a reply of type GETALL_DONE (which may
+ * be a short or even empty page) - a full-size page is always "more to come".
+ * req[0] is a size hint the kernel ignores.
+ *
+ * This is the single source of truth for both nvram_getall() and the commit
+ * dump, so the two paths can never diverge. The caller must hold g_lock.
+ *
+ * Returns the number of stream bytes written (NOT counting the trailing
+ * double-NUL it appends), or -1 on a transport/protocol error. *complete is set
+ * to 1 iff the kernel's GETALL_DONE marker was seen (i.e. the full stream fit in
+ * buf); 0 means buf filled first and the stream is truncated.
+ */
+static int nl_getall_drain(char *buf, int cap, int *complete)
+{
+	int index = 0, off = 0;
+
+	if (complete)
+		*complete = 0;
+	if (!buf || cap <= 0)
+		return -1;
+
+	for (;;) {
+		int req[2];
+		unsigned short rt = 0;
+		int plen, room = cap - off;
+
+		/* Reserve 2 bytes so we can always double-NUL terminate. */
+		if (room <= 2)
+			return off;                 /* buffer full, not complete */
+
+		req[0] = room;                      /* size hint (kernel ignores) */
+		req[1] = index;                     /* page index */
+		if (nl_send(WLCSM_MSG_NVRAM_GETALL, req, sizeof(req)) < 0)
+			return -1;
+		plen = nl_recv(&rt, buf + off, room - 2);
+		if (plen < 0)
+			return -1;                  /* never assemble a partial page */
+		off += plen;                        /* nl_recv returns bytes placed */
+
+		if (rt == WLCSM_MSG_NVRAM_GETALL_DONE) {
+			if (complete)
+				*complete = 1;          /* kernel signalled end of stream */
+			break;
+		}
+		if (rt != WLCSM_MSG_NVRAM_GETALL)
+			return -1;                  /* ERR/BUSY/unexpected: do not trust */
+		if (++index > NVRAM_GETALL_MAX_PAGES)
+			return -1;                  /* runaway guard */
+	}
+
+	/* double-NUL terminate the stream (room for 2 was reserved above) */
+	buf[off] = '\0';
+	buf[off + 1] = '\0';
+	return off;
+}
+
+/*
  * nvram_getall: fill buf with the whole tree as "name=value\0name=value\0\0".
- * Pages via index 0,1,.. until the kernel replies GETALL_DONE (short page).
- * Concatenating page payloads reconstructs the kernel's NUL-separated stream
- * (the kernel emits the tail of any entry straddling a page boundary).
+ * Drains every page until the kernel's GETALL_DONE marker (see nl_getall_drain).
+ * With a fixed caller buffer, a stream larger than count is truncated to count
+ * (bounded); the CLI passes 256 KiB which exceeds the live ~182 KiB stream.
  */
 int nvram_getall(char *buf, int count)
 {
-	int index = 0, off = 0;
+	int off, complete = 0;
 
 	if (!buf || count <= 0)
 		return -1;
 	pthread_mutex_lock(&g_lock);
 	if (nl_ensure() < 0) { pthread_mutex_unlock(&g_lock); return -1; }
-
-	for (;;) {
-		int req[2];
-		unsigned short rt = 0;
-		int plen;
-
-		req[0] = count;     /* size hint */
-		req[1] = index;     /* page */
-		if (nl_send(WLCSM_MSG_NVRAM_GETALL, req, sizeof(req)) < 0)
-			break;
-		plen = nl_recv(&rt, buf + off, count - off);
-		if (plen < 0)
-			break;
-		off += (plen < count - off) ? plen : (count - off);
-		if (rt == WLCSM_MSG_NVRAM_GETALL_DONE || off >= count)
-			break;
-		index++;
-	}
-	if (off < count) {           /* double-NUL terminate the stream */
-		buf[off] = '\0';
-		if (off + 1 < count)
-			buf[off + 1] = '\0';
-	} else {
-		buf[count - 1] = '\0';
-	}
+	off = nl_getall_drain(buf, count, &complete);
 	pthread_mutex_unlock(&g_lock);
 	return off;
 }
@@ -291,23 +364,34 @@ int nvram_commit(void)
 	if (nl_send(WLCSM_MSG_NVRAM_COMMIT, NULL, 0) == 0)
 		(void)nl_recv(&rt, NULL, 0);
 
-	all = malloc(256 * 1024);
-	if (!all) { pthread_mutex_unlock(&g_lock); return -1; }
-
-	/* getall (re-enter would deadlock; inline a lock-free dump) */
+	/*
+	 * Capture the COMPLETE current key set via the SAME drain as nvram_getall
+	 * (re-entering the public API would deadlock on g_lock, so call the
+	 * lock-free helper directly). The commit path must NOT censor or drop
+	 * anything - it persists the whole tree byte-for-byte - so it relies on
+	 * nl_getall_drain's GETALL_DONE termination and grows its buffer rather
+	 * than ever writing a truncated stream (which would silently corrupt the
+	 * config file). If the stream cannot be captured in full, the commit is
+	 * ABORTED and the existing file is left untouched.
+	 */
 	{
-		int index = 0, off = 0, cap = 256 * 1024;
+		int cap = NVRAM_COMMIT_INIT_CAP, complete = 0;
+		all = NULL; n = -1;
 		for (;;) {
-			int req[2]; unsigned short t = 0; int plen;
-			req[0] = cap; req[1] = index;
-			if (nl_send(WLCSM_MSG_NVRAM_GETALL, req, sizeof(req)) < 0) break;
-			plen = nl_recv(&t, all + off, cap - off);
-			if (plen < 0) break;
-			off += (plen < cap - off) ? plen : (cap - off);
-			if (t == WLCSM_MSG_NVRAM_GETALL_DONE || off >= cap) break;
-			index++;
+			char *nb = realloc(all, cap);
+			if (!nb) { free(all); all = NULL; break; }
+			all = nb;
+			n = nl_getall_drain(all, cap, &complete);
+			if (n < 0) break;            /* transport/protocol error */
+			if (complete) break;         /* full stream captured */
+			if (cap >= NVRAM_COMMIT_MAX_CAP) { n = -1; break; }
+			cap *= 2;                    /* grow and re-drain from page 0 */
 		}
-		n = off;
+		if (!all || n < 0 || !complete) {
+			free(all);
+			pthread_mutex_unlock(&g_lock);
+			return -1;                   /* refuse to persist a partial tree */
+		}
 	}
 
 	fd = open(NVRAM_FILE_NEW, O_WRONLY | O_CREAT | O_TRUNC, 0644);
