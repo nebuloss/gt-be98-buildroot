@@ -313,13 +313,13 @@ done
 for n in bcm-knvram bcm-platform net-lan; do
 	ln -sf "/rom/etc/init.d/$n" "$ETC/runlevels/boot/$n"
 done
-# default: wifi glue + webui controller
-for n in wifi-radio webui; do
+# default: wifi glue + webui controller + ★v22 watchdog-disarm LAST (boot-complete)★
+for n in wifi-radio webui watchdog-disarm; do
 	ln -sf "/rom/etc/init.d/$n" "$ETC/runlevels/default/$n"
 done
 echo "  sysinit: deadman-early etc-farm sysfs procfs devfs dmesg"
 echo "  boot:    bcm-knvram bcm-platform net-lan   (v7: hw-wdt/net-switch dropped)"
-echo "  default: wifi-radio webui"
+echo "  default: wifi-radio webui watchdog-disarm   (v22: disarm wdt on committed boot)"
 # verify every runlevel symlink resolves to a real init.d script
 DANGLE=0
 for l in "$ETC"/runlevels/*/*; do
@@ -362,8 +362,8 @@ grep -q 'wdtctl -t 240 start' "$ETC/init.d/deadman-early" \
 	&& echo "  deadman-early HW-watchdog backstop arm [V]" \
 	|| { echo "  ! deadman-early watchdog backstop MISSING"; MISSING=1; }
 
-# === v8 verify: Broadcom datapath in net-lan + start-stop-daemon present ======
-echo "== v8 verify: runner datapath (fc/rtpolicy/allmulti) + start-stop-daemon =="
+# === v16 verify: faithful datapath (fc/rtpolicy) + SYN-probe + watcher ==========
+echo "== v16 verify: datapath (fc enable/rtpolicy/allmulti) + syn_probe + watcher =="
 grep -q 'fc enable' "$ETC/init.d/net-lan" \
 	&& echo "  net-lan: fc enable (flow cache) [V]" \
 	|| { echo "  ! net-lan missing fc enable"; MISSING=1; }
@@ -373,6 +373,28 @@ grep -q 'rtpolicy auto ALL' "$ETC/init.d/net-lan" \
 grep -q 'allmulti' "$ETC/init.d/net-lan" \
 	&& echo "  net-lan: ALLMULTI on bridge + members [V]" \
 	|| { echo "  ! net-lan missing ALLMULTI"; MISSING=1; }
+grep -q 'syn_probe()' "$ETC/init.d/net-lan" && grep -q '/data/syn-probe.log' "$ETC/init.d/net-lan" \
+	&& echo "  net-lan: v16 SYN-probe diagnostic (-> /data/syn-probe.log) [V]" \
+	|| { echo "  ! net-lan missing v16 syn_probe"; MISSING=1; }
+grep -q 'iptables -t raw -I PREROUTING -p tcp --dport 2230' "$ETC/init.d/net-lan" \
+	&& echo "  net-lan: v18 layered SYN counters (raw/PREROUTING + INPUT :2230) [V]" \
+	|| { echo "  ! net-lan missing v18 iptables SYN counters"; MISSING=1; }
+grep -q 'iptables -F INPUT' "$ETC/init.d/net-lan" && grep -q '/data/firewall.log' "$ETC/init.d/net-lan" \
+	&& echo "  net-lan: v19 INPUT firewall flush + ACCEPT + dump [V]" \
+	|| { echo "  ! net-lan missing v19 firewall flush"; MISSING=1; }
+grep -q 'iptables -I OUTPUT -p tcp --sport 2230' "$ETC/init.d/net-lan" && grep -q '/data/dropbear-2230.log' "$ETC/init.d/net-lan" \
+	&& echo "  net-lan: v20 OUTPUT SYN-ACK counter + :2230 -E conn log [V]" \
+	|| { echo "  ! net-lan missing v20 OUTPUT counter / dropbear -E log"; MISSING=1; }
+grep -q 'ip route replace default via' "$ETC/init.d/net-lan" \
+	&& echo "  net-lan: v21 DEFAULT ROUTE via lan_gateway (the fix) [V]" \
+	|| { echo "  ! net-lan missing v21 default route"; MISSING=1; }
+# ★v22★ committable-baseline checks (admin user is verified AFTER the passwd bake below)
+[ -L "$ETC/runlevels/default/watchdog-disarm" ] && [ -f "$ETC/init.d/watchdog-disarm" ] \
+	&& echo "  v22: watchdog-disarm service in default runlevel (no commit boot-loop) [V]" \
+	|| { echo "  ! v22 watchdog-disarm service missing/unlinked"; MISSING=1; }
+grep -q '/data/.trial-armed' "$ETC/init.d/watchdog-disarm" && grep -q 'wdtctl stop' "$ETC/init.d/watchdog-disarm" \
+	&& echo "  v22: watchdog-disarm gates on /data/.trial-armed + wdtctl stop [V]" \
+	|| { echo "  ! v22 watchdog-disarm gating missing"; MISSING=1; }
 [ -x "$FS/sbin/start-stop-daemon" ] \
 	&& echo "  /sbin/start-stop-daemon present (webui background launch) [V]" \
 	|| { echo "  ! /sbin/start-stop-daemon MISSING"; MISSING=1; }
@@ -592,6 +614,7 @@ fi
 if [ ! -e "$ETC/passwd" ]; then
 	cat > "$ETC/passwd" <<'EOF'
 root:x:0:0:root:/root:/bin/sh
+admin:x:0:0:admin:/root:/bin/sh
 daemon:x:1:1:daemon:/usr/sbin:/bin/false
 bin:x:2:2:bin:/bin:/bin/false
 sys:x:3:3:sys:/dev:/bin/false
@@ -604,6 +627,46 @@ EOF
 else
 	echo "  ~ /rom/etc/passwd already present (left untouched)"
 fi
+# ★v22★ admin user (uid0, HOME=/root) MUST be present so admin@:2222 auths like br-0045.
+grep -q '^admin:x:0:0:.*:/root:' "$ETC/passwd" \
+	&& echo "  v22: admin user (uid0, HOME=/root) in /rom/etc/passwd (admin@ auth) [V]" \
+	|| { echo "  ! v22 admin user missing from /rom/etc/passwd"; MISSING=1; }
+
+# === v23 FORCE-REBOOT — the open-init must REBOOT without hanging =============
+# The base /sbin/reboot is a symlink -> rc, whose reboot applet signals PID1 assuming
+# PID1==rc (Blocker E). Under openrc-init that triggers openrc-shutdown, which HANGS
+# (graft daemons never stop) -> a hung reboot; with the watchdog disarmed that is a
+# hard-hang needing a power-cycle (this bit us once). FIX: replace /sbin/reboot (and
+# halt/poweroff) with a wrapper that forces an IMMEDIATE kernel reset — sync first
+# (/data UBIFS is journaled/crash-safe), then reboot(2) via busybox -f, then sysrq-b.
+# This NEVER goes through the hanging openrc-shutdown/rc path. The HW watchdog +
+# bcm_bootstate are unaffected (they reset independently of /sbin/reboot).
+echo "== v23: force-reboot wrapper (/sbin/{reboot,halt,poweroff}) =="
+REBOOT_WRAP="$FS/sbin/reboot"
+# preserve the original rc-symlink target name for reference (do not call it — it hangs)
+[ -L "$FS/sbin/reboot" ] && echo "  (base /sbin/reboot -> $(readlink "$FS/sbin/reboot"); replacing)"
+for f in reboot halt poweroff; do rm -f "$FS/sbin/$f"; done
+cat > "$REBOOT_WRAP" <<'RBEOF'
+#!/bin/sh
+# v23 open-init force-reset: openrc-shutdown / rc-reboot HANG on the graft -> never use
+# them. Sync, then immediate kernel reset. (/data UBIFS is journaled.)
+sync; sync
+/bin/busybox reboot -f 2>/dev/null
+# fallback: sysrq immediate reset
+echo 1 > /proc/sys/kernel/sysrq 2>/dev/null
+echo b > /proc/sysrq-trigger 2>/dev/null
+# last resort: raw reboot(2) via the kernel (should never reach here)
+/bin/busybox reboot 2>/dev/null
+RBEOF
+chmod 0755 "$REBOOT_WRAP"
+ln -sf reboot "$FS/sbin/halt"
+ln -sf reboot "$FS/sbin/poweroff"
+if head -1 "$REBOOT_WRAP" | grep -q '^#!/bin/sh' && grep -q 'busybox reboot -f' "$REBOOT_WRAP"; then
+	echo "  v23: /sbin/reboot force-reset wrapper installed (+halt/poweroff symlinks) [V]"
+else
+	echo "  ! v23 force-reboot wrapper FAILED"; MISSING=1
+fi
+[ -x "$FS/bin/busybox" ] || echo "  ~ note: /bin/busybox presence not checked here (wrapper relies on it)"
 
 echo
 echo "== overlay tree assembled at: $FS =="

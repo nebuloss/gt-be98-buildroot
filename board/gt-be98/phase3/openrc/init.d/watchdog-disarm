@@ -1,0 +1,28 @@
+#!/sbin/openrc-run
+# ★v22★ Boot-complete watchdog disarm — the LAST service in the default runlevel.
+# The PID1 wrapper arms the HW watchdog (wdtctl -t 240, non-petting) early so a boot
+# HANG auto-resets. Reaching THIS service means sysinit->boot->default all completed =
+# a healthy boot. Behaviour depends on WHY we booted:
+#   * COMMITTED boot (no /data/.trial-armed): disarm (wdtctl stop) so the committed
+#     open-init does NOT reboot-loop every 240s. The boot is proven healthy by getting
+#     here. (No ongoing petting watchdog yet — a runtime hang is not covered; that's a
+#     later refinement. Boot-hang protection is preserved by the wrapper's early arm.)
+#   * TRIAL boot (/data/.trial-armed present): LEAVE the watchdog ARMED. The operator
+#     disarms manually from a confirmed SSH session (feedback-disarm-only-from-ssh) so
+#     an UNREACHABLE trial still auto-reverts to the GOOD slot. Never auto-disarm a trial.
+description="Disarm the boot watchdog on a healthy COMMITTED boot (never on a trial)"
+
+depend() {
+	after webui wifi-radio net-lan
+}
+
+start() {
+	if [ -f /data/.trial-armed ]; then
+		ebegin "TRIAL boot — leaving watchdog ARMED (disarm manually via SSH)"
+		eend 0
+	else
+		ebegin "COMMITTED boot reached default runlevel — disarming watchdog (wdtctl stop)"
+		wdtctl stop >> /data/openrc-boot.log 2>&1
+		eend 0
+	fi
+}

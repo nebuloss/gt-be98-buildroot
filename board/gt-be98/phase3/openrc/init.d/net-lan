@@ -1,4 +1,85 @@
 #!/sbin/openrc-run
+# === v22 ★COMMITTABLE BASELINE★ — default route + admin user + clean committed boot =
+# v21 PROVED the open-init is externally reachable with a root shell (the DEFAULT ROUTE
+# below was the fix). v22 makes it a committable baseline: (1) the new watchdog-disarm
+# service (default runlevel, last) does `wdtctl stop` ONLY on a COMMITTED boot (no
+# /data/.trial-armed) so the committed open-init does NOT reboot-loop every 240s — on a
+# TRIAL it stays armed for the revert safety + manual SSH disarm; (2) assemble bakes an
+# `admin` user (so admin@:2222 works like br-0045, not just root@); (3) the debug cruft
+# (:2230 -E log, net-diag, syn_probe) is gated to TRIAL-only so committed boots stay
+# clean. The default-route fix + datapath + :2222/:2223 are KEPT.
+# === v21 ★THE FIX: add the DEFAULT ROUTE (cross-subnet return path)★ ============
+# v20 was decisive: inbound SYN reaches the L3 INPUT hook (87) but never dropbear (0
+# SYN_RECV / 0 conntrack / dropbear -E log empty / 0 SYN-ACK), AND `ip route get
+# 10.0.50.177` returned NOTHING — the open-init had NO DEFAULT ROUTE (net-lan set the
+# br0 IP but not the gateway). My build host is on a different subnet, so the SYN-ACK
+# return path needs the default gw; without it the bcm stack drops the inbound SYN
+# before the socket. v21 adds `default via <nvram lan_gateway> dev br0` (as rc does).
+# Keeps the v20 instrumentation so the same logs confirm the fix (expect SYN_RECV +
+# OUTPUT SYN-ACK>0 + dropbear "Child connection" + my catcher banner). No auto-disarm.
+# === v20 ★SYN reaches INPUT but not the socket★ ================================
+# v19 surprise: the firewall was ALREADY fully open (-P INPUT ACCEPT, 0 rules). So the
+# SYN traverses the INPUT netfilter hook (counted 87) yet never reaches dropbear (0
+# SYN_RECV) and isn't firewalled. Something between the INPUT hook and the listening
+# socket consumes it — bridge-netfilter (br0 not delivering its own MAC to L3) or the
+# bcm blog/fcache accelerator. v20 instruments to localize it: (a) :2230 dropbear runs
+# -E -F -> /data/dropbear-2230.log (did the SYN reach dropbear?); (b) an OUTPUT --sport
+# 2230 counter (did dropbear send a SYN-ACK? => return-path, not delivery); (c) a one-
+# time bridge-nf/FDB/return-route dump; (d) syn_probe also samples OUTPUT + conntrack.
+# === v19 ★firewall was already open★ ==========================================
+# v18 layered counters were DECISIVE: raw/PREROUTING :2230 = 87 pkts AND INPUT :2230 =
+# 87 pkts, but dropbear saw 0 SYN_RECV -> the inbound SYN reaches the CPU + the local
+# INPUT chain and is then DROPPED by a firewall rule/policy the graft leaves in place
+# for NEW inbound. NOT a Broadcom runner issue (v14-v17 chased the wrong layer). v19
+# records the original firewall to /data/firewall.log, then sets ACCEPT policy + flushes
+# INPUT so NEW inbound reaches the sockets. Keeps the :2230 slot-proof + layered counters
+# (now expect INPUT count == reaches-dropbear == SYN_RECV) + SYN-probe. No auto-disarm.
+# === v18 ★LAYERED SYN COUNTERS★ ===============================================
+# v17 VOPI did NOT fix inbound (still 0 SYN_RECV). v18 reverts to raw eth bridging
+# (br-0050-faithful) and adds iptables count-only rules at the two earliest CPU hooks
+# for dport 2230 (raw/PREROUTING + INPUT), sampled by syn_probe. Only MY external SYNs
+# hit :2230, so the counts are clean: raw/PREROUTING==0 => SYN never reaches the CPU
+# (runner/switch drop, the hard Broadcom part); raw>0 & INPUT==0 => CPU got it but
+# routing didn't deliver locally (Linux-fixable); both>0 => reaches dropbear (return
+# path). Auto-disarm REMOVED (operator: disarm only from a confirmed SSH session).
+# === v17 ★RUNNER-REGISTERED VOPI br0★ (reverted in v18) ========================
+# v16 SYN-probe was DEFINITIVE: 66 netstat samples, ZERO SYN_RECV for :2230 -> the
+# external unicast SYN to br0's IP NEVER reaches the CPU (runner flow-miss punt fail).
+# v17 bridges a vlanctl untagged VOPI (ethN.v0) into br0 instead of raw ethN, so the
+# bcm runner is REGISTERED to deliver that ingress to the CPU (the exact mechanism the
+# open-init's working br20-70 use; init-broadcom.c:12221). Keeps fc enable + rtpolicy +
+# the :2230 slot-proof + the SYN-probe (so SYN_RECV/ESTABLISHED now confirms the fix) +
+# the auto-disarm watcher (stays on slot2 the moment inbound works, no login needed).
+# === v16 ★SYN-PROBE DIAGNOSTIC★ ================================================
+# v15 net-diag /proc/net/dev showed br0 RX 60 pkts/3192 B (25 mcast) -> inbound L2
+# DOES reach the CPU; and v15's ethswctl hw-switching disable FAILED (rc=95, no-op).
+# So the question narrows: does my UNICAST SYN to :2230 reach dropbear? v16 keeps the
+# faithful datapath (fc enable + rtpolicy) and adds syn_probe() -> /data/syn-probe.log
+# (full `netstat -tn` for :2230 every 3s): SYN_RECV = SYN reached CPU but handshake
+# didn't complete (RETURN-PATH issue); ESTABLISHED = full inbound works; only-LISTEN =
+# SYN never reached CPU (runner punt issue). Also fixes the v15 watcher `seq` bug
+# (busybox.openrc has no seq -> the loop never ran) by using a while-counter.
+# === v15 ★SOFTWARE-BRIDGE DATAPATH + AUTO-DISARM-ON-INBOUND★ ===================
+# v14 RESULT (DEFINITIVE, via the unique :2230 port): the open-init boots, br0 up,
+# :2222/:2223/:80/:2230 all LISTENING, OUTBOUND works (ping gateway PASS), but a
+# brand-new EXTERNAL SYN to :2230 is NEVER punted to the CPU -> INBOUND is broken at
+# the bcm runner (flow-miss not delivered to the CPU for the plain-brctl br0). v15:
+# (1) DATAPATH -> software bridge: `ethswctl -c hw-switching -o disable` + `fc disable`
+#     (skip rtpolicy) so the HW switch sends ALL frames to the CPU and the kernel
+#     bridge forwards in software -> every inbound packet reaches the CPU.
+# (2) AUTO-DISARM-ON-INBOUND: a watcher stops the watchdog the moment a real external
+#     connection reaches :2230/:2222/:80 -> proves inbound + keeps slot2 alive WITHOUT
+#     needing dropbear login auth (the auth question stays separate). See start().
+# === v14 ★UNAMBIGUOUS INBOUND/SLOT PROOF (:2230)★ ==============================
+# The v2..v13 "unreachable" was never slot-disambiguated (every probed port also
+# exists on br-0045/br-0050, so a catcher couldn't tell the open-init from br-0045
+# after the auto-revert). v14 changes ONLY the MEASUREMENT: it launches a dropbear on
+# the UNIQUE port :2230 (opened by NOTHING but this open-init). `nc 10.0.0.8 2230`
+# returning the SSH banner == INBOUND WORKS on slot2 (no auth needed); `ssh -p 2230`
+# logging in == AUTH works. Datapath (fc enable + rtpolicy + allmulti) is IDENTICAL to
+# v13, so the :2230 result is a clean read on whether v13 already had inbound. See the
+# :2230 block in start(). If :2230 banner is UNREACHABLE (but net-diag self-test PASS),
+# inbound is genuinely broken with fc-enable -> v15 tries fc-disable (software bridge).
 # === v13 ★ADMIN-KEY BYTE-MATCH + FIXED AUTH INSTRUMENT★ on top of v12 ===========
 # v12 RESULT: :2222 LISTENING, perms EXACTLY br-0045's (700/700/600 uid0:gid0),
 # datapath PASS, :80 reachable — but admin key STILL rejected. Two gaps closed in
@@ -375,6 +456,11 @@ start() {
 	if ! brctl show 2>/dev/null | grep -q "^${br}[[:space:]]"; then
 		brctl addbr "$br" 2>/dev/null && blog "created bridge $br"
 	fi
+	# ★v18★ RAW eth bridging restored (v17 VOPI didn't fix inbound -> revert to the
+	# br-0050-faithful raw path for a clean diagnostic). The layered iptables counters
+	# (raw PREROUTING + INPUT for :2230, set up after the IP is up) + syn_probe will
+	# pinpoint WHERE the SYN dies: raw-PREROUTING count 0 = never reaches the CPU
+	# (runner/switch); >0 but INPUT 0 = CPU-side routing/local-delivery.
 	for i in $ifs; do
 		[ "$i" = "$br" ] && continue
 		# member UP + ALLMULTI (ifconfig sets IFF_ALLMULTI; ip-link fallback)
@@ -391,13 +477,56 @@ start() {
 	eend 0
 	blog "bridge $br up (ALLMULTI) with $ip/$cidr"
 
+	# ★★★ v21 THE LIKELY FIX — DEFAULT ROUTE ★★★
+	# v20 instrumentation was decisive: the inbound SYN reaches the L3 INPUT hook
+	# (counted 87) but NEVER reaches dropbear (0 SYN_RECV, 0 conntrack, dropbear -E log
+	# empty, 0 SYN-ACK). And `ip route get 10.0.50.177` on the open-init returned
+	# NOTHING — the open-init has NO DEFAULT ROUTE (net-lan set the br0 IP but never the
+	# gateway; the working br-0045 has `default via 10.0.0.254 dev br0`). My build host
+	# is on a DIFFERENT subnet (10.0.50.177), so the SYN-ACK return path must go via the
+	# default gateway. With no route to the source, the bcm stack/blog can't build the
+	# locally-terminated return flow and DROPS the inbound SYN after the netfilter hook,
+	# before the socket. (The "outbound works" earlier was only SAME-subnet pings to
+	# 10.0.0.x — never a routed/return path.) FIX: add the default route from nvram
+	# lan_gateway, exactly as rc does. This also lets the open-init reach other subnets.
+	gw=$(nvram get lan_gateway 2>/dev/null); [ -n "$gw" ] || gw=10.0.0.254
+	if ip route replace default via "$gw" dev "$br" 2>/dev/null; then
+		blog "v21 default route -> $gw dev $br (return path for cross-subnet inbound)"
+	elif route add default gw "$gw" dev "$br" 2>/dev/null; then
+		blog "v21 default route (route cmd) -> $gw dev $br"
+	else
+		blog "v21 WARN could not set default route via $gw"
+	fi
+
 	# 3. ★v8 Broadcom runner datapath★ — without these, br0+ip is logically up
 	#    but the HW flow-accelerator never bridges eth<->br0<->CPU (the v7 gap).
 	#    (a) fc enable: rc start_lan fc_init() -> `fc enable` (flow cache HW accel,
 	#        AP/bridge mode, fc_disable=0). `fc` is /bin/fc -> fcctl on the device.
 	#    (b) rtpolicy auto ALL: rc init_main START state (init.c:26613) -> applies
 	#        the runner runtime policy from /etc/rt_policy_info.d/.
-	ebegin "Broadcom datapath: fc enable + rtpolicy auto ALL"
+	# ★v15 ★SOFTWARE-BRIDGE DATAPATH (force net->CPU punt)★ — v14 PROVED inbound is
+	# broken: the open-init listens on :2230 (unique port) + OUTBOUND works (ping
+	# gateway PASS = runner fast-paths the echo-REPLY of a device-initiated flow back
+	# to the CPU), but a brand-new EXTERNALLY-initiated SYN to br0's own IP (:2230) is
+	# NEVER punted to the CPU. That is a FLOW-MISS punting failure: the plain-brctl br0
+	# is not registered with the bcm runner/rdpa as a locally-terminating bridge whose
+	# unknown-unicast misses go to the CPU. fc enable/disable does NOT change this (a
+	# miss already bypasses the cache); the working bridges br20-70 get it via a
+	# vlanctl VOPI rx-rule. The reliable, low-risk lever is to BYPASS the runner for
+	# L2 forwarding entirely: `ethswctl -c hw-switching -o disable` makes the HW switch
+	# deliver ALL frames to the CPU port, so the Linux bridge (br0) does the forwarding
+	# in software and EVERY inbound packet (incl. new SYNs) reaches the CPU. Slower (no
+	# HW offload) but REACHABLE — exactly the handoff's #1 plan. We also `fc disable`
+	# and skip `rtpolicy auto ALL` so no fast-path competes. (If this proves inbound,
+	# v16 can restore HW offload with a proper per-br0 vlanctl CPU-punt rule.)
+	# ★v16 DATAPATH = faithful baseline (fc enable + rtpolicy)★ — v15's
+	# `ethswctl hw-switching disable` FAILED (rc=95, unsupported at runtime) so it was
+	# a no-op; revert to the v14 datapath that DOES get br0 receiving frames (v15
+	# net-diag /proc/net/dev: br0 RX 60 pkts/3192 B incl 25 mcast — inbound L2 DOES
+	# reach the CPU). v16 is a DIAGNOSTIC trial: keep this datapath and add a SYN-probe
+	# (see syn_probe below) to settle whether my unicast SYN to :2230 actually reaches
+	# dropbear (-> return-path issue) or never arrives (-> runner punt issue).
+	ebegin "Broadcom datapath: fc enable + rtpolicy auto ALL (faithful baseline)"
 	if [ "$(nvram get fc_disable 2>/dev/null)" != "1" ]; then
 		fc enable >> /data/openrc-boot.log 2>&1 && blog "fc enable (flow cache HW accel)"
 	else
@@ -409,19 +538,51 @@ start() {
 		blog "runner_disable=1 -> skip rtpolicy"
 	fi
 	eend 0
-	blog "datapath configured — eth <-> $br <-> CPU should now pass traffic"
+	blog "datapath configured — eth <-> $br <-> CPU should pass traffic"
 
 	# 4. sshd reachability: :2223 rescue (defensive; rc3.d may already have it) +
 	#    ★v10★ :2222 admin = faithful merlin replica (/jffs hostkeys + nvram authkeys
 	#    + EXACT `dropbear -p 2222 -j -k` cmdline) so the open-init is reachable with
 	#    the SAME admin key as br-0045. (v9 used a keyless /data-hostkey dropbear that
 	#    never bound — see start_admin_dropbear header.)
-	ebegin "Starting sshd (:2223 rescue + :2222 admin merlin replica)"
+	ebegin "Starting sshd (:2223 rescue + :2222 admin merlin replica + :2230 SLOT-PROOF)"
 	start_dropbear 2223 /usr/br/sbin/dropbearmulti
 	start_admin_dropbear
+	# ★v14 ★UNAMBIGUOUS INBOUND / SLOT PROOF★ — a dropbear on the UNIQUE port :2230
+	# that NEITHER br-0045 NOR br-0050 ever opens. The whole v2..v13 saga was
+	# ambiguous about whether the open-init (slot2) was EVER reachable inbound: every
+	# port answering on 10.0.0.8 (:2222/:80/:2223) ALSO exists on br-0045/br-0050, so a
+	# catcher could not tell "open-init reachable" from "br-0045 after the auto-revert".
+	# :2230 is opened ONLY by this open-init. So:
+	#   * `nc 10.0.0.8 2230` returns the SSH-2.0 banner  ==> INBOUND WORKS on slot2
+	#     (the bcm datapath punts net->CPU) — definitive, slot-unambiguous, NO auth needed.
+	#   * `ssh -p 2230 admin@10.0.0.8` logs in            ==> AUTH also works.
+	# This cleanly SEPARATES the two open questions (inbound datapath vs key-auth) that
+	# were conflated before, WITHOUT changing the v13 datapath (so the result is a clean
+	# read on whether v13's fc-enable datapath already gives inbound). Same `-j -k`
+	# default-hostkey + ~/.ssh/authorized_keys auth chain that start_admin_dropbear just
+	# set up (so :2230 auth == :2222 auth). Capped babysitter; only relaunches while
+	# :2230 is unbound; can NEVER wedge boot.
+	(
+		dbin=/usr/sbin/dropbear; N=0
+		[ -x "$dbin" ] || dbin=/usr/br/sbin/dropbearmulti
+		while [ "$N" -lt 20 ]; do
+			netstat -ltn 2>/dev/null | grep -q ":2230 " && break
+			# ★v22★ plain self-backgrounding (no -E -F logging — that grew /data on a
+			# committed baseline). Trial-only -E logging is gated below on .trial-armed.
+			if [ -f /data/.trial-armed ]; then
+				"$dbin" -E -F -p 2230 -j -k >> /data/dropbear-2230.log 2>&1
+			else
+				"$dbin" -p 2230 -j -k -P /tmp/dropbear-2230.pid >/dev/null 2>&1
+			fi
+			N=$((N + 1))
+			sleep 5
+		done
+	) &
+	blog "launched SLOT-PROOF dropbear on :2230 (trial: -E log; committed: plain)"
 	eend 0
 
-	blog "DONE — datapath up; open-init reachable on :2222 (+ :2223 rescue) at $ip"
+	blog "DONE — datapath up; open-init reachable on :2222 (+ :2223 rescue, :2230 slot-proof) at $ip"
 
 	# 5. ★v9 SELF-DIAGNOSTICS★ — v8 ran every datapath step + dropbear "listening"
 	#    yet NO traffic passed on :2222/:2223, and live debug is impossible (the
@@ -431,9 +592,104 @@ start() {
 	#    the revert). Backgrounded + every probe time-bounded so it can NEVER hang
 	#    the boot. The next trial's /data/net-diag.log then says whether the
 	#    datapath passes traffic (gateway ping) and whether sshd actually listens.
-	run_diagnostics "$br" "$ip" &
+	# ★★★ v19 THE FIX — open the INPUT firewall ★★★
+	# v18 PROVED it: raw/PREROUTING :2230 = 87 pkts AND INPUT :2230 = 87 pkts, yet
+	# dropbear saw 0 SYN_RECV. The SYN reaches the CPU and the local INPUT chain, then a
+	# LATER INPUT rule (or a DROP policy) drops it before the socket. It was NEVER the
+	# Broadcom runner (all of v14-v17 chased the wrong layer) — it is a plain Linux
+	# iptables firewall the graft leaves default-deny for NEW inbound (ESTABLISHED/
+	# RELATED replies pass, which is why ping/ARP/outbound worked). The full ASUS rc
+	# opens this; the open-init never did. FIX: record the original rules (so we know
+	# exactly what dropped it), then set ACCEPT policy + flush INPUT so NEW inbound to
+	# our mgmt ports reaches the sockets. (Trial-wide open; once reachable+committed a
+	# v20 can narrow it to the mgmt ports only.)
+	{
+		echo "==== v19 FIREWALL BEFORE (uptime $(cat /proc/uptime 2>/dev/null)) ===="
+		echo "--- iptables -S ---";        iptables -S 2>&1
+		echo "--- iptables -L INPUT -vn ---"; iptables -L INPUT -vn 2>&1
+		echo "--- ip6tables -S (INPUT) ---";  ip6tables -S 2>&1 | grep -i input
+	} >> /data/firewall.log 2>&1
+	for t in INPUT FORWARD OUTPUT; do iptables -P "$t" ACCEPT 2>/dev/null; ip6tables -P "$t" ACCEPT 2>/dev/null; done
+	iptables -F INPUT 2>/dev/null && blog "v19 INPUT chain FLUSHED + policy ACCEPT (open inbound)"
+	iptables -t raw -F PREROUTING 2>/dev/null
+	{
+		echo "==== v19 FIREWALL AFTER flush+accept ===="
+		iptables -S 2>&1
+	} >> /data/firewall.log 2>&1
+
+	# ★v18 LAYERED SYN COUNTERS★ — insert counting rules at the two earliest CPU
+	# netfilter hooks for dport 2230 (nothing else hits :2230, so the counts are PURELY
+	# my external SYNs): raw/PREROUTING = the packet was delivered to the CPU at all;
+	# INPUT = it passed routing as locally-destined. After the trial: raw-PREROUTING 0
+	# => the SYN never reaches the CPU (runner/switch drop); raw>0 & INPUT 0 => CPU got
+	# it but routing didn't deliver locally; both>0 => reaches dropbear (return-path).
+	# -I inserts at the top so other rules can't mask the count; no -j => count-only.
+	iptables -t raw -I PREROUTING -p tcp --dport 2230 >> /data/openrc-boot.log 2>&1 \
+		&& blog "v18 raw/PREROUTING :2230 counter armed" \
+		|| blog "v18 WARN raw/PREROUTING counter failed"
+	iptables -I INPUT -p tcp --dport 2230 >> /data/openrc-boot.log 2>&1 \
+		&& blog "v18 INPUT :2230 counter armed" \
+		|| blog "v18 WARN INPUT counter failed"
+	# ★v20★ OUTPUT --sport 2230 counter: did dropbear actually SEND a SYN-ACK? If >0,
+	# the SYN reached dropbear (=> RETURN-PATH issue); if 0, the SYN dies between the
+	# INPUT hook and the socket (bridge-nf / blog accelerator consumes it).
+	iptables -I OUTPUT -p tcp --sport 2230 >> /data/openrc-boot.log 2>&1 \
+		&& blog "v20 OUTPUT :2230 (SYN-ACK) counter armed" || blog "v20 WARN OUTPUT counter failed"
+	# ★v20★ one-time L2/bridge-nf state dump (does br0 own its MAC locally? is
+	# bridge-nf-call-iptables intercepting? what's the return route?).
+	{
+		echo "==== v20 L2/bridge-nf state (uptime $(cat /proc/uptime 2>/dev/null)) ===="
+		echo "--- bridge-nf sysctls ---"
+		for s in bridge-nf-call-iptables bridge-nf-call-ip6tables bridge-nf-filter-vlan-tagged; do
+			echo "$s = $(cat /proc/sys/net/bridge/$s 2>/dev/null)"
+		done
+		echo "rp_filter br0 = $(cat /proc/sys/net/ipv4/conf/br0/rp_filter 2>/dev/null); all = $(cat /proc/sys/net/ipv4/conf/all/rp_filter 2>/dev/null)"
+		echo "--- brctl showmacs br0 (is_local for br0 MAC?) ---"
+		brctl showmacs br0 2>/dev/null | grep -iE 'mac addr|yes' | head
+		echo "--- ip route get 10.0.50.177 (return path to build host) ---"
+		ip route get 10.0.50.177 2>/dev/null
+		echo "--- ip route get 10.0.40.3 ---"
+		ip route get 10.0.40.3 2>/dev/null
+	} >> /data/firewall.log 2>&1
+
+	# ★v22★ Heavy diagnostics run ONLY on a TRIAL boot (.trial-armed): net-diag
+	# (~45KB/boot) + syn_probe (~21KB/boot) would slowly grow /data on a committed
+	# baseline — which is unnecessary now that the device is reachable + debuggable live.
+	# (Auto-disarm-on-inbound stays REMOVED — operator: disarm only from an SSH session.)
+	if [ -f /data/.trial-armed ]; then
+		run_diagnostics "$br" "$ip" &
+		syn_probe &
+		blog "v22 TRIAL diagnostics: run_diagnostics + syn_probe launched"
+	else
+		blog "v22 COMMITTED boot — heavy diagnostics skipped (clean)"
+	fi
 
 	return 0
+}
+
+# ★v16★ Append the FULL (not -l) tcp socket table filtered to our probe ports every
+# 3s for ~200s to /data/syn-probe.log. This reveals SYN_RECV (the SYN reached the CPU
+# + dropbear replied SYN-ACK but the handshake didn't complete -> RETURN-PATH issue)
+# vs ESTABLISHED (full inbound works) vs nothing-but-LISTEN (the SYN never reached the
+# CPU -> runner punt issue). Bounded; never blocks boot. No keys/MACs.
+syn_probe() {
+	local i=0
+	echo "==== v16 SYN-PROBE start uptime=$(cat /proc/uptime 2>/dev/null) ====" >> /data/syn-probe.log 2>&1
+	while [ "$i" -lt 65 ]; do
+		{
+			echo "--- t=$i uptime=$(cat /proc/uptime 2>/dev/null | cut -d' ' -f1) ---"
+			netstat -tn 2>/dev/null | awk 'NR<=2 || $4 ~ /:(2230|2222|80)$/ {print}'
+			# ★v18★ layered SYN counters (pkts that reached each CPU hook)
+			echo "[raw/PRE :2230] $(iptables -t raw -L PREROUTING -vnx 2>/dev/null | awk '/dpt:2230/{print $1" pkts"}')"
+			echo "[INPUT  :2230] $(iptables -L INPUT -vnx 2>/dev/null | awk '/dpt:2230/{print $1" pkts"}')"
+			echo "[OUTPUT :2230] $(iptables -L OUTPUT -vnx 2>/dev/null | awk '/spt:2230/{print $1" pkts(synack)"}')"
+			echo "[conntrack] $(conntrack -L 2>/dev/null | grep -c 2230) :2230 entries"
+			conntrack -L 2>/dev/null | grep 2230 | head -2
+		} >> /data/syn-probe.log 2>&1
+		i=$((i + 1))
+		sleep 3
+	done
+	echo "==== v16 SYN-PROBE end ====" >> /data/syn-probe.log 2>&1
 }
 
 # === v9 self-diagnostics ====================================================
