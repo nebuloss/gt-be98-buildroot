@@ -675,6 +675,119 @@ else
 fi
 [ -x "$FS/bin/busybox" ] || echo "  ~ note: /bin/busybox presence not checked here (wrapper relies on it)"
 
+# === v25 SLIM: strip unused components + de-blob the DPI stack ================
+# Reads openrc-strip.list (this dir) and `rm -rf` each rootfs-relative path under
+# $FS. Tolerant of already-absent paths. Runs AFTER all overlays so nothing we
+# just installed is touched, and BEFORE mksquashfs so the removals shrink the
+# image. The DPI engine objects (wred/dcd/libshn_*/usr/bwdpi) are in the list;
+# libbwdpi.so + libbwdpi_sql.so are NOT removed but REPLACED with clean-room
+# no-op stubs immediately afterward (KEEP binaries still DT_NEEDED them). The
+# graft objects are NOT in the list, so the byte-identical graft is untouched.
+STRIPLIST="${STRIPLIST:-$HERE/openrc-strip.list}"
+echo "== v25 SLIM: strip unused components (openrc-strip.list) =="
+if [ -f "$STRIPLIST" ]; then
+	STRIP_BEFORE=$(command du -sb "$FS" 2>/dev/null | command cut -f1)
+	nrm=0; nabs=0; freed=0
+	while IFS= read -r rel; do
+		# skip comments + blank lines
+		case "$rel" in ''|\#*) continue;; esac
+		rel="${rel#/}"                     # tolerate accidental leading slash
+		tgt="$FS/$rel"
+		if [ -e "$tgt" ] || [ -L "$tgt" ]; then
+			sz=$(command du -sb "$tgt" 2>/dev/null | command cut -f1); sz=${sz:-0}
+			rm -rf "$tgt"
+			freed=$((freed + sz)); nrm=$((nrm + 1))
+			echo "  - /$rel  (${sz}B)"
+		else
+			nabs=$((nabs + 1))
+			echo "  ~ /$rel  (already absent)"
+		fi
+	done < "$STRIPLIST"
+	STRIP_AFTER=$(command du -sb "$FS" 2>/dev/null | command cut -f1)
+	echo "  strip total: removed $nrm path(s), $nabs already-absent; ~${freed}B (uncompressed) freed"
+	echo "  \$FS uncompressed: ${STRIP_BEFORE}B -> ${STRIP_AFTER}B"
+else
+	echo "  ! openrc-strip.list MISSING at $STRIPLIST"; MISSING=1
+fi
+
+# === v25 DPI stub: install clean-room no-op libbwdpi{,_sql}.so ===============
+# Compile (if needed) and overwrite $FS/usr/lib/libbwdpi.so + libbwdpi_sql.so
+# with the no-op stubs. They export EXACTLY the symbols surviving consumers
+# reference (49 FUNC + 6 OBJECT / 8 FUNC). 32-bit ARM EABI5, no SONAME (matches
+# the originals). The .c lives in bwdpi-stub/; prebuilt .so are used if present.
+echo "== v25 DPI stub: install no-op libbwdpi.so + libbwdpi_sql.so =="
+STUBDIR="${STUBDIR:-$HERE/bwdpi-stub}"
+STUB_CC="${STUB_CC:-/home/guillaume/be98/buildroot/output-openrc-init/host/bin/arm-buildroot-linux-gnueabi-gcc}"
+STUB_NM="${STUB_NM:-/home/guillaume/be98/buildroot/output-openrc-init/host/bin/arm-buildroot-linux-gnueabi-nm}"
+for pair in "libbwdpi.so:libbwdpi_stub.c" "libbwdpi_sql.so:libbwdpi_sql_stub.c"; do
+	so="${pair%%:*}"; src="${pair##*:}"
+	# (re)build the stub if the .so is absent or older than its source
+	if [ ! -f "$STUBDIR/$so" ] || [ "$STUBDIR/$src" -nt "$STUBDIR/$so" ]; then
+		if [ -x "$STUB_CC" ] && [ -f "$STUBDIR/$src" ]; then
+			"$STUB_CC" -shared -fPIC -O2 -o "$STUBDIR/$so" "$STUBDIR/$src" \
+				&& echo "  + compiled stub $so" \
+				|| { echo "  ! stub compile FAILED: $so"; MISSING=1; }
+		else
+			echo "  ! cannot build stub $so (no CC or missing $src)"; MISSING=1
+		fi
+	fi
+	if [ -f "$STUBDIR/$so" ]; then
+		install -D -m 0755 "$STUBDIR/$so" "$FS/usr/lib/$so"
+		echo "  + installed $FS/usr/lib/$so ($(command stat -c%s "$FS/usr/lib/$so")B)"
+	else
+		echo "  ! stub $so MISSING — cannot install"; MISSING=1
+	fi
+done
+# verify the installed stubs are ARM ELF and export every required symbol
+verify_stub_syms() { # so-path  required-symbol...
+	local sop="$1"; shift
+	command file "$sop" 2>/dev/null | command grep -q 'ELF 32-bit.*ARM' \
+		|| { echo "  ! $(command basename "$sop") not ARM ELF"; MISSING=1; return; }
+	local have miss=0
+	have="$("$STUB_NM" -D --defined-only "$sop" 2>/dev/null | command awk '{print $3}')"
+	for s in "$@"; do
+		printf '%s\n' "$have" | command grep -qx "$s" || { echo "  ! $(command basename "$sop") MISSING symbol: $s"; miss=1; MISSING=1; }
+	done
+	[ "$miss" -eq 0 ] && echo "  $(command basename "$sop"): all $# required symbols exported (ARM ELF) [V]"
+}
+verify_stub_syms "$FS/usr/lib/libbwdpi.so" \
+	AiProtectionMonitor_InfectedEvent AiProtectionMonitor_mail_log MobileDevMode_restart \
+	WRS_WBL_DEL_LIST WRS_WBL_GET_PATH WRS_WBL_WRITE_LIST auto_sig_check check_tcode_blacklist \
+	check_tdts_module_exist data_collect_main device_info_main device_main dump_dpi_support \
+	free_app_cat free_app_inf free_rule_db get_anomaly_main get_app_patrol_main get_fw_app_bw_clear \
+	get_fw_mesh_extender get_fw_user_domain_list get_fw_user_list get_fw_vp_list get_fw_wrs_url_list \
+	get_vp init_app_cat init_app_inf init_rule_db mesh_set_extender qosd_main redirect_page_status \
+	run_dpi_engine_service search_app_cat search_app_inf setup_wrs_conf start_dc start_dpi_engine_service \
+	start_wrs start_wrs_wbl_service stat_main stop_bwdpi_wred_alive stop_dpi_engine_service \
+	tdts_check_wan_changed tm_eula_check tm_qos_main web_history_save wrs_app_main wrs_main wrs_url_main \
+	file_path s_tcode_blacklist_tuple s_tcode_tuple s_tuple vpnc_profile vpnc_profile_num
+verify_stub_syms "$FS/usr/lib/libbwdpi_sql.so" \
+	bwdpi_cgi_mon_del_db bwdpi_cgi_mon_to_json bwdpi_maclist_db bwdpi_monitor_info \
+	bwdpi_monitor_ips bwdpi_monitor_nonips bwdpi_monitor_stat get_web_hook
+
+# === v25 SAFETY: DO-NOT-REMOVE invariant must still hold in $FS ==============
+echo "== v25 verify: DO-NOT-REMOVE set intact in assembled \$FS =="
+v25_present() { if [ -e "$FS/$1" ] || [ -L "$FS/$1" ]; then echo "  $1 present [V]"; else echo "  ! $1 MISSING"; MISSING=1; fi; }
+v25_present usr/lib/libbwdpi.so
+v25_present usr/lib/libbwdpi_sql.so
+v25_present usr/lib/libsqlite3.so.0
+v25_present usr/lib/libovpn.so
+v25_present usr/lib/libssl.so.1.1
+v25_present usr/lib/libcrypto.so.1.1
+v25_present usr/sbin/wl
+v25_present bin/nvram
+v25_present usr/sbin/hostapd
+v25_present usr/br/sbin/dropbearmulti
+v25_present usr/br/libexec/sftp-server
+if [ -d "$FS/lib/modules/4.19.294/extra" ] && [ "$(command find "$FS/lib/modules/4.19.294/extra" -type f | command wc -l)" -gt 0 ]; then
+	echo "  /lib/modules/4.19.294/extra intact ($(command find "$FS/lib/modules/4.19.294/extra" -type f | command wc -l) files) [V]"
+else
+	echo "  ! /lib/modules/4.19.294/extra MISSING/empty"; MISSING=1
+fi
+[ -e "$FS/lib/modules/4.19.294/kernel/net/wireless/cfg80211.ko" ] \
+	&& echo "  cfg80211.ko present [V]" || { echo "  ! cfg80211.ko MISSING"; MISSING=1; }
+[ -d "$FS/rom/etc/rc3.d" ] && echo "  /rom/etc/rc3.d present [V]" || { echo "  ! /rom/etc/rc3.d MISSING"; MISSING=1; }
+
 echo
 echo "== overlay tree assembled at: $FS =="
 if [ "$MISSING" -ne 0 ] || [ "$DANGLE" -ne 0 ]; then

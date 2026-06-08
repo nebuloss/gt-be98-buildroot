@@ -1,0 +1,125 @@
+# openrc-strip.list — v25 SLIM open-init strip manifest
+#
+# Paths (rootfs-relative, NO leading slash) removed by openrc-assemble.sh from
+# the unsquashed $FS BEFORE mksquashfs. Lines beginning with # and blank lines
+# are ignored. `rm -rf` is tolerant of already-absent paths.
+#
+# Every path below was resolved against the br-0050 base-rootfs reference
+# (/home/guillaume/.claude/jobs/5eb9adaf/tmp/base-rootfs) and ONLY listed if it
+# EXISTS there. Each "verify-only-used-by" library was confirmed via a full
+# DT_NEEDED reverse-dependency scan of the entire rootfs (needed-map.txt).
+#
+# DO-NOT-REMOVE invariant (must never appear here): libbwdpi.so libbwdpi_sql.so
+# libsqlite3.so* libovpn.so libssl.so.1.1 libcrypto.so.1.1 /lib/modules/*/extra
+# cfg80211.ko wl hostapd* nvram eapd wlceventd mcpd acsd2 wlconf ethswctl vlanctl
+# fc/fcctl bcm_boot_launcher rc /rom/etc/rc3.d dropbearmulti sftp-server
+# openrc-init* OpenRC libs.
+
+# --- /usr/br staging cruft (~5.97MB xz) -------------------------------------
+# KEPT (NOT listed): usr/br/sbin/dropbearmulti, usr/br/libexec/sftp-server,
+#                    usr/br/bin/scp, usr/br/bin/sftp  (the SSH/SFTP channel)
+usr/br/bin/openssl
+usr/br/bin/ssh
+usr/br/bin/ssh-keygen
+usr/br/bin/busybox
+
+# --- samba (~2.74MB) --------------------------------------------------------
+# NOTE: libsmbclient.so* surviving referrer after this strip is liblightsql.so,
+# whose only consumers (mod_aicloud_auth/aidisk_access/smbdav/webdav) are ALL
+# removed below, so liblightsql is orphaned and the dangling dep is inert.
+usr/sbin/samba_multicall
+usr/lib/libsmbclient.so
+usr/lib/libsmbclient.so.0
+usr/sbin/sambaclient
+sbin/write_smb_conf
+
+# --- Tor (~1.07MB) ----------------------------------------------------------
+usr/sbin/Tor
+
+# --- ookla (~0.73MB) --------------------------------------------------------
+usr/sbin/ookla
+
+# --- VPN (~0.9MB+) ----------------------------------------------------------
+# KEPT (NOT listed): usr/lib/libovpn.so (rc/wps_pbcd/httpd DT_NEEDED)
+usr/sbin/openvpn
+usr/lib/ipsec
+usr/sbin/ipsec
+lib/modules/4.19.294/kernel/net/wireguard/wireguard.ko
+
+# --- AiCloud / webdav cluster (~2.3MB) --------------------------------------
+# libxml2.so* is KEPT: besides this cluster it is DT_NEEDED by liblightsql,
+# libsmartsync_api, Notify_Event2NC, ftpclient, lldpcli, nt_center, nt_monitor
+# (NONE of which are removed) — so libxml2 is NOT cluster-exclusive. KEEP.
+usr/lighttpd
+usr/sbin/lighttpd
+usr/sbin/lighttpd-arpping
+usr/sbin/lighttpd-monitor
+usr/lib/libasusnatnl.so
+usr/lib/libneon.so
+usr/lib/libneon.so.27
+usr/lib/libneon.so.27.3.2
+usr/sbin/aaews
+usr/sbin/webdav_client
+usr/sbin/asuswebstorage
+usr/lib/mod_usertrack.so
+usr/lib/mod_redirect.so
+usr/lib/mod_aidisk_access.so
+usr/lib/mod_aicloud_sharelink.so
+usr/lib/mod_dirlisting.so
+usr/lib/mod_webdav.so
+usr/lib/mod_aicloud_invite.so
+usr/lib/mod_userdir.so
+usr/lib/mod_indexfile.so
+usr/lib/mod_aicloud_auth.so
+usr/lib/mod_access.so
+usr/lib/mod_create_captcha_image.so
+usr/lib/mod_smbdav.so
+usr/lib/mod_alias.so
+usr/lib/mod_compress.so
+usr/lib/mod_rewrite.so
+usr/lib/mod_query_field_json.so
+usr/lib/mod_captive_portal_uam.so
+usr/lib/mod_auth.so
+usr/lib/mod_staticfile.so
+
+# --- media (~1.3MB) ---------------------------------------------------------
+# All libs below verified DT_NEEDED only by minidlna / mt-daapd (removed here).
+usr/sbin/minidlna
+usr/sbin/mt-daapd
+usr/lib/libavcodec.so.58
+usr/lib/libavformat.so.58
+usr/lib/libavutil.so.56
+usr/lib/libFLAC.so.8
+usr/lib/libvorbis.so.0
+usr/lib/libogg.so.0
+usr/lib/libid3tag.so.0
+
+# --- netatalk / AFP (~0.7MB) ------------------------------------------------
+# libdb-4.8.so verified DT_NEEDED only by dbd + cnid_dbd (both netatalk).
+usr/sbin/afpd
+usr/sbin/cnid_metad
+usr/sbin/cnid_dbd
+usr/bin/dbd
+usr/lib/libatalk.so.6
+usr/lib/libatalk.so.6.0.0
+usr/lib/libdb-4.8.so
+
+# --- CLIs (~0.95MB) ---------------------------------------------------------
+# KEPT (NOT listed): usr/lib/libsqlite3.so* (rc + wlceventd + many DT_NEEDED).
+# libonig.so* verified DT_NEEDED only by libjq.so (jq tooling); /usr/sbin/sqlite3
+# and /usr/bin/jq are standalone CLIs (jq statically resolves; nothing keeps it).
+usr/sbin/sqlite3
+usr/bin/jq
+usr/lib/libonig.so
+usr/lib/libonig.so.4
+usr/lib/libonig.so.5
+usr/lib/libonig.so.5.4.0
+
+# --- DPI de-blobbing (~6.5MB, removes 3 embedded openssl copies) ------------
+# libbwdpi.so + libbwdpi_sql.so are NOT removed here — they are REPLACED with
+# clean-room no-op stubs by openrc-assemble.sh AFTER this strip runs.
+usr/sbin/wred
+usr/sbin/dcd
+usr/lib/libshn_pctrl.so
+usr/lib/libshn_utils.so
+usr/bwdpi
