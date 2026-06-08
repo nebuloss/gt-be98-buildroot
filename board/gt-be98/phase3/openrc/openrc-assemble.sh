@@ -40,8 +40,15 @@ MKSQ="${MKSQ:-/home/guillaume/be98/buildroot/output/host/bin/mksquashfs}"
 CEILING="${CEILING:-71106560}"   # slot-2 squashfs ceiling (bytes)
 
 # OpenRC-owned files to lift from the stage (the REAL 0.56 buildroot layout).
+# ★v8★: add start-stop-daemon + supervise-daemon. OpenRC's openrc-run.sh launches
+# command-based services with command_background="yes" (e.g. the webui service) via
+# `start-stop-daemon`. v7 never copied them -> webui's background launch had no
+# start-stop-daemon. These are OpenRC's OWN binaries (from-source, /sbin), the exact
+# helpers openrc-run.sh expects (the busybox.openrc applet exists too but OpenRC's
+# own SSD matches the -m/-p/-b semantics openrc-run.sh uses).
 OPENRC_BINS="sbin/openrc-init sbin/openrc sbin/openrc-run sbin/openrc-shutdown \
-             sbin/rc-update sbin/rc-service bin/rc-status"
+             sbin/rc-update sbin/rc-service bin/rc-status \
+             sbin/start-stop-daemon sbin/supervise-daemon"
 OPENRC_LIBS="usr/lib/librc.so usr/lib/librc.so.1 \
              usr/lib/libeinfo.so usr/lib/libeinfo.so.1"
 
@@ -307,6 +314,28 @@ grep -q 'start_dropbear 2223' "$ETC/init.d/net-lan" && grep -q 'start_dropbear 2
 grep -q 'wdtctl -t 240 start' "$ETC/init.d/deadman-early" \
 	&& echo "  deadman-early HW-watchdog backstop arm [V]" \
 	|| { echo "  ! deadman-early watchdog backstop MISSING"; MISSING=1; }
+
+# === v8 verify: Broadcom datapath in net-lan + start-stop-daemon present ======
+echo "== v8 verify: runner datapath (fc/rtpolicy/allmulti) + start-stop-daemon =="
+grep -q 'fc enable' "$ETC/init.d/net-lan" \
+	&& echo "  net-lan: fc enable (flow cache) [V]" \
+	|| { echo "  ! net-lan missing fc enable"; MISSING=1; }
+grep -q 'rtpolicy auto ALL' "$ETC/init.d/net-lan" \
+	&& echo "  net-lan: rtpolicy auto ALL (runner policy) [V]" \
+	|| { echo "  ! net-lan missing rtpolicy auto ALL"; MISSING=1; }
+grep -q 'allmulti' "$ETC/init.d/net-lan" \
+	&& echo "  net-lan: ALLMULTI on bridge + members [V]" \
+	|| { echo "  ! net-lan missing ALLMULTI"; MISSING=1; }
+[ -x "$FS/sbin/start-stop-daemon" ] \
+	&& echo "  /sbin/start-stop-daemon present (webui background launch) [V]" \
+	|| { echo "  ! /sbin/start-stop-daemon MISSING"; MISSING=1; }
+[ -x "$FS/sbin/supervise-daemon" ] \
+	&& echo "  /sbin/supervise-daemon present [V]" \
+	|| { echo "  ! /sbin/supervise-daemon MISSING"; MISSING=1; }
+# v8 etc-farm fix: must write fstab to the tmpfs, not RO /etc
+grep -q '/tmp/etc/fstab' "$ETC/init.d/etc-farm" \
+	&& echo "  etc-farm: writes fstab to /tmp/etc (tmpfs, not RO /rom/etc) [V]" \
+	|| { echo "  ! etc-farm still writes /etc/fstab through RO symlink"; MISSING=1; }
 
 echo "== v3 logging layer 2: PID1 wrapper /sbin/init (+/sbin/openrc-init) =="
 # The kernel exec()s /sbin/init (and the cmdline may name /sbin/openrc-init).

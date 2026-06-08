@@ -1,29 +1,42 @@
 #!/sbin/openrc-run
-# === v7 ★REACHABILITY★: early wired LAN + sshd (replaces v6 net-switch) =========
-# v6 HUNG hard-unreachable: openrc-init booted further (services ran) but NO network
-# came up (v6's net-switch was a stub: config_switch/config_extwan only, no real
-# start_lan) -> no ping / no :2222 / no :2223 -> undebuggable. The :2223 rescue
-# dropbear IS actually launched in v6 (rc3.d S28br-dropbear runs inside
-# bcm_boot_launcher via the bcm-platform service) but was UNREACHABLE because the
-# wired LAN (br0 + eth + the 10.0.0.8 management IP) was never brought up.
+# === v8 ★REACHABILITY+DATAPATH★: wired LAN + Broadcom runner datapath + sshd ====
+# v7 RESULT: open-init booted fully (OpenRC sysinit->boot->default), net-lan did
+# config_switch + config_extwan + brctl addbr br0 + ip addr 10.0.0.8 (all [ok]),
+# but NO traffic passed -> never reachable on slot2. On Broadcom, br0 + ip is NOT
+# enough: the HW flow-accelerator/runner datapath (eth port <-> bridge <-> CPU)
+# must be configured, which the ASUS rc START state does AFTER the bridge is up.
 #
-# v7's #2 job: bring up the WIRED LAN EARLY via the OPEN path so a booting open-init
-# is REACHABLE (debuggable) on :2222 (and :2223 rescue) even if a LATER service hangs
-# (the HW watchdog armed by the PID1 wrapper still guarantees reset-on-hang).
+# v8 DATAPATH DIAGNOSIS (live br-0045 capture + rc source, sw_mode=3 AP/bridge):
+#   The runner modules (pktrunner, bcm_enet, pktflow, cmdlist, rdpa*, bdmf) are
+#   already loaded by bcm_boot_launcher (bcm-platform). The eth<->bridge<->CPU
+#   datapath needs THREE steps beyond brctl/ip, all confirmed on the live device:
+#   (a) ★ALLMULTI on br0 + every bridge member★ — rc start_lan brings the bridge
+#       up via ifconfig(lan_ifname, IFUP|IFF_ALLMULTI, ...) and members are
+#       ALLMULTI too (ifconfig br0/eth0 -> "UP BROADCAST RUNNING ALLMULTI"). The
+#       bcm_enet+runner datapath floods/forwards to the CPU port via ALLMULTI;
+#       v7 used `ip link set up` (NO ALLMULTI) -> the runner never bridged to CPU.
+#   (b) ★fc enable★ — rc start_lan's fc_init() runs `fc enable` (flow-cache HW
+#       accelerator) when !is_routing_enabled() (sw_mode=3 here). Live device:
+#       `fcctl status` -> "HW Acceleration <Enabled>", fc_disable=0.
+#   (c) ★rtpolicy auto ALL★ — rc init_main START state (init.c:26613, the
+#       RTCONFIG_HND_ROUTER_BE_4916 step right after start_lan) runs
+#       `rtpolicy auto ALL` -> applies the runner runtime policy from
+#       /etc/rt_policy_info.d/. runner_disable=0.
 #
 # Open-path bring-up:
 #   1. `rc config_switch` + `rc config_extwan` — standalone in-proc rc applets
 #      (rc.c:4388/4394) that program the CLOSED Broadcom HW switch via the
 #      ethswctl/vlanctl ABI. They do NOT signal PID1 -> work under OpenRC [V-src].
 #   2. open start_lan stand-in: `brctl addbr br0` + add lan_ifnames members +
-#      `ip addr add <lan_ipaddr>/<cidr> dev br0` + `ip link set br0 up`, all derived
-#      from nvram (lan_ifnames / lan_ipaddr / lan_netmask; nvram is up — bcm-platform
-#      ran S40hndnvram). This is the [[wl-ioctl-rc-boundary]] open wired path.
-#   3. sshd reachability: relaunch the :2223 RESCUE (dropbearmulti, /data hostkey;
+#      members UP with ALLMULTI + `ifconfig br0 ... IFF_ALLMULTI <ip> <nm>`, all
+#      from nvram (lan_ifnames / lan_ipaddr / lan_netmask; nvram is up).
+#   3. ★v8 datapath★: `fc enable` (flow cache) + `rtpolicy auto ALL` (runner) so
+#      eth <-> br0 <-> CPU actually passes traffic -> SSH reachable.
+#   4. sshd reachability: relaunch the :2223 RESCUE (dropbearmulti, /data hostkey;
 #      replicates br-dropbear.sh — defensive, in case rc3.d ordering differs) and
 #      start the merlin dropbear on :2222. Both key-auth, /data-persisted hostkey.
 # Ordered AFTER bcm-platform (drivers + nvram loaded), BEFORE the rest.
-description="GT-BE98 wired LAN bring-up + sshd (open-init reachability)"
+description="GT-BE98 wired LAN + Broadcom runner datapath + sshd (open-init reachable)"
 
 depend() {
 	need nvram
@@ -82,34 +95,63 @@ start() {
 	eend $?
 
 	# 2. Open start_lan stand-in: br0 + lan_ifnames members + management IP.
+	#    ★v8★: bridge AND every member brought up with ALLMULTI (IFF_ALLMULTI) —
+	#    rc start_lan uses ifconfig(lan_ifname, IFUP|IFF_ALLMULTI, ...) and the
+	#    members run ALLMULTI too (live br-0045: ifconfig br0/eth0 show ALLMULTI).
+	#    The bcm_enet+runner datapath needs ALLMULTI to flood/forward to the CPU
+	#    port; plain `ip link set up` (v7) left the runner with no CPU bridging.
 	local br="br0" ifs ip nm cidr i
 	ifs=$(nvram get lan_ifnames 2>/dev/null)
 	ip=$(nvram get lan_ipaddr 2>/dev/null);  [ -n "$ip" ] || ip=10.0.0.8
 	nm=$(nvram get lan_netmask 2>/dev/null); [ -n "$nm" ] || nm=255.255.255.0
 	cidr=$(nm2cidr "$nm")
 	blog "lan_ifnames='$ifs' lan_ipaddr=$ip lan_netmask=$nm (/$cidr)"
-	ebegin "Bringing up $br ($ifs) -> $ip/$cidr"
+	ebegin "Bringing up $br ($ifs) -> $ip/$cidr (ALLMULTI)"
 	if ! brctl show 2>/dev/null | grep -q "^${br}[[:space:]]"; then
 		brctl addbr "$br" 2>/dev/null && blog "created bridge $br"
 	fi
 	for i in $ifs; do
 		[ "$i" = "$br" ] && continue
-		ip link set "$i" up 2>/dev/null
-		brctl addif "$br" "$i" 2>/dev/null && blog "added $i to $br"
+		# member UP + ALLMULTI (ifconfig sets IFF_ALLMULTI; ip-link fallback)
+		ifconfig "$i" up allmulti 2>/dev/null \
+			|| { ip link set "$i" up 2>/dev/null; ip link set "$i" allmulticast on 2>/dev/null; }
+		brctl addif "$br" "$i" 2>/dev/null && blog "added $i to $br (allmulti)"
 	done
-	ip link set "$br" up 2>/dev/null
-	# assign the management IP (idempotent; ip first, ifconfig fallback)
-	ip addr add "$ip/$cidr" dev "$br" 2>/dev/null \
-		|| ifconfig "$br" "$ip" netmask "$nm" 2>/dev/null
+	# bring the bridge UP with the management IP AND ALLMULTI in one ifconfig —
+	# this mirrors rc start_lan's ifconfig(lan_ifname, IFUP|IFF_ALLMULTI, ip, nm).
+	ifconfig "$br" "$ip" netmask "$nm" up allmulti 2>/dev/null \
+		|| { ip link set "$br" up 2>/dev/null
+		     ip link set "$br" allmulticast on 2>/dev/null
+		     ip addr add "$ip/$cidr" dev "$br" 2>/dev/null; }
 	eend 0
-	blog "bridge $br up with $ip/$cidr"
+	blog "bridge $br up (ALLMULTI) with $ip/$cidr"
 
-	# 3. sshd reachability: :2223 rescue (defensive; rc3.d may already have it) + :2222.
+	# 3. ★v8 Broadcom runner datapath★ — without these, br0+ip is logically up
+	#    but the HW flow-accelerator never bridges eth<->br0<->CPU (the v7 gap).
+	#    (a) fc enable: rc start_lan fc_init() -> `fc enable` (flow cache HW accel,
+	#        AP/bridge mode, fc_disable=0). `fc` is /bin/fc -> fcctl on the device.
+	#    (b) rtpolicy auto ALL: rc init_main START state (init.c:26613) -> applies
+	#        the runner runtime policy from /etc/rt_policy_info.d/.
+	ebegin "Broadcom datapath: fc enable + rtpolicy auto ALL"
+	if [ "$(nvram get fc_disable 2>/dev/null)" != "1" ]; then
+		fc enable >> /data/openrc-boot.log 2>&1 && blog "fc enable (flow cache HW accel)"
+	else
+		blog "fc_disable=1 -> skip fc enable"
+	fi
+	if [ "$(nvram get runner_disable 2>/dev/null)" != "1" ]; then
+		rtpolicy auto ALL >> /data/openrc-boot.log 2>&1 && blog "rtpolicy auto ALL (runner policy)"
+	else
+		blog "runner_disable=1 -> skip rtpolicy"
+	fi
+	eend 0
+	blog "datapath configured — eth <-> $br <-> CPU should now pass traffic"
+
+	# 4. sshd reachability: :2223 rescue (defensive; rc3.d may already have it) + :2222.
 	ebegin "Starting sshd (:2223 rescue + :2222)"
 	start_dropbear 2223 /usr/br/sbin/dropbearmulti
 	start_dropbear 2222 /usr/sbin/dropbear
 	eend 0
 
-	blog "DONE — open-init reachable on :2222 (+ :2223 rescue) at $ip"
+	blog "DONE — datapath up; open-init reachable on :2222 (+ :2223 rescue) at $ip"
 	return 0
 }

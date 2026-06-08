@@ -26,9 +26,15 @@ start() {
 		[ -e "$n" ] || ln -sf "$s" "$n"
 	done
 	# Writable compatibility files the stock sysinit also creates.
-	: > /etc/hosts 2>/dev/null
-	: > /etc/fstab 2>/dev/null
-	ln -sf /proc/mounts /etc/mtab 2>/dev/null
-	ln -sf /tmp/resolv.conf /etc/resolv.conf 2>/dev/null
+	# ★v8 minor fix★: write these to the TMPFS (/tmp/etc, the real /etc target),
+	# NOT through a symlink into read-only /rom/etc. The assemble step bakes
+	# /tmp/etc/fstab -> /rom/etc/fstab (so fstabinfo resolves at do_sysinit);
+	# `: > /etc/fstab` would follow that symlink and fail truncating RO /rom/etc.
+	# Remove any RO-pointing symlink first, then create a writable tmpfs copy.
+	[ -L /tmp/etc/fstab ] && rm -f /tmp/etc/fstab 2>/dev/null
+	cp /rom/etc/fstab /tmp/etc/fstab 2>/dev/null || : > /tmp/etc/fstab 2>/dev/null
+	: > /tmp/etc/hosts 2>/dev/null
+	ln -sf /proc/mounts /tmp/etc/mtab 2>/dev/null
+	ln -sf /tmp/resolv.conf /tmp/etc/resolv.conf 2>/dev/null
 	eend 0
 }

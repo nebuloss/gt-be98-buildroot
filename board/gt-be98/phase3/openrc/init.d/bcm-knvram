@@ -14,10 +14,13 @@ depend() {
 
 start() {
 	echo "$(cat /proc/uptime) svc bcm-knvram START" >> /data/openrc-boot.log 2>/dev/null
+	# ★v8 minor★: use the EXACT mount path deadman-early uses successfully
+	# (ubifs ubi:data, ext4 /dev/data fallback, both quiet). deadman-early already
+	# mounted /data first, so this mountpoint check normally skips re-mounting.
 	if ! mountpoint -q /data 2>/dev/null; then
 		ebegin "Mounting ubi:data -> /data"
 		mount -t ubifs ubi:data /data 2>/dev/null \
-			|| mount -t ext4 /dev/data /data
+			|| mount -t ext4 /dev/data /data 2>/dev/null
 		eend $?
 	fi
 	if ! grep -q '^bcm_knvram ' /proc/modules 2>/dev/null; then

@@ -235,6 +235,69 @@ in `output-openrc-init/` (`make ... openrc` only — no full firmware rebuild).
   `~/be98/artifacts-br/GT-BE98_openrc-init-v6_nand_squashfs.pkgtb`
   (`83,829,448 B`, sha `2656b66a…`; rootfs Image 1 sha `341cd071…`). NOT flashed.
   **This SHOULD let OpenRC's services actually run → network/sshd → reachable.**
+- **v7 = v6 + guaranteed reset-on-hang + early reachability [V-bin] (2026-06-07).**
+  v6 booted-further but HUNG hard-unreachable. v7 armed the SoC HW watchdog in the
+  PID1 wrapper in DIRECT, NON-petting mode (`wdtctl -t 240 start`, no `-d`/wdtd) so
+  ANY hang resets → committed slot1; dropped the petting `hw-wdt` + the v6
+  `net-switch` stub from the runlevels; added `net-lan` (config_switch +
+  config_extwan + br0 + management IP + sshd :2222/:2223) to the boot runlevel.
+  pkgtb `…_openrc-init-v7_…` (`83,833,544 B`).
+  **v7 TRIAL RESULT (the win + the gap):** open-init booted FULLY — OpenRC
+  sysinit→boot→default, bcm_boot_launcher graft drivers, net-lan, sshd, wifi-glue
+  all ran (blocker F PASSED). BUT UNREACHABLE: net-lan did config_switch +
+  config_extwan + `brctl addbr br0` + `ip addr 10.0.0.8` (all logged `[ok]`) yet
+  **NO traffic passed** (never reachable on slot2, 2 trials). On Broadcom, br0 + ip
+  is NOT enough: the HW flow-accelerator/runner datapath (eth ↔ bridge ↔ CPU) must
+  be configured, which the ASUS rc START state does AFTER the bridge comes up.
+- **v8 = v7 + the REAL Broadcom LAN datapath [V-bin] (2026-06-08).** ★The v7 gap
+  fixed.★ DIAGNOSED on the LIVE working br-0045 (read-only capture; sw_mode=3
+  AP/bridge) cross-referenced with the rc source (`rc/lan.c:start_lan`,
+  `rc/init.c:26594..26613` START state, `rc/sysdeps/init-broadcom.c:fc_init`). The
+  runner modules (`pktrunner`, `bcm_enet`, `pktflow`, `cmdlist`, `rdpa*`, `bdmf`)
+  are ALREADY loaded by `bcm_boot_launcher` (bcm-platform) — present since v2. What
+  v7's net-lan was MISSING (the eth↔br0↔CPU datapath) is THREE steps the rc START
+  state does after the bridge is up, all confirmed live on br-0045:
+  1. **ALLMULTI on br0 + every member.** `start_lan` brings the bridge up via
+     `ifconfig(lan_ifname, IFUP|IFF_ALLMULTI, …)` and members run ALLMULTI too
+     (live: `ifconfig br0`/`eth0` → `UP BROADCAST RUNNING ALLMULTI`). The
+     bcm_enet+runner datapath floods/forwards to the CPU port via ALLMULTI; v7's
+     `ip link set up` (NO ALLMULTI) left the runner with no CPU bridging.
+  2. **`fc enable`** — `start_lan`'s `fc_init()` runs `fc enable` (flow-cache HW
+     accelerator) when `!is_routing_enabled()` (AP mode). Live: `fcctl status` →
+     `HW Acceleration <Enabled>`, `fc_disable=0`. (`/bin/fc → fcctl`.)
+  3. **`rtpolicy auto ALL`** — rc `init_main` START state (init.c:26613, the
+     `RTCONFIG_HND_ROUTER_BE_4916` step right after `start_lan`) applies the runner
+     runtime policy from `/etc/rt_policy_info.d/`. `runner_disable=0`.
+  net-lan now: bridge + members UP with ALLMULTI (`ifconfig … up allmulti`, IP set
+  in the same `ifconfig` like rc), then `fc enable` + `rtpolicy auto ALL` (each
+  nvram-gated on `fc_disable`/`runner_disable`), then sshd :2222/:2223.
+  **start-stop-daemon fix:** OpenRC builds its OWN `/sbin/start-stop-daemon` +
+  `/sbin/supervise-daemon` (the helpers `openrc-run.sh` uses for `command_background`
+  services like webui), but v7's `OPENRC_BINS` never copied them. v8 adds both to
+  the copy list (from-source OpenRC, byte-matching the rest). **Minor fixes:**
+  etc-farm now writes `fstab`/`hosts`/`mtab`/`resolv.conf` to the TMPFS
+  (`/tmp/etc/*`, removing the baked `/tmp/etc/fstab → /rom/etc/fstab` RO symlink
+  first) instead of through a symlink into RO `/rom/etc`; bcm-knvram quieted to use
+  the EXACT `/data` mount path deadman-early uses (ubifs `ubi:data` → ext4
+  `/dev/data` fallback, both `2>/dev/null`). ALL v7 fixes KEPT (non-petting
+  `wdtctl -t 240`, `/run` tmpfs, busybox.openrc command-shell, librc/libeinfo in
+  `/lib` + ld.so.cache, `/data` logging, :2223 rescue, the 8+ services). Re-assembled
+  on the FULL br-0050 base (Image 1 of `GT-BE98_blob0035`, `69,894,144 B`, sha
+  `a5179579…`). New squashfs `70,545,408 B` (67.28 MiB), under the slot-2 ceiling
+  `71,106,560` (`561,152 B` headroom). **Image-diff vs FULL br-0050: ZERO removals;
+  185 adds (all OpenRC-owned + `/sbin/{start-stop,supervise}-daemon`, `/run`,
+  `/rom/etc/{group,passwd}`, `busybox.openrc`, `/tmp/etc/fstab`); exactly 3 mods —
+  `/sbin/init` (symlink→`rc` ⇒ wrapper), `/rom/etc/fstab` (+tmpfs `/run` line),
+  `/tmp/etc/ld.so.cache` (dangling symlink ⇒ compiled cache).** Graft byte-IDENTICAL
+  (`bcm_boot_launcher`, `nvram`, `wdtctl`, `bcm_knvram.ko`, `wl.ko`, `dhd.ko`, `fc`,
+  `fcctl`, `rtpolicy`, `ethswctl`, `vlanctl`, full `/rom/etc/rc3.d`); safety net
+  present (`/usr/br/sbin/dropbearmulti`, `/sbin/trial-deadman` byte-identical to
+  base, `br-dropbear.sh`, `trial-deadman.sh`). pkgtb (br-0050 boot-chain FIT, bootfs
+  Image 0 byte-identical, sha `81f38fe0…`):
+  `~/be98/artifacts-br/GT-BE98_openrc-init-v8_nand_squashfs.pkgtb`
+  (`83,874,504 B`, sha `e5d20e38…`; rootfs Image 1 sha `ca9999e1…`). NOT flashed.
+  **This SHOULD make the open-init REACHABLE — br0+ip plus the runner datapath
+  (ALLMULTI + fc + rtpolicy) so eth ↔ br0 ↔ CPU actually passes traffic.**
 - **NOT VERIFIED (bench-only):** that openrc-init-as-PID1 actually boots the
   closed bcm stack (blocker F), glibc ABI of the merlin libc against these
   binaries at runtime, and runlevel execution order live. Build-buildable only.
