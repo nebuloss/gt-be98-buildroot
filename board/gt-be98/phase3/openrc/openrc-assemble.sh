@@ -388,6 +388,13 @@ grep -q 'iptables -I OUTPUT -p tcp --sport 2230' "$ETC/init.d/net-lan" && grep -
 grep -q 'ip route replace default via' "$ETC/init.d/net-lan" \
 	&& echo "  net-lan: v21 DEFAULT ROUTE via lan_gateway (the fix) [V]" \
 	|| { echo "  ! net-lan missing v21 default route"; MISSING=1; }
+# ★v24★ wifi-radio must LOAD the wl driver (the graft bcm-wlan-drivers.sh is neutered)
+grep -q 'load_wl_drivers' "$ETC/init.d/wifi-radio" && grep -q 'insmod "\$X/wl.ko" instance_base=0 intf_name=wl%d' "$ETC/init.d/wifi-radio" \
+	&& echo "  v24: wifi-radio loads the wl driver (cfg80211 before wl.ko) [V]" \
+	|| { echo "  ! v24 wifi-radio missing wl driver load"; MISSING=1; }
+grep -q 'webui_radio_init=1' "$ETC/init.d/wifi-radio" \
+	&& echo "  v24: wifi-radio arms EnsureRadio gates [V]" \
+	|| { echo "  ! v24 wifi-radio missing EnsureRadio gate arming"; MISSING=1; }
 # ★v22★ committable-baseline checks (admin user is verified AFTER the passwd bake below)
 [ -L "$ETC/runlevels/default/watchdog-disarm" ] && [ -f "$ETC/init.d/watchdog-disarm" ] \
 	&& echo "  v22: watchdog-disarm service in default runlevel (no commit boot-loop) [V]" \

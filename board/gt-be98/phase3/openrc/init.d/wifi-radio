@@ -1,13 +1,17 @@
 #!/sbin/openrc-run
-# Open WiFi bring-up. The radios themselves are driven by the webui-go controller
-# (EnsureRadio: wl ioctls + from-source hostapd, NO wlconf), VALIDATED LIVE on
-# br-0049/br-0050 ([[wl-ioctl-rc-boundary]]). This service starts the CLOSED wifi
-# glue daemons the datapath needs (pinned graft), then leaves radio init to the
-# webui boot-reconcile (webui_radio_init=1 + gtbe98_wifi_extsup=1, the br-0050
-# gates that make the controller the sole hostapd supervisor).
-# GRAFT consumed: wl.ko/dhd.ko + firmware (loaded by bcm-platform) +
-# eapd/wlceventd/mcpd/acsd2 (pinned blobs, no open source).
-description="Open WiFi glue + controller-owned radio bring-up"
+# ★v24 WIFI FIX★ — Open WiFi bring-up. ROOT CAUSE found live: the wl/dhd drivers were
+# NEVER loaded on the open-init. The graft's bcm-wlan-drivers.sh (run by bcm-platform
+# /bcm_boot_launcher) is NEUTERED in this base image — start_main() is a skip-stub and
+# load_modules() `echo`s the insmods — so nothing loaded wl.ko. (On the closed ASUS rc
+# the driver is loaded by rc's init-broadcom load_wl, not that script.) So this service
+# now LOADS the wl driver itself (the proven sequence: cfg80211 MUST precede wl.ko),
+# then the webui controller's EnsureRadio (wl ioctls + from-source hostapd, NO wlconf,
+# VALIDATED on br-0049/br-0050) brings up the WPA2/WPA3 APs on all radios — which only
+# ever worked when the driver was loaded. We also arm the two gates the controller
+# needs (gtbe98_wifi_extsup=1 + webui_radio_init=1) so it is the sole hostapd supervisor.
+# GRAFT consumed: wl.ko + cfg80211/hnd/emf/igs/wlshared + firmware + eapd/wlceventd/
+# mcpd/acsd2 (pinned blobs). LIVE-PROVEN: wl0/wl2/wl3 -> bss up, WPA2-PSK+SAE, all bands.
+description="Open WiFi: load wl driver + glue daemons + controller-owned radio bring-up"
 
 depend() {
 	need net nvram
@@ -15,16 +19,73 @@ depend() {
 	before webui
 }
 
+blog() { echo "$(cat /proc/uptime 2>/dev/null) wifi-radio: $*" >> /data/openrc-boot.log 2>/dev/null; }
+running() { pidof "$1" >/dev/null 2>&1 || grep -qw "$1" /proc/*/comm 2>/dev/null; }
+
+# ★Load the Broadcom wl driver stack (the missing prerequisite).★ Idempotent. The
+# KEY ordering constraint (found live): cfg80211.ko MUST be inserted before wl.ko or
+# wl fails with "Unknown symbol cfg80211_*/wiphy_*". hnd/emf/igs/wlshared have no such
+# dep. wl.ko takes `instance_base=0 intf_name=wl%d` (per rc init-broadcom for BE-4916).
+load_wl_drivers() {
+	if grep -q '^wl ' /proc/modules 2>/dev/null; then
+		blog "wl driver already loaded"; return 0
+	fi
+	local KV X CFG FWC
+	KV=$(uname -r)              # 4.19.294
+	X="/lib/modules/$KV/extra"
+	CFG=$(find "/lib/modules/$KV" -name cfg80211.ko 2>/dev/null | head -1)
+	FWC=$(find "/lib/modules/$KV" -name firmware_class.ko 2>/dev/null | head -1)
+	insmod "$X/wlshared.ko" 2>/dev/null
+	[ -n "$FWC" ] && insmod "$FWC" 2>/dev/null
+	[ -n "$CFG" ] && insmod "$CFG" 2>/dev/null   # ★must precede wl.ko★
+	insmod "$X/hnd.ko" 2>/dev/null
+	insmod "$X/emf.ko" 2>/dev/null
+	insmod "$X/igs.ko" 2>/dev/null
+	insmod "$X/wl.ko" instance_base=0 intf_name=wl%d 2>/dev/null
+	if grep -q '^wl ' /proc/modules 2>/dev/null; then
+		blog "wl driver LOADED ($(ls /sys/class/net 2>/dev/null | grep -c '^wl') wl ifaces)"
+	else
+		blog "WARN wl driver load FAILED (check cfg80211/dmesg)"
+	fi
+}
+
 start() {
 	echo "$(cat /proc/uptime) svc wifi-radio START" >> /data/openrc-boot.log 2>/dev/null
-	# Closed wifi glue daemons (mux EAPOL/BRCM events, multicast, channel-select).
-	ebegin "Starting wifi glue (eapd / wlceventd / mcpd)"
-	pgrep -x eapd      >/dev/null 2>&1 || eapd       2>/dev/null &
-	pgrep -x wlceventd >/dev/null 2>&1 || wlceventd  2>/dev/null &
-	pgrep -x mcpd      >/dev/null 2>&1 || mcpd        2>/dev/null &
+
+	ebegin "Loading Broadcom wl driver stack (graft bcm-wlan-drivers.sh is neutered)"
+	load_wl_drivers
 	eend 0
-	# acsd2 (auto-channel) is started on demand by the controller/hostapd path.
-	# Radio primaries + named BSSes: owned by the webui controller (see webui).
-	einfo "Radio init delegated to webui controller (EnsureRadio)"
+
+	# Configure each radio's PHY from nvram (wlconf applies chanspec/band/mode) + bridge
+	# it — the live-proven sequence (driver -> wlconf -> glue -> webui EnsureRadio). The
+	# radios that came up had a chanspec set by wlconf; without it the PHY stays at
+	# chanspec=0 and the BSS won't start. wlconf is a pinned graft binary (consistent).
+	ebegin "Per-radio PHY config (wlconf) + bridge into br0"
+	local u
+	for u in 0 1 2 3; do
+		[ "$(nvram get wl${u}_radio 2>/dev/null)" = "1" ] || { blog "wl$u radio off -> skip"; continue; }
+		wlconf wl$u up >> /data/openrc-boot.log 2>&1
+		ifconfig wl$u up allmulti 2>/dev/null
+		brctl addif br0 wl$u 2>/dev/null && blog "wl$u wlconf+up+bridged"
+	done
+	eend 0
+
+	# Closed wifi glue daemons (mux EAPOL/BRCM events, multicast, auto-channel).
+	ebegin "Starting wifi glue (eapd / wlceventd / mcpd / acsd2)"
+	running eapd      || eapd       2>/dev/null &
+	running wlceventd || wlceventd  2>/dev/null &
+	running mcpd      || mcpd        2>/dev/null &
+	running acsd2     || /usr/sbin/acsd2 2>/dev/null &
+	eend 0
+
+	# Arm the two gates that make the webui controller the SOLE hostapd supervisor +
+	# run EnsureRadio at its boot-reconcile (set in running nvram each boot; the webui
+	# service starts AFTER this one and reads them — no NAND commit needed).
+	nvram set gtbe98_wifi_extsup=1 2>/dev/null
+	nvram set webui_radio_init=1   2>/dev/null
+	blog "armed EnsureRadio gates (gtbe98_wifi_extsup=1 webui_radio_init=1)"
+
+	# Radio primaries + named BSSes: owned by the webui controller (EnsureRadio).
+	einfo "Driver loaded; radio init delegated to webui controller (EnsureRadio)"
 	return 0
 }
