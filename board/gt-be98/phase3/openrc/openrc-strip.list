@@ -261,3 +261,50 @@ usr/bin/plistutil
 usr/sbin/smbd
 usr/sbin/nmbd
 usr/sbin/smbpasswd
+
+# === v30 RC REMOVAL — drop the closed `rc` binary + its now-orphaned lib ======
+# The RUNTIME is already rc-free (v28 removed the no-op `rc config_*` calls from
+# init.d/net-lan + net-switch; webui's sync_apgx_to_wlunit is open-init-guarded
+# AND reimplemented open on feat/open-sync-apgx). `rc` survived ONLY as the flash
+# backend via the /sbin/hnd-write symlink. With the OPEN flasher proven end-to-end
+# (board/gt-be98/flash/open-flash.sh = dumpimage(host) + ubi-utils + CRC32-env
+# metadata seq-writer + bcm_bootstate activate), hnd-write is no longer needed, so
+# rc can be deleted outright.
+#
+# ★ORPHAN RE-SCAN (v30, from scratch — orphan-scan.py)★ Computed the closed libs
+# orphaned when BOTH /sbin/rc AND /sbin/hnd-write are removed = DT_NEEDED-closure(rc)
+# (37 sonames) MINUS the union DT_NEEDED-closure of EVERY OTHER surviving kept
+# binary in the v29 keep-set (650 ELF files, 107 sonames). RESULT: exactly ONE
+# closed lib is orphaned:
+#   libconn_diag.so (82,644 B) — full-rootfs DT_NEEDED reverse-scan shows it is
+#     referenced ONLY by: /sbin/rc, /usr/sbin/httpd (stripped v26),
+#     /usr/sbin/asusdiscovery, /usr/sbin/arpstorm, /usr/sbin/find_cap (all three
+#     stripped v29). No dlopen-string referrer beyond those same five. ALL five
+#     are removed -> libconn_diag is fully orphaned. Its own NEEDED (libnvram/
+#     libshared/libc) each have 100+ other consumers -> NO second-order orphan.
+# Every OTHER soname in rc's closure stays ALIVE via a surviving consumer (notably
+# wps_pbcd, kept: libamas-utils/libasc/libbcm/libcfgmnt/libnmpapi/libnt/libovpn/
+# libwebapi/libwpa_client/libletsencrypt; and bwdpi_sqlite/hwinfo + libbwdpi stub:
+# libbcm_flashutil/libbcm_boardctl/libbcm_util/libgen_util/libsys_util) — so they
+# are NOT added here. ★libbcm_flashutil (NAND image writer) is KEPT — still
+# DT_NEEDED by bwdpi_sqlite/hwinfo/libbwdpi.★
+#
+# KEPT for the open flasher / boot (NEVER listed here, all verified present):
+#   bin/bcm_bootstate (standalone 9.7KB binary, NOT an rc symlink — activate step)
+#   bin/ubiupdatevol bin/ubimkvol bin/ubirmvol bin/ubicrc32 bin/ubinfo bin/ubiformat
+#   bin/ubiattach bin/ubidetach bin/ubiblock bin/ubinize bin/ubiscan bin/ubirename
+#   bin/ubirsvol (+ usr/br/sbin/ubi* duplicates) — the volume recreate+write step.
+#   sbin/bcm_flasher, libbcm_flashutil.so consumers — other flash/boot tooling.
+#   wps_pbcd (WPS, shares rc's libs), wl/wlconf/hostapd*/eapd/wlceventd/mcpd/acsd2,
+#   nvram, dropbearmulti, sftp-server, busybox, ethswctl/vlanctl/fcctl.
+#
+# ★v30+ MUST flash via the OPEN path★ — there is no hnd-write after this strip.
+# board/gt-be98/trial/trial-flash.sh delegates to flash/open-flash.sh when
+# hnd-write is absent (or GT_BE98_OPEN_FLASH=1). bcm_bootstate stays for activate.
+#
+# ORDER NOTE: the strip loop removes paths top-to-bottom and tolerates dangling
+# symlinks ([ -L ] + rm -rf), so listing rc before hnd-write is fine — hnd-write
+# becomes a dangling symlink after rc goes and is still matched + removed.
+sbin/rc
+sbin/hnd-write
+usr/lib/libconn_diag.so

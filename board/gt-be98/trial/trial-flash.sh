@@ -94,29 +94,61 @@ $SSH "printf 'TRIAL_SLOT=%s\nGOOD_SLOT=%s\nWINDOW=%s\nSHA=%s\n' $TRIAL $GOOD $WI
 $SSH 'cat /data/.trial-armed' | grep -q "TRIAL_SLOT=$TRIAL" || die "arming flag verify failed"
 info "dead-man armed: trial=$TRIAL good=$GOOD (flag persists until operator cleanup)"
 
-# ---- flash inactive slot (hnd-write auto-commits it) ---------------------------
-info "flashing inactive slot $TRIAL with hnd-write (exit 99 is normal)"
-$SSH 'hnd-write /tmp/trial.pkgtb; echo "hnd-write exit=$?"' 2>&1 | tail -3
-AFTER=$($SSH 'bcm_bootstate 2>/dev/null')
-echo "$AFTER" | grep -q 'valid 1,2' || die "post-flash: slots no longer both valid! state: $AFTER"
-echo "$AFTER" | grep -qm1 "committed $TRIAL" || die "post-flash: expected committed=$TRIAL (hnd-write auto-commit), got: $(echo "$AFTER" | grep -om1 'committed [0-9]')"
-NEWSEQ=$(echo "$AFTER" | grep -om1 'seq [0-9]*,[0-9]*' | sed 's/seq //')
-info "post-flash: committed=$TRIAL (hnd-write auto-commit), seq=$NEWSEQ, both valid"
+# ---- flash inactive slot --------------------------------------------------------
+# v30+ has NO closed `rc`, therefore NO `/sbin/hnd-write` (it was an rc symlink).
+# Detect the flash backend and pick the path:
+#   * hnd-write present AND GT_BE98_OPEN_FLASH!=1  -> legacy closed path (auto-commit
+#       + commit-repair to GOOD + ONCE-arm). Kept for flashing v29-and-earlier images.
+#   * hnd-write ABSENT (v30+) OR GT_BE98_OPEN_FLASH=1 -> OPEN path: delegate the
+#       actual slot write + metadata seq-bump + activate to board/.../flash/open-flash.sh
+#       (dumpimage(host) + ubirmvol/ubimkvol/ubiupdatevol + CRC32-env seq writer +
+#       bcm_bootstate). open-flash.sh leaves the committed slot = GOOD (it only bumps
+#       the TRIAL seq to max+1 and arms ONCE via `bcm_bootstate 3`), so it provides the
+#       SAME trial semantics as the legacy "commit-repair + ONCE-arm" block below.
+#       trial-flash's preflight + dead-man + GOOD/TRIAL logic above is unchanged; the
+#       persistent /data/.trial-armed flag (richer than open-flash's own one) wins.
+OPEN_FLASH="$HERE/../flash/open-flash.sh"
+HAVE_HNDWRITE=1
+$SSH 'command -v hnd-write >/dev/null 2>&1' || HAVE_HNDWRITE=0
+if [ "${GT_BE98_OPEN_FLASH:-0}" = 1 ] || [ "$HAVE_HNDWRITE" = 0 ]; then
+    [ "$HAVE_HNDWRITE" = 0 ] && info "hnd-write ABSENT on device (v30+ rc-free) -> using OPEN flasher" \
+                             || info "GT_BE98_OPEN_FLASH=1 -> using OPEN flasher"
+    [ -x "$OPEN_FLASH" ] || die "open flasher not found/executable at $OPEN_FLASH"
+    # open-flash.sh re-runs its own preflight (identical guards), writes the TRIAL
+    # slot volumes, seq-bumps TRIAL to max+1, and arms ONCE. It uses the SAME
+    # GT_BE98_DEV/GT_BE98_PORT env. It needs host `dumpimage` (we produce the FIT).
+    command -v dumpimage >/dev/null 2>&1 || die "open path needs host 'dumpimage' (u-boot-tools) on PATH"
+    GT_BE98_DEV="$DEV" GT_BE98_PORT="$PORT" "$OPEN_FLASH" "$IMG" || die "open-flash.sh failed"
+    FINAL=$($SSH 'bcm_bootstate 2>/dev/null')
+    echo "$FINAL" | grep -qm1 "committed $GOOD" || die "final check (open path): committed != $GOOD"
+    echo "$FINAL" | grep -q 'valid 1,2' || die "final check (open path): validity lost!"
+    RR=$($SSH 'cat /proc/bootstate/reset_reason')
+    [ "$RR" = "1" ] || die "open path: ONCE not armed (reset_reason=$RR, expected 1/ACTIVATE)"
+    info "OPEN flash complete: committed=$GOOD, both valid, ONCE armed -> next boot = slot $TRIAL (once)"
+else
+    info "flashing inactive slot $TRIAL with hnd-write (exit 99 is normal)"
+    $SSH 'hnd-write /tmp/trial.pkgtb; echo "hnd-write exit=$?"' 2>&1 | tail -3
+    AFTER=$($SSH 'bcm_bootstate 2>/dev/null')
+    echo "$AFTER" | grep -q 'valid 1,2' || die "post-flash: slots no longer both valid! state: $AFTER"
+    echo "$AFTER" | grep -qm1 "committed $TRIAL" || die "post-flash: expected committed=$TRIAL (hnd-write auto-commit), got: $(echo "$AFTER" | grep -om1 'committed [0-9]')"
+    NEWSEQ=$(echo "$AFTER" | grep -om1 'seq [0-9]*,[0-9]*' | sed 's/seq //')
+    info "post-flash: committed=$TRIAL (hnd-write auto-commit), seq=$NEWSEQ, both valid"
 
-# ---- repair commit back to the good slot ---------------------------------------
-info "repairing commit -> good slot $GOOD"
-$SSH "bcm_bootstate +$GOOD" >/dev/null 2>&1
-$SSH 'bcm_bootstate 2>/dev/null' | grep -qm1 "committed $GOOD" || die "commit repair FAILED - DO NOT REBOOT; fix manually (bcm_bootstate +$GOOD)"
-info "commit repaired: committed=$GOOD"
+    # ---- repair commit back to the good slot -----------------------------------
+    info "repairing commit -> good slot $GOOD"
+    $SSH "bcm_bootstate +$GOOD" >/dev/null 2>&1
+    $SSH 'bcm_bootstate 2>/dev/null' | grep -qm1 "committed $GOOD" || die "commit repair FAILED - DO NOT REBOOT; fix manually (bcm_bootstate +$GOOD)"
+    info "commit repaired: committed=$GOOD"
 
-# ---- arm ONCE (one-shot boot of the non-committed = trial slot) ----------------
-info "arming one-shot trial boot (bcm_bootstate 3)"
-$SSH 'bcm_bootstate 3' >/dev/null 2>&1
-RR=$($SSH 'cat /proc/bootstate/reset_reason')
-[ "$RR" = "1" ] || die "ONCE arm failed: reset_reason=$RR (expected 1/ACTIVATE)"
-FINAL=$($SSH 'bcm_bootstate 2>/dev/null')
-echo "$FINAL" | grep -qm1 "committed $GOOD" || die "final check: committed flipped!"
-echo "$FINAL" | grep -q 'valid 1,2' || die "final check: validity lost!"
+    # ---- arm ONCE (one-shot boot of the non-committed = trial slot) -------------
+    info "arming one-shot trial boot (bcm_bootstate 3)"
+    $SSH 'bcm_bootstate 3' >/dev/null 2>&1
+    RR=$($SSH 'cat /proc/bootstate/reset_reason')
+    [ "$RR" = "1" ] || die "ONCE arm failed: reset_reason=$RR (expected 1/ACTIVATE)"
+    FINAL=$($SSH 'bcm_bootstate 2>/dev/null')
+    echo "$FINAL" | grep -qm1 "committed $GOOD" || die "final check: committed flipped!"
+    echo "$FINAL" | grep -q 'valid 1,2' || die "final check: validity lost!"
+fi
 info "metadata verified: committed=$GOOD, both valid, ONCE armed -> next boot = slot $TRIAL (once)"
 
 if [ $DO_REBOOT = 0 ]; then

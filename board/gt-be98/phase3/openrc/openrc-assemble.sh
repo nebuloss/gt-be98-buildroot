@@ -803,9 +803,13 @@ echo "== v28 DT_NEEDED integrity check (FATAL for keep-set, WARN for dead orphan
 READELF="${READELF:-readelf}"
 # keep-set basenames: must load. (transitive closed libs are checked via the
 # whole-rootfs scan too, but these are the launch points that MUST be clean.)
+# v30: `rc` REMOVED from the keep-set (it is now stripped — see openrc-strip.list).
+# The open flasher needs bcm_bootstate + the ubi-utils instead. libconn_diag.so is
+# rc-orphaned and stripped; it must NOT appear here.
 DT_KEEP_SET="wl wlconf hostapd hostapd_cli eapd wlceventd mcpd acsd2 \
 ethswctl vlanctl fcctl bcmmcastctl bcm_boot_launcher nvram dropbearmulti \
-sftp-server scp sftp busybox bcm_flasher bcm_bootstate wdtctl envrams wps_pbcd rc \
+sftp-server scp sftp busybox bcm_flasher bcm_bootstate wdtctl envrams wps_pbcd \
+ubiupdatevol ubimkvol ubirmvol ubicrc32 ubinfo ubiformat ubiattach ubidetach \
 libbwdpi.so libbwdpi_sql.so libshared.so libnvram.so libwlcsm.so libsqlite3.so.0 \
 libovpn.so libssl.so.1.1 libcrypto.so.1.1 libbcm_flashutil.so libbcm_boardctl.so \
 libbcm_util.so libgen_util.so libsys_util.so libwebapi.so libdisk.so libcfgmnt.so"

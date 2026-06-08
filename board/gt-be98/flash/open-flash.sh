@@ -64,13 +64,39 @@ $SSHT 'dd if=/dev/ubi0_1 bs=1 count=1280 2>/dev/null' > "$TMP/meta.bak"
 python3 - "$TMP/meta.bak" "$TMP/meta.new" "$TRIAL" <<'PY'
 import sys,zlib,struct,re
 b=bytearray(open(sys.argv[1],'rb').read()); trial=int(sys.argv[3])
-w0,=struct.unpack_from('<I',b,0); n=(w0-4)&0xffff; data=b[12:12+n]
-m=re.search(rb'SEQ=(\d+),(\d+)\x00',bytes(data)); s=[int(m.group(1)),int(m.group(2))]
+# layout: [0:4]=word0 (=n+4, n = CRC data-region length, FIXED), [8:12]=crc32(data[:n]),
+# data=b[12:12+n] is a region of NUL-separated key entries; the LAST entry is the
+# (already truncated-to-fit) mtd partition-map text. The bootloader reads
+# COMMITTED=/VALID=/SEQ= from here. n is fixed by the buffer, so a SEQ that grows
+# digits (9->10, 99->100, ...) is absorbed by REFLOWING within the fixed n-byte
+# window: shift the bytes after SEQ and trim the equal number of bytes off the
+# partition-map tail (which is informational + pre-truncated). On a SHRINK
+# (unlikely) we pad the tail with NUL to keep n constant.
+w0,=struct.unpack_from('<I',b,0); n=(w0-4)&0xffff; data=bytearray(b[12:12+n])
+m=re.search(rb'SEQ=(\d+),(\d+)\x00',bytes(data))
+assert m, "SEQ token not found in metadata data region"
+s=[int(m.group(1)),int(m.group(2))]
 new=max(s)+1; s[trial-1]=new; nt=f"SEQ={s[0]},{s[1]}\x00".encode()
-assert len(nt)==len(m.group(0)), "seq digit rollover — extend writer to reflow data"
-data[m.start():m.end()]=nt; b[12:12+n]=data
+old=m.group(0); delta=len(nt)-len(old)
+if delta==0:
+    data[m.start():m.end()]=nt
+else:
+    head=data[:m.start()]; tail=data[m.end():]      # tail = everything after old SEQ token
+    if delta>0:
+        # SEQ grew: drop `delta` bytes from the END of the window (map-text tail slack)
+        if len(tail) < delta:
+            sys.exit("FATAL: seq rollover would overflow CRC window (no map-text slack to reclaim)")
+        # guard: never trim into a structural entry (COMMITTED/VALID/SEQ live in head)
+        tail=tail[:len(tail)-delta]
+    else:
+        # SEQ shrank: pad the tail back to length with NUL so n stays constant
+        tail=tail + b'\x00'*(-delta)
+    newdata=head+nt+tail
+    assert len(newdata)==n, f"reflow length error: {len(newdata)} != {n}"
+    data=newdata
+b[12:12+n]=data
 struct.pack_into('<I',b,8,zlib.crc32(bytes(data[:n]))&0xffffffff)
-open(sys.argv[2],'wb').write(b); print(f"seq->{s[0]},{s[1]}")
+open(sys.argv[2],'wb').write(b); print(f"seq->{s[0]},{s[1]}" + (f" (reflowed {delta:+d}B)" if delta else ""))
 PY
 $SSHT 'cat > /tmp/of.meta' < "$TMP/meta.new"
 # write vol1, verify; only then vol2 (one valid copy always remains)
