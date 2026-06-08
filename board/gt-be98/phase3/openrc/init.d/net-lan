@@ -432,13 +432,13 @@ start_admin_dropbear() {
 start() {
 	blog "START"
 
-	# 1. HW switch + ext-WAN port programming (in-proc rc applets; graft-safe).
-	ebegin "HW switch programming (rc config_switch)"
-	rc config_switch >> /data/openrc-boot.log 2>&1
-	eend $?
-	ebegin "Ext-WAN port config (rc config_extwan)"
-	rc config_extwan >> /data/openrc-boot.log 2>&1
-	eend $?
+	# 1. HW switch + ext-WAN port programming — REMOVED (v28).
+	#    `rc config_switch` is a VERIFIED no-op on THIS board: its body is gated by
+	#    is_rtl8372_boardid + sw_mode=3 (AP/bridge) + no-dualwan, and GT-BE98 is a
+	#    BCM switch (not RTL8372), so the call programs nothing. `rc config_extwan`
+	#    is an UNCONDITIONAL no-op here (mutually-exclusive GT-BE98 extwan guards).
+	#    Dropping them removes the open-init's last net-path rc invocation; the HW
+	#    switch/VLAN state is owned by the graft + ethswctl/vlanctl, not rc.
 
 	# 2. Open start_lan stand-in: br0 + lan_ifnames members + management IP.
 	#    ★v8★: bridge AND every member brought up with ALLMULTI (IFF_ALLMULTI) —

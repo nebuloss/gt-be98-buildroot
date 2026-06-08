@@ -14,6 +14,36 @@
 # cfg80211.ko wl hostapd* nvram eapd wlceventd mcpd acsd2 wlconf ethswctl vlanctl
 # fc/fcctl bcm_boot_launcher rc /rom/etc/rc3.d dropbearmulti sftp-server
 # openrc-init* OpenRC libs.
+#
+# === v28 rc-removal investigation (RESULT: /sbin/rc is KEPT) =================
+# The v28 task was to DROP /sbin/rc + its now-orphaned closed libs. A full
+# DT_NEEDED reverse-dependency re-scan of the unsquashed keep-set established:
+#   (1) ORPHAN SET FROM REMOVING rc = EMPTY. Every soname in rc's DT_NEEDED
+#       closure (38 libs) is ALSO DT_NEEDED by at least one OTHER surviving,
+#       non-stripped binary, so removing rc orphans ZERO closed libs:
+#         - libbcm_flashutil/libbcm_boardctl/libbcm_util/libgen_util/libsys_util
+#           -> DT_NEEDED by bcm_flasher + bcm_bootstate + tmctl (flash/boot tools,
+#              KEEP). ★libbcm_flashutil is the NAND/pkgtb image writer — KEEP.★
+#         - libwebapi/libovpn/libletsencrypt/libdisk/libbwdpi/libnt/libcodb/
+#           libconn_diag/libamas-utils/libasc/libbcm/libwpa_client/libcfgmnt/
+#           libnmpapi/libcurl/libjansson/liblldpctl -> DT_NEEDED by surviving
+#           wps_pbcd and/or the AiMesh + notification daemons (asusdiscovery,
+#           arpstorm, find_cap, cfg_client, cfg_reportstatus, nt_*, Notify_*).
+#   (2) libbwdpi/libbwdpi_sql were NOT rc-exclusive (the "rc was its only
+#       consumer" premise was WRONG): 7 surviving consumers remain after rc+httpd
+#       go (wps_pbcd, asusdiscovery, arpstorm, find_cap, bwdpi_sqlite, libwebapi,
+#       libbwdpi_sql) -> the no-op STUB STAYS; a full removal would dangle them.
+#   (3) ★/sbin/hnd-write IS A SYMLINK -> rc★ (no standalone hnd-write binary).
+#       The operator flash/recovery path (board/gt-be98/trial/trial-flash.sh:99
+#       `hnd-write /tmp/trial.pkgtb`, which auto-commits the slot) runs THROUGH
+#       rc. Removing /sbin/rc would break the trial flash + recovery channel.
+#   CONCLUSION (conservative, "KEEP when unsure"): /sbin/rc stays; no lib is
+#   added to this list for rc-removal. What v28 DID change: the VERIFIED-no-op
+#   runtime rc invocations (`rc config_switch` / `rc config_extwan`) were removed
+#   from init.d/net-lan + init.d/net-switch, so the open-init makes NO rc call at
+#   boot (rc now survives ONLY as the hnd-write flash backend, never executed on
+#   the boot path). A new DT_NEEDED integrity gate in openrc-assemble.sh fails the
+#   build if any keep-set binary ends up with a dangling NEEDED lib.
 
 # --- /usr/br staging cruft (~5.97MB xz) -------------------------------------
 # KEPT (NOT listed): usr/br/sbin/dropbearmulti, usr/br/libexec/sftp-server,

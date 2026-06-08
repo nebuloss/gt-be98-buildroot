@@ -26,12 +26,11 @@ depend() {
 
 start() {
 	echo "$(cat /proc/uptime) svc net-switch START" >> /data/openrc-boot.log 2>/dev/null
-	ebegin "HW switch programming (rc config_switch)"
-	rc config_switch
-	eend $?
-	ebegin "Ext-WAN port config (rc config_extwan)"
-	rc config_extwan
-	eend $?
+	# rc config_switch / rc config_extwan REMOVED (v28): VERIFIED no-ops on THIS
+	# board. config_switch is gated by is_rtl8372_boardid + sw_mode=3 + no-dualwan
+	# (BCM switch, not RTL8372) and config_extwan is an unconditional GT-BE98 no-op
+	# (mutually-exclusive board guards). Neither programs anything here, so the
+	# only-other-consumer (rc) is not invoked. (RE-verified by DT_NEEDED + board-RE.)
 
 	# --- FIRST-CUT open bridge bring-up (start_lan stand-in; BLOCKER surface) ---
 	# WARNING: not a verified start_lan reproduction. br0 + lan_ifnames only.

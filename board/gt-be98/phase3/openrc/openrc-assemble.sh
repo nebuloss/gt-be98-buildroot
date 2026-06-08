@@ -788,6 +788,65 @@ fi
 	&& echo "  cfg80211.ko present [V]" || { echo "  ! cfg80211.ko MISSING"; MISSING=1; }
 [ -d "$FS/rom/etc/rc3.d" ] && echo "  /rom/etc/rc3.d present [V]" || { echo "  ! /rom/etc/rc3.d MISSING"; MISSING=1; }
 
+# === v28 DT_NEEDED integrity: no KEPT binary may have a dangling NEEDED lib =====
+# For the TRUE keep-set (the binaries that MUST load on the open-init: wl/hostapd/
+# nvram/dropbear/sftp/the wifi+net+flash+boot tools + their transitive closed libs)
+# confirm each DT_NEEDED soname resolves to a file inside $FS (loader dirs /lib +
+# /usr/lib + /opt/lib + /opt/usr/lib). This catches the failure mode where a strip
+# entry removes a lib a kept binary still links. The whole-rootfs is ALSO scanned
+# and reported, but a dangling NEEDED that belongs ONLY to an already-dead orphan
+# left over from the v26/v27 strips (strongswan/netatalk/jq/samba helpers whose own
+# launchers were removed) is a WARNING, not a build failure — those binaries are
+# never executed on the open-init. A dangle hitting a KEEP-SET binary is FATAL.
+# Uses the host readelf (works on the cross ARM ELF; verified).
+echo "== v28 DT_NEEDED integrity check (FATAL for keep-set, WARN for dead orphans) =="
+READELF="${READELF:-readelf}"
+# keep-set basenames: must load. (transitive closed libs are checked via the
+# whole-rootfs scan too, but these are the launch points that MUST be clean.)
+DT_KEEP_SET="wl wlconf hostapd hostapd_cli eapd wlceventd mcpd acsd2 \
+ethswctl vlanctl fcctl bcmmcastctl bcm_boot_launcher nvram dropbearmulti \
+sftp-server scp sftp busybox bcm_flasher bcm_bootstate wdtctl envrams wps_pbcd rc \
+libbwdpi.so libbwdpi_sql.so libshared.so libnvram.so libwlcsm.so libsqlite3.so.0 \
+libovpn.so libssl.so.1.1 libcrypto.so.1.1 libbcm_flashutil.so libbcm_boardctl.so \
+libbcm_util.so libgen_util.so libsys_util.so libwebapi.so libdisk.so libcfgmnt.so"
+in_keep_set() { case " $DT_KEEP_SET " in *" $1 "*) return 0;; esac; return 1; }
+if ! command -v "$READELF" >/dev/null 2>&1; then
+	echo "  ~ no readelf on host — DT_NEEDED integrity check SKIPPED (non-fatal)"
+else
+	DT_TMP="$(mktemp)"
+	for d in lib usr/lib opt/lib opt/usr/lib; do
+		[ -d "$FS/$d" ] && find "$FS/$d" -maxdepth 1 \( -type f -o -type l \) -printf '%f\n' 2>/dev/null
+	done | sort -u > "$DT_TMP"
+	dt_have() { grep -qxF "$1" "$DT_TMP"; }
+	DT_FATAL=0; DT_WARN=0; DT_CHECKED=0
+	while IFS= read -r f; do
+		case "$f" in *.ko) continue;; esac
+		head -c4 "$f" 2>/dev/null | grep -q $'\x7fELF' || continue
+		DT_CHECKED=$((DT_CHECKED+1))
+		bn="$(basename "$f")"
+		needs="$("$READELF" -d "$f" 2>/dev/null | sed -n 's/.*(NEEDED).*\[\(.*\)\]/\1/p')"
+		for so in $needs; do
+			case "$so" in ld-linux*|ld-*.so*) continue;; esac
+			if ! dt_have "$so"; then
+				if in_keep_set "$bn"; then
+					echo "  ! FATAL DANGLING (keep-set): ${f#$FS} NEEDS $so"
+					DT_FATAL=$((DT_FATAL+1)); MISSING=1
+				else
+					echo "  ~ warn dangling (dead orphan): ${f#$FS} NEEDS $so"
+					DT_WARN=$((DT_WARN+1))
+				fi
+			fi
+		done
+	done <<EOF_DTLIST
+$(find "$FS" -type f \( -path "$FS/lib/*" -o -path "$FS/usr/lib/*" -o -path "$FS/bin/*" -o -path "$FS/sbin/*" -o -path "$FS/usr/sbin/*" -o -path "$FS/usr/bin/*" -o -path "$FS/usr/br/*" \) 2>/dev/null)
+EOF_DTLIST
+	rm -f "$DT_TMP"
+	echo "  DT_NEEDED scan: $DT_CHECKED ELF; keep-set dangling=$DT_FATAL ; dead-orphan dangling=$DT_WARN (warn-only)"
+	[ "$DT_FATAL" -eq 0 ] \
+		&& echo "  DT_NEEDED integrity OK: 0 dangling NEEDED in any keep-set binary [V]" \
+		|| echo "  ! DT_NEEDED integrity FAIL: $DT_FATAL keep-set binaries have a dangling NEEDED"
+fi
+
 echo
 echo "== overlay tree assembled at: $FS =="
 if [ "$MISSING" -ne 0 ] || [ "$DANGLE" -ne 0 ]; then
