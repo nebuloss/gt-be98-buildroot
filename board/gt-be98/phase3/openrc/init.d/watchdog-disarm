@@ -1,28 +1,60 @@
 #!/sbin/openrc-run
-# ★v22★ Boot-complete watchdog disarm — the LAST service in the default runlevel.
-# The PID1 wrapper arms the HW watchdog (wdtctl -t 240, non-petting) early so a boot
-# HANG auto-resets. Reaching THIS service means sysinit->boot->default all completed =
-# a healthy boot. Behaviour depends on WHY we booted:
-#   * COMMITTED boot (no /data/.trial-armed): disarm (wdtctl stop) so the committed
-#     open-init does NOT reboot-loop every 240s. The boot is proven healthy by getting
-#     here. (No ongoing petting watchdog yet — a runtime hang is not covered; that's a
-#     later refinement. Boot-hang protection is preserved by the wrapper's early arm.)
-#   * TRIAL boot (/data/.trial-armed present): LEAVE the watchdog ARMED. The operator
-#     disarms manually from a confirmed SSH session (feedback-disarm-only-from-ssh) so
-#     an UNREACHABLE trial still auto-reverts to the GOOD slot. Never auto-disarm a trial.
-description="Disarm the boot watchdog on a healthy COMMITTED boot (never on a trial)"
+# ★v27 HEALTH-GATED PETTING WATCHDOG★ — the LAST service in the default runlevel.
+# The PID1 wrapper arms `wdtctl -t 240` (non-petting) EARLY so a boot HANG auto-resets.
+# Reaching THIS service means sysinit->boot->default all completed. Behaviour by WHY we
+# booted:
+#   * TRIAL boot (/data/.trial-armed present): leave the watchdog ARMED + UNPETTED so an
+#     unreachable/broken trial AUTO-REVERTS to the GOOD slot (br-0045) within <=240s. The
+#     operator disarms manually from a confirmed SSH session after a health-check
+#     ([[feedback-disarm-only-from-ssh]]). NEVER auto-pet/disarm a trial.
+#   * COMMITTED boot (no flag): start a HEALTH-GATED petting daemon that `wdtctl ping`s
+#     every 60s ONLY WHILE HEALTHY (br0 has an IP + a mgmt service :2222/:80 listens).
+#     A healthy committed boot thus never resets (no 240s reboot-loop); a RUNTIME hang or
+#     breakage stops the pings -> the watchdog fires -> reset -> reboots the committed
+#     slot = recovery. This is the proper production watchdog. It is NOT v6's unconditional
+#     petting (which hid hangs) — we ping ONLY when the system is verified healthy, so a
+#     wedged system still resets. (wdtctl ping verified to reset the timer via the bcm
+#     ioctl even though the wrapper armed it — no /dev/watchdog single-open conflict.)
+description="Watchdog keeper: health-gated petting on committed boots; armed+unpetted on trials"
 
 depend() {
 	after webui wifi-radio net-lan
 }
 
+blog() { echo "$(cat /proc/uptime 2>/dev/null) watchdog-keeper: $*" >> /data/openrc-boot.log 2>/dev/null; }
+
+# Healthy = the management plane is up: br0 carries an IP AND a mgmt service is listening.
+healthy() {
+	ip addr show br0 2>/dev/null | grep -q 'inet ' || return 1
+	netstat -ltn 2>/dev/null | grep -qE ':(2222|80) ' || return 1
+	return 0
+}
+
+# Ping the (wrapper-armed, 240s) watchdog every 60s while healthy -> 4x margin so a healthy
+# system never resets; stop pinging the instant the mgmt plane is gone -> reset/recovery.
+watchdog_keeper() {
+	local first=1
+	while true; do
+		if healthy; then
+			wdtctl ping >/dev/null 2>&1
+			[ "$first" = 1 ] && { blog "health OK -> petting watchdog (wdtctl ping/60s)"; first=0; }
+		else
+			blog "UNHEALTHY (br0/mgmt down) -> NOT petting; watchdog will reset for recovery"
+		fi
+		sleep 60
+	done
+}
+
 start() {
+	echo "$(cat /proc/uptime) svc watchdog-keeper START" >> /data/openrc-boot.log 2>/dev/null
 	if [ -f /data/.trial-armed ]; then
-		ebegin "TRIAL boot — leaving watchdog ARMED (disarm manually via SSH)"
+		ebegin "TRIAL boot — watchdog ARMED + UNPETTED (auto-revert to GOOD; disarm manually via SSH)"
+		blog "trial boot: leaving watchdog armed+unpetted (operator disarms after health-check)"
 		eend 0
 	else
-		ebegin "COMMITTED boot reached default runlevel — disarming watchdog (wdtctl stop)"
-		wdtctl stop >> /data/openrc-boot.log 2>&1
+		ebegin "COMMITTED boot — health-gated watchdog keeper (wdtctl ping while healthy)"
+		watchdog_keeper &
+		blog "committed boot: health-gated petting daemon started (pid $!)"
 		eend 0
 	fi
 }
