@@ -187,3 +187,55 @@ the LIVE EOL-1.1 surface is now hostapd alone, which is irreducibly SDK-pinned t
 1.1.1w. openssl-3.6.2 already serves the open /usr/br SSH/SFTP surface (static). No
 relink target exists, so no binary change is made. The residual EOL-1.1 exposure
 (hostapd) is irreducible without a newer Broadcom SDK.**
+
+---
+
+## 6. UPDATE (v32) — the 1.1 pin was a BUILD PATH, not a lock: hostapd relinked to openssl-3
+
+Section 5's "irreducible" verdict was **wrong about the mechanism** and is superseded.
+Re-RE showed hostapd's openssl-1.1 dependency is purely a **build-time include/lib
+path**, not a closed lock:
+
+- `crypto_openssl.c` already carries 12 `#if OPENSSL_VERSION_NUMBER >= 0x30000000L`
+  branches — the SAME source compiles against openssl-3 with NO source edits.
+- hostapd imports **180 libcrypto symbols, 0 libssl symbols** (CONFIG_EAP off → no TLS;
+  the `-lssl` was over-linked). All 180 resolve in openssl-3.6.2 (the lone apparent gap,
+  `EVP_PKEY_size`, is an openssl-3 macro → `EVP_PKEY_get_size`, applied at compile time).
+- WiFi-7 (MLO/320MHz, `driver_nl80211.c`) + SAE/WPA3 (`sae.c`) carry ZERO openssl refs;
+  all crypto is isolated in `crypto_openssl.c`.
+- `libceshared.so` is a 9.5KB UDP event emitter, links only libc, NO crypto — unchanged.
+
+**Two openssl-1.1 include paths had to be repointed** (both restored after build so the
+1.1 fallback stays intact):
+  1. `hostapd/hostapd/Makefile:27-28` — `-I$(TOP)/openssl/include` + `-L$(TOP)/openssl`.
+  2. `hostapd/hostapd/brcm.config:45` — `-I$(BCM_FSBUILD_DIR)/public/include`, which
+     carries a SECOND openssl-1.1 header tree (`fs.build/public/include/openssl`) that
+     WON by include order; shadowed with the openssl-3 headers for the build.
+
+**Decision: STATIC.** openssl-3.6.2 is static-linked (gt-be98-br-openssl `libcrypto.a`)
+into hostapd (reuse the same staging the /usr/br SSH island uses). hostapd is the SOLE
+LIVE 1.1 consumer, so static = self-contained, no shared `libcrypto.so.3` to ship next
+to the dormant 1.1. `-lssl` dropped; `-ldl` added (static `dso_dlfcn` needs it).
+
+RESULT (v32 = v31 + this hostapd):
+- New hostapd: 32-bit ARM EABI5 softfp VFPv3; **DT_NEEDED carries NO libcrypto.so.1.1 /
+  libssl.so.1.1** (openssl-3 baked in statically); libceshared.so/libnvram/libshared/
+  libnl-3/libnl-genl-3 unchanged; +libdl.so.2. 0 undefined crypto symbols; the openssl-3
+  EVP_MAC/OSSL_PARAM modern branch is statically present.
+- Stripped 4.90 MB (the old 1.1 device hostapd was 7.45 MB + a separately-shipped
+  ~3.5 MB libcrypto/libssl.so.1.1; static link pulls only the used crypto).
+- v32 squashfs = v31 with ONLY `/usr/sbin/hostapd` changed (file-list diff verified);
+  DT_NEEDED integrity gate clean (0 keep-set danglers); rc-free preserved; the 1.1 .so
+  are KEPT for the ~40 inert non-launched 1.1 consumers (conservative).
+
+The LIVE EOL-1.1 surface is now **EMPTY**: the sole live consumer (hostapd) runs on
+openssl-3.6.2. The 1.1 libs remain on disk only for dormant, never-executed binaries.
+
+Recipe: `BR2_PACKAGE_GT_BE98_HOSTAPD_DAEMON_OPENSSL3=y` (Config.in); the glue
+`build-hostapd-daemon.sh` honors `OPENSSL3_DEV`; the proven 1.1 path is the default
+(OPENSSL3_DEV unset) and is left fully intact as a fallback.
+
+CAVEAT (operator runtime trial): functionally validate on v32 — SAE/WPA3 associate +
+WiFi-7 (MLO/320MHz) associate — to confirm the openssl-3 crypto path behaves at runtime.
+Static analysis (symbols/ABI/DT_NEEDED) is clean; only a live association proves the
+EVP/EC/BN code paths under the BRCM driver.

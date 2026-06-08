@@ -46,13 +46,23 @@ GT_BE98_HOSTAPD_VERSION = 2.10-brcm-impl103
 GT_BE98_HOSTAPD_LICENSE = BSD-3-Clause
 GT_BE98_HOSTAPD_LICENSE_FILES = COPYING
 
-GT_BE98_HOSTAPD_MERLIN_ROOT ?= $(BR2_EXTERNAL_GT_BE98_PATH)/../gt-be98-firmware/vendor/asuswrt-merlin.ng/release/src-rt-5.04behnd.4916
+# Firmware root carries the brcm-arm-hnd toolchain + tools/env.sh; the SDK
+# (src-rt-5.04behnd.4916) carries router/ + bcmdrivers/ (the source). They are
+# distinct dirs in the current tree, so GTBE98_ROOT (toolchain) and SDK (source)
+# are passed separately to the glue script.
+GT_BE98_HOSTAPD_FW_ROOT ?= $(BR2_EXTERNAL_GT_BE98_PATH)/../gt-be98-firmware
+GT_BE98_HOSTAPD_MERLIN_ROOT ?= $(GT_BE98_HOSTAPD_FW_ROOT)/vendor/asuswrt-merlin.ng/release/src-rt-5.04behnd.4916
 GT_BE98_HOSTAPD_SITE = $(GT_BE98_HOSTAPD_MERLIN_ROOT)/bcmdrivers/broadcom/net/wl/impl103/main/components/opensource/router_tools/hostapd
 GT_BE98_HOSTAPD_SITE_METHOD = local
 
 ifeq ($(BR2_PACKAGE_GT_BE98_HOSTAPD_DAEMON),y)
 GT_BE98_HOSTAPD_DEPENDENCIES += gt-be98-libshared gt-be98-nvram
-GT_BE98_HOSTAPD_FW_ROOT = $(GT_BE98_HOSTAPD_MERLIN_ROOT)
+# OPENSSL3 mode: static-link openssl-3.6.2 (gt-be98-br-openssl) into hostapd to
+# close the EOL openssl-1.1 gap (hostapd is the device's SOLE live 1.1 consumer).
+ifeq ($(BR2_PACKAGE_GT_BE98_HOSTAPD_DAEMON_OPENSSL3),y)
+GT_BE98_HOSTAPD_DEPENDENCIES += gt-be98-br-openssl
+GT_BE98_HOSTAPD_OPENSSL3_DEV = $(BUILD_DIR)/gt-be98-br-openssl-$(GT_BE98_BR_OPENSSL_VERSION)/_brdev/usr/br
+endif
 # The daemon's brcm.config build is run by the SDK glue script (its own .config);
 # only the hostapd_cli still needs the minimal stub config.
 endif
@@ -74,6 +84,7 @@ define GT_BE98_HOSTAPD_BUILD_CMDS
 		SDK="$(GT_BE98_HOSTAPD_MERLIN_ROOT)" \
 		PKG_SRC="$(BR2_EXTERNAL_GT_BE98_PATH)/package/gt-be98-libshared/src" \
 		OUTDIR="$(@D)" \
+		OPENSSL3_DEV="$(GT_BE98_HOSTAPD_OPENSSL3_DEV)" \
 			$(SHELL) $(GT_BE98_HOSTAPD_PKGDIR)/src/build-hostapd-daemon.sh)
 endef
 
@@ -82,8 +93,9 @@ define GT_BE98_HOSTAPD_INSTALL_TARGET_CMDS
 	$(if $(BR2_PACKAGE_GT_BE98_HOSTAPD_DAEMON),\
 		$(INSTALL) -D -m 0755 $(@D)/hostapd.daemon $(TARGET_DIR)/usr/sbin/hostapd ; \
 		$(INSTALL) -D -m 0755 $(@D)/libceshared.so $(TARGET_DIR)/usr/lib/libceshared.so ; \
-		$(INSTALL) -D -m 0755 $(@D)/libcrypto.so.1.1 $(TARGET_DIR)/usr/lib/libcrypto.so.1.1 ; \
-		$(INSTALL) -D -m 0755 $(@D)/libssl.so.1.1 $(TARGET_DIR)/usr/lib/libssl.so.1.1 ; \
+		$(if $(BR2_PACKAGE_GT_BE98_HOSTAPD_DAEMON_OPENSSL3),, \
+			$(INSTALL) -D -m 0755 $(@D)/libcrypto.so.1.1 $(TARGET_DIR)/usr/lib/libcrypto.so.1.1 ; \
+			$(INSTALL) -D -m 0755 $(@D)/libssl.so.1.1 $(TARGET_DIR)/usr/lib/libssl.so.1.1 ;) \
 		$(INSTALL) -D -m 0755 $(@D)/libnl-3.so.200.20.0 $(TARGET_DIR)/lib/libnl-3.so.200.20.0 ; \
 		ln -sf libnl-3.so.200.20.0 $(TARGET_DIR)/lib/libnl-3.so.200 ; \
 		$(INSTALL) -D -m 0755 $(@D)/libnl-genl-3.so.200.20.0 $(TARGET_DIR)/lib/libnl-genl-3.so.200.20.0 ; \

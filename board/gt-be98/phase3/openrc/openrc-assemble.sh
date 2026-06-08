@@ -57,6 +57,27 @@ rm -rf "$FS"
 echo "== unsquash baseline =="
 "$UNSQ" -d "$FS" "$BASE_IMG" >/dev/null || { echo "FATAL: unsquashfs failed"; exit 1; }
 
+# --- v32: openssl-3 hostapd injection (optional) -----------------------------
+# When HOSTAPD_OSSL3 points at a hostapd binary STATIC-linked against openssl-3.6.2
+# (built by gt-be98-hostapd with OPENSSL3_DEV set), replace the base image's stock
+# 1.1-linked /usr/sbin/hostapd with it. hostapd is the device's SOLE LIVE openssl-1.1
+# consumer, so this closes the EOL-1.1 gap. The replacement is done BEFORE the v28
+# DT_NEEDED gate so the new binary's NEEDED set is validated against $FS; openssl-3 is
+# static (no libcrypto.so.3 to ship), and the 1.1 .so are KEPT for the inert non-launched
+# 1.1 consumers (wps_pbcd/libovpn/etc.). Stripped before install (matches stock perms).
+if [ -n "${HOSTAPD_OSSL3:-}" ]; then
+	[ -f "$HOSTAPD_OSSL3" ] || { echo "FATAL: HOSTAPD_OSSL3=$HOSTAPD_OSSL3 not found"; exit 1; }
+	echo "== v32: inject openssl-3 hostapd ($HOSTAPD_OSSL3) =="
+	OLD_HA_SZ=$(stat -c%s "$FS/usr/sbin/hostapd" 2>/dev/null || echo 0)
+	install -D -m 0755 "$HOSTAPD_OSSL3" "$FS/usr/sbin/hostapd"
+	NEW_HA_SZ=$(stat -c%s "$FS/usr/sbin/hostapd")
+	echo "  hostapd replaced: ${OLD_HA_SZ} -> ${NEW_HA_SZ} bytes (openssl-3 static)"
+	if "${READELF:-readelf}" -d "$FS/usr/sbin/hostapd" 2>/dev/null | grep -qE 'libcrypto\.so\.1\.1|libssl\.so\.1\.1'; then
+		echo "  ! FATAL: injected hostapd still NEEDs libcrypto/libssl.so.1.1"; exit 1
+	fi
+	echo "  [V] injected hostapd NEEDs NO libcrypto/libssl.so.1.1 (openssl-3 static)"
+fi
+
 # --- sanity: stage must hold a built openrc-init -----------------------------
 if [ ! -x "$OPENRC_STAGE/sbin/openrc-init" ]; then
 	echo "FATAL: no openrc-init in OPENRC_STAGE=$OPENRC_STAGE"
