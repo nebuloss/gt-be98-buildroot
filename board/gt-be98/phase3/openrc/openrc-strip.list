@@ -180,3 +180,84 @@ usr/sbin/httpds
 #                 /webdav/samba cluster. rc DT_NEEDED it -> KEEP (rc must load).
 # No dlopen-only referrers found (string scan == DT_NEEDED set). So NO web lib
 # is stock-web-exclusive once rc is in the keep-set: none removed.
+
+# === v29 UNWANTED ASUS-FEATURE DAEMONS (the #1 raw-MiB target, rc-independent) =
+# Inventory roadmap target: the remaining OPEN bucket still ships ASUS feature
+# daemons that the open-OS (single-AP wired/bridge+VLAN + WPA wifi + SSH + webui,
+# NOT AiMesh) never needs. EACH path below was verified against the v28 keep-set
+# (base-rootfs minus this list) on these two axes:
+#   (a) NOT STARTED by the open-init: zero references in any board/.../openrc/
+#       init.d/* service AND zero references in the graft /rom/etc/rc3.d scripts
+#       (bcm-platform runs only S25..S50 = mount/nvram/drivers/ssl — none name
+#       these). On the stock fw ASUS rc(PID1) launched them; rc is NOT PID1 here.
+#   (b) STRIPPING DANGLES NOTHING for the keep-set: every entry is a LEAF binary
+#       (or a dead symlink to an already-stripped target), NEVER a .so. Each is a
+#       *consumer* of shared libs, not a provider, so removing it orphans no
+#       keep-set NEEDED. ★libnt.so / libcurl / libcfgmnt / libwebapi / libdisk /
+#       libsqlite3 / libwlcsm / libnvram / libshared etc. are KEPT★ (they remain
+#       DT_NEEDED by rc + wlceventd + wps_pbcd, which are in the keep-set) — so
+#       this strip frees ONLY the daemon-binary bytes, NOT any shared lib. The
+#       v28 DT_NEEDED integrity gate (FATAL on any keep-set dangle) backstops this.
+#
+# FLAGGED — DELIBERATELY NOT STRIPPED (plausible user features / load-bearing):
+#   wps_pbcd (WPS), miniupnpd (UPnP), avahi-daemon (mDNS), igmpproxy + udpxy + mcpd
+#   (IGMP/multicast/IPTV), l2tpd + pptpd (VPN SERVERS the operator may host),
+#   dnsmasq (the real DNS resolver/DHCP), eapd/wlceventd/acsd2 (wl glue — separate
+#   decision), and the /sbin rc-applet symlinks (amas_lib/sw_devled/erp_monitor/
+#   wpsaide/pc_block -> rc; tiny, dispatch through the KEPT rc).
+#
+# --- AiMesh control/discovery (single-AP, NOT AiMesh) -----------------------
+usr/sbin/cfg_client
+usr/sbin/cfg_reportstatus
+usr/sbin/asusdiscovery
+usr/sbin/arpstorm
+usr/sbin/find_cap
+# --- ASUS Notification Center + email (no NC backend on the open-OS) --------
+usr/sbin/nt_center
+usr/sbin/nt_monitor
+usr/sbin/Notify_Event2NC
+usr/sbin/email
+# --- AiProtection "protection server" / event relay (DPI-adjacent; DPI stubbed) -
+usr/sbin/req_ptcsrv
+usr/sbin/protect_srv
+usr/sbin/Send_Event2ptcsrv
+# --- DDNS clients (no DDNS on the open-OS; webui owns any future DDNS) -------
+usr/sbin/inadyn
+usr/sbin/phddns
+# --- captive portal (CoovaChilli) -------------------------------------------
+usr/sbin/chilli
+# --- SNMP agent --------------------------------------------------------------
+usr/sbin/snmpd
+# --- USB printer / EZ-print + USB-over-net file sharing ---------------------
+usr/sbin/lpd
+usr/sbin/u2ec
+# --- DPI/parental DNS-query interceptor (netfilter_queue; dnsmasq is the real
+#     resolver and is KEPT). Leaf binary; ties into the already-stubbed bwdpi. --
+usr/sbin/dnsqd
+# --- libimobiledevice / iTunes-Wi-Fi-sync suite (20 bins): statically linked,
+#     no usbmuxd daemon + no libimobiledevice/libplist .so ship -> already
+#     non-functional dead weight on a router. ~2.99 MiB. ------------------------
+usr/bin/idevice_id
+usr/bin/idevicebackup
+usr/bin/idevicebackup2
+usr/bin/idevicecrashreport
+usr/bin/idevicedate
+usr/bin/idevicedebug
+usr/bin/idevicedebugserverproxy
+usr/bin/idevicediagnostics
+usr/bin/ideviceenterrecovery
+usr/bin/ideviceimagemounter
+usr/bin/ideviceinfo
+usr/bin/idevicename
+usr/bin/idevicenotificationproxy
+usr/bin/idevicepair
+usr/bin/ideviceprovision
+usr/bin/idevicescreenshot
+usr/bin/idevicesetlocation
+usr/bin/idevicesyslog
+usr/bin/iproxy
+usr/bin/plistutil
+# --- dead samba dispatch symlinks (target samba_multicall stripped in v25) ---
+usr/sbin/smbd
+usr/sbin/nmbd
+usr/sbin/smbpasswd
