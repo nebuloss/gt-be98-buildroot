@@ -136,21 +136,60 @@ start_admin_dropbear() {
 	done
 
 	# (b) admin authorized_keys: nvram sshd_authkeys -> $HOME/.ssh/authorized_keys
-	#     (HOME=/root -> /tmp/home/root tmpfs; etc-farm already made /tmp/home). Fall
-	#     back to the persistent /jffs/.ssh/authorized_keys if nvram is empty. We
-	#     never log the key content.
-	local home="${HOME:-/root}" ak akdir
+	#     ★v11 THE ONE FIX★ — v10 got :2222 LISTENING but logged
+	#       `can't create /root/.ssh/authorized_keys: nonexistent directory`
+	#     so NO admin key was loaded -> auth rejected. ROOT CAUSE (confirmed READ-ONLY
+	#     on br-0045 — /etc/passwd `admin:x:0:0:admin:/root:/bin/sh`, HOME=/root, and
+	#     `/root` is a SYMLINK -> tmp/home/root on tmpfs): under the open-init the
+	#     symlink TARGET /tmp/home/root does NOT exist (etc-farm makes /tmp/home but
+	#     NOT /tmp/home/root), so `/root` is a DANGLING symlink and `mkdir -p
+	#     /root/.ssh` refuses to create through it -> "nonexistent directory".
+	#     FIX: resolve where $HOME/.ssh actually lands and create the REAL target
+	#     dir first (mkdir -p the symlink target, e.g. /tmp/home/root), THEN
+	#     mkdir -p /root/.ssh AND "$HOME/.ssh", write the key to BOTH resolved paths
+	#     (+ keep the persistent /jffs/.ssh/authorized_keys), chmod 700/600. Never
+	#     log key content.
+	local home="${HOME:-/root}" ak akdir tgt
+	# If $home is a symlink (merlin: /root -> /tmp/home/root), ensure its target
+	# directory exists so mkdir -p / writes through the link succeed. Resolve the
+	# link target (absolute), create it, and also force-create /root's target.
+	if [ -L "$home" ]; then
+		tgt=$(readlink -f "$home" 2>/dev/null)
+		[ -n "$tgt" ] && mkdir -p "$tgt" 2>/dev/null && blog "admin: created HOME symlink target $tgt (for $home)"
+	fi
+	if [ -L /root ]; then
+		tgt=$(readlink -f /root 2>/dev/null)
+		[ -n "$tgt" ] && mkdir -p "$tgt" 2>/dev/null
+	fi
+	# Now the .ssh dirs can be created (through the now-valid symlinks too).
+	mkdir -p /root/.ssh 2>/dev/null; chmod 700 /root/.ssh 2>/dev/null
 	akdir="$home/.ssh"; ak="$akdir/authorized_keys"
 	mkdir -p "$akdir" 2>/dev/null; chmod 700 "$akdir" 2>/dev/null
+	# Collect the distinct authorized_keys targets to write (de-dup: /root and
+	# $HOME usually resolve to the same file via the symlink, but be explicit).
 	local nk; nk=$(nvram get sshd_authkeys 2>/dev/null)
-	if [ -n "$nk" ]; then
-		printf '%s\n' "$nk" > "$ak" 2>/dev/null && blog "admin authkeys from nvram sshd_authkeys -> $ak (${#nk}B)"
-	elif [ -f "$JFFS_SSH/authorized_keys" ]; then
-		cp "$JFFS_SSH/authorized_keys" "$ak" 2>/dev/null && blog "admin authkeys from $JFFS_SSH/authorized_keys -> $ak (fallback)"
+	local f wrote=0
+	for f in "$ak" /root/.ssh/authorized_keys; do
+		[ -d "${f%/*}" ] || continue
+		if [ -n "$nk" ]; then
+			printf '%s\n' "$nk" > "$f" 2>/dev/null && { chmod 600 "$f" 2>/dev/null; wrote=1; }
+		elif [ -f "$JFFS_SSH/authorized_keys" ]; then
+			cp "$JFFS_SSH/authorized_keys" "$f" 2>/dev/null && { chmod 600 "$f" 2>/dev/null; wrote=1; }
+		fi
+	done
+	if [ "$wrote" = 1 ]; then
+		if [ -n "$nk" ]; then
+			blog "admin authkeys from nvram sshd_authkeys -> $ak (+/root/.ssh) (${#nk}B)"
+		else
+			blog "admin authkeys from $JFFS_SSH/authorized_keys -> $ak (+/root/.ssh) (fallback)"
+		fi
 	else
 		blog "admin :2222 WARN: no sshd_authkeys nvram + no $JFFS_SSH/authorized_keys (key-auth will reject)"
 	fi
-	chmod 600 "$ak" 2>/dev/null
+	# Keep the persistent /jffs copy authoritative (dropbear -j -k reads ~/.ssh,
+	# but /jffs is the slot-shared source of truth; leave it in place).
+	[ -d "$JFFS_SSH" ] && [ -n "$nk" ] && [ ! -f "$JFFS_SSH/authorized_keys" ] && \
+		{ printf '%s\n' "$nk" > "$JFFS_SSH/authorized_keys" 2>/dev/null && chmod 600 "$JFFS_SSH/authorized_keys" 2>/dev/null; }
 
 	# (c) launch the EXACT br-0045 merlin cmdline: `dropbear -p 2222 -j -k` (default
 	#     /etc/dropbear hostkeys, -j/-k disable port forwarding). NOT -F: merlin runs

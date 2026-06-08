@@ -330,6 +330,38 @@ in `output-openrc-init/` (`make ... openrc` only — no full firmware rebuild).
   (`83,890,884 B`, sha `d2aad9b0…`; rootfs Image 1 sha `ba4db57c…`). NOT flashed.
   **This SHOULD make the open-init FULLY reachable on `:2222` with the admin key
   (same key as br-0045), in addition to the v9-proven `:80` + `:2223`.**
+- **v11 [V-bin] (2026-06-08, the ONE FIX — admin `authorized_keys` write now
+  succeeds).** v10 got `:2222` dropbear LISTENING but the boot log showed
+  `can't create /root/.ssh/authorized_keys: nonexistent directory` → no admin key
+  loaded → key-auth rejected. **ROOT CAUSE (re-confirmed READ-ONLY on br-0045's
+  live `:2222`, no key material read):** `/etc/passwd` =
+  `admin:x:0:0:admin:/root:/bin/sh` (HOME=`/root`), and `/root` is a SYMLINK →
+  `tmp/home/root` on tmpfs. Under the open-init the symlink TARGET `/tmp/home/root`
+  does NOT exist (etc-farm created `/tmp/home` but not `/tmp/home/root`), so `/root`
+  is a DANGLING symlink and `mkdir -p /root/.ssh` refuses to create through it
+  → "nonexistent directory". **FIX (two tiny edits):** (1) `etc-farm` now
+  `mkdir -p /tmp/home/root` so `/root` resolves to a real dir from early boot;
+  (2) `net-lan start_admin_dropbear` now, BEFORE writing authkeys, resolves
+  `readlink -f $HOME` (and `/root`) and `mkdir -p` the symlink TARGET, then
+  `mkdir -p /root/.ssh` AND `"$HOME/.ssh"` (chmod 700), and writes
+  `nvram get sshd_authkeys` (fallback `/jffs/.ssh/authorized_keys`) to BOTH
+  resolved `authorized_keys` paths + keeps the persistent `/jffs/.ssh` copy,
+  chmod 600 — so the existing `dropbear -p 2222 -j -k` finds the admin key.
+  EVERYTHING else from v10 KEPT (`:2222` merlin cmdline + `/jffs` hostkeys,
+  `:2223` rescue, v8 datapath, v9 net-diag). Re-assembled on the SAME FULL br-0050
+  base (rootfs.img `69,894,144 B`, sha `a5179579…`; itb sha `81f38fe0…`). New
+  squashfs `70,561,792 B` (67.29 MiB), under slot-2 ceiling `71,106,560`
+  (`544,768 B` headroom), sha `40797e62…`. **Image-diff vs FULL br-0050: ZERO
+  removals; 188 adds; graft byte-IDENTICAL (`nvram`, `wdtctl`,
+  `bcm_boot_launcher`, `ethswctl`, `vlanctl`, `rtpolicy`, `fcctl`, `fc`,
+  `dropbearmulti`, `trial-deadman`, `wl.ko`/`dhd.ko`/`bcm_knvram.ko`); bootfs
+  Image 0 byte-identical (`81f38fe0…`).** Safety net present (`/usr/br/sbin/
+  dropbearmulti`, `/sbin/trial-deadman`, `br-dropbear.sh`, `S26trial-deadman`,
+  `S28br-dropbear`). pkgtb:
+  `~/be98/artifacts-br/GT-BE98_openrc-init-v11_nand_squashfs.pkgtb`
+  (`83,890,884 B`, sha `a93cb91a…`; rootfs Image 1 sha `40797e62…`). NOT flashed.
+  **This SHOULD make the open-init FULLY reachable on `:2222` with the admin key
+  — the v10 authkeys-write failure is fixed.**
 - **NOT VERIFIED (bench-only):** that openrc-init-as-PID1 actually boots the
   closed bcm stack (blocker F), glibc ABI of the merlin libc against these
   binaries at runtime, and runlevel execution order live. Build-buildable only.

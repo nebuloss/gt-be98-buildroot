@@ -20,6 +20,10 @@ start() {
 	# defensively here in case it is not yet present).
 	mountpoint -q /tmp 2>/dev/null || mount -t tmpfs tmpfs /tmp
 	mkdir -p /tmp/etc /tmp/var /tmp/home
+	# ★v11★ admin HOME=/root is a SYMLINK -> tmp/home/root (merlin layout). Create
+	# the symlink TARGET so /root is a VALID dir from early boot (v10 net-lan failed
+	# `mkdir -p /root/.ssh: nonexistent directory` because /tmp/home/root was absent).
+	mkdir -p /tmp/home/root 2>/dev/null; chmod 700 /tmp/home/root 2>/dev/null
 	ebegin "Populating /etc from /rom/etc"
 	for s in /rom/etc/*; do
 		n="/etc/${s##*/}"
