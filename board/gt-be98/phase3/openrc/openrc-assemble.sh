@@ -426,10 +426,18 @@ grep -q 'chmod 700' "$ETC/init.d/net-lan" && grep -q 'chmod 600' "$ETC/init.d/ne
 grep -q 'AUTH-CHAIN PERMS' "$ETC/init.d/net-lan" \
 	&& echo "  net-lan: dumps auth-chain perms to /data/net-diag.log (no key bytes) [V]" \
 	|| { echo "  ! net-lan missing auth-chain perms dump"; MISSING=1; }
-# instrument (b): verbose -E -F -v debug dropbear on :2229 -> /data/dropbear-auth.log
-grep -q '\-E -F -v -p 2229' "$ETC/init.d/net-lan" \
-	&& echo "  net-lan: verbose -E -F -v debug dropbear on :2229 [V]" \
-	|| { echo "  ! net-lan missing -E -F -v :2229 debug dropbear"; MISSING=1; }
+# ★v13★ byte-match: net-lan must verify authkeys vs br-0045 sha and log RESULT.
+grep -q 'RESULT: PASS authkeys byte-match' "$ETC/init.d/net-lan" \
+	&& grep -q '6a09e22ceb71274f6b680b5037202f6d69d0b591edcfc4c5127362ee187d6364' "$ETC/init.d/net-lan" \
+	&& echo "  net-lan: byte-match verify vs br-0045 authkeys sha + RESULT line [V]" \
+	|| { echo "  ! net-lan missing v13 authkeys byte-match RESULT/sha"; MISSING=1; }
+# instrument (b): ★v13★ debug dropbear on :2229 -> /data/dropbear-auth.log.
+# v12 launched it as `-E -F -v` but -v is INVALID on dropbear v2025.88 (prints
+# usage + exits, so :2229 never bound). v13 uses `-E -F -p 2229` (no -v).
+grep -qF '"$dbin" -E -F -p 2229 -j -k' "$ETC/init.d/net-lan" \
+	&& ! grep -qF '"$dbin" -E -F -v' "$ETC/init.d/net-lan" \
+	&& echo "  net-lan: debug dropbear LAUNCH is -E -F -p 2229 (no invalid -v) [V]" \
+	|| { echo "  ! net-lan :2229 launch not '-E -F -p 2229' (or stale -v in launch)"; MISSING=1; }
 grep -q '/data/dropbear-auth.log' "$ETC/init.d/net-lan" \
 	&& echo "  net-lan: :2229 auth verdicts -> /data/dropbear-auth.log (-E to stderr) [V]" \
 	|| { echo "  ! net-lan missing /data/dropbear-auth.log redirect"; MISSING=1; }

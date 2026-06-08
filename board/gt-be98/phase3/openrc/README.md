@@ -402,6 +402,51 @@ in `output-openrc-init/` (`make ... openrc` only — no full firmware rebuild).
   (`83,894,980 B`, sha `39a3522b…`; rootfs Image 1 sha `704fa4c9…`). NOT flashed.
   **This SHOULD make the admin key ACCEPTED on `:2222`; `:2229` + `net-diag.log`
   make the verdict definitive if not.**
+- **v13 [V-bin] (2026-06-08, the LAST gap — admin key still rejected on `:2222`).**
+  v12 got `:2222` LISTENING, perms EXACTLY br-0045's (700/700/600 uid0:gid0),
+  datapath PASS, `:80` reachable — but the admin key was STILL rejected. **Two
+  gaps closed (both diagnosed by READing br-0045 READ-ONLY — sha/byte-counts ONLY,
+  NO key bytes):**
+  **(a) authorized_keys CONTENT drift → BYTE-MATCH.** br-0045
+  `/tmp/home/root/.ssh/authorized_keys` = **262 B, 2 lines (LF@80,161), sha256
+  `6a09e22ceb71274f6b680b5037202f6d69d0b591edcfc4c5127362ee187d6364`**. v12 wrote
+  the key from `nvram get sshd_authkeys` via `printf '%s\n'`, but the nvram value
+  does NOT byte-reproduce the file: raw `nvram get` = **263 B, 1 trailing LF, sha
+  `01d03d09…`**; even strip-trailing-LF = 262 B but sha `d319f33d…` with **3 LFs**
+  (first differing byte at char 81 = the file's first LF — nvram mangles the
+  INTERNAL newlines). So nvram can NEVER byte-match → dropbear saw a key string
+  that didn't match → reject. **FIX (`net-lan start_admin_dropbear`):** prefer the
+  AUTHORITATIVE source — `/jffs/.ssh/authorized_keys`, which on br-0045 is
+  BYTE-IDENTICAL to the live key file (same sha `6a09e22c…`, 262 B, 2 lines; the
+  slot-shared source of truth `dropbear -j -k` reads). Copy it verbatim (no
+  transform); only if `/jffs` is ABSENT fall back to nvram (normalized
+  `tr -d '\r'` + one trailing LF, best-effort). After writing, VERIFY `sha256sum`
+  + `wc -c` vs the embedded br-0045 target and log
+  `RESULT: PASS/FAIL authkeys byte-match (mine=NNN sha=… br0045=262 sha=6a09e22c…)`
+  (counts/sha ONLY) to `/data/net-diag.log`.
+  **(b) auth instrumentation was DEAD → FIXED.** v12's debug dropbear launched as
+  `dropbear -E -F -v`, but **`-v` is INVALID on dropbear v2025.88** — it prints the
+  usage text and EXITS, so `:2229` never bound and NO auth verdict was ever
+  captured. **FIX:** launch `dropbear -E -F -p 2229` (drop `-v`); `-E` still routes
+  the pubkey-auth verdict / perm-reject line to stderr → `/data/dropbear-auth.log`
+  (e.g. "bad owner or permissions on /tmp/home/root/.ssh", "pubkey auth
+  succeeded/failed for admin"). Everything from v12 KEPT (`:2222` merlin cmdline +
+  `/jffs` hostkeys, `:2223` rescue, v8 datapath, v9 net-diag, v12 perms-fix +
+  perms dump). Re-assembled on the SAME FULL br-0050 base (rootfs.img
+  `69,894,144 B`, sha `a5179579…`; itb sha `81f38fe0…`). New squashfs
+  `70,565,888 B`, under slot-2 ceiling `71,106,560` (`540,672 B` headroom), sha
+  `d61cd14e…`. **Image-diff vs FULL br-0050: ZERO graft removals (only the 2
+  expected type-changes — `/sbin/init` symlink→wrapper, `tmp/etc/ld.so.cache`
+  symlink→compiled cache); 190 OpenRC-owned adds; of 3,215 common files exactly 1
+  differs (`/rom/etc/fstab`, the intended v5 `tmpfs /run` line) — every graft
+  object (`nvram`, `wdtctl`, `bcm_boot_launcher`, `/usr/sbin/dropbear`,
+  `dropbearmulti`, `wl.ko`/`dhd.ko`/`bcm_knvram.ko`) byte-IDENTICAL; bootfs Image 0
+  byte-identical (`81f38fe0…`).** pkgtb:
+  `~/be98/artifacts-br/GT-BE98_openrc-init-v13_nand_squashfs.pkgtb`
+  (`83,894,980 B`, sha `eae507ff…`; rootfs Image 1 sha `d61cd14e…`). NOT flashed.
+  **The `:2222` admin key should now be ACCEPTED (byte-identical key + correct
+  perms); if not, `:2229`'s now-WORKING `/data/dropbear-auth.log` carries the exact
+  reject reason and `net-diag.log`'s `RESULT:` line confirms the byte-match.**
 - **NOT VERIFIED (bench-only):** that openrc-init-as-PID1 actually boots the
   closed bcm stack (blocker F), glibc ABI of the merlin libc against these
   binaries at runtime, and runlevel execution order live. Build-buildable only.

@@ -1,5 +1,16 @@
 #!/sbin/openrc-run
-# === v12 ★ADMIN-KEY PERMS FIX★ on top of v8 reachability+datapath ===============
+# === v13 ★ADMIN-KEY BYTE-MATCH + FIXED AUTH INSTRUMENT★ on top of v12 ===========
+# v12 RESULT: :2222 LISTENING, perms EXACTLY br-0045's (700/700/600 uid0:gid0),
+# datapath PASS, :80 reachable — but admin key STILL rejected. Two gaps closed in
+# v13: (a) the authorized_keys CONTENT did NOT byte-match br-0045 — v12 wrote it
+# from `nvram get sshd_authkeys` (263 B, sha 01d03d09, mangled internal LFs) which
+# differs from the 262 B / sha 6a09e22c on-disk key file; v13 instead copies the
+# AUTHORITATIVE /jffs/.ssh/authorized_keys (byte-identical to br-0045) and VERIFIES
+# sha/byte-count, logging RESULT: PASS/FAIL to /data/net-diag.log (counts/sha only).
+# (b) the v12 debug dropbear used `-E -F -v`, but -v is INVALID on dropbear v2025.88
+# (prints usage + exits, :2229 never bound, no verdict captured); v13 launches
+# `dropbear -E -F -p 2229` so the pubkey-auth verdict lands in /data/dropbear-auth.log.
+# --- v12 history (perms fix, kept) ---
 # v11 RESULT: open-init boots, datapath PASS, :80/:2222/:2223 serving, admin key
 # WRITTEN to ~/.ssh/authorized_keys — but dropbear v2025.88 REJECTED the admin key.
 # ROOT CAUSE (dropbear src svr-authpubkey.c checkpubkeyperms()/checkfileperm() +
@@ -211,31 +222,62 @@ start_admin_dropbear() {
 	for d in /root/.ssh "$akdir"; do
 		[ -d "$d" ] && { chown 0:0 "$d" 2>/dev/null; chmod 700 "$d" 2>/dev/null; }
 	done
-	# Collect the distinct authorized_keys targets to write (de-dup: /root and
-	# $HOME usually resolve to the same file via the symlink, but be explicit).
+	# ★v13 THE ONE FIX — BYTE-MATCH br-0045's authorized_keys★
+	# v12 got :2222 LISTENING + perms EXACTLY br-0045's (700/700/600 uid0:gid0) +
+	# datapath PASS, but the admin key was STILL rejected. ROOT CAUSE (diagnosed by
+	# READing br-0045 READ-ONLY): v12 wrote the key from `nvram get sshd_authkeys`
+	# piped through `printf '%s\n'`, which does NOT byte-match the on-disk key file:
+	#   * br-0045 /tmp/home/root/.ssh/authorized_keys : 262 B, 2 LF (offsets 80,161),
+	#         sha256 6a09e22ceb71274f6b680b5037202f6d69d0b591edcfc4c5127362ee187d6364
+	#   * raw `nvram get sshd_authkeys`               : 263 B, 1 LF (trailing only),
+	#         sha256 01d03d09... — DIFFERENT bytes (nvram mangles the internal LFs:
+	#         even strip-trailing-LF gives 262 B but sha d319f33d + 3 LFs, first byte
+	#         diff at char 81 = the file's first LF). So nvram CANNOT byte-reproduce
+	#         the file -> dropbear saw a key string that didn't match -> reject.
+	# FIX: prefer the AUTHORITATIVE source — /jffs/.ssh/authorized_keys, which on
+	# br-0045 is BYTE-IDENTICAL to the live ~/.ssh/authorized_keys (same sha 6a09e22c,
+	# 262 B, 2 lines; it is the slot-shared source of truth dropbear -j -k reads).
+	# Only if /jffs is ABSENT do we fall back to nvram (normalized: tr -d '\r',
+	# ensure exactly one trailing LF) — best-effort, may not byte-match but is the
+	# last resort. After writing, we VERIFY sha/byte-count vs br-0045's target and
+	# log RESULT: PASS/FAIL (counts/sha ONLY, key bytes NEVER printed).
 	local nk; nk=$(nvram get sshd_authkeys 2>/dev/null)
-	local f wrote=0
+	local AK_BR0045_SHA=6a09e22ceb71274f6b680b5037202f6d69d0b591edcfc4c5127362ee187d6364
+	local AK_BR0045_BYTES=262
+	local f wrote=0 src=none
 	for f in "$ak" /root/.ssh/authorized_keys; do
 		[ -d "${f%/*}" ] || continue
-		if [ -n "$nk" ]; then
-			printf '%s\n' "$nk" > "$f" 2>/dev/null && { chown 0:0 "$f" 2>/dev/null; chmod 600 "$f" 2>/dev/null; wrote=1; }
-		elif [ -f "$JFFS_SSH/authorized_keys" ]; then
-			cp "$JFFS_SSH/authorized_keys" "$f" 2>/dev/null && { chown 0:0 "$f" 2>/dev/null; chmod 600 "$f" 2>/dev/null; wrote=1; }
+		if [ -f "$JFFS_SSH/authorized_keys" ]; then
+			# AUTHORITATIVE: byte-identical to br-0045 -> exact copy, no transform.
+			cp "$JFFS_SSH/authorized_keys" "$f" 2>/dev/null && { chown 0:0 "$f" 2>/dev/null; chmod 600 "$f" 2>/dev/null; wrote=1; src=jffs; }
+		elif [ -n "$nk" ]; then
+			# FALLBACK: nvram. Strip CR drift, guarantee exactly one trailing LF.
+			# (printf '%s\n' on a value already ending in \n would add nothing here
+			# because we strip first; best-effort — may not byte-match br-0045.)
+			printf '%s\n' "$(nvram get sshd_authkeys 2>/dev/null | tr -d '\r')" > "$f" 2>/dev/null \
+				&& { chown 0:0 "$f" 2>/dev/null; chmod 600 "$f" 2>/dev/null; wrote=1; src=nvram; }
 		fi
 	done
 	if [ "$wrote" = 1 ]; then
-		if [ -n "$nk" ]; then
-			blog "admin authkeys from nvram sshd_authkeys -> $ak (+/root/.ssh) (${#nk}B)"
-		else
-			blog "admin authkeys from $JFFS_SSH/authorized_keys -> $ak (+/root/.ssh) (fallback)"
-		fi
+		blog "admin authkeys -> $ak (+/root/.ssh) [src=$src]"
 	else
-		blog "admin :2222 WARN: no sshd_authkeys nvram + no $JFFS_SSH/authorized_keys (key-auth will reject)"
+		blog "admin :2222 WARN: no $JFFS_SSH/authorized_keys + no sshd_authkeys nvram (key-auth will reject)"
 	fi
-	# Keep the persistent /jffs copy authoritative (dropbear -j -k reads ~/.ssh,
-	# but /jffs is the slot-shared source of truth; leave it in place).
+	# Keep the persistent /jffs copy as the source of truth; only seed it from nvram
+	# (normalized) if it is entirely ABSENT (cannot byte-match br-0045 in that case).
 	[ -d "$JFFS_SSH" ] && [ -n "$nk" ] && [ ! -f "$JFFS_SSH/authorized_keys" ] && \
-		{ printf '%s\n' "$nk" > "$JFFS_SSH/authorized_keys" 2>/dev/null && chmod 600 "$JFFS_SSH/authorized_keys" 2>/dev/null; }
+		{ printf '%s\n' "$(nvram get sshd_authkeys 2>/dev/null | tr -d '\r')" > "$JFFS_SSH/authorized_keys" 2>/dev/null && chmod 600 "$JFFS_SSH/authorized_keys" 2>/dev/null; }
+	# ★v13 BYTE-MATCH VERIFY★ — compare what we wrote to br-0045's known sha/bytes
+	# and log a definitive RESULT line (sha/counts ONLY, NEVER key content).
+	{
+		mine_bytes=$(wc -c < "$ak" 2>/dev/null)
+		mine_sha=$(sha256sum "$ak" 2>/dev/null | cut -d' ' -f1)
+		if [ "$mine_sha" = "$AK_BR0045_SHA" ] && [ "$mine_bytes" = "$AK_BR0045_BYTES" ]; then
+			echo "RESULT: PASS authkeys byte-match (mine=${mine_bytes}B sha=${mine_sha:-none} br0045=${AK_BR0045_BYTES}B sha=${AK_BR0045_SHA}) [src=$src]"
+		else
+			echo "RESULT: FAIL authkeys byte-match (mine=${mine_bytes:-0}B sha=${mine_sha:-none} br0045=${AK_BR0045_BYTES}B sha=${AK_BR0045_SHA}) [src=$src]"
+		fi
+	} >> "$DIAG" 2>/dev/null
 
 	# ★v12 INSTRUMENT (a)★ — dump the EXACT perms+ownership of the walked auth chain
 	# to PERSISTENT /data/net-diag.log so the next trial is DEFINITIVE about whether
@@ -244,7 +286,7 @@ start_admin_dropbear() {
 	# the authorized_keys LINE COUNT + SIZE only (no content). MACs N/A here.
 	{
 		echo "================================================================"
-		echo "v12 ADMIN :2222 AUTH-CHAIN PERMS (target: br-0045 = 700/700/600 uid0:gid0)"
+		echo "v13 ADMIN :2222 AUTH-CHAIN PERMS (target: br-0045 = 700/700/600 uid0:gid0)"
 		echo "uptime: $(cat /proc/uptime 2>/dev/null)"
 		echo "HOME=$home  pw_dir(/root)->$(readlink -f /root 2>/dev/null)"
 		echo "----- ls -lad walked chain (homedir -> .ssh) -----"
@@ -273,19 +315,21 @@ start_admin_dropbear() {
 	) &
 	blog "launched merlin admin dropbear on :2222 (dropbear -p 2222 -j -k, /etc/dropbear hostkeys -> /jffs/.ssh)"
 
-	# ★v12 INSTRUMENT (b)★ — a SECOND, VERBOSE dropbear on debug port :2229 with
-	# `-E -F -v` so its log captures the EXACT auth decision/reason for a rejected
-	# key — e.g. dropbear's
+	# ★v13 INSTRUMENT (b) — FIXED★ — a SECOND debug dropbear on port :2229 to capture
+	# the EXACT auth decision/reason for a rejected key — e.g. dropbear's
 	#   "<path> must be owned by user or root, and not writable by group or others"
 	# (the checkfileperm() rejection) or "Pubkey auth succeeded" — redirected to
 	# PERSISTENT /data/dropbear-auth.log (survives the dead-man revert).
-	#   -E : ★REQUIRED★ — log to STDERR instead of syslog. Confirmed from the merlin
-	#        dropbear src (svr-session.c svr_dropbear_log): the perm-rejection line
-	#        reaches stderr ONLY when !usingsyslog (=-E) — this build has DEBUG_TRACE
-	#        compiled OUT (default_options.h DEBUG_TRACE 0), so -v alone would NOT
-	#        emit it to stderr. -E is what makes the verdict land in our log.
-	#   -F : foreground (don't fork) so the redirected stderr is THIS process's.
-	#   -v : verbose (harmless even without DEBUG_TRACE; future-proofs if rebuilt).
+	# ★v12 BUG FIXED★: v12 launched this as `dropbear -E -F -v ...`, but `-v` is NOT a
+	# valid flag on dropbear v2025.88 — it printed the usage text and EXITED, so :2229
+	# never bound and NO auth verdict was ever captured. v13 DROPS -v entirely and
+	# launches the documented form `dropbear -E -F -p 2229`:
+	#   -E : ★REQUIRED★ — log to STDERR instead of syslog. Per the merlin dropbear src
+	#        (svr-session.c svr_dropbear_log) the pubkey-auth verdict / perm-rejection
+	#        line reaches stderr ONLY when !usingsyslog (=-E) — this is what surfaces
+	#        "pubkey auth succeeded/failed for admin" / "bad owner or permissions on
+	#        /tmp/home/root/.ssh" into our redirected log.
+	#   -F : foreground (don't fork) so the redirected stderr IS this process's stderr.
 	#   -j -k : same forward-disable as :2222. Same auth chain (same ~/.ssh/
 	#        authorized_keys + /etc/dropbear hostkeys) so it reproduces :2222's verdict.
 	# Capped babysitter (backgrounded subshell -> never blocks boot); only relaunches
@@ -296,12 +340,12 @@ start_admin_dropbear() {
 		N=0
 		while [ "$N" -lt 20 ]; do
 			netstat -ltn 2>/dev/null | grep -q ":2229 " && break
-			"$dbin" -E -F -v -p 2229 -j -k -P "$dpidf" >> /data/dropbear-auth.log 2>&1
+			"$dbin" -E -F -p 2229 -j -k -P "$dpidf" >> /data/dropbear-auth.log 2>&1
 			N=$((N + 1))
 			sleep 5
 		done
 	) &
-	blog "launched VERBOSE debug dropbear on :2229 (-E -F -v, auth verdicts -> /data/dropbear-auth.log)"
+	blog "launched debug dropbear on :2229 (-E -F -p 2229, auth verdicts -> /data/dropbear-auth.log)"
 }
 
 start() {
