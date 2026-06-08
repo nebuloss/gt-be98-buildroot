@@ -341,9 +341,22 @@ if [ -e "$ETC/runlevels/boot/hw-wdt" ] || [ -e "$ETC/runlevels/boot/net-switch" 
 else
 	echo "  v7: hw-wdt + net-switch absent from runlevels (no watchdog petting) [V]"
 fi
-grep -q 'start_dropbear 2223' "$ETC/init.d/net-lan" && grep -q 'start_dropbear 2222' "$ETC/init.d/net-lan" \
-	&& echo "  net-lan starts sshd :2222 + :2223 rescue [V]" \
+grep -q 'start_dropbear 2223' "$ETC/init.d/net-lan" && grep -q 'start_admin_dropbear' "$ETC/init.d/net-lan" \
+	&& echo "  net-lan starts sshd :2222 admin + :2223 rescue [V]" \
 	|| { echo "  ! net-lan sshd launch MISSING"; MISSING=1; }
+# v10: the :2222 admin dropbear must be the faithful merlin replica — exact cmdline
+# `dropbear -p 2222 -j -k`, /etc/dropbear hostkeys symlinked to /jffs/.ssh, and the
+# admin authorized_keys sourced from nvram sshd_authkeys.
+echo "== v10 verify: :2222 admin merlin-replica dropbear setup =="
+grep -q 'dropbear -p 2222 -j -k\|"\$dbin" -p 2222 -j -k' "$ETC/init.d/net-lan" \
+	&& echo "  net-lan: EXACT merlin cmdline dropbear -p 2222 -j -k [V]" \
+	|| { echo "  ! net-lan missing merlin :2222 cmdline (-j -k)"; MISSING=1; }
+grep -q '/jffs/.ssh/dropbear_${k}_host_key\|JFFS_SSH/dropbear_${k}_host_key' "$ETC/init.d/net-lan" \
+	&& echo "  net-lan: /etc/dropbear hostkeys -> /jffs/.ssh (persistent, slot-shared) [V]" \
+	|| { echo "  ! net-lan missing /jffs/.ssh hostkey symlinks"; MISSING=1; }
+grep -q 'nvram get sshd_authkeys' "$ETC/init.d/net-lan" \
+	&& echo "  net-lan: admin authorized_keys from nvram sshd_authkeys [V]" \
+	|| { echo "  ! net-lan missing nvram sshd_authkeys authkey setup"; MISSING=1; }
 # the deadman-early backstop must also (re)arm the watchdog
 grep -q 'wdtctl -t 240 start' "$ETC/init.d/deadman-early" \
 	&& echo "  deadman-early HW-watchdog backstop arm [V]" \

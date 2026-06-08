@@ -298,6 +298,38 @@ in `output-openrc-init/` (`make ... openrc` only — no full firmware rebuild).
   (`83,874,504 B`, sha `e5d20e38…`; rootfs Image 1 sha `ca9999e1…`). NOT flashed.
   **This SHOULD make the open-init REACHABLE — br0+ip plus the runner datapath
   (ALLMULTI + fc + rtpolicy) so eth ↔ br0 ↔ CPU actually passes traffic.**
+- **v10 [V-bin] (2026-06-08, :2222 admin sshd FIX = faithful merlin replica).**
+  v9 trial PROVED the open-init boots/networks/serves — `net-diag.log`: gateway
+  ping PASS (0% loss), `:80` + `:2223` LISTENING — but `:2222` admin sshd did NOT
+  bind. ROOT CAUSE: v9 launched `:2222` via the generic `start_dropbear` (a
+  `/data` ed25519-hostkey dropbear with NO `authorized_keys`); the merlin
+  `/usr/sbin/dropbear` (→`dropbearmulti`) defaults to
+  `/etc/dropbear/dropbear_{ecdsa,ed25519,rsa}_host_key`, which under the open-init
+  is an `/etc`-tmpfs symlink-farm into RO `/rom/etc` (no `dropbear` dir) → hostkeys
+  absent → dropbear exits before binding, and the admin pubkey was never written
+  where dropbear reads it. **FIX (captured READ-ONLY from br-0045's live `:2222`):**
+  the merlin `:2222` = exact cmdline `dropbear -p 2222 -j -k` (no `-r` ⇒ default
+  `/etc/dropbear` hostkeys; `-j`/`-k` disable local/remote port-forwarding), with
+  `/etc/dropbear/dropbear_*_host_key` → SYMLINKS to `/jffs/.ssh/dropbear_*_host_key`
+  (persistent, slot-shared; all 3 confirmed present on the device), and admin
+  `authorized_keys` = `nvram get sshd_authkeys` written to `$HOME/.ssh/authorized_keys`
+  (admin `HOME=/root`→`/tmp/home/root`; persistent copy at `/jffs/.ssh/authorized_keys`,
+  262 B). The new `start_admin_dropbear()` in `net-lan` replaces any `/etc/dropbear`
+  symlink with a real dir, symlinks the 3 `/jffs/.ssh` hostkeys, writes the nvram
+  authkeys (fallback to `/jffs/.ssh/authorized_keys`), then launches the EXACT
+  `dropbear -p 2222 -j -k` under a capped babysitter that only respawns while
+  `:2222` is unbound (can't pile up / hang boot). `:2223` rescue + v9 self-diag
+  KEPT (re-confirms `:2222` LISTENING next trial). Re-assembled on the SAME FULL
+  br-0050 base (Image 1 of `GT-BE98_blob0035`, `69,894,144 B`, sha `a5179579…`).
+  New squashfs `70,561,792 B` (67.29 MiB), under slot-2 ceiling `71,106,560`
+  (`544,768 B` headroom). **Image-diff vs FULL br-0050: ZERO pure-path removals;
+  188 adds; graft byte-IDENTICAL; bootfs Image 0 byte-identical (`81f38fe0…`).**
+  Safety net present (`/usr/br/sbin/dropbearmulti`, `/sbin/trial-deadman`,
+  `br-dropbear.sh`, `S26trial-deadman`, `S28br-dropbear`). pkgtb:
+  `~/be98/artifacts-br/GT-BE98_openrc-init-v10_nand_squashfs.pkgtb`
+  (`83,890,884 B`, sha `d2aad9b0…`; rootfs Image 1 sha `ba4db57c…`). NOT flashed.
+  **This SHOULD make the open-init FULLY reachable on `:2222` with the admin key
+  (same key as br-0045), in addition to the v9-proven `:80` + `:2223`.**
 - **NOT VERIFIED (bench-only):** that openrc-init-as-PID1 actually boots the
   closed bcm stack (blocker F), glibc ABI of the merlin libc against these
   binaries at runtime, and runlevel execution order live. Build-buildable only.

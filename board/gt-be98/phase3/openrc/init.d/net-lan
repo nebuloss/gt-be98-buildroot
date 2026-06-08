@@ -34,9 +34,15 @@
 #      eth <-> br0 <-> CPU actually passes traffic -> SSH reachable.
 #   4. sshd reachability: relaunch the :2223 RESCUE (dropbearmulti, /data hostkey;
 #      replicates br-dropbear.sh — defensive, in case rc3.d ordering differs) and
-#      start the merlin dropbear on :2222. Both key-auth, /data-persisted hostkey.
+#      ★v10★ the merlin admin :2222 as a FAITHFUL replica of br-0045: /etc/dropbear
+#      hostkeys symlinked -> /jffs/.ssh/dropbear_*_host_key, admin authorized_keys
+#      from `nvram get sshd_authkeys` -> $HOME/.ssh/authorized_keys, EXACT cmdline
+#      `dropbear -p 2222 -j -k`. v9 PROVED the datapath (gateway ping PASS, :80 +
+#      :2223 listening) but :2222 used a keyless /data-hostkey dropbear that never
+#      bound (default /etc/dropbear hostkeys absent under the open-init's /etc
+#      tmpfs); v10 sets up exactly the paths the merlin dropbear reads.
 # Ordered AFTER bcm-platform (drivers + nvram loaded), BEFORE the rest.
-description="GT-BE98 wired LAN + Broadcom runner datapath + sshd (open-init reachable)"
+description="GT-BE98 wired LAN + Broadcom runner datapath + sshd (open-init reachable, :2222 merlin admin)"
 
 depend() {
 	need nvram
@@ -81,6 +87,86 @@ start_dropbear() {
 		done
 	) &
 	blog "launched dropbear on :$port ($dbin, /data hostkey)"
+}
+
+# === v10 ★ADMIN :2222★ — faithful replica of the br-0045 merlin :2222 dropbear ==
+# v9 RESULT (net-diag.log): datapath PASSED (gateway ping 0% loss), :80 + :2223
+# LISTENING — but :2222 admin sshd did NOT bind. ROOT CAUSE: v9 launched :2222 via
+# start_dropbear (a /data ed25519-hostkey dropbear with NO authorized_keys), and on
+# the merlin /usr/sbin/dropbear (-> dropbearmulti) the DEFAULT hostkey dir is
+# /etc/dropbear/dropbear_{ecdsa,ed25519,rsa}_host_key — which, under the open-init,
+# is an /etc tmpfs symlink-farm to RO /rom/etc (no dropbear dir) so the hostkeys are
+# absent and dropbear exits before binding. The admin pubkey (nvram sshd_authkeys)
+# was also never written to where dropbear reads it.
+#
+# EXACT br-0045 (READ-ONLY captured) merlin :2222 setup this replicates:
+#   * cmdline:  `dropbear -p 2222 -j -k`   (-j/-k = disable local/remote fwd; NO -r,
+#                so it uses the DEFAULT /etc/dropbear/dropbear_*_host_key hostkeys).
+#   * hostkeys: /etc/dropbear/dropbear_{ecdsa,ed25519,rsa}_host_key are SYMLINKS to
+#               /jffs/.ssh/dropbear_*_host_key (persist on /jffs, shared across
+#               slots; all 3 confirmed present on the live device — ls, not cat).
+#   * authkeys: `nvram get sshd_authkeys` is written to $HOME/.ssh/authorized_keys.
+#               admin HOME=/root (-> /tmp/home/root tmpfs); a persistent copy also
+#               lives at /jffs/.ssh/authorized_keys (262 B, identical). dropbear with
+#               -j -k (no -A/-U) reads ~/.ssh/authorized_keys for the connecting user
+#               -> /root/.ssh/authorized_keys.
+# We set up exactly those paths, then launch the EXACT merlin cmdline. Hardened so a
+# missing key / dropbear hang can NEVER wedge boot (all guarded + babysitter capped).
+JFFS_SSH=/jffs/.ssh
+start_admin_dropbear() {
+	local dbin=/usr/sbin/dropbear pidf=/tmp/dropbear-2222.pid k
+	[ -x "$dbin" ] || { blog "admin dropbear bin $dbin missing -> skip :2222"; return; }
+	if netstat -ltn 2>/dev/null | grep -q ":2222 "; then
+		blog "port :2222 already listening -> not relaunching admin sshd"
+		return
+	fi
+
+	# (a) /etc/dropbear must be a REAL writable dir, not the etc-farm symlink into
+	#     RO /rom/etc. Replace any symlink, then symlink the 3 hostkeys -> /jffs/.ssh
+	#     (the persistent, slot-shared keys — same layout as br-0045).
+	[ -L /etc/dropbear ] && rm -f /etc/dropbear 2>/dev/null
+	mkdir -p /etc/dropbear 2>/dev/null
+	for k in ecdsa ed25519 rsa; do
+		if [ -f "$JFFS_SSH/dropbear_${k}_host_key" ]; then
+			ln -sf "$JFFS_SSH/dropbear_${k}_host_key" \
+				"/etc/dropbear/dropbear_${k}_host_key" 2>/dev/null
+		else
+			blog "admin :2222 WARN: $JFFS_SSH/dropbear_${k}_host_key absent"
+		fi
+	done
+
+	# (b) admin authorized_keys: nvram sshd_authkeys -> $HOME/.ssh/authorized_keys
+	#     (HOME=/root -> /tmp/home/root tmpfs; etc-farm already made /tmp/home). Fall
+	#     back to the persistent /jffs/.ssh/authorized_keys if nvram is empty. We
+	#     never log the key content.
+	local home="${HOME:-/root}" ak akdir
+	akdir="$home/.ssh"; ak="$akdir/authorized_keys"
+	mkdir -p "$akdir" 2>/dev/null; chmod 700 "$akdir" 2>/dev/null
+	local nk; nk=$(nvram get sshd_authkeys 2>/dev/null)
+	if [ -n "$nk" ]; then
+		printf '%s\n' "$nk" > "$ak" 2>/dev/null && blog "admin authkeys from nvram sshd_authkeys -> $ak (${#nk}B)"
+	elif [ -f "$JFFS_SSH/authorized_keys" ]; then
+		cp "$JFFS_SSH/authorized_keys" "$ak" 2>/dev/null && blog "admin authkeys from $JFFS_SSH/authorized_keys -> $ak (fallback)"
+	else
+		blog "admin :2222 WARN: no sshd_authkeys nvram + no $JFFS_SSH/authorized_keys (key-auth will reject)"
+	fi
+	chmod 600 "$ak" 2>/dev/null
+
+	# (c) launch the EXACT br-0045 merlin cmdline: `dropbear -p 2222 -j -k` (default
+	#     /etc/dropbear hostkeys, -j/-k disable port forwarding). NOT -F: merlin runs
+	#     it as a self-backgrounding daemon (it forks + writes the lease itself). A
+	#     capped babysitter respawns it if it dies (OpenRC does not supervise it),
+	#     and it ONLY relaunches while :2222 is unbound so we never pile up daemons.
+	(
+		N=0
+		while [ "$N" -lt 20 ]; do
+			netstat -ltn 2>/dev/null | grep -q ":2222 " && break
+			"$dbin" -p 2222 -j -k -P "$pidf" >/dev/null 2>&1
+			N=$((N + 1))
+			sleep 5
+		done
+	) &
+	blog "launched merlin admin dropbear on :2222 (dropbear -p 2222 -j -k, /etc/dropbear hostkeys -> /jffs/.ssh)"
 }
 
 start() {
@@ -146,10 +232,14 @@ start() {
 	eend 0
 	blog "datapath configured — eth <-> $br <-> CPU should now pass traffic"
 
-	# 4. sshd reachability: :2223 rescue (defensive; rc3.d may already have it) + :2222.
-	ebegin "Starting sshd (:2223 rescue + :2222)"
+	# 4. sshd reachability: :2223 rescue (defensive; rc3.d may already have it) +
+	#    ★v10★ :2222 admin = faithful merlin replica (/jffs hostkeys + nvram authkeys
+	#    + EXACT `dropbear -p 2222 -j -k` cmdline) so the open-init is reachable with
+	#    the SAME admin key as br-0045. (v9 used a keyless /data-hostkey dropbear that
+	#    never bound — see start_admin_dropbear header.)
+	ebegin "Starting sshd (:2223 rescue + :2222 admin merlin replica)"
 	start_dropbear 2223 /usr/br/sbin/dropbearmulti
-	start_dropbear 2222 /usr/sbin/dropbear
+	start_admin_dropbear
 	eend 0
 
 	blog "DONE — datapath up; open-init reachable on :2222 (+ :2223 rescue) at $ip"
