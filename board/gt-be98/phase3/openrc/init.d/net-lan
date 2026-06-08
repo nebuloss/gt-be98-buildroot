@@ -153,5 +153,148 @@ start() {
 	eend 0
 
 	blog "DONE — datapath up; open-init reachable on :2222 (+ :2223 rescue) at $ip"
+
+	# 5. ★v9 SELF-DIAGNOSTICS★ — v8 ran every datapath step + dropbear "listening"
+	#    yet NO traffic passed on :2222/:2223, and live debug is impossible (the
+	#    image runs unattended on the trial, then the dead-man reverts). So the
+	#    image must SELF-REPORT: dump the full network + Broadcom-datapath state
+	#    and a connectivity self-test to PERSISTENT /data/net-diag.log (survives
+	#    the revert). Backgrounded + every probe time-bounded so it can NEVER hang
+	#    the boot. The next trial's /data/net-diag.log then says whether the
+	#    datapath passes traffic (gateway ping) and whether sshd actually listens.
+	run_diagnostics "$br" "$ip" &
+
 	return 0
+}
+
+# === v9 self-diagnostics ====================================================
+# Append the live network + datapath + listener + connectivity state to a
+# PERSISTENT log. PRIVACY: never log keys/MACs — every dump is piped through
+# redact_mac (xx:xx:xx:xx:xx:xx) and we never touch the dropbear hostkey/
+# fingerprint. Each command is guarded `2>&1`, skipped if its binary is absent,
+# and time-bounded (run_to) so a stuck tool cannot wedge the diagnostics.
+DIAG=/data/net-diag.log
+
+# redact every MAC (and bare 6-octet hwaddr) so net-diag.log carries no MACs.
+redact_mac() {
+	sed -E 's/([0-9a-fA-F]{2}:){5}[0-9a-fA-F]{2}/xx:xx:xx:xx:xx:xx/g'
+}
+
+# run_to SECS CMD... — run a command bounded by `timeout` (busybox has it);
+# falls back to a background kill if timeout is unavailable. Output is appended
+# (already redacted by the caller's pipeline).
+run_to() {
+	local s="$1"; shift
+	if command -v timeout >/dev/null 2>&1; then
+		timeout "$s" "$@" 2>&1
+	else
+		( "$@" 2>&1 ) & local p=$!
+		( sleep "$s"; kill "$p" 2>/dev/null ) & local k=$!
+		wait "$p" 2>/dev/null; kill "$k" 2>/dev/null
+	fi
+}
+
+# diag SECS "LABEL" CMD... — emit a labeled section iff CMD's binary exists,
+# redacting MACs. Skips (with a note) if the binary is missing.
+diag() {
+	local s="$1" label="$2"; shift 2
+	{
+		echo "----- $label -----"
+		if command -v "$1" >/dev/null 2>&1; then
+			run_to "$s" "$@" | redact_mac
+		else
+			echo "(skip: $1 not present)"
+		fi
+		echo
+	} >> "$DIAG" 2>/dev/null
+}
+
+# ping_test LABEL TARGET — ping with a clear PASS/FAIL line (the key datapath
+# probe). 3 echo requests, 2s per-packet wait, whole thing bounded to 12s.
+ping_test() {
+	local label="$1" tgt="$2" out rc
+	{
+		echo "----- PING $label ($tgt) -----"
+		if [ -z "$tgt" ]; then
+			echo "RESULT: SKIP $label — no target"
+			echo; return
+		fi
+		if ! command -v ping >/dev/null 2>&1; then
+			echo "RESULT: SKIP $label — ping not present"
+			echo; return
+		fi
+		out=$(run_to 12 ping -c3 -W2 "$tgt"); rc=$?
+		echo "$out" | redact_mac
+		if [ "$rc" -eq 0 ] && echo "$out" | grep -q ' 0% packet loss'; then
+			echo "RESULT: PASS $label ($tgt) reachable"
+		else
+			echo "RESULT: FAIL $label ($tgt) UNREACHABLE (rc=$rc)"
+		fi
+		echo
+	} >> "$DIAG" 2>/dev/null
+}
+
+run_diagnostics() {
+	local br="$1" ip="$2" gw
+	gw=$(nvram get lan_gateway 2>/dev/null)
+	{
+		echo "================================================================"
+		echo "GT-BE98 open-init-v9 net-lan SELF-DIAGNOSTICS"
+		echo "uptime: $(cat /proc/uptime 2>/dev/null)"
+		echo "date:   $(date 2>/dev/null)"
+		echo "br=$br ip=$ip lan_gateway=${gw:-<unset>}"
+		echo "================================================================"
+	} >> "$DIAG" 2>/dev/null
+
+	# --- L2/L3 network state (MACs redacted) ---
+	diag 5  "ip -d addr show"        ip -d addr show
+	diag 5  "ip route show"          ip route show
+	diag 5  "ip neigh"               ip neigh
+	diag 5  "arp -an"                arp -an
+	diag 5  "brctl show"             brctl show
+	diag 5  "brctl showmacs $br"     brctl showmacs "$br"
+	diag 5  "/proc/net/dev"          cat /proc/net/dev
+
+	# --- Broadcom switch / runner / flow-accelerator datapath state ---
+	# ethswctl/ethctl: link + port state for eth0 (the LAN uplink to the switch).
+	diag 5  "ethswctl mode (getifname unit0 port0)" ethswctl getifname 0 0
+	diag 5  "ethctl eth0 media-type"  ethctl eth0 media-type
+	diag 5  "ethctl eth0 phy-power"   ethctl eth0 phy-power
+	diag 5  "vlanctl --dump-table"    vlanctl --dump-table
+	diag 5  "fcctl status"            fcctl status
+	# rtpolicy has no 'show' subcmd; the applied runner policy lives in this dir.
+	diag 5  "rtpolicy config dir (/etc/rt_policy_info.d)" ls -la /etc/rt_policy_info.d
+	# loaded runner/flow modules (datapath drivers) — confirms the HW path exists.
+	diag 5  "loaded runner/flow modules" sh -c 'grep -E "pktrunner|pktflow|bcm_enet|cmdlist|rdpa|bdmf|archer" /proc/modules'
+	diag 5  "/proc/driver/enet listing" ls -la /proc/driver/enet
+
+	# --- ★listening sockets: confirm dropbear is REALLY listening :2222+:2223★ ---
+	{
+		echo "----- LISTENING TCP SOCKETS (netstat -ltn || ss -ltn) -----"
+		if command -v netstat >/dev/null 2>&1; then
+			run_to 5 netstat -ltn | redact_mac
+		elif command -v ss >/dev/null 2>&1; then
+			run_to 5 ss -ltn | redact_mac
+		else
+			echo "(skip: neither netstat nor ss present)"
+		fi
+		echo
+		# explicit per-port verdict for the two dropbear listeners
+		for p in 2222 2223; do
+			if { netstat -ltn 2>/dev/null || ss -ltn 2>/dev/null; } | grep -q ":${p} "; then
+				echo "RESULT: PASS sshd LISTENING on :$p"
+			else
+				echo "RESULT: FAIL sshd NOT listening on :$p"
+			fi
+		done
+		echo
+	} >> "$DIAG" 2>/dev/null
+
+	# --- ★CONNECTIVITY SELF-TEST (the key datapath probe)★ ---
+	ping_test "loopback"        127.0.0.1
+	ping_test "gateway-10.0.0.1" 10.0.0.1
+	ping_test "nvram-lan_gateway" "$gw"
+
+	echo "===== net-diag complete =====" >> "$DIAG" 2>/dev/null
+	blog "self-diagnostics written to $DIAG"
 }

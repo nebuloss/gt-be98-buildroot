@@ -112,6 +112,40 @@ ln -sf librc.so.1    "$FS/lib/librc.so"
 ln -sf libeinfo.so.1 "$FS/lib/libeinfo.so"
 echo "  + /lib/librc.so -> librc.so.1 ; /lib/libeinfo.so -> libeinfo.so.1"
 
+# === v9 FIX: libcap.so.2 in /lib (start-stop-daemon needs it -> webui) =========
+# DIAGNOSIS (v8): /sbin/start-stop-daemon (the OpenRC helper that launches the
+# webui service with command_background="yes") is `NEEDED: libcap.so.2`, but the
+# br-0050 base ships only libcap-NG (libcap-ng.so.0) — NOT libcap.so.2. So SSD
+# fails to load -> the webui background launch dies. FIX: install libcap.so.2
+# from the OpenRC build sysroot (libcap 2.78, same ARM EABI5 / ld-linux.so.3 as
+# the base libc) into /lib (the always-searched glibc dir, next to libc.so.6),
+# with the soname + unversioned dev symlinks. The base has NO libcap.so.2, so
+# this is purely additive (no graft object touched).
+echo "== v9 fix: libcap.so.2 in /lib (start-stop-daemon dependency) =="
+LIBCAP_SRC="${LIBCAP_SRC:-$OPENRC_STAGE/usr/lib/libcap.so.2.78}"
+# fall back to the OpenRC host sysroot if the target copy is absent
+if [ ! -e "$LIBCAP_SRC" ]; then
+	for c in \
+		/home/guillaume/be98/buildroot/output-openrc-init/host/arm-buildroot-linux-gnueabi/sysroot/usr/lib/libcap.so.2.78 \
+		"$OPENRC_STAGE"/usr/lib/libcap.so.2* "$OPENRC_STAGE"/lib/libcap.so.2*; do
+		[ -e "$c" ] && { LIBCAP_SRC="$c"; break; }
+	done
+fi
+if [ -e "$LIBCAP_SRC" ]; then
+	# verify it is the right ARM lib (EABI5) before placing it
+	if file "$LIBCAP_SRC" 2>/dev/null | grep -q 'ELF 32-bit.*ARM'; then
+		install -D -m 0755 "$LIBCAP_SRC" "$FS/lib/$(basename "$LIBCAP_SRC")"
+		ln -sf "$(basename "$LIBCAP_SRC")" "$FS/lib/libcap.so.2"
+		ln -sf libcap.so.2 "$FS/lib/libcap.so"
+		echo "  + /lib/$(basename "$LIBCAP_SRC") (ARM EABI5) [V]"
+		echo "  + /lib/libcap.so.2 -> $(basename "$LIBCAP_SRC") ; /lib/libcap.so -> libcap.so.2"
+	else
+		echo "  ! libcap source is NOT ARM ELF: $LIBCAP_SRC"; MISSING=1
+	fi
+else
+	echo "  ! libcap.so.2 source MISSING (looked in $OPENRC_STAGE + sysroot)"; MISSING=1
+fi
+
 # --- v4 CHANGE 1 (belt-and-suspenders): ld.so.conf lists /lib+/usr/lib + cache --
 # merlin /etc is a tmpfs (/etc -> tmp/etc) and /etc/ld.so.conf -> /rom/etc/ld.so.conf,
 # so the PERSISTENT loader conf lives in read-only /rom/etc. The merlin base ALREADY
@@ -336,6 +370,35 @@ grep -q 'allmulti' "$ETC/init.d/net-lan" \
 grep -q '/tmp/etc/fstab' "$ETC/init.d/etc-farm" \
 	&& echo "  etc-farm: writes fstab to /tmp/etc (tmpfs, not RO /rom/etc) [V]" \
 	|| { echo "  ! etc-farm still writes /etc/fstab through RO symlink"; MISSING=1; }
+
+# === v9 verify: net-lan self-diagnostics + libcap.so.2 ========================
+echo "== v9 verify: net-lan self-diagnostics block + libcap.so.2 =="
+grep -q 'run_diagnostics ' "$ETC/init.d/net-lan" \
+	&& echo "  net-lan: backgrounded run_diagnostics invoked [V]" \
+	|| { echo "  ! net-lan missing run_diagnostics call"; MISSING=1; }
+grep -q '/data/net-diag.log' "$ETC/init.d/net-lan" \
+	&& echo "  net-lan: writes /data/net-diag.log (persists revert) [V]" \
+	|| { echo "  ! net-lan missing /data/net-diag.log"; MISSING=1; }
+grep -q 'ping_test ' "$ETC/init.d/net-lan" \
+	&& echo "  net-lan: connectivity self-test (ping PASS/FAIL) [V]" \
+	|| { echo "  ! net-lan missing ping self-test"; MISSING=1; }
+grep -qE 'netstat -ltn|ss -ltn' "$ETC/init.d/net-lan" \
+	&& echo "  net-lan: listening-socket probe (netstat/ss) [V]" \
+	|| { echo "  ! net-lan missing listening-socket probe"; MISSING=1; }
+grep -q 'redact_mac' "$ETC/init.d/net-lan" \
+	&& echo "  net-lan: MAC redaction in diagnostics (no MACs logged) [V]" \
+	|| { echo "  ! net-lan diagnostics not redacting MACs"; MISSING=1; }
+# libcap.so.2 must be present in /lib and be ARM ELF
+if [ -e "$FS/lib/libcap.so.2" ]; then
+	REAL="$FS/lib/$(readlink "$FS/lib/libcap.so.2")"
+	if file "$REAL" 2>/dev/null | grep -q 'ELF 32-bit.*ARM'; then
+		echo "  /lib/libcap.so.2 present + ARM ELF (start-stop-daemon dep) [V]"
+	else
+		echo "  ! /lib/libcap.so.2 target not ARM ELF"; MISSING=1
+	fi
+else
+	echo "  ! /lib/libcap.so.2 MISSING"; MISSING=1
+fi
 
 echo "== v3 logging layer 2: PID1 wrapper /sbin/init (+/sbin/openrc-init) =="
 # The kernel exec()s /sbin/init (and the cmdline may name /sbin/openrc-init).
