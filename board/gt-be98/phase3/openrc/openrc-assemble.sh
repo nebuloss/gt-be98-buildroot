@@ -413,6 +413,31 @@ else
 	echo "  ! /lib/libcap.so.2 MISSING"; MISSING=1
 fi
 
+# === v12 verify: admin-key perms fix + auth instrumentation ===================
+echo "== v12 verify: :2222 admin-key perms fix (chown/chmod) + auth instrumentation =="
+# explicit chown 0:0 + chmod on the dropbear-walked auth chain (umask-0000 safe)
+grep -q 'chown 0:0' "$ETC/init.d/net-lan" \
+	&& echo "  net-lan: explicit chown 0:0 on auth chain (uid0:gid0 like br-0045) [V]" \
+	|| { echo "  ! net-lan missing chown 0:0 on auth chain"; MISSING=1; }
+grep -q 'chmod 700' "$ETC/init.d/net-lan" && grep -q 'chmod 600' "$ETC/init.d/net-lan" \
+	&& echo "  net-lan: chmod 700 (homedir/.ssh) + 600 (authorized_keys) [V]" \
+	|| { echo "  ! net-lan missing chmod 700/600 on auth chain"; MISSING=1; }
+# instrument (a): perms dump of the walked chain to net-diag.log
+grep -q 'AUTH-CHAIN PERMS' "$ETC/init.d/net-lan" \
+	&& echo "  net-lan: dumps auth-chain perms to /data/net-diag.log (no key bytes) [V]" \
+	|| { echo "  ! net-lan missing auth-chain perms dump"; MISSING=1; }
+# instrument (b): verbose -E -F -v debug dropbear on :2229 -> /data/dropbear-auth.log
+grep -q '\-E -F -v -p 2229' "$ETC/init.d/net-lan" \
+	&& echo "  net-lan: verbose -E -F -v debug dropbear on :2229 [V]" \
+	|| { echo "  ! net-lan missing -E -F -v :2229 debug dropbear"; MISSING=1; }
+grep -q '/data/dropbear-auth.log' "$ETC/init.d/net-lan" \
+	&& echo "  net-lan: :2229 auth verdicts -> /data/dropbear-auth.log (-E to stderr) [V]" \
+	|| { echo "  ! net-lan missing /data/dropbear-auth.log redirect"; MISSING=1; }
+# the original :2222 + :2223 must STILL be present (v12 is additive)
+grep -qF '"$dbin" -p 2222 -j -k -P' "$ETC/init.d/net-lan" \
+	&& echo "  net-lan: :2222 admin merlin cmdline KEPT [V]" \
+	|| { echo "  ! v12 dropped the :2222 admin dropbear"; MISSING=1; }
+
 echo "== v3 logging layer 2: PID1 wrapper /sbin/init (+/sbin/openrc-init) =="
 # The kernel exec()s /sbin/init (and the cmdline may name /sbin/openrc-init).
 # Wire BOTH to a tiny #!/bin/sh wrapper that mounts /data, records "kernel

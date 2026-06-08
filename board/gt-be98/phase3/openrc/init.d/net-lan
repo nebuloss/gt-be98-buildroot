@@ -1,4 +1,18 @@
 #!/sbin/openrc-run
+# === v12 ★ADMIN-KEY PERMS FIX★ on top of v8 reachability+datapath ===============
+# v11 RESULT: open-init boots, datapath PASS, :80/:2222/:2223 serving, admin key
+# WRITTEN to ~/.ssh/authorized_keys — but dropbear v2025.88 REJECTED the admin key.
+# ROOT CAUSE (dropbear src svr-authpubkey.c checkpubkeyperms()/checkfileperm() +
+# br-0045 perms captured READ-ONLY): dropbear walks the auth path UP from
+# authorized_keys to pw_dir(/root) and refuses any node that is group/other-writable
+# or not owned by the user/root. Under the open-init's umask 0000 every `mkdir -p`
+# made the .ssh dirs mode 0777 -> rejected. v12 FIX: explicit chown 0:0 + chmod
+# 700/700/600 on the whole walked chain (homedir -> .ssh -> authorized_keys),
+# EXACTLY matching br-0045 (drwx------ /tmp/home/root, drwx------ .ssh, -rw-------
+# authorized_keys, all uid0:gid0). Plus v12 instrumentation: dump the chain perms to
+# /data/net-diag.log + a verbose `-E -F -v` debug dropbear on :2229 logging the exact
+# auth verdict to /data/dropbear-auth.log. Everything from v11 (:2222 + :2223 +
+# datapath) is KEPT.
 # === v8 ★REACHABILITY+DATAPATH★: wired LAN + Broadcom runner datapath + sshd ====
 # v7 RESULT: open-init booted fully (OpenRC sysinit->boot->default), net-lan did
 # config_switch + config_extwan + brctl addbr br0 + ip addr 10.0.0.8 (all [ok]),
@@ -149,6 +163,25 @@ start_admin_dropbear() {
 	#     mkdir -p /root/.ssh AND "$HOME/.ssh", write the key to BOTH resolved paths
 	#     (+ keep the persistent /jffs/.ssh/authorized_keys), chmod 700/600. Never
 	#     log key content.
+	# ★v12 THE ONE FIX★ — v11 wrote the admin key to $HOME/.ssh/authorized_keys and
+	# :2222 LISTENED, but dropbear v2025.88 REJECTED the admin key. ROOT CAUSE (read
+	# from dropbear src svr-authpubkey.c checkpubkeyperms()/checkfileperm() + the live
+	# br-0045 perms captured READ-ONLY): dropbear walks the auth path UP from
+	# authorized_keys to the user's homedir (pw_dir=/root) and DEMANDS that EACH of
+	#   ~/.ssh/authorized_keys , ~/.ssh , ~  (=/root -> /tmp/home/root)
+	# is (a) owned by the user or root (uid 0) AND (b) NOT group/other-writable
+	# (st_mode & (S_IWGRP|S_IWOTH) == 0). The open-init runs with umask 0000, so every
+	# bare `mkdir -p` here created the dir mode 0777 = group+other writable -> dropbear
+	# refused it with "must be owned by user or root, and not writable by group or
+	# others" -> admin key REJECTED. (etc-farm chmod 700 /tmp/home/root, but the .ssh
+	# dirs net-lan created stayed 0777 under umask 0000.)
+	# FIX: set the EXACT br-0045 working perms+ownership on the whole walked chain —
+	#   /tmp/home/root      drwx------ (700) uid0:gid0   (= homedir = dropbear walk top)
+	#   /tmp/home/root/.ssh drwx------ (700) uid0:gid0
+	#   .../authorized_keys -rw------- (600) uid0:gid0   (262 B on br-0045)
+	# with EXPLICIT chmod + chown 0:0 (never rely on umask). /tmp (1777) and /tmp/home
+	# (755) are ABOVE pw_dir so dropbear does NOT walk into them (the walk stops at
+	# pw_dir), matching why br-0045's world-writable /tmp is fine — we leave them.
 	local home="${HOME:-/root}" ak akdir tgt
 	# If $home is a symlink (merlin: /root -> /tmp/home/root), ensure its target
 	# directory exists so mkdir -p / writes through the link succeed. Resolve the
@@ -162,9 +195,22 @@ start_admin_dropbear() {
 		[ -n "$tgt" ] && mkdir -p "$tgt" 2>/dev/null
 	fi
 	# Now the .ssh dirs can be created (through the now-valid symlinks too).
-	mkdir -p /root/.ssh 2>/dev/null; chmod 700 /root/.ssh 2>/dev/null
+	mkdir -p /root/.ssh 2>/dev/null
 	akdir="$home/.ssh"; ak="$akdir/authorized_keys"
-	mkdir -p "$akdir" 2>/dev/null; chmod 700 "$akdir" 2>/dev/null
+	mkdir -p "$akdir" 2>/dev/null
+	# ★v12★ Lock the EXACT br-0045 perms+ownership on EVERY node dropbear walks
+	# (homedir -> .ssh -> authorized_keys). chown 0:0 + chmod explicitly so umask
+	# 0000 can never leave them group/other-writable. Apply to BOTH the symlink
+	# names (/root, $HOME) AND the resolved real target (/tmp/home/root) so whichever
+	# path dropbear stat()s sees 700/600 uid0:gid0. (chown follows symlinks; harmless.)
+	# homedir: /root, $HOME, and the resolved tmpfs target — all -> 700 uid0:gid0
+	for d in /root "$home" "$(readlink -f /root 2>/dev/null)"; do
+		[ -n "$d" ] && [ -d "$d" ] && { chown 0:0 "$d" 2>/dev/null; chmod 700 "$d" 2>/dev/null; }
+	done
+	# .ssh dirs -> 700 uid0:gid0
+	for d in /root/.ssh "$akdir"; do
+		[ -d "$d" ] && { chown 0:0 "$d" 2>/dev/null; chmod 700 "$d" 2>/dev/null; }
+	done
 	# Collect the distinct authorized_keys targets to write (de-dup: /root and
 	# $HOME usually resolve to the same file via the symlink, but be explicit).
 	local nk; nk=$(nvram get sshd_authkeys 2>/dev/null)
@@ -172,9 +218,9 @@ start_admin_dropbear() {
 	for f in "$ak" /root/.ssh/authorized_keys; do
 		[ -d "${f%/*}" ] || continue
 		if [ -n "$nk" ]; then
-			printf '%s\n' "$nk" > "$f" 2>/dev/null && { chmod 600 "$f" 2>/dev/null; wrote=1; }
+			printf '%s\n' "$nk" > "$f" 2>/dev/null && { chown 0:0 "$f" 2>/dev/null; chmod 600 "$f" 2>/dev/null; wrote=1; }
 		elif [ -f "$JFFS_SSH/authorized_keys" ]; then
-			cp "$JFFS_SSH/authorized_keys" "$f" 2>/dev/null && { chmod 600 "$f" 2>/dev/null; wrote=1; }
+			cp "$JFFS_SSH/authorized_keys" "$f" 2>/dev/null && { chown 0:0 "$f" 2>/dev/null; chmod 600 "$f" 2>/dev/null; wrote=1; }
 		fi
 	done
 	if [ "$wrote" = 1 ]; then
@@ -191,6 +237,26 @@ start_admin_dropbear() {
 	[ -d "$JFFS_SSH" ] && [ -n "$nk" ] && [ ! -f "$JFFS_SSH/authorized_keys" ] && \
 		{ printf '%s\n' "$nk" > "$JFFS_SSH/authorized_keys" 2>/dev/null && chmod 600 "$JFFS_SSH/authorized_keys" 2>/dev/null; }
 
+	# ★v12 INSTRUMENT (a)★ — dump the EXACT perms+ownership of the walked auth chain
+	# to PERSISTENT /data/net-diag.log so the next trial is DEFINITIVE about whether
+	# the chmod/chown above produced the br-0045-identical 700/700/600 uid0:gid0.
+	# PRIVACY: ls -la shows only mode/owner/size/name — NEVER the key BYTES. We log
+	# the authorized_keys LINE COUNT + SIZE only (no content). MACs N/A here.
+	{
+		echo "================================================================"
+		echo "v12 ADMIN :2222 AUTH-CHAIN PERMS (target: br-0045 = 700/700/600 uid0:gid0)"
+		echo "uptime: $(cat /proc/uptime 2>/dev/null)"
+		echo "HOME=$home  pw_dir(/root)->$(readlink -f /root 2>/dev/null)"
+		echo "----- ls -lad walked chain (homedir -> .ssh) -----"
+		ls -lad /tmp /tmp/home /tmp/home/root /tmp/home/root/.ssh /root /root/.ssh 2>&1
+		echo "----- authorized_keys (perms/owner/SIZE only; content NEVER printed) -----"
+		ls -la /tmp/home/root/.ssh/authorized_keys "$ak" 2>&1
+		if [ -f "$ak" ]; then
+			echo "authorized_keys: $(wc -c < "$ak" 2>/dev/null) bytes, $(wc -l < "$ak" 2>/dev/null) line(s) [content redacted]"
+		fi
+		echo
+	} >> "$DIAG" 2>/dev/null
+
 	# (c) launch the EXACT br-0045 merlin cmdline: `dropbear -p 2222 -j -k` (default
 	#     /etc/dropbear hostkeys, -j/-k disable port forwarding). NOT -F: merlin runs
 	#     it as a self-backgrounding daemon (it forks + writes the lease itself). A
@@ -206,6 +272,36 @@ start_admin_dropbear() {
 		done
 	) &
 	blog "launched merlin admin dropbear on :2222 (dropbear -p 2222 -j -k, /etc/dropbear hostkeys -> /jffs/.ssh)"
+
+	# ★v12 INSTRUMENT (b)★ — a SECOND, VERBOSE dropbear on debug port :2229 with
+	# `-E -F -v` so its log captures the EXACT auth decision/reason for a rejected
+	# key — e.g. dropbear's
+	#   "<path> must be owned by user or root, and not writable by group or others"
+	# (the checkfileperm() rejection) or "Pubkey auth succeeded" — redirected to
+	# PERSISTENT /data/dropbear-auth.log (survives the dead-man revert).
+	#   -E : ★REQUIRED★ — log to STDERR instead of syslog. Confirmed from the merlin
+	#        dropbear src (svr-session.c svr_dropbear_log): the perm-rejection line
+	#        reaches stderr ONLY when !usingsyslog (=-E) — this build has DEBUG_TRACE
+	#        compiled OUT (default_options.h DEBUG_TRACE 0), so -v alone would NOT
+	#        emit it to stderr. -E is what makes the verdict land in our log.
+	#   -F : foreground (don't fork) so the redirected stderr is THIS process's.
+	#   -v : verbose (harmless even without DEBUG_TRACE; future-proofs if rebuilt).
+	#   -j -k : same forward-disable as :2222. Same auth chain (same ~/.ssh/
+	#        authorized_keys + /etc/dropbear hostkeys) so it reproduces :2222's verdict.
+	# Capped babysitter (backgrounded subshell -> never blocks boot); only relaunches
+	# while :2229 is unbound. The log carries auth DECISIONS only (file paths/perm
+	# verdicts), NEVER key bytes.
+	local dpidf=/tmp/dropbear-2229.pid
+	(
+		N=0
+		while [ "$N" -lt 20 ]; do
+			netstat -ltn 2>/dev/null | grep -q ":2229 " && break
+			"$dbin" -E -F -v -p 2229 -j -k -P "$dpidf" >> /data/dropbear-auth.log 2>&1
+			N=$((N + 1))
+			sleep 5
+		done
+	) &
+	blog "launched VERBOSE debug dropbear on :2229 (-E -F -v, auth verdicts -> /data/dropbear-auth.log)"
 }
 
 start() {

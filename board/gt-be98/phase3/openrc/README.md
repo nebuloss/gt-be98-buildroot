@@ -362,6 +362,46 @@ in `output-openrc-init/` (`make ... openrc` only — no full firmware rebuild).
   (`83,890,884 B`, sha `a93cb91a…`; rootfs Image 1 sha `40797e62…`). NOT flashed.
   **This SHOULD make the open-init FULLY reachable on `:2222` with the admin key
   — the v10 authkeys-write failure is fixed.**
+- **v12 [V-bin] (2026-06-08, the LAST gap — admin key PERMS/OWNERSHIP).** v11 got
+  `:2222` LISTENING + authkeys WRITTEN + datapath PASS, but dropbear v2025.88
+  REJECTED the admin key. **ROOT CAUSE (from the merlin dropbear src
+  `src/svr-authpubkey.c` `checkpubkeyperms()`/`checkfileperm()` + br-0045 perms
+  captured READ-ONLY, NO key bytes):** dropbear walks the auth path UP from
+  `authorized_keys` to the user's homedir (`pw_dir=/root`) and refuses ANY node
+  (`~/.ssh/authorized_keys`, `~/.ssh`, `~`) that is owned by neither the user nor
+  root OR is group/other-writable (`st_mode & (S_IWGRP|S_IWOTH)`). The open-init
+  runs with **umask 0000**, so every bare `mkdir -p` in v11 created the `.ssh`
+  dirs mode **0777** (group+other writable) → "must be owned by user or root, and
+  not writable by group or others" → key REJECTED. **br-0045's WORKING chain
+  (captured READ-ONLY, modes/owners ONLY):** `/tmp` `drwxrwxrwx`, `/tmp/home`
+  `drwxr-xr-x`(755), `/tmp/home/root` `drwx------`(**700**), `.ssh`
+  `drwx------`(**700**), `authorized_keys` `-rw-------`(**600**, 262 B) — all owner
+  `admin:root` = **uid0:gid0**; `/root` → symlink `tmp/home/root`. The walk STOPS
+  at `pw_dir=/root`, so `/tmp`/`/tmp/home` above it are NOT checked (why br-0045's
+  world-writable `/tmp` is fine). **FIX (`net-lan start_admin_dropbear`):** explicit
+  `chown 0:0` + `chmod 700` on the homedir (`/root`, `$HOME`, resolved
+  `/tmp/home/root`) AND `.ssh`, `chmod 600` + `chown 0:0` on `authorized_keys` —
+  never relying on umask — so the whole walked chain is EXACTLY br-0045's
+  700/700/600 uid0:gid0. **Instrumentation (definitive next trial):** (a) dump
+  `ls -lad` of the walked chain + `authorized_keys` perms/size (NO content) to
+  `/data/net-diag.log`; (b) a SECOND verbose dropbear on debug port `:2229` with
+  `-E -F -v` (—`-E` REQUIRED: this build has `DEBUG_TRACE 0`, so the perm-reject
+  line reaches stderr ONLY with `-E`/`!usingsyslog`, per `svr-session.c
+  svr_dropbear_log`) → `/data/dropbear-auth.log` capturing the EXACT auth verdict.
+  Everything from v11 KEPT (`:2222` merlin cmdline + `/jffs` hostkeys, `:2223`
+  rescue, v8 datapath, v9 net-diag). Re-assembled on the SAME FULL br-0050 base
+  (rootfs.img `69,894,144 B`, sha `a5179579…`; itb sha `81f38fe0…`). New squashfs
+  `70,565,888 B` (67.30 MiB), under slot-2 ceiling `71,106,560` (`540,672 B`
+  headroom), sha `704fa4c9…`. **Image-diff vs FULL br-0050: ZERO graft removals
+  (only the 2 expected mods — `/sbin/init` symlink→wrapper, `tmp/etc/ld.so.cache`
+  symlink→compiled cache); 190 OpenRC-owned adds; graft byte-IDENTICAL (`nvram`,
+  `wdtctl`, `bcm_boot_launcher`, `/usr/sbin/dropbear` :2222 admin binary,
+  `dropbearmulti`, `trial-deadman`, `busybox`, `wl.ko`/`dhd.ko`/`bcm_knvram.ko`);
+  bootfs Image 0 byte-identical (`81f38fe0…`).** pkgtb:
+  `~/be98/artifacts-br/GT-BE98_openrc-init-v12_nand_squashfs.pkgtb`
+  (`83,894,980 B`, sha `39a3522b…`; rootfs Image 1 sha `704fa4c9…`). NOT flashed.
+  **This SHOULD make the admin key ACCEPTED on `:2222`; `:2229` + `net-diag.log`
+  make the verdict definitive if not.**
 - **NOT VERIFIED (bench-only):** that openrc-init-as-PID1 actually boots the
   closed bcm stack (blocker F), glibc ABI of the merlin libc against these
   binaries at runtime, and runlevel execution order live. Build-buildable only.
