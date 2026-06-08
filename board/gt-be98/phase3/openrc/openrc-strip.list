@@ -1,4 +1,4 @@
-# openrc-strip.list — v25 SLIM open-init strip manifest
+# openrc-strip.list — v26 SLIM open-init strip manifest (v25 + stock web stack)
 #
 # Paths (rootfs-relative, NO leading slash) removed by openrc-assemble.sh from
 # the unsquashed $FS BEFORE mksquashfs. Lines beginning with # and blank lines
@@ -123,3 +123,30 @@ usr/sbin/dcd
 usr/lib/libshn_pctrl.so
 usr/lib/libshn_utils.so
 usr/bwdpi
+
+# === v26 STOCK ASUS WEB STACK (the open-OS serves :80 via /jffs/webui/webui) ==
+# CONFIRMED LIVE-DEAD: :80 is served by /jffs/webui/webui (webui-go, its own
+# /jffs/webui/www); the stock /usr/sbin/httpd is NOT running; nothing references
+# rootfs /www at runtime; webui lives on /jffs (NOT in this rootfs). The stock
+# ASUS UI tree + httpd are pure dead weight here.
+#
+# --- the ENTIRE stock ASUS UI tree (~34.0 MB raw) ---------------------------
+# Includes the lang dicts (/www/*.dict), cgi-bin, SDN/aimesh/VPN/device-map/
+# ajax/js/images/mobile templates — ALL stock-web data, removed with the tree.
+www
+#
+# --- stock web server (the C httpd ASUS rc would launch on :80/:443) --------
+# usr/sbin/httpds is a symlink -> httpd (the https variant); both go.
+usr/sbin/httpd
+usr/sbin/httpds
+#
+# --- web-EXCLUSIVE library back-ref scan (full-rootfs DT_NEEDED + dlopen) ----
+# Candidate web libs in the base: ONLY usr/lib/libwebapi.so and lib/libdisk.so
+# exist (no libwebui/libwebdav/cgi-helper libs ship). BOTH are KEPT — NOT listed:
+#   libwebapi.so  DT_NEEDED by: /sbin/rc, /sbin/wps_pbcd, /usr/sbin/httpd.
+#                 rc is in the KEEP-set (config_switch/sync_apgx_to_wlunit) and
+#                 DT_NEEDED libwebapi -> removing it would break rc load. KEEP.
+#   libdisk.so    DT_NEEDED by: /sbin/rc, /sbin/wps_pbcd + the (removed) lighttpd
+#                 /webdav/samba cluster. rc DT_NEEDED it -> KEEP (rc must load).
+# No dlopen-only referrers found (string scan == DT_NEEDED set). So NO web lib
+# is stock-web-exclusive once rc is in the keep-set: none removed.
