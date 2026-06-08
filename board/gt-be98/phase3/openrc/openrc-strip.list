@@ -14,6 +14,53 @@
 # cfg80211.ko wl hostapd* nvram eapd wlceventd mcpd acsd2 wlconf ethswctl vlanctl
 # fc/fcctl bcm_boot_launcher rc /rom/etc/rc3.d dropbearmulti sftp-server
 # openrc-init* OpenRC libs.
+#
+# ===========================================================================
+# SOURCE-PROVENANCE DISPOSITION (feat/openssl3-and-pkg-trim, 2026-06-08)
+# ---------------------------------------------------------------------------
+# Q: can these strips be done at the SOURCE (don't-build) instead of post-build?
+# A: NO, for almost all of them. The open-init base rootfs (br-0050 / blob 0035)
+#    is NOT assembled from Buildroot packages. It is the MONOLITHIC merlin blob
+#    `gt-be98-rootfs-<ver>.tar.gz` (package/gt-be98-rootfs), consumed VERBATIM by
+#    board/gt-be98/post-image-full.sh (see configs/gt-be98_full_defconfig:
+#    BR2_INIT_NONE, no busybox, only BR2_PACKAGE_GT_BE98_ROOTFS + _BOOTFS + the
+#    /usr/br island pkgs). rootfs-transform.sh only (a) deletes rootfs-remove.list
+#    paths, (b) overlays rootfs-overlay-full/, (c) harvests the /usr/br island.
+#    Therefore every component below is CATEGORY (iii) — baked into the opaque
+#    proprietary blob, removable ONLY post-build — EXCEPT the /usr/br island:
+#
+#  (i)  BUILDROOT PACKAGE, source-disable possible:  NONE.
+#       No BR2_PACKAGE_SAMBA/TOR/OPENVPN/STRONGSWAN/MINIDLNA/NETATALK/LIGHTTPD/
+#       WIREGUARD/etc. is selected in ANY open-init-lineage defconfig (full /
+#       openrc-init / fromsrc / pkgtest / inverted). They are NOT built here.
+#       (The OLD granular configs/gt-be98_defconfig DOES select buildroot
+#       OPENVPN/STRONGSWAN/LIGHTTPD/OPENSSL + gt-be98-samba + -userspace-base,
+#       but that is a SEPARATE, non-open-init lineage — out of scope, untouched.)
+#
+#  (ii) MERLIN PREBUILT harvested by rootfs-transform — the /usr/br block ONLY:
+#       usr/br/bin/{openssl,ssh,ssh-keygen} are BUILT FROM SOURCE
+#       (gt-be98-br-openssl 3.6.2 static CLI; gt-be98-br-openssh ssh/ssh-keygen
+#       clients), harvested into the rootfs by rootfs-transform.sh, then stripped
+#       here = genuine build-then-harvest-then-strip waste. They are NOT removed
+#       at source because: (1) gt-be98-br-openssl's static dev-tree
+#       (libcrypto.a) is REQUIRED to statically link gt-be98-br-openssh, so the
+#       PACKAGE must stay; (2) the harvest + this strip list both feed the
+#       COMMITTED, gate-validated br-0050 base shared by gt-be98_full_defconfig —
+#       editing the shared harvest perturbs that baseline. Pruning these from the
+#       harvest is a documented follow-up (touch rootfs-transform.sh + drop the 3
+#       lines here), deferred to avoid disturbing the committed base. usr/br/bin/
+#       busybox is the source-built static busybox CLI applet binary (the
+#       OpenRC overlay ships its own /bin/busybox.openrc) — same disposition.
+#
+#  (iii) MONOLITHIC-BLOB-ONLY (post-build strip is the ONLY option): EVERYTHING
+#        else below — samba, Tor, ookla, openvpn, ipsec/strongswan, wireguard.ko,
+#        the AiCloud/lighttpd/webdav cluster, minidlna/mt-daapd + media libs,
+#        netatalk/AFP, sqlite3/jq CLIs, the DPI stack (wred/dcd/libshn_*), the
+#        stock /www tree + httpd/httpds. None is a Buildroot package; all are
+#        inside the proprietary gt-be98-rootfs blob. This list stays the SAFETY
+#        NET for them. NOTHING was pruned from it (no source removal supersedes
+#        any (iii) entry).
+# ===========================================================================
 
 # --- /usr/br staging cruft (~5.97MB xz) -------------------------------------
 # KEPT (NOT listed): usr/br/sbin/dropbearmulti, usr/br/libexec/sftp-server,
