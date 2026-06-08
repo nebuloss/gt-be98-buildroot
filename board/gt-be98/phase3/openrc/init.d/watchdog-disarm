@@ -1,60 +1,98 @@
 #!/sbin/openrc-run
-# ★v27 HEALTH-GATED PETTING WATCHDOG★ — the LAST service in the default runlevel.
-# The PID1 wrapper arms `wdtctl -t 240` (non-petting) EARLY so a boot HANG auto-resets.
-# Reaching THIS service means sysinit->boot->default all completed. Behaviour by WHY we
-# booted:
-#   * TRIAL boot (/data/.trial-armed present): leave the watchdog ARMED + UNPETTED so an
-#     unreachable/broken trial AUTO-REVERTS to the GOOD slot (br-0045) within <=240s. The
-#     operator disarms manually from a confirmed SSH session after a health-check
+# ★v31 HEALTH-GATED PETTING WATCHDOG + COMMITTED-BOOT AUTO-REVERT★ — the LAST
+# service in the default runlevel. The PID1 wrapper/deadman-early arm `wdtctl -t 240`
+# EARLY so a pre-service boot HANG auto-resets. Reaching THIS service means
+# sysinit->boot->default completed. Behaviour by WHY we booted:
+#   * TRIAL boot (/data/.trial-armed): leave the watchdog ARMED + UNPETTED so an
+#     unreachable trial AUTO-REVERTS to the GOOD slot via the dead-man/HW wdt. The
+#     operator disarms manually from a confirmed SSH session
 #     ([[feedback-disarm-only-from-ssh]]). NEVER auto-pet/disarm a trial.
-#   * COMMITTED boot (no flag): start a HEALTH-GATED petting daemon that `wdtctl ping`s
-#     every 60s ONLY WHILE HEALTHY (br0 has an IP + a mgmt service :2222/:80 listens).
-#     A healthy committed boot thus never resets (no 240s reboot-loop); a RUNTIME hang or
-#     breakage stops the pings -> the watchdog fires -> reset -> reboots the committed
-#     slot = recovery. This is the proper production watchdog. It is NOT v6's unconditional
-#     petting (which hid hangs) — we ping ONLY when the system is verified healthy, so a
-#     wedged system still resets. (wdtctl ping verified to reset the timer via the bcm
-#     ioctl even though the wrapper armed it — no /dev/watchdog single-open conflict.)
-description="Watchdog keeper: health-gated petting on committed boots; armed+unpetted on trials"
+#   * COMMITTED boot (no flag): committed_boot_keeper() runs —
+#       1. HEALTH WINDOW: pet the HW wdt while polling health for up to WINDOW s
+#          (< the 240s HW timeout). Reaching here means the boot is NOT early-hung.
+#       2a. healthy in-window  -> clear the revert guard, enter steady-state petting
+#           (ping/60s WHILE healthy; a later runtime hang stops pings -> HW reset).
+#       2b. NOT healthy by WINDOW -> ★AUTO-REVERT★: if the OTHER slot is valid and we
+#           haven't already reverted this cycle, re-commit the OTHER slot + reboot
+#           (fall back to the known-good baseline). A revert guard (/data/.committed-
+#           revert-done) prevents ping-pong if BOTH slots are bad; a healthy boot
+#           clears it. This is what lets a PROMOTED image self-heal a PERSISTENT
+#           (not just hang) failure — the gap a plain petting watchdog left.
+# (wdtctl ping resets the timer via the bcm ioctl; no /dev/watchdog single-open issue.)
+description="Watchdog keeper: committed-boot health-window auto-revert + petting; armed on trials"
 
 depend() {
 	after webui wifi-radio net-lan
 }
 
+WINDOW=90   # health-assessment window (s); MUST stay < the 240s HW wdt timeout
+
 blog() { echo "$(cat /proc/uptime 2>/dev/null) watchdog-keeper: $*" >> /data/openrc-boot.log 2>/dev/null; }
 
-# Healthy = the management plane is up: br0 carries an IP AND a mgmt service is listening.
+# Healthy = the management plane is up: br0 carries an IP AND a mgmt service listens.
+# (/data/.force-unhealthy is a TEST hook to exercise the auto-revert on demand.)
 healthy() {
+	[ -f /data/.force-unhealthy ] && return 1
 	ip addr show br0 2>/dev/null | grep -q 'inet ' || return 1
 	netstat -ltn 2>/dev/null | grep -qE ':(2222|80) ' || return 1
 	return 0
 }
 
-# Ping the (wrapper-armed, 240s) watchdog every 60s while healthy -> 4x margin so a healthy
-# system never resets; stop pinging the instant the mgmt plane is gone -> reset/recovery.
-watchdog_keeper() {
-	local first=1
+booted_slot() { case "$(cat /proc/cmdline 2>/dev/null)" in *0,4*) echo 1;; *0,6*) echo 2;; *) echo 0;; esac; }
+both_valid()  { bcm_bootstate 2>/dev/null | grep -q 'valid 1,2'; }
+
+# steady-state: pet every 60s WHILE healthy (4x margin); stop the instant the mgmt
+# plane is gone so a runtime hang/breakage triggers the HW reset -> recovery.
+petting_loop() {
 	while true; do
-		if healthy; then
-			wdtctl ping >/dev/null 2>&1
-			[ "$first" = 1 ] && { blog "health OK -> petting watchdog (wdtctl ping/60s)"; first=0; }
-		else
-			blog "UNHEALTHY (br0/mgmt down) -> NOT petting; watchdog will reset for recovery"
-		fi
+		if healthy; then wdtctl ping >/dev/null 2>&1
+		else blog "runtime UNHEALTHY -> NOT petting; HW wdt will reset for recovery"; fi
 		sleep 60
 	done
+}
+
+committed_boot_keeper() {
+	# Phase 1 — health window. Pet while we assess (the boot already reached this
+	# late service, so it is not early-hung; petting here only prevents the HW wdt
+	# from firing before we can DECIDE pet-vs-revert).
+	local t=0
+	while [ "$t" -lt "$WINDOW" ]; do
+		wdtctl ping >/dev/null 2>&1
+		if healthy; then
+			rm -f /data/.committed-revert-done 2>/dev/null
+			blog "committed boot HEALTHY at +${t}s -> steady-state petting"
+			petting_loop
+			return
+		fi
+		sleep 15; t=$((t+15))
+	done
+	# Phase 2 — unhealthy after WINDOW. Auto-revert once.
+	local me other; me="$(booted_slot)"; other=$((3-me))
+	if [ -f /data/.committed-revert-done ]; then
+		blog "committed slot $me STILL unhealthy after a prior revert -> NOT ping-ponging (both slots bad); best-effort petting"
+		petting_loop
+	elif [ "$me" != 0 ] && both_valid; then
+		blog "★committed slot $me UNHEALTHY after ${WINDOW}s -> AUTO-REVERT to slot $other★"
+		touch /data/.committed-revert-done; sync
+		bcm_bootstate +$other >> /data/openrc-boot.log 2>&1
+		sync
+		reboot
+	else
+		blog "committed slot $me unhealthy but no valid fallback (valid!=1,2) -> best-effort petting"
+		petting_loop
+	fi
 }
 
 start() {
 	echo "$(cat /proc/uptime) svc watchdog-keeper START" >> /data/openrc-boot.log 2>/dev/null
 	if [ -f /data/.trial-armed ]; then
-		ebegin "TRIAL boot — watchdog ARMED + UNPETTED (auto-revert to GOOD; disarm manually via SSH)"
+		ebegin "TRIAL boot — watchdog ARMED + UNPETTED (dead-man auto-revert; disarm via SSH)"
 		blog "trial boot: leaving watchdog armed+unpetted (operator disarms after health-check)"
 		eend 0
 	else
-		ebegin "COMMITTED boot — health-gated watchdog keeper (wdtctl ping while healthy)"
-		watchdog_keeper &
-		blog "committed boot: health-gated petting daemon started (pid $!)"
+		ebegin "COMMITTED boot — health-window auto-revert + petting keeper"
+		committed_boot_keeper &
+		blog "committed boot: committed_boot_keeper started (pid $!, window ${WINDOW}s)"
 		eend 0
 	fi
 }

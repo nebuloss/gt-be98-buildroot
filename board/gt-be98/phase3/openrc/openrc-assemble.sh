@@ -399,9 +399,9 @@ grep -q 'webui_radio_init=1' "$ETC/init.d/wifi-radio" \
 [ -L "$ETC/runlevels/default/watchdog-disarm" ] && [ -f "$ETC/init.d/watchdog-disarm" ] \
 	&& echo "  v22: watchdog-disarm service in default runlevel (no commit boot-loop) [V]" \
 	|| { echo "  ! v22 watchdog-disarm service missing/unlinked"; MISSING=1; }
-grep -q '/data/.trial-armed' "$ETC/init.d/watchdog-disarm" && grep -q 'wdtctl ping' "$ETC/init.d/watchdog-disarm" && grep -q 'watchdog_keeper' "$ETC/init.d/watchdog-disarm" \
-	&& echo "  v27: watchdog-keeper gates on /data/.trial-armed; committed=health-gated wdtctl-ping [V]" \
-	|| { echo "  ! v27 watchdog-keeper petting/gating missing"; MISSING=1; }
+grep -q '/data/.trial-armed' "$ETC/init.d/watchdog-disarm" && grep -q 'wdtctl ping' "$ETC/init.d/watchdog-disarm" && grep -q 'committed_boot_keeper' "$ETC/init.d/watchdog-disarm" && grep -q 'AUTO-REVERT to slot' "$ETC/init.d/watchdog-disarm" \
+	&& echo "  v31: watchdog-keeper committed-boot health-window AUTO-REVERT + petting; trial=armed [V]" \
+	|| { echo "  ! v31 watchdog-keeper auto-revert/gating missing"; MISSING=1; }
 [ -x "$FS/sbin/start-stop-daemon" ] \
 	&& echo "  /sbin/start-stop-daemon present (webui background launch) [V]" \
 	|| { echo "  ! /sbin/start-stop-daemon MISSING"; MISSING=1; }
