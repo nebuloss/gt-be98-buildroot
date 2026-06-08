@@ -40,14 +40,32 @@ ART=/home/guillaume/be98/artifacts-br
 export PATH="$TC/usr/bin:$TC/bin:$PATH"
 export ARCH=arm64 CROSS_COMPILE=aarch64-buildroot-linux-gnu-
 export LINUX_VER_STR=4.19.294 BCM_KF=y BUILD_NAME=gt-be98 BRCM_CHIP=6813 BCM_CHIP=6813
-export PROFILE_DIR="$SDK/targets/96813GW" BUILD_DIR="$SDK" SHARED_DIR="$SDK/shared"
+export PROFILE_DIR="$SDK/targets/96813GWO_WL23D2GA" BUILD_DIR="$SDK" SHARED_DIR="$SDK/shared"
 export KERNEL_DIR="$KSRC" BRCMDRIVERS_DIR="$SDK/bcmdrivers" HND_SRC="$SDK" SRCBASE="$KSRC"
 export BRCM_BOARD=bcm963xx REUSE_PREBUILT_HND=1
+# ★SDK relink glue (SOLVED 2026-06-08, see NOTES Step 4)★ — these make the bcmdrivers
+# platform-driver re-descent compile + link without driving the full SDK top-level make.
+export INC_BRCMDRIVER_PUB_PATH="$SDK/bcmdrivers/opensource/include"   # make.common:1221
+export INC_BRCMDRIVER_PRIV_PATH="$SDK/bcmdrivers/broadcom/include"    # make.common:1222
+export INC_BRCMSHARED_PUB_PATH="$SDK/shared/opensource/include"      # make.common:1227
+export INC_BRCMSHARED_PRIV_PATH="$SDK/shared/broadcom/include"       # make.common:1228
+export BRCM_BOARD_ID="GT-BE98" BRCM_NUM_MAC_ADDRESSES=11 BRCM_BASE_MAC_ADDRESS="20:CF:30:00:00:00"
+# phy/Makefile:683 does mkdir $(INSTALL_DIR)/etc/fw (target rootfs PHY-fw copy, irrelevant
+# to Image) — redirect off the host root /etc/fw.
+export INSTALL_DIR="${INSTALL_DIR:-$WORK/fs.install}"
 KCFLAGS="-I../../bcmdrivers/opensource/include/bcm963xx/ -I../../bcmdrivers/broadcom/include/bcm963xx \
  -I$SDK/kernel/bcmkernel/include -I$SDK/kernel/bcmkernel/include/uapi \
  -I$SDK/shared/opensource/include/bcm963xx -DBCA_HNDROUTER -DBCA_CPEROUTER -DGTBE98"
 
-build_image() { # full Image build (hits the platform-relink wall on a clean tree)
+sync_config() { # restore the device-matching config; syncconfig (NOT olddefconfig — that
+  cd "$KSRC"                       # mangles the hand-merged config_gt-be98)
+  cp config_gt-be98 .config
+  yes "" | make syncconfig
+}
+
+build_image() { # full from-source Image relink (platform drivers + CVE built-ins)
+  mkdir -p "$INSTALL_DIR/etc/fw"
+  sync_config
   cd "$KSRC"
   make -j"$(nproc)" KCFLAGS="$KCFLAGS" ARCH=arm64 CROSS_COMPILE=aarch64-buildroot-linux-gnu- Image
 }
