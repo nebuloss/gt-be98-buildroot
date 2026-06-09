@@ -1,0 +1,576 @@
+=== APPLIED (261 file-diffs) ===
+  +4.19.295  crypto/asymmetric_keys/x509_public_key.c
+  +4.19.295  fs/cifs/smb2ops.c
+  +4.19.295  net/9p/trans_virtio.c
+  +4.19.295  net/dccp/ipv4.c
+  +4.19.295  net/dccp/ipv6.c
+  +4.19.295  net/ipv4/igmp.c
+  +4.19.295  net/netfilter/ipset/ip_set_hash_netportnet.c
+  +4.19.295  net/netfilter/nfnetlink_osf.c
+  +4.19.295  net/netfilter/nft_flow_offload.c
+  +4.19.295  net/netfilter/xt_sctp.c
+  +4.19.295  net/netfilter/xt_u32.c
+  +4.19.295  net/netrom/af_netrom.c
+  +4.19.295  net/sched/Kconfig
+  +4.19.295  net/sched/Makefile
+  +4.19.295  net/sched/cls_fw.c
+  +4.19.295  net/sched/cls_rsvp.c
+  +4.19.295  net/sched/cls_rsvp.h
+  +4.19.295  net/sched/cls_rsvp6.c
+  +4.19.295  net/sched/sch_hfsc.c
+  +4.19.295  net/sched/sch_plug.c
+  +4.19.295  net/sched/sch_qfq.c
+  +4.19.295  net/sctp/sm_sideeffect.c
+  +4.19.295  net/socket.c
+  +4.19.295  security/keys/keyctl.c
+  +4.19.296  net/dccp/ipv4.c
+  +4.19.296  net/dccp/ipv6.c
+  +4.19.296  net/netfilter/ipvs/ip_vs_sync.c
+  +4.19.296  net/rds/tcp_connect.c
+  +4.19.296  net/sctp/associola.c
+  +4.19.296  net/sctp/socket.c
+  +4.19.297  include/linux/indirect_call_wrapper.h
+  +4.19.297  net/bluetooth/hci_conn.c
+  +4.19.297  net/bluetooth/hci_core.c
+  +4.19.297  net/bluetooth/hci_event.c
+  +4.19.297  net/bluetooth/hci_sock.c
+  +4.19.297  net/ceph/messenger.c
+  +4.19.297  net/core/pktgen.c
+  +4.19.297  net/ipv6/xfrm6_policy.c
+  +4.19.297  net/netfilter/ipvs/ip_vs_sync.c
+  +4.19.297  net/netfilter/nft_payload.c
+  +4.19.297  net/netfilter/nft_set_rbtree.c
+  +4.19.297  net/nfc/llcp_core.c
+  +4.19.297  net/nfc/nci/core.c
+  +4.19.297  net/nfc/nci/spi.c
+  +4.19.297  net/rds/tcp_connect.c
+  +4.19.297  net/rds/tcp_listen.c
+  +4.19.297  net/sched/sch_hfsc.c
+  +4.19.297  net/socket.c
+  +4.19.297  net/xfrm/xfrm_interface_core.c
+  +4.19.298  fs/cifs/smbdirect.c
+  +4.19.298  net/netfilter/nfnetlink_log.c
+  +4.19.299  net/dccp/ipv4.c
+  +4.19.299  net/dccp/ipv6.c
+  +4.19.299  net/ipv4/tcp_metrics.c
+  +4.19.299  net/llc/llc_input.c
+  +4.19.299  net/llc/llc_s_ac.c
+  +4.19.299  net/llc/llc_station.c
+  +4.19.299  net/netfilter/xt_recent.c
+  +4.19.299  net/smc/af_smc.c
+  +4.19.299  net/smc/smc.h
+  +4.19.299  net/smc/smc_cdc.c
+  +4.19.299  net/smc/smc_close.c
+  +4.19.299  net/smc/smc_close.h
+  +4.19.299  net/tipc/netlink.c
+  +4.19.300  crypto/pcrypt.c
+  +4.19.300  fs/cifs/cifs_spnego.c
+  +4.19.300  net/bluetooth/hci_conn.c
+  +4.19.300  net/bluetooth/hci_sysfs.c
+  +4.19.300  net/mac80211/cfg.c
+  +4.19.300  net/sched/sch_api.c
+  +4.19.300  net/tipc/netlink_compat.c
+  +4.19.301  net/ipv4/igmp.c
+  +4.19.302  net/core/drop_monitor.c
+  +4.19.302  net/ipv6/ip6_fib.c
+  +4.19.302  net/netfilter/ipset/ip_set_core.c
+  +4.19.302  net/netfilter/xt_owner.c
+  +4.19.302  net/packet/af_packet.c
+  +4.19.302  net/packet/internal.h
+  +4.19.303  net/appletalk/ddp.c
+  +4.19.303  net/atm/ioctl.c
+  +4.19.303  net/rose/af_rose.c
+  +4.19.303  net/vmw_vsock/virtio_transport_common.c
+  +4.19.304  fs/cifs/misc.c
+  +4.19.304  fs/cifs/smb2misc.c
+  +4.19.304  fs/cifs/smb2pdu.h
+  +4.19.304  net/9p/protocol.c
+  +4.19.304  net/bluetooth/hci_event.c
+  +4.19.304  net/mac80211/mesh_plink.c
+  +4.19.304  net/rose/af_rose.c
+  +4.19.305  net/core/dst.c
+  +4.19.305  net/nfc/llcp_core.c
+  +4.19.305  net/sched/em_text.c
+  +4.19.305  net/socket.c
+  +4.19.306  crypto/af_alg.c
+  +4.19.306  crypto/scompress.c
+  +4.19.306  net/bluetooth/hci_conn.c
+  +4.19.306  net/bluetooth/hci_event.c
+  +4.19.306  net/netfilter/ipvs/ip_vs_xmit.c
+  +4.19.307  include/linux/units.h
+  +4.19.307  net/ipv6/addrconf_core.c
+  +4.19.307  net/llc/af_llc.c
+  +4.19.307  net/llc/llc_core.c
+  +4.19.307  net/netfilter/nf_log.c
+  +4.19.307  net/netfilter/nft_byteorder.c
+  +4.19.307  net/netfilter/nft_compat.c
+  +4.19.307  net/nfc/nci/core.c
+  +4.19.307  net/rds/af_rds.c
+  +4.19.307  net/rxrpc/conn_event.c
+  +4.19.307  net/rxrpc/conn_service.c
+  +4.19.307  net/sched/sch_cbs.c
+  +4.19.307  net/smc/smc_diag.c
+  +4.19.307  net/sunrpc/xprtmultipath.c
+  +4.19.307  net/tipc/bearer.c
+  +4.19.307  net/unix/diag.c
+  +4.19.307  net/wireless/scan.c
+  +4.19.308  net/ipv6/seg6.c
+  +4.19.308  net/mac80211/sta_info.c
+  +4.19.308  net/packet/af_packet.c
+  +4.19.308  net/sched/Kconfig
+  +4.19.308  net/sched/Makefile
+  +4.19.308  net/sched/sch_atm.c
+  +4.19.308  net/sched/sch_cbq.c
+  +4.19.309  net/bluetooth/hci_core.c
+  +4.19.309  net/bluetooth/hci_event.c
+  +4.19.309  net/bluetooth/l2cap_core.c
+  +4.19.310  net/netfilter/nf_conntrack_h323_asn1.c
+  +4.19.310  net/netrom/af_netrom.c
+  +4.19.310  net/netrom/nr_dev.c
+  +4.19.310  net/netrom/nr_in.c
+  +4.19.310  net/netrom/nr_out.c
+  +4.19.310  net/netrom/nr_route.c
+  +4.19.310  net/netrom/nr_subr.c
+  +4.19.310  net/rds/rdma.c
+  +4.19.310  net/rds/send.c
+  +4.19.311  crypto/af_alg.c
+  +4.19.311  crypto/algif_skcipher.c
+  +4.19.311  net/bluetooth/hci_core.c
+  +4.19.311  net/bluetooth/hci_event.c
+  +4.19.311  net/bluetooth/rfcomm/core.c
+  +4.19.311  net/core/sock_diag.c
+  +4.19.311  net/ipv4/udp.c
+  +4.19.311  net/ipv6/fib6_rules.c
+  +4.19.311  net/rds/send.c
+  +4.19.311  net/sunrpc/addr.c
+  +4.19.311  net/sunrpc/auth_gss/gss_rpc_xdr.c
+  +4.19.311  net/x25/af_x25.c
+  +4.19.312  net/bluetooth/hci_debugfs.c
+  +4.19.312  net/bluetooth/hci_event.c
+  +4.19.312  net/ipv6/ip6_fib.c
+  +4.19.312  net/mac80211/cfg.c
+  +4.19.312  net/nfc/nci/core.c
+  +4.19.312  net/rds/rdma.c
+  +4.19.312  net/sched/act_skbmod.c
+  +4.19.313  net/bluetooth/hci_request.c
+  +4.19.313  net/bluetooth/l2cap_sock.c
+  +4.19.313  net/bluetooth/sco.c
+  +4.19.313  net/ipv4/inet_timewait_sock.c
+  +4.19.313  net/ipv4/udp.c
+  +4.19.313  net/ipv6/ip6_fib.c
+  +4.19.313  net/ipv6/udp.c
+  +4.19.313  net/netfilter/ipvs/ip_vs_proto_sctp.c
+  +4.19.314  net/bluetooth/l2cap_core.c
+  +4.19.314  net/bluetooth/sco.c
+  +4.19.314  net/ipv6/fib6_rules.c
+  +4.19.314  net/mac80211/ieee80211_i.h
+  +4.19.314  net/tipc/msg.c
+  +4.19.316  net/9p/client.c
+  +4.19.316  net/ipv4/tcp_dctcp.c
+  +4.19.316  net/ipv6/seg6.c
+  +4.19.316  net/ipv6/seg6_hmac.c
+  +4.19.316  net/netfilter/nfnetlink_queue.c
+  +4.19.316  net/netfilter/nft_chain_filter.c
+  +4.19.316  net/netfilter/nft_compat.c
+  +4.19.316  net/netfilter/nft_exthdr.c
+  +4.19.316  net/netfilter/nft_flow_offload.c
+  +4.19.316  net/netfilter/nft_nat.c
+  +4.19.316  net/netfilter/nft_rt.c
+  +4.19.316  net/netfilter/nft_set_bitmap.c
+  +4.19.316  net/netfilter/nft_set_hash.c
+  +4.19.316  net/netfilter/nft_set_rbtree.c
+  +4.19.316  net/netfilter/nft_socket.c
+  +4.19.316  net/netfilter/nft_tproxy.c
+  +4.19.316  net/netrom/nr_route.c
+  +4.19.316  net/nfc/nci/core.c
+  +4.19.316  net/packet/af_packet.c
+  +4.19.316  net/sunrpc/auth_gss/svcauth_gss.c
+  +4.19.316  net/sunrpc/xprtsock.c
+  +4.19.316  net/wireless/trace.h
+  +4.19.317  net/bluetooth/l2cap_core.c
+  +4.19.317  net/ipv4/cipso_ipv4.c
+  +4.19.317  net/ipv6/seg6_iptunnel.c
+  +4.19.317  net/ipv6/xfrm6_policy.c
+  +4.19.317  net/mac80211/mesh_pathtbl.c
+  +4.19.317  net/mac80211/sta_info.c
+  +4.19.317  net/netrom/nr_timer.c
+  +4.19.317  net/unix/diag.c
+  +4.19.318  net/bluetooth/hci_event.c
+  +4.19.318  net/ceph/mon_client.c
+  +4.19.318  net/ipv4/inet_diag.c
+  +4.19.318  net/ipv4/tcp_metrics.c
+  +4.19.318  net/sctp/socket.c
+  +4.19.318  net/sunrpc/clnt.c
+  +4.19.319  net/bluetooth/hci_core.c
+  +4.19.319  net/ipv6/ila/ila_lwt.c
+  +4.19.319  net/mac80211/mesh.c
+  +4.19.319  net/mac80211/scan.c
+  +4.19.319  net/wireless/scan.c
+  +4.19.320  net/bluetooth/l2cap_core.c
+  +4.19.320  net/core/link_watch.c
+  +4.19.320  net/ipv6/ndisc.c
+  +4.19.320  net/netfilter/ipvs/ip_vs_proto_sctp.c
+  +4.19.320  net/netfilter/nft_set_hash.c
+  +4.19.320  net/netfilter/nft_set_rbtree.c
+  +4.19.320  net/packet/af_packet.c
+  +4.19.320  net/smc/smc_core.c
+  +4.19.320  net/sunrpc/sched.c
+  +4.19.320  net/tipc/udp_media.c
+  +4.19.321  net/bluetooth/bnep/core.c
+  +4.19.321  net/bluetooth/hci_core.c
+  +4.19.321  net/bluetooth/mgmt.c
+  +4.19.321  net/netfilter/nft_counter.c
+  +4.19.321  net/rds/recv.c
+  +4.19.322  net/can/bcm.c
+  +4.19.322  net/ipv6/ila/ila.h
+  +4.19.322  net/ipv6/ila/ila_main.c
+  +4.19.322  net/ipv6/ila/ila_xlat.c
+  +4.19.322  net/netfilter/nf_conncount.c
+  +4.19.322  net/sched/sch_netem.c
+  +4.19.322  net/sunrpc/xprtsock.c
+  +4.19.323  crypto/cipher.c
+  +4.19.323  net/bluetooth/af_bluetooth.c
+  +4.19.323  net/bluetooth/bnep/core.c
+  +4.19.323  net/bluetooth/rfcomm/sock.c
+  +4.19.323  net/bridge/br_netfilter_hooks.c
+  +4.19.323  net/can/bcm.c
+  +4.19.323  net/ipv4/devinet.c
+  +4.19.323  net/ipv4/fib_frontend.c
+  +4.19.323  net/ipv4/netfilter/nf_dup_ipv4.c
+  +4.19.323  net/ipv6/netfilter/nf_dup_ipv6.c
+  +4.19.323  net/ipv6/netfilter/nf_reject_ipv6.c
+  +4.19.323  net/mac80211/cfg.c
+  +4.19.323  net/mac80211/iface.c
+  +4.19.323  net/mac80211/key.c
+  +4.19.323  net/netfilter/nft_payload.c
+  +4.19.323  net/qrtr/qrtr.c
+  +4.19.323  net/sched/sch_api.c
+  +4.19.323  net/sctp/socket.c
+  +4.19.323  net/tipc/bearer.c
+  +4.19.323  net/wireless/scan.c
+  +4.19.323  net/wireless/sme.c
+  +4.19.324  net/9p/client.c
+  +4.19.324  net/bridge/br_device.c
+  +4.19.324  net/sctp/sm_statefuns.c
+  +4.19.324  net/vmw_vsock/hyperv_transport.c
+  +4.19.324  net/vmw_vsock/virtio_transport_common.c
+  +4.19.324  security/keys/keyring.c
+  +4.19.325  crypto/pcrypt.c
+  +4.19.325  net/9p/trans_xen.c
+  +4.19.325  net/bluetooth/rfcomm/sock.c
+  +4.19.325  net/mac80211/main.c
+  +4.19.325  net/netfilter/ipset/ip_set_bitmap_ip.c
+=== SKIPPED in-scope (123) ===
+  -4.19.295  fs/cifs/cifsfs.c   [cross-tree-API-dep (out-of-scope core header change)]
+  -4.19.295  net/core/skbuff.c   [bcm-modified-file]
+  -4.19.295  net/core/sock.c   [bcm-modified-file]
+  -4.19.295  net/ipv4/ip_output.c   [bcm-modified-file]
+  -4.19.295  net/ipv4/tcp_input.c   [bcm-modified-file]
+  -4.19.295  net/ipv6/addrconf.c   [bcm-modified-file]
+  -4.19.295  net/ipv6/ip6_output.c   [bcm-modified-file]
+  -4.19.295  net/netfilter/nf_tables_api.c   [cross-tree-API-dep (out-of-scope core header change)]
+  -4.19.295  net/unix/af_unix.c   [cross-tree-API-dep (out-of-scope core header change)]
+  -4.19.295  net/unix/scm.c   [cross-tree-API-dep (out-of-scope core header change)]
+  -4.19.296  net/bridge/br_forward.c   [bcm-modified-file]
+  -4.19.296  net/bridge/br_input.c   [bcm-modified-file]
+  -4.19.296  net/core/dev.c   [bcm-modified-file]
+  -4.19.296  net/core/rtnetlink.c   [bcm-modified-file]
+  -4.19.296  net/ipv4/route.c   [bcm-modified-file]
+  -4.19.296  net/ipv4/tcp_input.c   [bcm-modified-file]
+  -4.19.296  net/ipv4/tcp_output.c   [bcm-modified-file]
+  -4.19.296  net/netfilter/nf_tables_api.c   [cross-tree-API-dep (out-of-scope core header change)]
+  -4.19.297  net/ipv4/esp4.c   [bcm-modified-file]
+  -4.19.297  net/ipv4/tcp_output.c   [bcm-modified-file]
+  -4.19.297  net/ipv4/tcp_recovery.c   [cross-tree-API-dep (out-of-scope core header change)]
+  -4.19.297  net/ipv6/esp6.c   [bcm-modified-file]
+  -4.19.297  net/mac80211/tx.c   [bcm-modified-file]
+  -4.19.297  net/wireless/nl80211.c   [bcm-modified-file]
+  -4.19.297  net/xfrm/xfrm_policy.c   [cross-tree-API-dep (out-of-scope core header change)]
+  -4.19.299  net/ipv6/ip6_output.c   [bcm-modified-file]
+  -4.19.299  net/ipv6/syncookies.c   [bcm-modified-file]
+  -4.19.300  net/core/sock.c   [bcm-modified-file]
+  -4.19.300  net/ipv4/tcp_output.c   [bcm-modified-file]
+  -4.19.301  fs/cifs/cifsfs.c   [cross-tree-API-dep (out-of-scope core header change)]
+  -4.19.301  net/ipv4/route.c   [bcm-modified-file]
+  -4.19.302  net/ipv4/ip_gre.c   [bcm-modified-file]
+  -4.19.302  net/ipv4/tcp_input.c   [bcm-modified-file]
+  -4.19.303  net/ipv4/tcp_output.c   [bcm-modified-file]
+  -4.19.304  net/core/dev.c   [bcm-modified-file]
+  -4.19.304  net/wireless/certs/wens.hex   [conflict/fuzz: The next patch would create the file net/wireless/certs/wens.hex, which already exists!  Assume -R? [n]  Apply anyway? []
+  -4.19.305  net/ipv6/route.c   [cross-tree-API-dep (out-of-scope core header change)]
+  -4.19.305  net/netfilter/nf_tables_api.c   [cross-tree-API-dep (out-of-scope core header change)]
+  -4.19.306  net/ipv6/ip6_tunnel.c   [bcm-modified-file]
+  -4.19.307  crypto/algapi.c   [bcm-modified-file]
+  -4.19.307  net/ipv4/af_inet.c   [bcm-modified-file]
+  -4.19.307  net/ipv4/ip_output.c   [bcm-modified-file]
+  -4.19.307  net/ipv4/tcp.c   [bcm-modified-file]
+  -4.19.307  net/netfilter/nf_tables_api.c   [cross-tree-API-dep (out-of-scope core header change)]
+  -4.19.307  net/unix/af_unix.c   [cross-tree-API-dep (out-of-scope core header change)]
+  -4.19.308  net/mac80211/tx.c   [bcm-modified-file]
+  -4.19.308  net/sched/sch_dsmark.c   [conflict/fuzz: Reversed (or previously applied) patch detected!  Assume -R? [n]  Apply anyway? [n]  1 out of 1 hunk ignored]
+  -4.19.308  net/wireless/nl80211.c   [bcm-modified-file]
+  -4.19.309  net/wireless/nl80211.c   [bcm-modified-file]
+  -4.19.310  net/ipv6/route.c   [cross-tree-API-dep (out-of-scope core header change)]
+  -4.19.311  crypto/algif_aead.c   [bcm-modified-file]
+  -4.19.311  net/ipv4/tcp.c   [bcm-modified-file]
+  -4.19.311  net/unix/garbage.c   [cross-tree-API-dep (out-of-scope core header change)]
+  -4.19.312  net/core/sock.c   [bcm-modified-file]
+  -4.19.312  net/ipv4/inet_connection_sock.c   [bcm-modified-file]
+  -4.19.312  net/ipv4/ip_gre.c   [bcm-modified-file]
+  -4.19.312  net/ipv4/tcp.c   [bcm-modified-file]
+  -4.19.312  net/ipv6/ip6_gre.c   [bcm-modified-file]
+  -4.19.312  net/netfilter/nf_tables_api.c   [cross-tree-API-dep (out-of-scope core header change)]
+  -4.19.312  net/xfrm/xfrm_user.c   [bcm-modified-file]
+  -4.19.313  crypto/algapi.c   [bcm-modified-file]
+  -4.19.313  net/ipv4/route.c   [bcm-modified-file]
+  -4.19.313  net/ipv6/addrconf.c   [bcm-modified-file]
+  -4.19.313  net/netfilter/nf_tables_api.c   [cross-tree-API-dep (out-of-scope core header change)]
+  -4.19.314  net/bridge/br_forward.c   [bcm-modified-file]
+  -4.19.314  net/core/net_namespace.c   [cross-tree-API-dep (out-of-scope core header change)]
+  -4.19.314  net/core/rtnetlink.c   [bcm-modified-file]
+  -4.19.314  net/core/sock.c   [bcm-modified-file]
+  -4.19.314  net/ipv4/tcp.c   [bcm-modified-file]
+  -4.19.314  net/ipv4/tcp_input.c   [bcm-modified-file]
+  -4.19.314  net/ipv4/tcp_ipv4.c   [bcm-modified-file]
+  -4.19.314  net/ipv4/tcp_output.c   [bcm-modified-file]
+  -4.19.314  net/unix/af_unix.c   [cross-tree-API-dep (out-of-scope core header change)]
+  -4.19.314  net/unix/garbage.c   [cross-tree-API-dep (out-of-scope core header change)]
+  -4.19.314  net/unix/scm.c   [cross-tree-API-dep (out-of-scope core header change)]
+  -4.19.314  net/wireless/nl80211.c   [bcm-modified-file]
+  -4.19.316  net/ipv4/route.c   [bcm-modified-file]
+  -4.19.316  net/ipv6/route.c   [cross-tree-API-dep (out-of-scope core header change)]
+  -4.19.316  net/netfilter/nf_tables_api.c   [cross-tree-API-dep (out-of-scope core header change)]
+  -4.19.316  net/netfilter/nft_dynset.c   [cross-tree-API-dep (out-of-scope core header change)]
+  -4.19.316  net/unix/af_unix.c   [cross-tree-API-dep (out-of-scope core header change)]
+  -4.19.316  net/xfrm/xfrm_policy.c   [cross-tree-API-dep (out-of-scope core header change)]
+  -4.19.317  net/core/sock.c   [bcm-modified-file]
+  -4.19.317  net/ipv4/af_inet.c   [bcm-modified-file]
+  -4.19.317  net/ipv4/tcp.c   [bcm-modified-file]
+  -4.19.317  net/ipv6/af_inet6.c   [bcm-modified-file]
+  -4.19.317  net/ipv6/ipv6_sockglue.c   [bcm-modified-file]
+  -4.19.317  net/ipv6/route.c   [cross-tree-API-dep (out-of-scope core header change)]
+  -4.19.317  net/ipv6/tcp_ipv6.c   [bcm-modified-file]
+  -4.19.317  net/netfilter/nf_tables_api.c   [cross-tree-API-dep (out-of-scope core header change)]
+  -4.19.317  net/netfilter/nft_lookup.c   [cross-tree-API-dep (out-of-scope core header change)]
+  -4.19.317  net/unix/af_unix.c   [cross-tree-API-dep (out-of-scope core header change)]
+  -4.19.318  net/ipv4/tcp_input.c   [bcm-modified-file]
+  -4.19.318  net/ipv4/tcp_timer.c   [bcm-modified-file]
+  -4.19.319  net/ipv4/af_inet.c   [bcm-modified-file]
+  -4.19.320  net/ipv4/route.c   [bcm-modified-file]
+  -4.19.320  net/ipv6/addrconf.c   [bcm-modified-file]
+  -4.19.320  net/netfilter/nf_conntrack_netlink.c   [bcm-modified-file]
+  -4.19.320  net/netfilter/nf_tables_api.c   [cross-tree-API-dep (out-of-scope core header change)]
+  -4.19.320  net/wireless/nl80211.c   [bcm-modified-file]
+  -4.19.320  net/wireless/util.c   [bcm-modified-file]
+  -4.19.321  net/core/skbuff.c   [bcm-modified-file]
+  -4.19.321  net/ipv6/ip6_output.c   [bcm-modified-file]
+  -4.19.322  net/bridge/br.c   [cross-tree-API-dep (out-of-scope core header change)]
+  -4.19.322  net/bridge/br_fdb.c   [bcm-modified-file]
+  -4.19.322  net/bridge/br_input.c   [bcm-modified-file]
+  -4.19.322  net/bridge/br_private.h   [bcm-modified-file]
+  -4.19.322  net/bridge/br_switchdev.c   [cross-tree-API-dep (out-of-scope core header change)]
+  -4.19.322  net/core/net_namespace.c   [cross-tree-API-dep (out-of-scope core header change)]
+  -4.19.322  net/unix/af_unix.c   [cross-tree-API-dep (out-of-scope core header change)]
+  -4.19.323  crypto/aead.c   [bcm-modified-file]
+  -4.19.323  net/core/dev.c   [bcm-modified-file]
+  -4.19.323  net/ipv4/ip_gre.c   [bcm-modified-file]
+  -4.19.323  net/ipv4/tcp_input.c   [bcm-modified-file]
+  -4.19.323  net/ipv4/tcp_ipv4.c   [bcm-modified-file]
+  -4.19.323  net/ipv4/tcp_output.c   [bcm-modified-file]
+  -4.19.323  net/ipv4/tcp_rate.c   [cross-tree-API-dep (out-of-scope core header change)]
+  -4.19.323  net/ipv4/tcp_recovery.c   [cross-tree-API-dep (out-of-scope core header change)]
+  -4.19.323  net/ipv6/addrconf.c   [bcm-modified-file]
+  -4.19.323  net/netfilter/nf_conntrack_netlink.c   [bcm-modified-file]
+  -4.19.323  net/netfilter/nf_tables_api.c   [cross-tree-API-dep (out-of-scope core header change)]
+  -4.19.323  net/wireless/nl80211.c   [bcm-modified-file]
+  -4.19.323  net/xfrm/xfrm_user.c   [bcm-modified-file]
+=== DISTINCT FILES PATCHED (189) ===
+  crypto/af_alg.c
+  crypto/algif_skcipher.c
+  crypto/asymmetric_keys/x509_public_key.c
+  crypto/cipher.c
+  crypto/pcrypt.c
+  crypto/scompress.c
+  fs/cifs/cifs_spnego.c
+  fs/cifs/misc.c
+  fs/cifs/smb2misc.c
+  fs/cifs/smb2ops.c
+  fs/cifs/smb2pdu.h
+  fs/cifs/smbdirect.c
+  include/linux/indirect_call_wrapper.h
+  include/linux/units.h
+  net/9p/client.c
+  net/9p/protocol.c
+  net/9p/trans_virtio.c
+  net/9p/trans_xen.c
+  net/appletalk/ddp.c
+  net/atm/ioctl.c
+  net/bluetooth/af_bluetooth.c
+  net/bluetooth/bnep/core.c
+  net/bluetooth/hci_conn.c
+  net/bluetooth/hci_core.c
+  net/bluetooth/hci_debugfs.c
+  net/bluetooth/hci_event.c
+  net/bluetooth/hci_request.c
+  net/bluetooth/hci_sock.c
+  net/bluetooth/hci_sysfs.c
+  net/bluetooth/l2cap_core.c
+  net/bluetooth/l2cap_sock.c
+  net/bluetooth/mgmt.c
+  net/bluetooth/rfcomm/core.c
+  net/bluetooth/rfcomm/sock.c
+  net/bluetooth/sco.c
+  net/bridge/br_device.c
+  net/bridge/br_netfilter_hooks.c
+  net/can/bcm.c
+  net/ceph/messenger.c
+  net/ceph/mon_client.c
+  net/core/drop_monitor.c
+  net/core/dst.c
+  net/core/link_watch.c
+  net/core/pktgen.c
+  net/core/sock_diag.c
+  net/dccp/ipv4.c
+  net/dccp/ipv6.c
+  net/ipv4/cipso_ipv4.c
+  net/ipv4/devinet.c
+  net/ipv4/fib_frontend.c
+  net/ipv4/igmp.c
+  net/ipv4/inet_diag.c
+  net/ipv4/inet_timewait_sock.c
+  net/ipv4/netfilter/nf_dup_ipv4.c
+  net/ipv4/tcp_dctcp.c
+  net/ipv4/tcp_metrics.c
+  net/ipv4/udp.c
+  net/ipv6/addrconf_core.c
+  net/ipv6/fib6_rules.c
+  net/ipv6/ila/ila.h
+  net/ipv6/ila/ila_lwt.c
+  net/ipv6/ila/ila_main.c
+  net/ipv6/ila/ila_xlat.c
+  net/ipv6/ip6_fib.c
+  net/ipv6/ndisc.c
+  net/ipv6/netfilter/nf_dup_ipv6.c
+  net/ipv6/netfilter/nf_reject_ipv6.c
+  net/ipv6/seg6.c
+  net/ipv6/seg6_hmac.c
+  net/ipv6/seg6_iptunnel.c
+  net/ipv6/udp.c
+  net/ipv6/xfrm6_policy.c
+  net/llc/af_llc.c
+  net/llc/llc_core.c
+  net/llc/llc_input.c
+  net/llc/llc_s_ac.c
+  net/llc/llc_station.c
+  net/mac80211/cfg.c
+  net/mac80211/ieee80211_i.h
+  net/mac80211/iface.c
+  net/mac80211/key.c
+  net/mac80211/main.c
+  net/mac80211/mesh.c
+  net/mac80211/mesh_pathtbl.c
+  net/mac80211/mesh_plink.c
+  net/mac80211/scan.c
+  net/mac80211/sta_info.c
+  net/netfilter/ipset/ip_set_bitmap_ip.c
+  net/netfilter/ipset/ip_set_core.c
+  net/netfilter/ipset/ip_set_hash_netportnet.c
+  net/netfilter/ipvs/ip_vs_proto_sctp.c
+  net/netfilter/ipvs/ip_vs_sync.c
+  net/netfilter/ipvs/ip_vs_xmit.c
+  net/netfilter/nf_conncount.c
+  net/netfilter/nf_conntrack_h323_asn1.c
+  net/netfilter/nf_log.c
+  net/netfilter/nfnetlink_log.c
+  net/netfilter/nfnetlink_osf.c
+  net/netfilter/nfnetlink_queue.c
+  net/netfilter/nft_byteorder.c
+  net/netfilter/nft_chain_filter.c
+  net/netfilter/nft_compat.c
+  net/netfilter/nft_counter.c
+  net/netfilter/nft_exthdr.c
+  net/netfilter/nft_flow_offload.c
+  net/netfilter/nft_nat.c
+  net/netfilter/nft_payload.c
+  net/netfilter/nft_rt.c
+  net/netfilter/nft_set_bitmap.c
+  net/netfilter/nft_set_hash.c
+  net/netfilter/nft_set_rbtree.c
+  net/netfilter/nft_socket.c
+  net/netfilter/nft_tproxy.c
+  net/netfilter/xt_owner.c
+  net/netfilter/xt_recent.c
+  net/netfilter/xt_sctp.c
+  net/netfilter/xt_u32.c
+  net/netrom/af_netrom.c
+  net/netrom/nr_dev.c
+  net/netrom/nr_in.c
+  net/netrom/nr_out.c
+  net/netrom/nr_route.c
+  net/netrom/nr_subr.c
+  net/netrom/nr_timer.c
+  net/nfc/llcp_core.c
+  net/nfc/nci/core.c
+  net/nfc/nci/spi.c
+  net/packet/af_packet.c
+  net/packet/internal.h
+  net/qrtr/qrtr.c
+  net/rds/af_rds.c
+  net/rds/rdma.c
+  net/rds/recv.c
+  net/rds/send.c
+  net/rds/tcp_connect.c
+  net/rds/tcp_listen.c
+  net/rose/af_rose.c
+  net/rxrpc/conn_event.c
+  net/rxrpc/conn_service.c
+  net/sched/Kconfig
+  net/sched/Makefile
+  net/sched/act_skbmod.c
+  net/sched/cls_fw.c
+  net/sched/cls_rsvp.c
+  net/sched/cls_rsvp.h
+  net/sched/cls_rsvp6.c
+  net/sched/em_text.c
+  net/sched/sch_api.c
+  net/sched/sch_atm.c
+  net/sched/sch_cbq.c
+  net/sched/sch_cbs.c
+  net/sched/sch_hfsc.c
+  net/sched/sch_netem.c
+  net/sched/sch_plug.c
+  net/sched/sch_qfq.c
+  net/sctp/associola.c
+  net/sctp/sm_sideeffect.c
+  net/sctp/sm_statefuns.c
+  net/sctp/socket.c
+  net/smc/af_smc.c
+  net/smc/smc.h
+  net/smc/smc_cdc.c
+  net/smc/smc_close.c
+  net/smc/smc_close.h
+  net/smc/smc_core.c
+  net/smc/smc_diag.c
+  net/socket.c
+  net/sunrpc/addr.c
+  net/sunrpc/auth_gss/gss_rpc_xdr.c
+  net/sunrpc/auth_gss/svcauth_gss.c
+  net/sunrpc/clnt.c
+  net/sunrpc/sched.c
+  net/sunrpc/xprtmultipath.c
+  net/sunrpc/xprtsock.c
+  net/tipc/bearer.c
+  net/tipc/msg.c
+  net/tipc/netlink.c
+  net/tipc/netlink_compat.c
+  net/tipc/udp_media.c
+  net/unix/diag.c
+  net/vmw_vsock/hyperv_transport.c
+  net/vmw_vsock/virtio_transport_common.c
+  net/wireless/scan.c
+  net/wireless/sme.c
+  net/wireless/trace.h
+  net/x25/af_x25.c
+  net/xfrm/xfrm_interface_core.c
+  security/keys/keyctl.c
+  security/keys/keyring.c
