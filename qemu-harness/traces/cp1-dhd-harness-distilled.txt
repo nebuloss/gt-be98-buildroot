@@ -1,0 +1,27 @@
+CP-1 harness-kernel dhd dep-chain load transcript (deduped)
+kernel: harness 4.19.294 (merlin source + virt + ubus/pmc/xrdp stubs), qemu -M virt + broadcom-fmac-stub
+============================================================
+bcm-fmac-stub: realized: vendor=0x14e4 device=0x6717 class=0x0280 BAR0=16384B TCM=8MiB chipid=0x6717 ipc_rev=0x06Booting Linux on physical CPU 0x0000000000 [0x410fd083]
+Kernel command line: earlycon=pl011,0x9000000 keep_bootcon console=ttyAMA0 loglevel=8 rdinit=/init dyndbg="module dhd +p"
+BCM UBUS Driver initcall
+BCM UBUS Driver: QEMU-harness stub (SoC fabric init skipped)
+PMC driver initcall
+PMC driver: QEMU-harness stub (PMC init skipped)
+Powering on XRDP core...
+XRDP: QEMU-harness stub (power-on skipped)
+9000000.pl011: ttyAMA0 at MMIO 0x9000000 (irq = 39, base_baud = 0) is a PL011 rev1
+Run /init as init process
+==== QEMU FullMAC RE harness init (aarch64) ====
+---- finit_module /bcm_knvram.ko ----
+---- finit_module /bcmlibs.ko ----
+---- finit_module /bdmf.ko ----
+---- finit_module /bcmmcast.ko ----
+---- finit_module /cfg80211.ko ----
+cfg80211: Loaded X.509 cert 'sforshee: 00b28ddf47aef9cea7'
+---- finit_module /wlshared.ko ----
+---- finit_module /hnd.ko ----
+---- finit_module /rdpa_gpl.ko ----
+Unable to handle kernel access to user memory outside uaccess routines at virtual address 0000000100000021
+Internal error: Oops: 96000005 [#1] PREEMPT SMP
+pc : resolve_symbol.constprop.0+0xcc/0x300
+lr : resolve_symbol.constprop.0+0x70/0x300

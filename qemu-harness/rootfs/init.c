@@ -79,15 +79,25 @@ int main(void)
         closedir(d);
     }
 
-    /* Load every .ko sitting at / (insertion order: deps first if present). */
+    /* Load the .ko sitting at / in dependency-resolved order (deps first).
+     * Order derived from the modinfo `depends=` chain (CP-1):
+     *   dhd depends= bdmf,hnd,cfg80211,wlshared,rdpa_gpl,bcm_knvram,bcmlibs,
+     *                bcmmcast,wfd,emf,igs,bcm_pcie_hcd
+     *   hnd->bcm_knvram; rdpa_gpl->bdmf; emf->{hnd,bcmmcast};
+     *   igs->{emf,hnd,bcmmcast}; wfd->{bdmf,rdpa_gpl,bcmlibs,bcmmcast};
+     *   bcm_pcie_hcd->{bcm_enet,bcm_knvram}.
+     * Anything absent (e.g. the probe-only initramfs) is skipped. */
     static const char *mods[] = {
-        /* dhd dep chain (only present in the merlin-ABI rootfs variant) */
-        "/bcmlibs.ko", "/hnd.ko", "/bdmf.ko", "/wlshared.ko",
-        "/rdpa_gpl.ko", "/bcm_knvram.ko", "/emf.ko", "/igs.ko",
-        "/bcmmcast.ko", "/wfd.ko", "/bcm_pcie_hcd.ko",
+        /* leaves first */
+        "/bcm_knvram.ko", "/bcmlibs.ko", "/bdmf.ko", "/bcmmcast.ko",
+        "/cfg80211.ko", "/wlshared.ko",
+        "/hnd.ko", "/rdpa_gpl.ko",
+        "/emf.ko", "/igs.ko",
+        "/wfd.ko",
+        "/bcm_enet.ko", "/bcm_pcie_hcd.ko",
         /* the FullMAC driver under test */
         "/dhd.ko",
-        /* stock-kernel exerciser */
+        /* stock-kernel exerciser (probe initramfs only) */
         "/bcmfmac_probe.ko",
         NULL
     };

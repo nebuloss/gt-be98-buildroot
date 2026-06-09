@@ -1,0 +1,273 @@
+bcm-fmac-stub: realized: vendor=0x14e4 device=0x6717 class=0x0280 BAR0=16384B TCM=8MiB chipid=0x6717 ipc_rev=0x06Booting Linux on physical CPU 0x0000000000 [0x410fd083]
+Linux version 4.19.294 (guillaume@dev-build) (gcc version 10.3.0 (Buildroot 2021.02.4)) #10 SMP PREEMPT Tue Jun 9 08:37:26 UTC 2026
+Machine model: linux,dummy-virt
+earlycon: pl11 at MMIO 0x0000000009000000 (options '')
+bootconsole [pl11] enabled
+On node 0 totalpages: 262144
+  DMA32 zone: 4096 pages used for memmap
+  DMA32 zone: 0 pages reserved
+  DMA32 zone: 262144 pages, LIFO batch:63
+psci: probing for conduit method from DT.
+psci: PSCIv1.1 detected in firmware.
+psci: Using standard PSCI v0.2 function IDs
+psci: Trusted OS migration not required
+psci: SMC Calling Convention v1.0
+percpu: Embedded 33 pages/cpu s97816 r8192 d29160 u135168
+pcpu-alloc: s97816 r8192 d29160 u135168 alloc=33*4096
+pcpu-alloc: [0] 0 
+Detected PIPT I-cache on CPU0
+ARM_SMCCC_ARCH_WORKAROUND_1 missing from firmware
+CPU features: enabling workaround for EL2 vector hardening
+CPU features: enabling workaround for Spectre-BHB
+CPU features: enabling workaround for ARM erratum 1742098
+CPU features: kernel page table isolation forced ON by KASLR
+CPU features: detected: Kernel page table isolation (KPTI)
+Built 1 zonelists, mobility grouping on.  Total pages: 258048
+Kernel command line: earlycon=pl011,0x9000000 console=ttyAMA0 loglevel=8 rdinit=/init
+Dentry cache hash table entries: 131072 (order: 8, 1048576 bytes)
+Inode-cache hash table entries: 65536 (order: 7, 524288 bytes)
+Memory: 1013460K/1048576K available (9022K kernel code, 804K rwdata, 2076K rodata, 2688K init, 778K bss, 35116K reserved, 0K cma-reserved)
+SLUB: HWalign=64, Order=0-3, MinObjects=0, CPUs=1, Nodes=1
+ftrace: allocating 28375 entries in 111 pages
+ftrace: allocated 111 pages with 6 groups
+rcu: Preemptible hierarchical RCU implementation.
+rcu: 	RCU restricting CPUs from NR_CPUS=4 to nr_cpu_ids=1.
+	Tasks RCU enabled.
+rcu: Adjusting geometry for rcu_fanout_leaf=16, nr_cpu_ids=1
+NR_IRQS: 64, nr_irqs: 64, preallocated irqs: 0
+GICv2m: range[mem 0x08020000-0x08020fff], SPI[80:143]
+arch_timer: cp15 timer(s) running at 62.50MHz (virt).
+clocksource: arch_sys_counter: mask: 0xffffffffffffff max_cycles: 0x1cd42e208c, max_idle_ns: 881590405314 ns
+sched_clock: 56 bits at 62MHz, resolution 16ns, wraps every 4398046511096ns
+Calibrating delay loop (skipped), value calculated using timer frequency.. 125.00 BogoMIPS (lpj=62500)
+pid_max: default: 32768 minimum: 301
+Mount-cache hash table entries: 2048 (order: 2, 16384 bytes)
+Mountpoint-cache hash table entries: 2048 (order: 2, 16384 bytes)
+/cpus/cpu-map: empty cluster
+ASID allocator initialised with 32768 entries
+rcu: Hierarchical SRCU implementation.
+Boot Device: NAND 2K Page
+uboot_max_len missing, using defaults 16384
+uboot env missing
+Failed to retrieve boot CFE version from dtb!
+BoardId [], NVRAM_ULBOARDSTUFFOPTION=0 
+smp: Bringing up secondary CPUs ...
+smp: Brought up 1 node, 1 CPU
+SMP: Total of 1 processors activated.
+CPU features: detected: 32-bit EL0 Support
+CPU features: emulated: Privileged Access Never (PAN) using TTBR0_EL1 switching
+CPU: All CPU(s) started at EL1
+alternatives: patching kernel code
+devtmpfs: initialized
+clocksource: jiffies: mask: 0xffffffff max_cycles: 0xffffffff, max_idle_ns: 1911260446275000 ns
+futex hash table entries: 256 (order: 2, 16384 bytes)
+pinctrl core: initialized pinctrl subsystem
+size of sk_buff 576
+offset of cb in sk_buff 400
+NET: Registered protocol family 16
+OTP driver initcall
+OTP driver scanning DT
+Strap driver initcall
+Failed to find strap dts node
+Strap Register: 0xffffffff
+cpuidle: using governor menu
+BCM UBUS Driver initcall
+BCM UBUS Driver: QEMU-harness stub (SoC fabric init skipped)
+PMC driver initcall
+PMC driver: QEMU-harness stub (PMC init skipped)
+DMA: preallocated 256 KiB pool for atomic allocations
+Serial: AMBA PL011 UART driver
+Powering on XRDP core...
+XRDP: QEMU-harness stub (power-on skipped)
+9000000.pl011: ttyAMA0 at MMIO 0x9000000 (irq = 39, base_baud = 0) is a PL011 rev1
+console [ttyAMA0] enabled
+bootconsole [pl11] disabled
+cryptd: max_cpu_qlen set to 1000
+Broadcom GBPMv0.1 initialized
+Broadcom IQoS v1.0 initialized
+Broadcom Logger v0.1
+Char device /dev/bcmnet(252) registered
+Assigning idx[1] for lo
+skb_free_task created successfully with start budget 32, period 10ms
+[0;34mBLOG v3.0 Initialized[0m
+BLOG Rule v1.0 Initialized
+bcm_tcp_task created successfully with budget 256 ,cpumask:0x0
+clocksource: Switched to clocksource arch_sys_counter
+NET: Registered protocol family 2
+IP idents hash table entries: 16384 (order: 5, 131072 bytes)
+tcp_listen_portaddr_hash hash table entries: 512 (order: 1, 8192 bytes)
+TCP established hash table entries: 8192 (order: 4, 65536 bytes)
+TCP bind hash table entries: 8192 (order: 5, 131072 bytes)
+TCP: Hash tables configured (established 8192 bind 8192)
+UDP hash table entries: 512 (order: 2, 16384 bytes)
+UDP-Lite hash table entries: 512 (order: 2, 16384 bytes)
+NET: Registered protocol family 1
+Assigning idx[2] for blogtcp_local
+blogtcp_local netdev registered successfully 
+PCI: CLS 0 bytes, default 64
+Trying to unpack rootfs image as initramfs...
+Freeing initrd memory: 436K
+Initialise system trusted keyrings
+workingset: timestamp_bits=62 max_order=18 bucket_order=0
+squashfs: version 4.0 (2009/01/31) Phillip Lougher
+jffs2: version 2.2. (NAND) © 2001-2006 Red Hat, Inc.
+fuse init (API version 7.27)
+Key type asymmetric registered
+Asymmetric key parser 'x509' registered
+io scheduler noop registered (default)
+io scheduler mq-deadline registered
+io scheduler kyber registered
+pci-host-generic 4010000000.pcie: host bridge /pcie@10000000 ranges:
+pci-host-generic 4010000000.pcie:    IO 0x3eff0000..0x3effffff -> 0x00000000
+pci-host-generic 4010000000.pcie:   MEM 0x10000000..0x3efeffff -> 0x10000000
+pci-host-generic 4010000000.pcie:   MEM 0x8000000000..0xffffffffff -> 0x8000000000
+pci-host-generic 4010000000.pcie: ECAM at [mem 0x4010000000-0x401fffffff] for [bus 00-ff]
+pci-host-generic 4010000000.pcie: PCI host bridge to bus 0000:00
+pci_bus 0000:00: root bus resource [bus 00-ff]
+pci_bus 0000:00: root bus resource [io  0x0000-0xffff]
+pci_bus 0000:00: root bus resource [mem 0x10000000-0x3efeffff]
+pci_bus 0000:00: root bus resource [mem 0x8000000000-0xffffffffff]
+pci 0000:00:00.0: [1b36:0008] type 00 class 0x060000
+pci 0000:00:01.0: [1af4:1000] type 00 class 0x020000
+pci 0000:00:01.0: reg 0x10: [io  0x0000-0x001f]
+pci 0000:00:01.0: reg 0x14: [mem 0x00000000-0x00000fff]
+pci 0000:00:01.0: reg 0x20: [mem 0x00000000-0x00003fff 64bit pref]
+pci 0000:00:01.0: reg 0x30: [mem 0x00000000-0x0003ffff pref]
+pci 0000:00:02.0: [14e4:6717] type 00 class 0x028000
+pci 0000:00:02.0: reg 0x10: [mem 0x00000000-0x00003fff]
+pci 0000:00:02.0: reg 0x18: [mem 0x00000000-0x007fffff 64bit pref]
+pci 0000:00:02.0: BAR 2: assigned [mem 0x8000000000-0x80007fffff 64bit pref]
+pci 0000:00:01.0: BAR 6: assigned [mem 0x10000000-0x1003ffff pref]
+pci 0000:00:01.0: BAR 4: assigned [mem 0x8000800000-0x8000803fff 64bit pref]
+pci 0000:00:02.0: BAR 0: assigned [mem 0x10040000-0x10043fff]
+pci 0000:00:01.0: BAR 1: assigned [mem 0x10044000-0x10044fff]
+pci 0000:00:01.0: BAR 0: assigned [io  0x1000-0x101f]
+virtio-pci 0000:00:01.0: enabling device (0000 -> 0003)
+cacheinfo: Unable to detect cache hierarchy for CPU 0
+brd: module loaded
+loop: module loaded
+Assigning idx[3] for dummy0
+Assigning idx[4] for ifb0
+Assigning idx[5] for ifb1
+Assigning idx[6] for imq0
+Assigning idx[7] for imq1
+Assigning idx[8] for imq2
+IMQ driver loaded successfully. (numdevs = 3, numqueues = 1, imq_dev_accurate_stats = 1)
+	Hooking IMQ after NAT on PREROUTING.
+	Hooking IMQ before NAT on POSTROUTING.
+Assigning idx[9] for eth0
+PPP generic driver version 2.4.2
+PPP BSD Compression module registered
+PPP Deflate Compression module registered
+PPP MPPE Compression module registered
+NET: Registered protocol family 24
+PPTP driver version 0.8.5
+i2c /dev entries driver
+sdhci: Secure Digital Host Controller Interface driver
+sdhci: Copyright(c) Pierre Ossman
+sdhci-pltfm: SDHCI platform and OF driver helper
+hidraw: raw HID events driver (C) Jiri Kosina
+GACT probability NOT on
+Mirror/redirect action on
+Simple TC action Loaded
+u32 classifier
+    Performance counters on
+    input device check on
+    Actions configured
+xt_time: kernel timezone is -0000
+gre: GRE over IPv4 demultiplexor driver
+ip_gre: GRE over IPv4 tunneling driver
+Assigning idx[10] for gre0
+Assigning idx[11] for gretap0
+Assigning idx[12] for erspan0
+IPv4 over IPsec tunneling driver
+Assigning idx[13] for ip_vti0
+NET: Registered protocol family 10
+Segment Routing with IPv6
+Assigning idx[14] for ip6_vti0
+sit: IPv6, IPv4 and MPLS over IPv4 tunneling driver
+Assigning idx[15] for sit0
+Assigning idx[16] for ip6tnl0
+ip6_gre: GRE over IPv6 tunneling driver
+Assigning idx[17] for ip6gre0
+NET: Registered protocol family 17
+NET: Registered protocol family 15
+bridge: filtering via arp/ip/ip6tables is no longer available by default. Update your scripts to load br_netfilter if you need this.
+l2tp_core: L2TP core driver, V2.0
+l2tp_ppp: PPPoL2TP kernel driver, V2.0
+8021q: 802.1Q VLAN Support v1.8
+sctp: Hash tables configured (bind 256/256)
+brcmboard registered
+brcmboard: brcm_board_init entry
+ERROR - Invalid number of MAC addresses (0) is configured.
+Broadcom GPS GPIO driver
+Optical detection module loaded.
+Bridge Broadcom hooks registered
+ebt_blog registered
+ebt_ftos registered
+ebt_qos_map registered
+ebt_time registered
+ebt_dscp registered
+ebt_vtag registered
+ebt_wmm_mark registered
+ebt_reject registered
+Loading compiled-in X.509 certificates
+Freeing unused kernel memory: 2688K
+Checked W+X mappings: passed, no W+X pages found
+Run /init as init process
+== MIN init: load bdmf then rdpa_gpl only ==
+-- finit /bdmf.ko
+   -> rc=0
+-- finit /rdpa_gpl.ko
+Unable to handle kernel access to user memory outside uaccess routines at virtual address 0000000100000021
+Mem abort info:
+  ESR = 0x96000005
+  Exception class = DABT (current EL), IL = 32 bits
+  SET = 0, FnV = 0
+  EA = 0, S1PTW = 0
+Data abort info:
+  ISV = 0, ISS = 0x00000005
+  CM = 0, WnR = 0
+user pgtable: 4k pages, 39-bit VAs, pgdp = 0000000092ae0120
+[0000000100000021] pgd=0000000000000000, pud=0000000000000000
+Internal error: Oops: 96000005 [#1] PREEMPT SMP
+Modules linked in: bdmf init_addr(0000000000000000 - 0000000000000000), core_addr(ffffffa9299ea000 - ffffffa929a0a000)
+Process init (pid: 1, stack limit = 0x000000000af12698)
+===DDD===
+00400000 - 00478000, [init]
+CPU: 0 PID: 1 Comm: init Not tainted 4.19.294 #10
+Hardware name: linux,dummy-virt (DT)
+pstate: a0400005 (NzCv daif +PAN -UAO)
+pc : resolve_symbol.constprop.0+0xcc/0x300
+lr : resolve_symbol.constprop.0+0x70/0x300
+sp : ffffff800800bbb0
+x29: ffffff800800bbb0 x28: ffffffa929b443a0 
+x27: ffffffa929b3a0c8 x26: ffffff800832332a 
+x25: ffffffa938586000 x24: ffffffa929a1cf38 
+x23: ffffffa929a1cc40 x22: ffffff800800bd40 
+x21: ffffffa9385ac890 x20: ffffffa929a0a1d0 
+x19: ffffffa929b3a0c0 x18: 0000000000000000 
+x17: 0000000000000000 x16: 0000000000000000 
+x15: 5400160b13131717 x14: ff00000000000000 
+x13: 0000000000000000 x12: 0000000000000007 
+x11: 0000000000000030 x10: 0101010101010101 
+x9 : 0000000000000005 x8 : 7f7f7f7f7f7f7f7f 
+x7 : feff6b6475646b5e x6 : 00000000000080e2 
+x5 : 6200000000000000 x4 : 8080000000000000 
+x3 : ffffffa929a0a1d0 x2 : 0000000000000000 
+x1 : 0000000100000001 x0 : 0000000000000000 
+Call trace:
+ resolve_symbol.constprop.0+0xcc/0x300
+ load_module+0x1420/0x2270
+ __se_sys_finit_module+0xf8/0x130
+ __arm64_sys_finit_module+0x28/0x40
+ el0_svc_common+0x84/0x180
+ el0_svc_handler+0x74/0xa0
+ el0_svc+0x8/0x300
+Code: 14000020 f9400021 eb18003f 540003a0 (f9401023) 
+---[ end trace bb2b40a10a5d7f1f ]---
+Kernel panic - not syncing: Fatal exception
+Kernel Offset: 0x292f600000 from 0xffffff8008000000
+CPU features: 0x30,20806000
+Memory Limit: none
+Rebooting in 5 seconds..

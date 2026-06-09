@@ -1,0 +1,96 @@
+diff --git a/release/src-rt-5.04behnd.4916/bcmdrivers/opensource/misc/pmc/impl1/pmc_drv.c b/release/src-rt-5.04behnd.4916/bcmdrivers/opensource/misc/pmc/impl1/pmc_drv.c
+index ab5768296e..47909ebff7 100644
+--- a/release/src-rt-5.04behnd.4916/bcmdrivers/opensource/misc/pmc/impl1/pmc_drv.c
++++ b/release/src-rt-5.04behnd.4916/bcmdrivers/opensource/misc/pmc/impl1/pmc_drv.c
+@@ -305,6 +305,16 @@ static int read_bpcm_reg_direct_keyhole(int devAddr, int wordOffset, int keyhole
+ 	volatile PmbBus *pmb;
+ 	volatile keyholeReg *keyhole;
+ 
++#ifdef BCM_QEMU_HARNESS
++	/* CP-1 disposable QEMU harness: the PMC block + its BPCM keyhole MMIO do not
++	 * exist on -M virt, and the PMC init is stubbed so g_pmc/pmc_base is NULL.
++	 * Every PowerOnDevice/PowerOffDevice/PMC power-domain initcall funnels through
++	 * here; neutralise the access so none of them fault. Returns a benign 0 value.
++	 * NEVER define BCM_QEMU_HARNESS for a flashed build. */
++	if (value) *value = 0;
++	return kPMC_NO_ERROR;
++#endif
++
+ #if defined(PMC_ON_HOSTCPU) || defined(PMC_DIRECT_MODE_ONLY)
+ 	pmb = &((volatile Pmc *)(g_pmc->pmc_base))->pmb;
+ #else
+@@ -338,6 +348,11 @@ static int write_bpcm_reg_direct_keyhole(int devAddr, int wordOffset, int keyhol
+ 	volatile PmbBus *pmb;
+ 	volatile keyholeReg *keyhole;
+ 
++#ifdef BCM_QEMU_HARNESS
++	/* CP-1 harness: see read_bpcm_reg_direct_keyhole — swallow the write. */
++	return kPMC_NO_ERROR;
++#endif
++
+ #if defined(PMC_ON_HOSTCPU) || defined(PMC_DIRECT_MODE_ONLY)
+ 	pmb = &((volatile Pmc *)(g_pmc->pmc_base))->pmb;
+ #else
+diff --git a/release/src-rt-5.04behnd.4916/bcmdrivers/opensource/misc/pmc/impl1/pmc_drv_dt.c b/release/src-rt-5.04behnd.4916/bcmdrivers/opensource/misc/pmc/impl1/pmc_drv_dt.c
+index cc7e4f0ac2..d2bea89c0c 100644
+--- a/release/src-rt-5.04behnd.4916/bcmdrivers/opensource/misc/pmc/impl1/pmc_drv_dt.c
++++ b/release/src-rt-5.04behnd.4916/bcmdrivers/opensource/misc/pmc/impl1/pmc_drv_dt.c
+@@ -396,6 +396,16 @@ static int __init bcm_pmc_drv_reg(void)
+     int ret;
+ 
+     printk("PMC driver initcall\n");
++
++#ifdef BCM_QEMU_HARNESS
++    /* CP-1 disposable QEMU harness: no PMC block on -M virt; the DT scan finds
++     * no pmc node and pmc_init() then dereferences a NULL register map and
++     * faults (pmc_initmode). Skip it. The dhd dep-chain ABI does not depend on
++     * the PMC init. NEVER define BCM_QEMU_HARNESS for a flashed build. */
++    printk("PMC driver: QEMU-harness stub (PMC init skipped)\n");
++    return 0;
++#endif
++
+     g_pmc = kzalloc(sizeof(*g_pmc), GFP_KERNEL);
+     if (!g_pmc)
+     {
+diff --git a/release/src-rt-5.04behnd.4916/bcmdrivers/opensource/misc/pmc/impl1/pmc_xrdp.c b/release/src-rt-5.04behnd.4916/bcmdrivers/opensource/misc/pmc/impl1/pmc_xrdp.c
+index a2d63a6830..d3174c231b 100644
+--- a/release/src-rt-5.04behnd.4916/bcmdrivers/opensource/misc/pmc/impl1/pmc_xrdp.c
++++ b/release/src-rt-5.04behnd.4916/bcmdrivers/opensource/misc/pmc/impl1/pmc_xrdp.c
+@@ -44,6 +44,15 @@ int pmc_xrdp_init(void)
+     int i;
+ 
+     printk("Powering on XRDP core...\n");
++#ifdef BCM_QEMU_HARNESS
++    /* CP-1 disposable QEMU harness: the XRDP/Runner power domain + its BPCM
++     * keyhole registers do not exist on -M virt; PowerOnDevice() reads an absent
++     * PMC register and faults (read_bpcm_reg_direct_keyhole). The Runner datapath
++     * is not exercised by the dhd PCIe-IPC probe, so skip powering it on.
++     * NEVER define BCM_QEMU_HARNESS for a flashed build. */
++    printk("XRDP: QEMU-harness stub (power-on skipped)\n");
++    return 0;
++#endif
+     for (i = 0; i < sizeof(xrdp_pmb)/sizeof(pmb_init_t);i++)
+     {
+         status =  PowerOnDevice(xrdp_pmb[i].pmb_addr);
+diff --git a/release/src-rt-5.04behnd.4916/bcmdrivers/opensource/misc/ubus/impl1/bcm_ubus_dt.c b/release/src-rt-5.04behnd.4916/bcmdrivers/opensource/misc/ubus/impl1/bcm_ubus_dt.c
+index 78fa1e9884..31df5f9af4 100644
+--- a/release/src-rt-5.04behnd.4916/bcmdrivers/opensource/misc/ubus/impl1/bcm_ubus_dt.c
++++ b/release/src-rt-5.04behnd.4916/bcmdrivers/opensource/misc/ubus/impl1/bcm_ubus_dt.c
+@@ -264,6 +264,17 @@ static int __init bcm_ubus_drv_init(void)
+ 
+     printk("BCM UBUS Driver initcall\n");
+ 
++#ifdef BCM_QEMU_HARNESS
++    /* CP-1 disposable QEMU harness: the SoC UBUS fabric registers do not exist
++     * on qemu-system-aarch64 -M virt; bcm_ubus_config() writes to an absent MMIO
++     * range and faults (see qemu-harness/traces/merlin-kernel-virt-panic.log).
++     * Stub the init out so the kernel boots on -M virt. EXPORT_SYMBOLs in
++     * nbuff/blog/knvram (the dhd dep-chain ABI) are independent of this init and
++     * are unaffected. NEVER define BCM_QEMU_HARNESS for a flashed/device build. */
++    printk("BCM UBUS Driver: QEMU-harness stub (SoC fabric init skipped)\n");
++    return 0;
++#endif
++
+     ubus_sys = kzalloc(sizeof(*ubus_sys), GFP_KERNEL);
+     if (!ubus_sys) {
+         printk("UBUS failed to allocate memory \n");
