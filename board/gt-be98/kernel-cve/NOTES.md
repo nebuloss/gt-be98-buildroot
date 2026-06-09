@@ -185,3 +185,45 @@ failure: that leaves mgmt plane up but wifi/datapath down):**
 3. WiFi associates on all 3 radios; a client gets an IP.
 4. Datapath/internet works (HW-offloaded forwarding via the rebuilt kernel).
 Only after all four pass should the operator commit the trial slot.
+
+## Step 5 — v33 unified image: hardened kernel + v32 rootfs (PURE REPACK, 2026-06-09)
+
+**Why**: the hardened pkgtb (Step 4) carries the v31 rootfs, which predates the
+OpenSSL-3 hostapd promotion (v32). Trialing the hardened kernel as-is would
+regress hostapd back to the pre-openssl3 build. v33 = hardened **kernel** FIT +
+v32 **rootfs**, so the CVE-hardened kernel can be trialed with the v32 userspace
+intact. No rebuild — pure repack of two validated `.pkgtb`s.
+
+| Artifact | sha256 |
+|---|---|
+| `artifacts-br/GT-BE98_openrc-init-v33_nand_squashfs.pkgtb` | `566dc9680ff7ee241ed0a9045efc9dc28df8da173a146569b291fe6b1c4ca7f1` (48 839 764 B) |
+
+**Inputs** (both pre-validated):
+- HARDENED `GT-BE98_kernel-cve-hardened.pkgtb` (sha `174eb963`) → take **image 0**
+  bootfs.itb (sha `d73dfafa…`, the 61-CVE hardened vmlinux). Discard its image 1
+  (v31 rootfs `fed6cf3d…`).
+- V32 `GT-BE98_openrc-init-v32_nand_squashfs.pkgtb` (sha `90c64182`) → take
+  **image 1** nand_squashfs (sha `0de17e56…`, rc-free + self-heal +
+  hostapd-openssl3). Discard its image 0 (kernel).
+
+**Method**: `repack-v33-unified.sh` — `dumpimage -T flat_dt -p 0` / `-p 1` to
+split (identical to `open-flash.sh`), then `repack-pkgtb.py` **verbatim** to
+assemble the same external-data FIT (bootfs @offset 0 + nand_squashfs +
+conf_6813_a0+_nand_squashfs + per-segment sha256).
+
+**Verified**:
+- `dumpimage -l` → well-formed FIT, image 0 = `d73dfafa…`, image 1 = `0de17e56…`.
+- open-flash split (`-p 0` / `-p 1`) recovers both segments **byte-identical**
+  (`cmp` clean) to the hardened bootfs.itb and the v32 squashfs.
+- Provenance sanity: v33 bootfs **differs** from v32's kernel (kernel came from
+  hardened, not v32); v33 rootfs **differs** from the v31 rootfs inside the
+  hardened pkgtb (rootfs is v32, not v31). ⇒ exactly hardened-kernel + v32-rootfs.
+
+**CVE caveat (carries from Step 4)**: the 61 built-in CVE fixes are in the
+hardened **vmlinux** that v33 ships. The in-tree **cfg80211.ko** in the v32
+rootfs is still the pre-CVE one — to land the wireless-CVE cfg80211 fix, drop the
+rebuilt hardened `cfg80211.ko` into the rootfs before squashing (vermagic + 34/34
+exports unchanged, loads against either vmlinux).
+
+**Trial**: same GATE as Step 4; flash `GT-BE98_openrc-init-v33_nand_squashfs.pkgtb`
+to the spare slot. NO FLASH done here — repack only.
