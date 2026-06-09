@@ -80,16 +80,74 @@ OBJECT_DECLARE_SIMPLE_TYPE(BcmFmacStubState, BCM_FMAC_STUB)
 #define CFG_BAR0_WINDOW          0x80
 
 /* ---- backplane / ChipCommon model ---- */
-/* SiliconBackplane ChipCommon enumeration base on these parts. si_attach()
- * sets the BAR0 window to the ChipCommon core and reads offset 0 = chipid reg.
- * chipid register layout: [15:0]=id [19:16]=rev(packaged separately) ... */
-#define CHIPCOMMON_BASE          0x18000000u
+/* SiliconBackplane enumeration base. RE-CONFIRMED from dhd.ko si_enum_base_pa()
+ * (@0x6f960) + the live trace: for devid 0x602d (GT-BE98 6717a0) dhd programs
+ * the BAR0 sliding window to backplane 0x28000000 and reads offset 0 = the
+ * ChipCommon chipid register.  (The old 0x18000000 was the legacy/SoCI-SB base;
+ * the 6717/6726 AI-backplane parts enumerate at 0x28000000.) */
+#define CHIPCOMMON_BASE          0x28000000u
 #define CHIPCOMMON_CHIPID_OFF    0x00
+#define CHIPCOMMON_EROMPTR_OFF   0xfc   /* chipc.eromptr -> backplane addr of EROM */
+
+/* ChipCommon chipid register fields (chipcregs.chipid):
+ *   [15:0]  chip id     [19:16] chip rev    [23:20] package option
+ *   [27:24] #cores      [31:28] chiptype  (1 = SOCI_AI, the AXI backplane)
+ * dhd's si_doattach() requires chiptype==1 (AI) so it runs ai_scan()/EROM walk,
+ * and accepts chip id 0x6716 (the 6717 family base) -> internally normalized to
+ * 0x6726.  [RE-CONFIRMED from si_doattach disasm @0x70300-0x70338]. */
+#define CHIPID_AI_TYPE           (1u << 28)
+#define CHIPID_6717_ID           0x6716u
+/* backplane address where we expose the synthetic EROM table */
+#define EROM_BASE                0x28010000u
 
 /* ---- mailbox / doorbell bits (from brcmfmac pcie.c) ---- */
 #define D2H_DEV_D3_ACK           0x00000001
 #define MB_INT_D2H_DB            0x0000F000   /* D2H doorbell aggregate */
 #define H2D_HOST_D0_INFORM       0x00000010
+
+/*
+ * Synthetic AI/DMP EROM table (RE-CONFIRMED grammar from dhd.ko ai_scan @0x616c0,
+ * get_erom_ent @0x611e0, get_asd @0x61590):
+ *
+ *   CIA  (Component-ID entry A): [0]=valid(1) [3:1]=tag(CI=0) [19:8]=cid(12b)
+ *        [31:20]=mfg(12b, must be 0x43b = Broadcom).
+ *   CIB  (Component-ID entry B): [8:4]=#address-descriptors-of-this-core (w22),
+ *        [13:9]=nmw [18:14]=nsw [23:19]=nmp ... (wire/port counts).
+ *   ASD  (Address-Space Descriptor): [0]=valid [2:1]=tag(ADDR=2 -> &0x6==0x4)
+ *        [3]=is64bit [5:4]=sizetype (0x3=>explicit size word) [7:6]=addrtype
+ *        [11:8]=slave-port-id [31:12]=base>>12.
+ *   END  terminator = 0x0000000F.
+ *
+ * Minimal table: one core (ChipCommon, cid 0x800) with a single 4 KiB slave
+ * address descriptor at the enum base, then END.  This is enough to confirm
+ * ai_scan walks the table and to capture the next core dhd looks for.  A full
+ * bring-up table (PCIe2 core, ARM-CA7, SYS_MEM, …) is the next iteration.
+ *
+ *  CIA  = (mfg 0x43b << 20) | (cid 0x800 << 8) | valid 1   = 0x43b80001
+ *  CIB  = (#ASD 1 << 4)     | valid 1                       = 0x00000011
+ *  ASD  = (base 0x28000000) | (addrtype 0 << 6) | (sztype 1 << 4)
+ *                           | (sp 0 << 8) | (tag ADDR 2 << 1) | valid 1
+ *         base>>12 already in high bits -> 0x28000000 | 0x14 | 0x1 = 0x28000015
+ *         (sztype 1 => size = 4096 << 1 = 8 KiB region)
+ *  END  = 0x0000000F
+ */
+#define EROM_CIA(mfg, cid)  ((((mfg) & 0xfff) << 20) | (((cid) & 0xfff) << 8) | 1u)
+/* CIB: [8:4]=#ASD (w22), [13:9]=nmw (w23 master-wrapper count; ai_scan SKIPS the
+ * core if nmw==0, see ai_scan @0x617ac `ands w0,w23,#0x1f; b.eq`), [18:14]=nsw,
+ * [23:19]=nmp.  Give nmw=1 so the core is parsed; nsw=nmp=0 so the simple
+ * get_asd slave-descriptor path is taken (cmn w_nsw,w_nmp must be 0). */
+#define EROM_CIB(nasd, nmw) ((((nmw) & 0x1f) << 9) | (((nasd) & 0x1f) << 4) | 1u)
+#define EROM_ASD(base, sp, addrtype, sztype) \
+    (((base) & 0xfffff000u) | (((sp) & 0xf) << 8) | (((addrtype) & 0x3) << 6) | \
+     (((sztype) & 0x3) << 4) | (2u << 1) | 1u)
+#define EROM_END            0x0000000fu
+
+static const uint32_t bcm_erom_table[] = {
+    EROM_CIA(0x43b, 0x800),                  /* ChipCommon core, Broadcom mfg */
+    EROM_CIB(1, 1),                          /* 1 ASD, 1 master wrapper */
+    EROM_ASD(CHIPCOMMON_BASE, 0, 0, 1),      /* 4K@enum-base, slave port 0 */
+    EROM_END,
+};
 
 /*
  * BCA-PCIe-IPC handshake state.
@@ -168,15 +226,40 @@ static uint64_t bcm_bar0_read(void *opaque, hwaddr addr, unsigned size)
     uint32_t bp = s->bar0_window + (uint32_t)addr;
     uint64_t val = 0;
 
-    /* ChipCommon chipid register */
+    /* ChipCommon chipid register (offset 0 of the enum-base ChipCommon core) */
     if (bp == (CHIPCOMMON_BASE + CHIPCOMMON_CHIPID_OFF)) {
-        /* chipid reg: bits[15:0]=id, bits[19:16]=rev (approx), bits[28:25]=pkg */
+        /* [15:0]=id [19:16]=rev [23:20]=pkg [27:24]=#cores [31:28]=chiptype.
+         * chiptype MUST be 1 (SOCI_AI) for dhd to run ai_scan(); id 0x6716
+         * is the recognized 6717 family base. */
         val = (s->prop_chipid & 0xffff) |
-              ((s->prop_chiprev & 0xf) << 16);
+              ((s->prop_chiprev & 0xf) << 16) |
+              ((0x0u & 0xf) << 20) |          /* package option 0 */
+              ((0x6u & 0xf) << 24) |          /* #cores (informational) */
+              CHIPID_AI_TYPE;                 /* chiptype = AI */
         TRACE(s, "BAR0 read CHIPID bp=0x%08x -> 0x%08" PRIx64
-                 "  (id=0x%x rev=%u)  [si_attach]",
+                 "  (id=0x%x rev=%u type=AI)  [si_doattach]",
               bp, val, s->prop_chipid & 0xffff, s->prop_chiprev);
         return val;
+    }
+    /* ChipCommon eromptr: dhd's ai_scan() reads this to find the EROM table,
+     * then re-points the BAR0 window at it and walks 32-bit entries. */
+    if (bp == (CHIPCOMMON_BASE + CHIPCOMMON_EROMPTR_OFF)) {
+        val = EROM_BASE;
+        TRACE(s, "BAR0 read EROMPTR bp=0x%08x -> 0x%08" PRIx64 "  [ai_scan]",
+              bp, val);
+        return val;
+    }
+    /* Synthetic EROM table: served as sequential 32-bit entries starting at
+     * EROM_BASE.  ai_scan()/get_erom_ent() walk this to enumerate cores.
+     * Entry index = (bp - EROM_BASE)/4.  See bcm_erom_entry(). */
+    if (bp >= EROM_BASE && bp < EROM_BASE + sizeof(bcm_erom_table)) {
+        uint32_t idx = (bp - EROM_BASE) >> 2;
+        if (idx < (sizeof(bcm_erom_table) / sizeof(bcm_erom_table[0]))) {
+            val = bcm_erom_table[idx];
+            TRACE(s, "BAR0 read EROM[%u] bp=0x%08x -> 0x%08" PRIx64,
+                  idx, bp, val);
+            return val;
+        }
     }
 
     switch (addr) {
@@ -399,6 +482,7 @@ static uint32_t bcm_config_read(PCIDevice *pdev, uint32_t addr, int len)
 {
     BcmFmacStubState *s = BCM_FMAC_STUB(pdev);
     uint32_t val = pci_default_read_config(pdev, addr, len);
+    (void)s;   /* used only inside the TRACE() expansion below */
     /* Skip the high-frequency uninteresting 1-byte capability walk noise by
      * only tracing word/dword reads and the known-interesting offsets. */
     if (len >= 2 || addr == CFG_BAR0_WINDOW) {
@@ -416,6 +500,17 @@ static void bcm_fmac_realize(PCIDevice *pdev, Error **errp)
     /* class code 0x028000 (network controller / other) */
     pci_set_word(cfg + PCI_CLASS_DEVICE, BCM_CLASS_NETWORK_OTHER);
     cfg[PCI_INTERRUPT_PIN] = 1; /* INTA fallback if MSI off */
+
+    /* Subsystem IDs. dhdpcie_prepare_pcie_ep() reads pdev->subsystem_device
+     * (struct pci_dev +62, sourced from cfg 0x2e) and branches on it:
+     * the path that recognizes a 6717/6726-class part requires
+     *   (subsys_devid - 0x6024) & 0xffff <= 0xd   (i.e. 0x6024..0x6031)
+     * GT-BE98 nvram advertises 1:devid=0x602d, which lands in that window.
+     * Set sub-vendor 0x14e4, sub-device 0x602d so dhd takes the recognized
+     * path (then the cfg 0x6c liveness nibble gate below).  [RE-CONFIRMED:
+     * the 0x6024..0x6031 acceptance window from disasm; 0x602d from nvram]. */
+    pci_set_word(cfg + PCI_SUBSYSTEM_VENDOR_ID, BCM_VENDOR_ID);
+    pci_set_word(cfg + PCI_SUBSYSTEM_ID, 0x602d);
 
     /* BAR0: backplane register window (MMIO) */
     memory_region_init_io(&s->bar0, OBJECT(s), &bcm_bar0_ops, s,
@@ -448,15 +543,28 @@ static void bcm_fmac_realize(PCIDevice *pdev, Error **errp)
     if (pcie_endpoint_cap_init(pdev, 0x44) < 0) {
         /* non-fatal for the harness */
     }
-    /* dhd's dhdpcie_init() liveness gate reads config 0x6c (a 4-byte read) and
-     * treats 0 as "device not accessible" (captured live). With the Express cap
-     * at 0x44, 0x6c == express+0x28 (DevCtl2/DevSta2), which QEMU leaves 0.
-     * Stamp a non-zero sentinel there + populate Link Status (negotiated Gen2
-     * x1, link up) so the dongle looks alive. Also clear the writemask so dhd's
-     * value persists. The exact real-dongle value is [DYN]; what dhd checks is
-     * "non-zero" (liveness), captured here. */
-    pci_set_long(cfg + 0x6c, 0x00000001);
+    /* dhd's dhdpcie_prepare_pcie_ep() "device accessible" gate (RE-CONFIRMED by
+     * disasm of dhd.ko @0x4ddf0):
+     *   w23 = pdev->subsystem_device (struct pci_dev +62)
+     *   reads cfg 0x00 (vendor==0x14e4), cfg 0x110 -> w21, then for the
+     *   subsys-devid-recognized path reads cfg 0x6c (4 bytes) and does
+     *       tst w0, #0xf0 ; b.eq <fail -> return -40>
+     * i.e. the gate is NOT "0x6c nonzero" (the prior CP-2 guess) but
+     * specifically "(cfg6c & 0xF0) != 0".  cfg 0x6c == Express-cap+0x28 here
+     * (DevCtl2/DevSta2 region).  The 0xF0-mask is a vendor-defined PCIe-gen /
+     * capability nibble dhd polls for liveness.  Set bits[7:4] so the gate
+     * passes; keep the value otherwise minimal.  [RE-CONFIRMED: mask 0xF0 gate;
+     * exact real-dongle nibble value still DYN]. */
+    pci_set_long(cfg + 0x6c, 0x000000f0);
     pci_set_long(pdev->wmask + 0x6c, 0x00000000);
+    /* cfg 0x110 VSEC: dhd reads it into w21 and, if nonzero, writes it back
+     * (cleared-on-read AER-style scratch behaviour) at the end of
+     * prepare_pcie_ep.  QEMU's uninitialized ext-config returns garbage
+     * (0x62737973 = ASCII).  Zero it to a defined value so the path is
+     * deterministic and the writeback is skipped.  [DYN: real VSEC contents
+     * not yet needed to clear this gate]. */
+    pci_set_long(cfg + 0x110, 0x00000000);
+    pci_set_long(pdev->wmask + 0x110, 0xffffffff);
     /* PCI_EXP_LNKSTA (express+0x12) = link up, Gen2 (0x2), width x1 (0x10). */
     pci_set_word(cfg + 0x44 + 0x12, 0x0012);
 

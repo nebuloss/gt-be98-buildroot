@@ -29,26 +29,41 @@ Tags used throughout:
 - **[SDK]** — read from the exact SDK headers dhd.ko compiles against (authoritative struct/define; in-binary offset not independently re-derived).
 - **[DYN]** — needs runtime / bench / further-disasm confirmation before coding can finalize.
 
-## CP-2 dynamic-capture status (2026-06-09)
+## CP-2 dynamic-capture status (2026-06-09, updated CP-2b)
 
-The QEMU harness now boots the disposable kernel, loads the **full closed dhd dep
-chain**, and runs the **real `dhd.ko` probe** against the emulated 14e4 device
-(the CP-1 `rdpa_gpl` loader fault is root-caused + fixed — see
-`qemu-harness/traces/cp2-rdpa_gpl-rootcause-and-dhd-probe.md`). However, the live
-dhd currently stops in **`dhdpcie_scan_resource`** (PCI BAR enumeration), which is
-**upstream of** `si_attach`/chipid/EROM and the entire PCIe-IPC stage. Therefore:
+The QEMU harness boots the disposable kernel, loads the **full closed dhd dep
+chain**, and runs the **real `dhd.ko` probe** against the emulated 14e4 device.
+**CP-2b advanced the live probe past the PCI BAR/accessibility gate and chip
+recognition into the EROM enumeration** (see
+`qemu-harness/traces/cp2b-bar-gate-cleared-si_attach-erom.md`). Confirmed-live
+progress, with each gate RE-confirmed from the dhd.ko disasm (not guessed):
 
-- **No `[DYN]` item in §2–§9 has yet been promoted to `[RE-CONFIRMED]` from a live
-  dhd run** — dhd does not reach the shared-struct/ring/doorbell/HME code on the
-  current device-model. Promoting them would be unsupported; they remain `[DYN]`/`[SDK]`.
-- The only end-to-end IPC transcript so far is the **synthetic** `bcmfmac-probe`
-  exerciser (`qemu-harness/traces/handshake-distilled.txt`), which replays dhd's
-  expected order against tunable props — it confirms the harness mechanism, not the
-  real dongle's field values.
-- Next dynamic-capture step (to start flipping `[DYN]`→`[RE-CONFIRMED]`): RE
-  `dhdpcie_scan_resource`'s BAR acceptance + the cfg-0x110 VSEC that
-  `dhdpcie_prepare_pcie_ep` reads, size the device-model BARs to match, and drive
-  dhd into `si_attach → read_pcie_ipc`. Until then §2/§3/§4/§6/§7/§9 stay as tagged.
+- **BAR/"device accessible" gate CLEARED.** `dhdpcie_prepare_pcie_ep` (@0x4ddf0,
+  mode=1) requires (a) `pdev->subsystem_device` ∈ **0x6024..0x6031**
+  (nvram devid 0x602d) and (b) **`(cfg 0x6c & 0xF0) != 0`** (a 0xF0 nibble, NOT
+  merely "0x6c nonzero" as the prior note guessed). Device-model now sets cfg
+  0x2e=0x602d and cfg 0x6c=0x000000f0. dhd then ran the backplane-reset poll
+  (cfg 0x88 bit 0x400) and passed `dhdpcie_scan_resource`/`dhdpcie_get_resource`
+  (the `BAR2 Not enabled size(0)` line is a benign non-aborting warning).
+- **`si_attach` entered; chipid recognized.** `si_enum_base_pa(0x602d)` returns
+  enum base **0x28000000** (NOT the legacy 0x18000000); chipid reg `[31:28]` must
+  be **chiptype 1 (SOCI_AI)** to drive `ai_scan`. (See §1, now RE-CONFIRMED.)
+- **`ai_scan` EROM walk reached + parsing.** dhd reads chipc eromptr (off 0xfc),
+  re-points the window, and walks the AI/DMP EROM via `get_erom_ent`/`get_asd`.
+  The EROM grammar is now RE-CONFIRMED (see §1). dhd parsed a synthetic
+  ChipCommon core to END.
+
+- **Still NO `[DYN]` item in §2–§9 promoted from a live dhd** — dhd stops in
+  `si_doattach` *after* ai_scan because the synthetic EROM enumerates only
+  ChipCommon; the **PCIe2 buscore + ARM-CA7 + SYS_MEM cores are not yet present**,
+  so si_doattach cannot find its buscore. This is still upstream of
+  `read_pcie_ipc`. §2/§3/§4/§6/§7/§9 remain `[DYN]`/`[SDK]`.
+- **Next dynamic-capture step:** extend the device-model EROM to a multi-core
+  table (PCIe2 + CA7 + SYS_MEM with correct CIA/CIB/ASD + per-core register
+  stubs) so si_doattach completes → `dhdpcie_dongle_attach` body → membytes
+  fw-download + CA7 release → **`read_pcie_ipc`**. Only there do §2/§3/§4 flip to
+  RE-CONFIRMED and M3 becomes assessable. The synthetic `bcmfmac-probe`
+  transcript (`handshake-distilled.txt`) remains the only end-to-end IPC trace.
 
 dhd.ko v17.10.369.39012 and both `rtecdc.bin` images are the **same firmware
 train** (host/dongle FWID handshake matches), so the headers above describe
@@ -105,10 +120,18 @@ The two largest net-new chunks are **HME (§6)** and the **HYBRIDFW loader (§8)
 - `chip.c` has **no** 6717/6726/6715/43684 chip IDs. New `BRCM_CC_*_CHIP_ID`
   cases + core-table entries are required (see prototype patches 0001/0003). **[RE-CONFIRMED]**
 
-**[DYN]** the exact chipcommon chipid register values for 6717a0/6726b0 (read
-chipc `0x00` over BAR0 at runtime); the precise CA7 TCM/RAM base + reset-vector
-write register for these silicon revs (the `set_active` path exists but is
-unverified on this silicon). `devid=0x602d` from nvram is informational only.
+**[RE-CONFIRMED CP-2b]** backplane **enum base = 0x28000000** for devid 0x602d
+(from `si_enum_base_pa` @0x6f960 + the live window dhd programmed; the legacy SB
+base 0x18000000 is *not* used by these AI parts). The **chipid register
+(chipc +0x00)** format is `[15:0]=id [19:16]=rev [23:20]=pkg [27:24]=#cores
+[31:28]=chiptype`, and dhd's `si_doattach` requires **chiptype = 1 (SOCI_AI)** to
+run `ai_scan`. The **EROM** is reached via **chipc +0xfc (eromptr)**; dhd walks
+it with the AI/DMP grammar (CIA mfg=0x43b/cid; CIB nmw/#ASD; ASD base/size/type;
+END=0xF — `get_erom_ent` @0x611e0, `get_asd` @0x61590).
+**[DYN]** the exact chipid *id*/rev/pkg nibbles for 6717a0/6726b0, and the full
+multi-core EROM contents (PCIe2 buscore, CA7, SYS_MEM core addresses); the
+precise CA7 TCM/RAM base + reset-vector write register for these silicon revs
+(the `set_active` path exists but is unverified on this silicon).
 
 ### RAM sizing
 For CA7, brcmfmac reads rambase/ramsize from `BCMA_CORE_SYS_MEM` (not the
