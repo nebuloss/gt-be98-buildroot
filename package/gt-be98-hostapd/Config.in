@@ -36,4 +36,25 @@ config BR2_PACKAGE_GT_BE98_HOSTAPD_DAEMON
 	  reproducible-build match. Installs hostapd + its openssl-1.1 /
 	  libnl / libceshared runtime deps into the rootfs.
 
+config BR2_PACKAGE_GT_BE98_HOSTAPD_DAEMON_OPENSSL3
+	bool "static-link openssl-3.6.2 into hostapd (close the EOL-1.1 gap)"
+	depends on BR2_PACKAGE_GT_BE98_HOSTAPD_DAEMON
+	select BR2_PACKAGE_GT_BE98_BR_OPENSSL
+	help
+	  Recompile + STATIC-link the hostapd daemon against openssl-3.6.2
+	  (the gt-be98-br-openssl staging tree, libcrypto.a) instead of the
+	  SDK's bundled, end-of-life openssl-1.1.1w. hostapd is the device's
+	  SOLE live openssl-1.1 consumer, so this closes the EOL-1.1 gap.
+
+	  No source edits: crypto_openssl.c already carries the openssl-3
+	  #if-branches; the SAME source recompiles against the openssl-3
+	  headers. The unused -lssl is dropped (hostapd imports 0 libssl
+	  symbols; CONFIG_EAP is off). The result NEEDs NO libcrypto.so.1.1
+	  / libssl.so.1.1 -- openssl-3 is baked in statically, so those
+	  shared libs are NOT installed alongside hostapd in this mode.
+
+	  WiFi-7 (MLO/320MHz, driver_nl80211.c) + SAE/WPA3 (sae.c) carry zero
+	  openssl refs; all crypto is isolated in crypto_openssl.c. Operator
+	  must runtime-trial: SAE/WPA3 + WiFi-7 association.
+
 endif
