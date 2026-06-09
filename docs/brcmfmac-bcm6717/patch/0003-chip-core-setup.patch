@@ -1,0 +1,36 @@
+From: gt-be98 open-driver RE
+Subject: [PATCH 3/3] brcmfmac: chip core setup notes for BCM6717/6726 (CA7)
+
+The 6717/6726 boot the ARM **CA7** core (confirmed: dhd.ko strings
+"Failed to find ARM CA7 core", "ca7_regs_rev2"). brcmfmac's chip.c already
+handles BCMA_CORE_ARM_CA7 for the 4365/4366 family (set_active/disable/get_core
+cases exist), so the reset/halt plumbing is reused as-is — no new core case is
+strictly required for boot.
+
+What IS chip-specific is the TCM RAM base used by brcmf_chip_tcm_rambase().
+4365/4366 use 0x200000. The 6717/6726 RAM base is NOT encoded in the rtecdc
+"LFOC" container (word@8 is the image end/length: 0x1f4004 for 6717, 0x24b004
+for 6726; the reset vector at container off 0x0C is identical 0x01f018b8). The
+true rambase must be read from the chip DMP/erom or a bench dump. The entries
+below are UNVERIFIED placeholders so the build is complete — replace after bench.
+
+--- a/drivers/net/wireless/broadcom/brcm80211/brcmfmac/chip.c
++++ b/drivers/net/wireless/broadcom/brcm80211/brcmfmac/chip.c
+@@ -688,6 +688,13 @@ static u32 brcmf_chip_tcm_rambase(struct brcmf_chip_priv *ci)
+ 	case BRCM_CC_43664_CHIP_ID:
+ 		return 0x200000;
++	/* GT-BE98 FullMAC radios (CA7 core). UNVERIFIED rambase — the rtecdc
++	 * "LFOC" container does not carry it; confirm from chip DMP/erom dump.
++	 * 0x200000 is the 4365/4366-family value used as a starting guess.
++	 */
++	case BRCM_CC_6715_CHIP_ID:
++	case BRCM_CC_6717_CHIP_ID:
++	case BRCM_CC_6726_CHIP_ID:
++		return 0x200000; /* PLACEHOLDER — verify on bench */
+ 	case CY_CC_4373_CHIP_ID:
+ 		return 0x160000;
+ 	default:
+
+# NOTE (not a code change): brcmf_chip_recognize()/brcmf_chip_cores_check()
+# may reject these chips if the EROM core list contains cores brcmfmac doesn't
+# model. That is a probe-time failure to expect and triage on first insmod.

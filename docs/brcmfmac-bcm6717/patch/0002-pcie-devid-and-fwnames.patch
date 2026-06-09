@@ -1,0 +1,48 @@
+From: gt-be98 open-driver RE
+Subject: [PATCH 2/3] brcmfmac: register BCM6717/6726 devids + firmware-name map
+
+Two changes in pcie.c:
+
+1. Add the chips to brcmf_pcie_devid_table so the PCI core binds brcmfmac to
+   them. NOTE: the real device matches by PCI class on the device (dhd uses
+   PCI_ANY_ID + class 0x028000); if the bench-confirmed device-id differs from
+   the placeholders, prefer a class-based match entry instead (commented form
+   given below).
+
+2. Add brcmf_pcie_fwnames entries so brcmfmac builds the firmware request name.
+   IMPORTANT: brcmfmac will look for "brcmfmac6717-pcie.bin"/"...6726-pcie.bin"
+   under /lib/firmware/brcm/. The on-device file is rom/etc/wlan/dhd/<chip>/
+   release/rtecdc.bin and is wrapped in an "LFOC" container (see ANALYSIS §3),
+   so it CANNOT be used as-is — it needs the container stripped to the bare RAM
+   image (reset vector at container offset 0x0C) before brcmfmac's loader, which
+   does `resetintr = get_unaligned_le32(fw->data)` on byte 0, will accept it.
+
+--- a/drivers/net/wireless/broadcom/brcm80211/brcmfmac/pcie.c
++++ b/drivers/net/wireless/broadcom/brcm80211/brcmfmac/pcie.c
+@@ -60,6 +60,9 @@ BRCMF_FW_DEF(4366B, "brcmfmac4366b-pcie");
+ BRCMF_FW_DEF(4366C, "brcmfmac4366c-pcie");
+ BRCMF_FW_DEF(4371, "brcmfmac4371-pcie");
++BRCMF_FW_DEF(6717, "brcmfmac6717-pcie");
++BRCMF_FW_DEF(6726, "brcmfmac6726-pcie");
+
+ static const struct brcmf_firmware_mapping brcmf_pcie_fwnames[] = {
+ 	BRCMF_FW_ENTRY(BRCM_CC_43602_CHIP_ID, 0xFFFFFFFF, 43602),
+@@ -78,6 +81,9 @@ static const struct brcmf_firmware_mapping brcmf_pcie_fwnames[] = {
+ 	BRCMF_FW_ENTRY(BRCM_CC_43664_CHIP_ID, 0xFFFFFFF0, 4366C),
+ 	BRCMF_FW_ENTRY(BRCM_CC_4371_CHIP_ID, 0xFFFFFFFF, 4371),
++	/* GT-BE98 FullMAC radios. revmask 0xFFFFFFFF = all silicon revs. */
++	BRCMF_FW_ENTRY(BRCM_CC_6717_CHIP_ID, 0xFFFFFFFF, 6717),
++	BRCMF_FW_ENTRY(BRCM_CC_6726_CHIP_ID, 0xFFFFFFFF, 6726),
+ };
+
+@@ -1996,6 +2002,12 @@ static const struct pci_device_id brcmf_pcie_devid_table[] = {
+ 	BRCMF_PCIE_DEVICE(BRCM_PCIE_4371_DEVICE_ID),
++	/* GT-BE98 FullMAC radios — placeholder device-ids (confirm on bench). */
++	BRCMF_PCIE_DEVICE(BRCM_PCIE_6717_DEVICE_ID),
++	BRCMF_PCIE_DEVICE(BRCM_PCIE_6726_DEVICE_ID),
++	/* If device-id is unstable, match by class like the vendor dhd does:
++	 * { PCI_VENDOR_ID_BROADCOM, PCI_ANY_ID, PCI_ANY_ID, PCI_ANY_ID,
++	 *   0x028000, 0x00ffff00, 0 },
++	 */
+ 	{ /* end: all zeroes */ }
+ };
