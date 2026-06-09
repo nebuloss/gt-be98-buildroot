@@ -17,8 +17,11 @@
 set -euo pipefail
 PKG="${1:?usage: open-flash.sh <image.pkgtb>}"
 DEV="${GT_BE98_DEV:-admin@10.0.0.8}"; PORT="${GT_BE98_PORT:-2222}"
-SSH="ssh -p $PORT -o ConnectTimeout=8 -o StrictHostKeyChecking=no $DEV"
-SSHT="ssh -T -p $PORT -o ConnectTimeout=10 -o StrictHostKeyChecking=no $DEV"
+# Robust SSH: keepalive kills a hung ESTABLISHED session (a flash ssh once hung
+# 90min without it), UserKnownHostsFile=/dev/null avoids host-key churn.
+KA="-o ServerAliveInterval=5 -o ServerAliveCountMax=2 -o UserKnownHostsFile=/dev/null"
+SSH="ssh -p $PORT -o ConnectTimeout=30 -o StrictHostKeyChecking=no $KA $DEV"
+SSHT="ssh -T -p $PORT -o ConnectTimeout=30 -o StrictHostKeyChecking=no $KA $DEV"
 TMP="$(mktemp -d)"; trap 'rm -rf "$TMP"' EXIT
 say(){ echo "== $*"; }; die(){ echo "!! $*" >&2; exit 1; }
 
