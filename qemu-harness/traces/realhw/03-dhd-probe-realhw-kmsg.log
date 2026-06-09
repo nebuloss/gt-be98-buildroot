@@ -1,0 +1,203 @@
+kerSysDeregisterDyingGaspHandler: wl3 is deregistering
+kerSysDeregisterDyingGaspHandler: wl3 is deregistered
+kthread_should_stop detected in wfd
+wfd3-th pktlist3 <8:513> dispatch<0> list<0> pkts<0> peer<ffffffc04ae67800,wl_pktfwd_xfer_callback+0x0/0x5e0 [wl]>
+wl3 pktlist3 <8:513> dispatch<0> list<0> pkts<0> peer<0000000000000000,          (null)>
+ DEST PRIO KEY  PACKETS    CREDITS
+                =======
+                  0
+
+pktqueue domian 3 <tot:5> queue<0> pkts<0>
+kthread_should_stop detected on wl3
+wfd_unregisterdevice Nothing to unregister ifidx 0 wfd_idx 3
+br0: port 8(wl3) entered disabled state
+Freeing devid[2076] for wl3
+device wl3 left promiscuous mode
+br0: port 8(wl3) entered disabled state
+{BSS_UPDN::}wl3.0: wlc_bsscfg_free: cfg 00000000ea3727ac is still enable up 0 flags = 0x2062
+wfd_unregisterdevice Nothing to unregister ifidx 1 wfd_idx 3
+osl_mfree NULL
+osl_mfree NULL
+osl_mfree NULL
+osl_mfree NULL
+Freeing devid[2080] for wl3.1
+osl_mfree NULL
+osl_mfree NULL
+M2MDMA: core 0 deinit
+M2MDMA: core 1 deinit
+wfd_unregisterdevice Nothing to unregister ifidx 4 wfd_idx 3
+Freeing devid[2081] for wl3.4
+wl3: Memory leak of bytes 1536
+kerSysDeregisterDyingGaspHandler: wl2 is deregistering
+kerSysDeregisterDyingGaspHandler: wl2 is deregistered
+kthread_should_stop detected in wfd
+wfd2-th pktlist2 <8:513> dispatch<0> list<0> pkts<0> peer<ffffffc04c55b600,wl_pktfwd_xfer_callback+0x0/0x5e0 [wl]>
+wl2 pktlist2 <8:513> dispatch<0> list<0> pkts<0> peer<0000000000000000,          (null)>
+ DEST PRIO KEY  PACKETS    CREDITS
+                =======
+                  0
+
+pktqueue domian 2 <tot:5> queue<0> pkts<0>
+kthread_should_stop detected on wl2
+wfd_unregisterdevice Nothing to unregister ifidx 0 wfd_idx 2
+br0: port 7(wl2) entered disabled state
+Freeing devid[2075] for wl2
+device wl2 left promiscuous mode
+br0: port 7(wl2) entered disabled state
+{BSS_UPDN::}wl2.0: wlc_bsscfg_free: cfg 000000004247126f is still enable up 0 flags = 0x2062
+wfd_unregisterdevice Nothing to unregister ifidx 1 wfd_idx 2
+osl_mfree NULL
+osl_mfree NULL
+Freeing devid[2079] for wl2.1
+osl_mfree NULL
+osl_mfree NULL
+osl_mfree NULL
+osl_mfree NULL
+M2MDMA: core 0 deinit
+M2MDMA: core 1 deinit
+wl2: Memory leak of bytes 1024
+kerSysDeregisterDyingGaspHandler: wl1 is deregistering
+kerSysDeregisterDyingGaspHandler: wl1 is deregistered
+kthread_should_stop detected in wfd
+wfd1-th pktlist1 <8:513> dispatch<0> list<0> pkts<0> peer<ffffffc04df04c00,wl_pktfwd_xfer_callback+0x0/0x5e0 [wl]>
+wl1 pktlist1 <8:513> dispatch<0> list<0> pkts<0> peer<0000000000000000,          (null)>
+ DEST PRIO KEY  PACKETS    CREDITS
+                =======
+                  0
+
+pktqueue domian 1 <tot:5> queue<0> pkts<0>
+kthread_should_stop detected on wl1
+wfd_unregisterdevice Nothing to unregister ifidx 0 wfd_idx 1
+br0: port 6(wl1) entered disabled state
+Freeing devid[2074] for wl1
+device wl1 left promiscuous mode
+br0: port 6(wl1) entered disabled state
+{BSS_UPDN::}wl1.0: wlc_bsscfg_free: cfg 00000000da3df55f is still enable up 0 flags = 0x2062
+wfd_unregisterdevice Nothing to unregister ifidx 1 wfd_idx 1
+osl_mfree NULL
+osl_mfree NULL
+osl_mfree NULL
+osl_mfree NULL
+Freeing devid[2078] for wl1.1
+osl_mfree NULL
+osl_mfree NULL
+M2MDMA: core 0 deinit
+M2MDMA: core 1 deinit
+wl1: Memory leak of bytes 1024
+kerSysDeregisterDyingGaspHandler: wl0 is deregistering
+kerSysDeregisterDyingGaspHandler: wl0 is deregistered
+kthread_should_stop detected in wfd
+wfd0-th pktlist0 <8:513> dispatch<0> list<0> pkts<0> peer<ffffffc055a16a00,wl_pktfwd_xfer_callback+0x0/0x5e0 [wl]>
+wl0 pktlist0 <8:513> dispatch<0> list<0> pkts<0> peer<0000000000000000,          (null)>
+ DEST PRIO KEY  PACKETS    CREDITS
+                =======
+                  0
+
+pktqueue domian 0 <tot:5> queue<0> pkts<0>
+kthread_should_stop detected on wl0
+wfd_unregisterdevice Nothing to unregister ifidx 0 wfd_idx 0
+br0: port 5(wl0) entered disabled state
+Freeing devid[2073] for wl0
+device wl0 left promiscuous mode
+br0: port 5(wl0) entered disabled state
+{BSS_UPDN::}wl0.0: wlc_bsscfg_free: cfg 000000006dda38e7 is still enable up 0 flags = 0x2062
+wfd_unregisterdevice Nothing to unregister ifidx 1 wfd_idx 0
+osl_mfree NULL
+osl_mfree NULL
+osl_mfree NULL
+osl_mfree NULL
+Freeing devid[2077] for wl0.1
+osl_mfree NULL
+osl_mfree NULL
+M2MDMA: core 0 deinit
+M2MDMA: core 1 deinit
+wl0: Memory leak of bytes 1024
+[0;32mwl_pktfwd_sys_fini:  [1m[34mWL_PKTFWD[1.1.0][0m Complete[0m
+dhd_module_init in
+DHD_FKB_POOL size is:1280 and entry size:2816
+DHD_PKTTAG POOL size is:2592 and entry size:128
+[0;32mdhd_pktfwd_sys_init:  [1m[34mdhd_PKTFWD[1.0.0][0m Success[0m
+dhd_queue_budget = 256
+dhd_sta_threshold = 2048
+dhd_if_threshold = 65536
+dhd_bus_register: Enter
+PCI_PROBE:  bus 1, slot 0,vendor 14E4, device 6716(good PCI location)
+dhdpcie_prepare_pcie_ep: Resettting backplane for device 0x6716
+Polling for SB Reset state (PCI_SPROM_CONTROL)
+SB reset bit is de-asserted by HW. Wait for 2ms for Backplane RESET to be completed
+dhdpcie_scan_resource: ENTER
+dhdpcie_get_resource:Phys addr : reg space = 00000000e84cdab7 base addr 0x0x00000000c1800000 
+dhdpcie_get_resource:Phys addr : bar1_space = 00000000777090b7 base addr 0x0x00000000c1000000 
+dhdpcie_scan_resource:Exit - SUCCESS 
+dhdpcie_bus_attach: ENTER
+dhdpcie_dongle_attach: ENTER
+DHD: dongle ram size is set to 4718592(orig 4718592) at 0x0
+osl_pcie_mrrs_config: MPS 512 MRR 1024 devctl 0x123d50
+dhdpcie_dongle_attach: EXIT: SUCCESS
+PCIe: dev 0000:01:00.0: Link Speed: [GEN2]
+PCIe Link Speed after training: [GEN2]
+dhd_attach: Enter
+dhd_get_next_instance: enter: dhd_found 0 inst 0
+WET:wet_maxip_per_sta = 2
+dhd:0: fw path:/etc/wlan/dhd nv path:(null)
+dhd_allocate_if: ifidx=0, bssidx=0, unit=0, hwport=0
+[dhd_allocate_if] Allocated wl0 dev 000000000e1451e3 
+wl0: dhd_cpudbg_init: mac_cpudbg_config = 0
+dhd_runner_attach: dhd<ffffffc04f680008>
+dhd_helper_attach: hlp<ffffffc047a60000> dhd<ffffffc04f680008>
+dor0: runner supported ring format types TxP 0x5, RxP 0x3 TxC 0x3 RxC 0x3
+[COHERENT_POOL_0] Allocated 0x8000 size pool 0xffffff800bd6d000, 0x0_62c10000
+dhd_runner_attach: Tx Offload - Enabled, Ring Size = 1024
+dhd_runner_attach: Rx Offload - Enabled, Ring Size = 1024
+TX wakeup info: reg = <0x82800004>, val = <0x00000001>
+RX wakeup info: reg = <0x82800004>, val = <0x00000004>
+dhd_prot_ring_map_init: ringid 0 dir:1 type:CMN flowid 0 offset 0
+dhd_runner_notify: H2R dhd_hlp<ffffffc047a60000> ops<0> <0x40000> <0xffffffc04f4b0860>
+H2R_DMA_BUF_NOTIF type<0x00040000> dma_buf<0xffffffc04f4b0860>
+dhd_runner_dma_buf_init: ATTACH_RING_BUF<0x00040000> dma_buf<0xffffffc050808000,0x0_50808000,20480>
+RING_ATTACH : h2dctrl Items: type 0 size 40 max 512 misc 65535, Ring: size 20480 start 0000000008c0f1f5 buf phys addr haddr64 hi 0x00000000 lo 0x50808000
+dhd_prot_ring_map_init: ringid 2 dir:2 type:CMN flowid 0 offset 0
+dhd_runner_notify: H2R dhd_hlp<ffffffc047a60000> ops<0> <0x40002> <0xffffffc04f4b0970>
+H2R_DMA_BUF_NOTIF type<0x00040002> dma_buf<0xffffffc04f4b0970>
+dhd_runner_dma_buf_init: ATTACH_RING_BUF<0x00040002> dma_buf<0xffffffc047f44000,0x0_47f44000,12288>
+RING_ATTACH : d2hctrl Items: type 0 size 24 max 512 misc 65535, Ring: size 12288 start 00000000352ced96 buf phys addr haddr64 hi 0x00000000 lo 0x47f44000
+dhd_prot_host_mem_alloc: Alloc Legacy Host Memory DMA Buffer len 1314816 rounding 4096
+wl0: dhd_prot_attach: allocated cpudbg dma buf va 00000000b624ce53
+dhd_pktid_map_pp_init:3154: pktidmaphigh set to [0xffffffc000000000]
+CFG80211-ERROR) wl_setup_wiphy : 
+Registering Vendor80211
+CFG80211-ERROR) wl_cfg80211_apply_eventbuffer : 
+Get event_msgs error (-19)
+CFG80211-ERROR) wl_cfg80211_set_cac_state_change_eventbits : 
+failed to set WLC_E_CAC_STATE_CHANGE bit
+dhd_attach(): thread:dhd_watchdog_thread:f08 started
+dhd_deferred_work_init: work queue initialized 
+wl0: pktfwd_tbl 0xffffff80024cd008
+[0;31mwfd_bind: wfd0-thrd initialized pktlists: radio 0 nodes 4104 xfer dhd_pktfwd_xfer_callback+0x0/0x7a0 [dhd]
+[0m
+Creating CPU ring for queue number 8 with 8192 packets descriptor=0xffffff8000fc50c0, size_of_entry 16
+Done initializing Ring 8 Base=0xffffffc04c680000 num of entries= 8192 RDD Base=4c680000 descriptor=0xffffff8000fc50c0
+Creating CPU ring for queue number 9 with 8192 packets descriptor=0xffffff8000fc5148, size_of_entry 16
+Done initializing Ring 9 Base=0xffffffc04d940000 num of entries= 8192 RDD Base=4d940000 descriptor=0xffffff8000fc5148
+[1m[34m wfd_bind: Dev wl0 wfd_idx 0 wl_radio_idx 0 Type fkb:sll configured WFD thread wfd0-thrd minQId/maxQId (0/1), status (0) qmask 0x3[0m
+Instantiating WFD 0 thread
+[0;32mdhd_wfd_bind: wl0 wfd_idx 0 success[0m
+dhd_mlo_ipc_init: ENTER ap_unit[0] mlo_unit[-1]
+Created wl_trace_radio procfs interface
+dhdpcie_bus_attach: EXIT SUCCESS
+dhdpcie_init: Registering and masking interrupts
+dhdpcie_bus_intr_disable Enter
+dhdpcie_bus_intr_disable Exit
+Using PCIE-MSI irq 76
+dhdpcie_request_irq dhdpcie:0000:01:00.0, wl0
+dhdpcie_irq_enabled: depth:0
+dhd0: dhdpcie_bhm_mem_alloc: PCIe IPC BHM ALLOC SUCCESS: size 26MB  DMA Buf va ffffff8016615000 pa hi 0x00000000 lo 0x62d00000 len 27262976
+Enter dhd_bus_start_try:
+dhd:0: fw path:/etc/wlan/dhd nv path:(null)
+dhd_bus_start_try download fw /etc/wlan/dhd, nv 
+osl_os_get_image_stat: no file info for /etc/wlan/dhd/6726b0//rtecdc.bin (-2)
+DHD  concate_extfdimg_name: Final FW path is /etc/wlan/dhd/6726b0/release/rtecdc.bin 
+dhd_bus_download_firmware: firmware path=/etc/wlan/dhd/6726b0/release/rtecdc.bin, nvram path=
+dhdpcie_ramsize_adj: Enter
+dhd_bea_read_header: Not a .bea header
+dhdpcie_ramsize_adj: Adjust dongle RAMSIZE to 0x480000

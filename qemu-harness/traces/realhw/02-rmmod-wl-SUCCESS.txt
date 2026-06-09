@@ -1,0 +1,41 @@
+# Real-hardware capture — rmmod wl + dhd load attempt (2026-06-09)
+# Device: GT-BE98 admin@10.0.0.8:2222, committed v34 slot1 (root=/dev/ubiblock0_4)
+
+## STEP 1 — Baseline (see 00-baseline-snapshot.txt)
+- br0 = eth0,eth1,eth2,eth3 (WIRED, SSH lifeline) + wl0,wl1,wl2,wl3 (wifi)
+- 4 PCIe endpoints, ALL: vendor=0x14e4  device=0x6716  class=0x028000  driver=wl
+  (NOTE: real PCI config-space devid = 0x6716, NOT 0x6717 as the QEMU model used)
+- wl revinfo (ALL 4 radios): chipnum=0x6726  chiprev=0x1 (=b0)  corerev=134
+  deviceid(chipc)=0x602d/0x602e/0x602c  radiorev=0x150e8  boardid=0xa5e
+  => Board is 4x BCM6726b0. (6717a0 firmware present but unused on this unit.)
+- wl module deps: wl->igs->emf->hnd (+cfg80211,wlshared,bcm_pcie_hcd,bcmlibs,
+  bdmf,rdpa_gpl,bcm_knvram,wfd). wl "Used by: nothing" (0 refs).
+- dhd params (from .modinfo): dhd_msg_level(uint), firmware_path(string),
+  nvram_path(string), op_mode(int), dhd_console_ms(uint), iface_name(string),
+  instance_base(int), dhd_dongle_ramsize(int), allow_delay_fwdl, mlo_bl_en, ...
+- dhd default fw_path = "/etc/wlan/dhd" (symlink -> /rom/etc/wlan/dhd).
+  Production load (bcm-wlan-drivers.sh): `dhd iface_name=wl dhd_console_ms=N instance_base=idx`
+  (NO firmware_path/nvram_path for non-mfg; dhd derives chip subdir + model nvram).
+- model nvram = GT-BE98 -> dhd selects /rom/etc/wlan/nvram/GT-BE98.nvm (53320 B).
+
+## STEP 2 — rmmod wl  => SUCCESS, SSH SURVIVED  [RE-CONFIRMED]
+- `rmmod wl` exit=0; wl GONE; SSH stayed up (ran over wired br0).
+- br0 dropped ONLY wl0-3; eth0-3 remained members (lifeline intact, as designed).
+- All shared deps stayed loaded (hnd,cfg80211,emf,igs,wlshared,bcm_pcie_hcd,
+  bdmf,rdpa_gpl,bcm_knvram) — available for dhd.
+- All 4 PCIe endpoints (0000-0003:01:00.0) became driverless (driver= empty)
+  => chips freed and available for dhd to claim. [RE-CONFIRMED]
+- rmmod dmesg: clean wl teardown (bsscfg free, M2MDMA deinit, pktfwd fini).
+  => CONFIRMS the SPEC/ROADMAP claim that wl and dhd compete for the same
+     class-0x028000 device and rmmod wl cleanly releases them.
+
+## STEP 3 — insmod dhd (high debug) => DEVICE WEDGED / DROPPED OFF NET
+- cmd: insmod dhd.ko iface_name=wl dhd_console_ms=250 dhd_msg_level=0x617e7fff
+- insmod did NOT return; SSH session hung; device then "No route to host".
+- Interpretation: dhd probe of the REAL 6726b0 silicon hung/faulted the kernel
+  before dmesg could be drained over SSH. Watchdog auto-reset to committed v34
+  expected. (dmesg from the dhd probe was NOT recoverable over the live session
+  because the network path died with the hang.)
+- This itself is a FINDING: loading the stock closed dhd.ko against the live
+  chips — with the rest of the merlin wl/runner stack still resident — wedges
+  the box rather than cleanly probing. See M3 verdict + console-capture caveat.

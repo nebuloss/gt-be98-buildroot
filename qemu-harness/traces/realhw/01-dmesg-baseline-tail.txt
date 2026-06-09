@@ -1,0 +1,50 @@
+netdev path : eth0.50 -> eth0
+br50: port 1(eth0.50) entered blocking state
+br50: port 1(eth0.50) entered disabled state
+device eth0.50 entered promiscuous mode
+br50: port 1(eth0.50) entered blocking state
+br50: port 1(eth0.50) entered forwarding state
+Assigning idx[46] for eth1.50
+netdev path : eth1.50 -> eth1
+IPv6: ADDRCONF(NETDEV_UP): eth1.50: link is not ready
+br50: port 2(eth1.50) entered blocking state
+br50: port 2(eth1.50) entered disabled state
+device eth1.50 entered promiscuous mode
+Assigning idx[47] for eth2.50
+netdev path : eth2.50 -> eth2
+IPv6: ADDRCONF(NETDEV_UP): eth2.50: link is not ready
+br50: port 3(eth2.50) entered blocking state
+br50: port 3(eth2.50) entered disabled state
+device eth2.50 entered promiscuous mode
+Assigning idx[48] for eth3.50
+netdev path : eth3.50 -> eth3
+IPv6: ADDRCONF(NETDEV_UP): eth3.50: link is not ready
+br50: port 4(eth3.50) entered blocking state
+br50: port 4(eth3.50) entered disabled state
+device eth3.50 entered promiscuous mode
+Assigning idx[49] for br70
+Assigning idx[50] for eth0.70
+netdev path : eth0.70 -> eth0
+br70: port 1(eth0.70) entered blocking state
+br70: port 1(eth0.70) entered disabled state
+device eth0.70 entered promiscuous mode
+br70: port 1(eth0.70) entered blocking state
+br70: port 1(eth0.70) entered forwarding state
+Assigning idx[51] for eth1.70
+netdev path : eth1.70 -> eth1
+IPv6: ADDRCONF(NETDEV_UP): eth1.70: link is not ready
+br70: port 2(eth1.70) entered blocking state
+br70: port 2(eth1.70) entered disabled state
+device eth1.70 entered promiscuous mode
+Assigning idx[52] for eth2.70
+netdev path : eth2.70 -> eth2
+IPv6: ADDRCONF(NETDEV_UP): eth2.70: link is not ready
+br70: port 3(eth2.70) entered blocking state
+br70: port 3(eth2.70) entered disabled state
+device eth2.70 entered promiscuous mode
+Assigning idx[53] for eth3.70
+netdev path : eth3.70 -> eth3
+IPv6: ADDRCONF(NETDEV_UP): eth3.70: link is not ready
+br70: port 4(eth3.70) entered blocking state
+br70: port 4(eth3.70) entered disabled state
+device eth3.70 entered promiscuous mode

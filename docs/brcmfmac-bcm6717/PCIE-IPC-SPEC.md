@@ -69,6 +69,46 @@ dhd.ko v17.10.369.39012 and both `rtecdc.bin` images are the **same firmware
 train** (host/dongle FWID handshake matches), so the headers above describe
 exactly what the firmware speaks.
 
+## REAL-HARDWARE dynamic-capture (2026-06-09) — past QEMU's wall, then a hard hang
+
+Run on the **actual GT-BE98** (4x **BCM6726b0**, committed v34). `rmmod wl` (SSH
+survived over the wired br0 lifeline), then `insmod dhd.ko iface_name=wl
+dhd_console_ms=250 dhd_msg_level=0x617e7fff`, draining dmesg to /jffs flash every
+50 ms. Real dhd executed **everything QEMU CP-2b is still synthesizing** — the
+full real EROM walk, PCIe2/CA7/SYS_MEM cores, `dhdpcie_dongle_attach` — natively:
+
+- `PCI_PROBE: bus 1 ... vendor 14E4 device 6716 (good PCI location)` — real
+  config-space devid = **0x6716** (QEMU used 0x6717; the subsystem/nvram devid is
+  0x602d). `dhdpcie_prepare_pcie_ep: Resettting backplane for device 0x6716` ->
+  `Polling for SB Reset state (PCI_SPROM_CONTROL)` -> `SB reset bit is de-asserted
+  by HW. Wait for 2ms for Backplane RESET`. **[§1 backplane seq RE-CONFIRMED]**
+- `dhdpcie_scan_resource: SUCCESS`; BAR0 reg space @ **0xc1800000**, BAR1/TCM @
+  **0xc1000000**. `dongle ram size is set to 4718592` (**0x480000**) for 6726b0;
+  `osl_pcie_mrrs_config: MPS 512 MRR 1024`; **PCIe link GEN2**.
+  **[§1 RAM size + BAR + link RE-CONFIRMED for 6726b0]**
+- `dhdpcie_dongle_attach: EXIT SUCCESS` -> runner ring attach: `h2dctrl Items:
+  type 0 size 40 max 512`, `d2hctrl Items: type 0 size 24 max 512` — **item_type
+  0 = WI64**, sizes 40/24 exactly as §5. Runner caps `TxP 0x5 RxP 0x3 TxC 0x3
+  RxC 0x3`. **[§5 WI64 control-ring sizes RE-CONFIRMED; WI64 IS used]**
+- `dhd_prot_host_mem_alloc: Alloc Legacy Host Memory DMA Buffer len 1314816`;
+  `dhdpcie_bhm_mem_alloc: PCIe IPC BHM ALLOC SUCCESS: size 26MB ... len 27262976`
+  @ pa lo 0x62d00000. **[§6 HME alloc RE-CONFIRMED (presence + sizes); bind not
+  reached]**. `dhd_mlo_ipc_init: ENTER ap_unit[0] mlo_unit[-1]` runs at init even
+  for an un-bound single unit. **[§11 init path RE-CONFIRMED]**
+- `Using PCIE-MSI irq 76`; fw resolves to `/etc/wlan/dhd/6726b0/release/rtecdc.bin`
+  (nvram path **(null)** at insmod — dhd resolves model nvram internally);
+  `dhd_bea_read_header: Not a .bea header` (tries .bea before LFOC);
+  `dhdpcie_ramsize_adj: Adjust dongle RAMSIZE to 0x480000`.
+
+**Then the kernel HARD-HUNG** at the firmware **membytes-DMA download** to dongle
+RAM (no further printk ever drained -> a fabric/AXI hang, not a soft oops). So the
+deep IPC stage — shared-struct read (§2/§3), ring D2H sync (§9), doorbell gen
+(§7b), HME **bind** (§6), MLO bring-up (§11) — was **NOT** captured; it is *after*
+the fw download, which does not complete on this box (root cause + M3 verdict:
+`qemu-harness/traces/realhw/04-dhd-realhw-DISTILLED.md`). The hang is reproducible
+(3/3) and recoverable (watchdog -> v34); `rmmod wl` released all 4 EPs cleanly
+every time. Raw trace: `qemu-harness/traces/realhw/03-dhd-probe-realhw-kmsg.log`.
+
 ---
 
 ## 0. Executive summary — the blocker, precisely
@@ -128,10 +168,18 @@ base 0x18000000 is *not* used by these AI parts). The **chipid register
 run `ai_scan`. The **EROM** is reached via **chipc +0xfc (eromptr)**; dhd walks
 it with the AI/DMP grammar (CIA mfg=0x43b/cid; CIB nmw/#ASD; ASD base/size/type;
 END=0xF — `get_erom_ent` @0x611e0, `get_asd` @0x61590).
-**[DYN]** the exact chipid *id*/rev/pkg nibbles for 6717a0/6726b0, and the full
-multi-core EROM contents (PCIe2 buscore, CA7, SYS_MEM core addresses); the
-precise CA7 TCM/RAM base + reset-vector write register for these silicon revs
-(the `set_active` path exists but is unverified on this silicon).
+**[RE-CONFIRMED on real 6726b0 (2026-06-09)]** This unit is **4x BCM6726b0**
+(`wl revinfo`: chipnum **0x6726**, chiprev **0x1** = b0, corerev 134, boardid
+0xa5e). PCI **config-space devid = 0x6716** (`PCI_PROBE ... device 6716`;
+`Resettting backplane for device 0x6716`) — distinct from the chipc/nvram devid
+0x602d. dhd's real backplane bring-up = `dhdpcie_prepare_pcie_ep` -> `Resettting
+backplane` -> `Polling for SB Reset state (PCI_SPROM_CONTROL)` -> `SB reset bit
+de-asserted by HW; Wait 2ms for Backplane RESET`, then `dhdpcie_scan_resource`
+SUCCESS. So the real EROM/PCIe2/CA7/SYS_MEM cores DO enumerate natively (this is
+exactly what the QEMU CP-2b synthetic EROM is still missing). **[still DYN]** the
+exact chipid id/rev/pkg nibbles and the per-core EROM register addresses (not
+individually dumped — the live capture hung before a register-level EROM dump;
+they enumerate correctly but were not transcribed).
 
 ### RAM sizing
 For CA7, brcmfmac reads rambase/ramsize from `BCMA_CORE_SYS_MEM` (not the
@@ -140,6 +188,10 @@ SYS_MEM core enumerates. dhd confirms a dynamic path: `Adjust dongle RAMSIZE to
 0x%x`, module param `dhd_dongle_ramsize`, and a `SMAR` ramsize tag
 (`0x534D4152` = brcmfmac's `BRCMF_RAMSIZE_MAGIC`, honored by
 `brcmf_pcie_adjust_ramsize`). **[RE-CONFIRMED]**
+**[RE-CONFIRMED on real 6726b0]** dongle RAM size = **0x480000 (4,718,592 B)** —
+`DHD: dongle ram size is set to 4718592 ... at 0x0` and `dhdpcie_ramsize_adj:
+Adjust dongle RAMSIZE to 0x480000`. BAR0 reg-space phys @ 0xc1800000, BAR1/TCM @
+0xc1000000; PCIe link GEN2; MPS 512 / MRR 1024.
 
 ---
 

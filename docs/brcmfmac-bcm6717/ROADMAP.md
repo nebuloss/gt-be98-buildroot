@@ -304,3 +304,70 @@ transport SPEC, a runnable QEMU harness that captures the dhd handshake live, an
 chip-support patches — i.e. the UNKNOWNS are now dynamic-capture tasks, not
 guesses, and the next agent can execute CP-1→CP-3 to settle the M3 go/no-go
 before anyone commits to the M4 rewrite.
+
+---
+
+## 8. M3 verdict — from REAL-HARDWARE dhd capture (2026-06-09)
+
+**Method.** On the live GT-BE98 (4x BCM6726b0, committed v34): `rmmod wl` (SSH
+survived over the wired br0 lifeline — confirmed safe, 3/3), then `insmod dhd.ko`
+with high `dhd_msg_level`, draining dmesg to /jffs flash at 50 ms (the only way
+to capture up to a hard hang). Real dhd executed **everything the QEMU harness is
+still synthesizing** (real EROM + PCIe2/CA7/SYS_MEM cores, `dhdpcie_dongle_attach`)
+and got as far as the firmware download before **hard-hanging the SoC**. Trace:
+`qemu-harness/traces/realhw/{03-dhd-probe-realhw-kmsg.log,04-dhd-realhw-DISTILLED.md}`.
+
+**What real HW settled (CP-2-equivalent, partial CP-3):** §1 chip/devid/RAM/
+backplane, §5 WI64 control-ring sizes (40/24, item_type 0), §6 HME *allocation*
+presence (26 MB BHM) — all promoted to `[RE-CONFIRMED]` in the SPEC. The deep IPC
+handshake (shared-struct read §2/§3, ring D2H sync §9, doorbell gen §7b, HME
+*bind* §6, MLO bring-up §11) was **NOT** captured: it is downstream of the fw
+membytes-DMA download, which **wedges the PCIe/AXI fabric and hangs the kernel**
+on this box (reproducible 3/3; watchdog auto-resets to v34). Cause: the merlin
+`bcm_pcie_hcd` RC + runner/rdpa stack stays resident and already owns these 4
+links; dhd re-driving the same EP (backplane reset + download DMA) collides at the
+hardware-fabric level. This is a *bench-setup* limit, not a protocol verdict — but
+it does mean the dongle-side IPC bytes can't be read on a stock-but-wl-removed
+image.
+
+**The M3 question — is a WI64-only open back-end (no HME/MLO) portable, or are
+HME/MLO entangled into core bring-up? → ENTANGLED. Verdict: NO-GO for a
+HME/MLO-free minimal port.** Empirical evidence from the real init path, in order,
+**all before** firmware download / any link:
+
+1. `dhd_prot_host_mem_alloc: Alloc Legacy Host Memory DMA Buffer len 1314816` and
+   `dhdpcie_bhm_mem_alloc: PCIe IPC BHM ALLOC SUCCESS: size 26MB` — **HME/BHM is
+   allocated unconditionally during attach**, not as an optional post-link
+   feature. It sits *inside* the mandatory bring-up, consistent with SPEC §6
+   ("MANDATORY before link"). A WI64-only port still has to implement the HME
+   allocate+bind handshake to get the dongle to link at all.
+2. `dhd_mlo_ipc_init: ENTER ap_unit[0] mlo_unit[-1]` — **MLO-IPC init runs on the
+   core path even for a single, un-bound unit** (mlo_unit = -1). It is woven into
+   `dhd_attach`, not gated behind an MLO config. A port can likely leave the MLD
+   *un-bound* (mlo_unit stays -1, the MLC_* mailbox states never fire), so MLO
+   *bring-up* is probably skippable — but the MLO-IPC *init/HME-user* scaffolding
+   is on the unconditional path and must at least be tolerated.
+
+So §3's "negotiate WI64, advertise no ACWI, defer HME/MLO" minimal strategy is
+**only half-valid**: WI64 control rings are confirmed real and reusable (good),
+but **HME is not deferrable** — it is a hard prerequisite of the link, with no
+brcmfmac analogue, and is the single biggest net-new implementation chunk (as M3's
+"make-or-break, high-risk" rating predicted). MLO bring-up stays deferrable; MLO
+init scaffolding does not.
+
+**Consequence for the milestones.** M3's go/no-go specifically asked whether
+HME/MLO entanglement makes a WI64-only minimal port impossible. **HME entanglement
+is now empirically confirmed** — M4 cannot skip HME. That does not kill the
+research path, but it *removes the cheapest version of M4* (the "WI64 + no HME"
+shortcut) and re-confirms HME (§6) as a mandatory, from-scratch M4 deliverable.
+Combined with the standing finding that the open port yields **no openness gain**
+over `dhd.ko` (it still needs the closed `rtecdc.bin`), the recommendation stands:
+**do NOT start M4.** Keep `dhd.ko`/`wl.ko` shipping; this branch remains research.
+
+**Two residual captures still need a cleaner bench** (a kernel/image where the
+merlin RC+runner stack is *not* resident, so the fw-download DMA doesn't collide —
+i.e. the disposable harness kernel of CP-1, but booted on real silicon, or a
+build that loads dhd *instead of* the runner stack from boot): the shared-struct
+read (§2/§3 byte layout) and the HME *bind* + doorbell-gen + D2H-sync (§7/§9).
+Until then those stay `[DYN]`/`[SDK]`. The QEMU CP-2b path (extend synthetic EROM
+to multi-core) and this real-HW path now bracket the same gap from both sides.

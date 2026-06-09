@@ -1,0 +1,56 @@
+=== CMDLINE ===
+coherent_pool=4M cpuidle_sysfs_switch pci=pcie_bus_safe console=ttyAMA0,115200  rootwait rng_core.default_quality=1024 mtdparts=brcmnand.0:2097152(loader),265289728@2097152(image) root=/dev/ubiblock0_4 ubi.mtd=image ubi.block=0,4 rootfstype=squashfs cma=168M
+=== UPTIME ===
+ 03:55:42 up  3:55,  load average: 4.12, 4.06, 4.01
+=== LSMOD (wl chain) ===
+wl                  16289792  0 
+igs                    32768  1 wl
+emf                    28672  2 wl,igs
+hnd                   397312  3 wl,igs,emf
+cfg80211              286720  1 wl
+wlshared               16384  1 wl
+bcm_pcie_hcd           90112  1 wl
+bcm_enet              163840  1 bcm_pcie_hcd
+bcm_knvram             24576  6 hnd,bcm_pcie_hcd,rdpa_mw
+=== WL INTERFACES ===
+-- wl0 --
+vendorid 0x14e4
+deviceid 0x602d
+radiorev 0x150e8
+chipnum 0x6726
+chiprev 0x1
+chippackage 0x0
+corerev 134.0
+boardid 0xa5e
+-- wl1 --
+vendorid 0x14e4
+deviceid 0x602d
+radiorev 0x150e8
+chipnum 0x6726
+chiprev 0x1
+chippackage 0x0
+corerev 134.0
+boardid 0xa5e
+-- wl2 --
+vendorid 0x14e4
+deviceid 0x602e
+radiorev 0x150e8
+chipnum 0x6726
+chiprev 0x1
+chippackage 0x0
+corerev 134.0
+boardid 0xa5e
+-- wl3 --
+vendorid 0x14e4
+deviceid 0x602c
+radiorev 0x150e8
+chipnum 0x6726
+chiprev 0x1
+chippackage 0x0
+corerev 134.0
+boardid 0xa5e
+=== PCI DEVID ===
+/sys/bus/pci/devices/0000:01:00.0: dev=0x6716 class=0x028000
+/sys/bus/pci/devices/0001:01:00.0: dev=0x6716 class=0x028000
+/sys/bus/pci/devices/0002:01:00.0: dev=0x6716 class=0x028000
+/sys/bus/pci/devices/0003:01:00.0: dev=0x6716 class=0x028000
