@@ -12,3 +12,11 @@ device-model/modules.order
 device-model/bcmfmac_probe.c
 device-model/.tmp_versions/
 device-model/Kbuild
+# CP-2 shim build artifacts (keep .c/.ko/Makefile/build-shim.sh; drop intermediates)
+shim/*.o
+shim/*.mod
+shim/*.mod.c
+shim/.*.cmd
+shim/Module.symvers
+shim/modules.order
+shim/.tmp_versions/

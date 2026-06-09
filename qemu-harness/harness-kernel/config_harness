@@ -4785,12 +4785,38 @@ CONFIG_VIRTIO_CONSOLE=y
 CONFIG_VIRTIO_NET=y
 CONFIG_VIRTIO_INPUT=y
 CONFIG_VIRTIO_BALLOON=y
-# debug instrumentation for IPC capture
-CONFIG_FTRACE=y
-CONFIG_FUNCTION_TRACER=y
-CONFIG_DYNAMIC_FTRACE=y
+# debug instrumentation for IPC capture.
+#
+# ⚠️ CP-2 ROOT-CAUSE FIX (do NOT re-enable FTRACE/tracepoints here):
+# The closed dhd dep-chain .ko's `.gnu.linkonce.this_module` section is
+# sizeof(struct module)=0x280, built against the DEVICE config which has
+# FTRACE/TRACING/TRACEPOINTS *off*. Turning CONFIG_FUNCTION_TRACER/FTRACE
+# (or anything that selects CONFIG_TRACEPOINTS / CONFIG_TRACING /
+# CONFIG_EVENT_TRACING / CONFIG_FTRACE_MCOUNT_RECORD, e.g. KPROBE_EVENTS) ON
+# grows struct module to 0x340 (+0xC0: num_tracepoints/tracepoints_ptrs/
+# trace_bprintk_fmt/trace_events/num_ftrace_callsites/ftrace_callsites are
+# inserted *before* source_list at 0x2f8). The loader then lays each .ko's
+# .bss right after its 0x280 this_module slot, so module-owned globals
+# (e.g. bdmf's `bdmf_chrdev_cdev`) physically OVERLAP the kernel-owned tail
+# of struct module. bdmf's init cdev_init()->kobject_init() then clobbers
+# bdmf->source_list with {0x1,0x1,0x0}; the next module's resolve_symbol ->
+# already_uses() walks that bogus list -> DABT at 0x100000021. (Captured live
+# via gdb watchpoint on bdmf->source_list; see traces/cp2-*.txt.)
+#
+# FIX: keep struct module byte-identical to the device layout (0x280) by
+# leaving the tracing family OFF. KGDB + plain KPROBES + DYNAMIC_DEBUG give us
+# all the IPC-capture instrumentation we need and add NO struct-module fields.
+# CONFIG_FTRACE is not set
+# CONFIG_FUNCTION_TRACER is not set
+# CONFIG_DYNAMIC_FTRACE is not set
+# CONFIG_TRACEPOINTS is not set
+# CONFIG_TRACING is not set
+# CONFIG_EVENT_TRACING is not set
+# CONFIG_FTRACE_MCOUNT_RECORD is not set
+# CONFIG_KPROBE_EVENTS is not set
+# CONFIG_UPROBE_EVENTS is not set
+# CONFIG_BPF_EVENTS is not set
 CONFIG_KPROBES=y
-CONFIG_KPROBE_EVENTS=y
 CONFIG_KGDB=y
 CONFIG_KGDB_SERIAL_CONSOLE=y
 CONFIG_DYNAMIC_DEBUG=y

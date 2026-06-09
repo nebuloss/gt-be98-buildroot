@@ -65,7 +65,11 @@ KCFLAGS="-DBCM_QEMU_HARNESS \
 syncconfig() {
   cd "$KSRC"
   cp "$HERE/config_harness" .config
-  yes "" | make syncconfig
+  # CP-2: use olddefconfig (take the default for every NEW symbol) instead of
+  # `yes "" | make syncconfig`. olddefconfig is fully non-interactive and does
+  # NOT trip the SIGPIPE-under-pipefail stall the original CAVEAT warned about
+  # (the `yes` writer gets SIGPIPE'd when conf closes its stdin -> exit 141).
+  make ARCH=arm64 CROSS_COMPILE=aarch64-buildroot-linux-gnu- olddefconfig </dev/null
 }
 
 PATCH="$HERE/0001-soc-initcall-stubs-for-qemu-virt-harness.patch"

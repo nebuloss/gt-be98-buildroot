@@ -46,6 +46,7 @@
 #include "hw/pci/pci.h"
 #include "hw/pci/pci_device.h"
 #include "hw/pci/msi.h"
+#include "hw/pci/pcie.h"
 #include "hw/qdev-properties.h"
 #include "migration/vmstate.h"
 #include "qom/object.h"
@@ -390,6 +391,22 @@ static void bcm_config_write(PCIDevice *pdev, uint32_t addr,
     pci_default_write_config(pdev, addr, val, len);
 }
 
+/* ---- config-space read hook (CP-2): log every config read dhd issues during
+ * dhdpcie_init so we can see the "device not accessible" gate. dhd typically
+ * reads VENDOR/DEVICE id, COMMAND, the PCIe cap (link status), and pokes the
+ * sliding BAR0_WINDOW. Logging these reveals which check fails. ---- */
+static uint32_t bcm_config_read(PCIDevice *pdev, uint32_t addr, int len)
+{
+    BcmFmacStubState *s = BCM_FMAC_STUB(pdev);
+    uint32_t val = pci_default_read_config(pdev, addr, len);
+    /* Skip the high-frequency uninteresting 1-byte capability walk noise by
+     * only tracing word/dword reads and the known-interesting offsets. */
+    if (len >= 2 || addr == CFG_BAR0_WINDOW) {
+        TRACE(s, "CFG read  off=0x%02x len=%d -> 0x%08x", addr, len, val);
+    }
+    return val;
+}
+
 /* ---- realize ---- */
 static void bcm_fmac_realize(PCIDevice *pdev, Error **errp)
 {
@@ -417,8 +434,36 @@ static void bcm_fmac_realize(PCIDevice *pdev, Error **errp)
                      PCI_BASE_ADDRESS_MEM_PREFETCH,
                      &s->tcm);
 
-    /* MSI: dhd uses MSI. One vector is enough for the handshake. */
-    if (msi_init(pdev, 0, 1, true, false, errp) < 0) {
+    /* PCIe Express capability (CP-2): the real Broadcom dongle is a PCIe
+     * endpoint and dhd's dhdpcie_init() reads config 0x6c (inside the PCIe cap
+     * region: Link Control 2 / Device Status 2) to confirm the device is
+     * "accessible". Without a PCIe cap, 0x6c reads 0 and dhd aborts with
+     * "device not accessible" before ever touching BAR0 (captured in
+     * traces/cp2-dhd-device-not-accessible.txt). Broadcom places the Express
+     * cap at config 0x44; the PCIe v2 cap spans 0x44..0x7f, so 0x6c lands at
+     * Express-cap offset 0x28 (PCI_EXP_LNKSTA2 / DevCtl2 region) and reads
+     * non-zero once initialized, while leaving CFG_BAR0_WINDOW (0x80, the
+     * vendor sliding-backplane dword) untouched. */
+    pdev->cap_present |= QEMU_PCI_CAP_EXPRESS;   /* mark as PCIe before cap init */
+    if (pcie_endpoint_cap_init(pdev, 0x44) < 0) {
+        /* non-fatal for the harness */
+    }
+    /* dhd's dhdpcie_init() liveness gate reads config 0x6c (a 4-byte read) and
+     * treats 0 as "device not accessible" (captured live). With the Express cap
+     * at 0x44, 0x6c == express+0x28 (DevCtl2/DevSta2), which QEMU leaves 0.
+     * Stamp a non-zero sentinel there + populate Link Status (negotiated Gen2
+     * x1, link up) so the dongle looks alive. Also clear the writemask so dhd's
+     * value persists. The exact real-dongle value is [DYN]; what dhd checks is
+     * "non-zero" (liveness), captured here. */
+    pci_set_long(cfg + 0x6c, 0x00000001);
+    pci_set_long(pdev->wmask + 0x6c, 0x00000000);
+    /* PCI_EXP_LNKSTA (express+0x12) = link up, Gen2 (0x2), width x1 (0x10). */
+    pci_set_word(cfg + 0x44 + 0x12, 0x0012);
+
+    /* MSI: dhd uses MSI. One vector is enough for the handshake. Place the MSI
+     * cap at 0xC0 so it collides with neither the PCIe Express cap (0x44..0x7f)
+     * nor CFG_BAR0_WINDOW (0x80). */
+    if (msi_init(pdev, 0xC0, 1, true, false, errp) < 0) {
         /* non-fatal: fall back to INTx */
     }
 
@@ -473,6 +518,7 @@ static void bcm_fmac_class_init(ObjectClass *klass, void *data)
 
     k->realize = bcm_fmac_realize;
     k->config_write = bcm_config_write;
+    k->config_read = bcm_config_read;
     k->vendor_id = BCM_VENDOR_ID;
     k->device_id = BCM_DEFAULT_DEVICE_ID;
     k->class_id  = 0x0280;   /* network controller, other */
@@ -491,6 +537,10 @@ static const TypeInfo bcm_fmac_info = {
     .instance_size = sizeof(BcmFmacStubState),
     .class_init = bcm_fmac_class_init,
     .interfaces = (InterfaceInfo[]) {
+        /* CP-2: expose as a PCI Express endpoint so pcie_endpoint_cap_init()
+         * works and dhd's dhdpcie_init() PCIe-cap accessibility read (0x6c)
+         * returns non-zero. */
+        { INTERFACE_PCIE_DEVICE },
         { INTERFACE_CONVENTIONAL_PCI_DEVICE },
         { },
     },

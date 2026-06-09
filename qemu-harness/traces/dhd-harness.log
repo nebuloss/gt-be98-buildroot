@@ -1,5 +1,5 @@
 bcm-fmac-stub: realized: vendor=0x14e4 device=0x6717 class=0x0280 BAR0=16384B TCM=8MiB chipid=0x6717 ipc_rev=0x06Booting Linux on physical CPU 0x0000000000 [0x410fd083]
-Linux version 4.19.294 (guillaume@dev-build) (gcc version 10.3.0 (Buildroot 2021.02.4)) #10 SMP PREEMPT Tue Jun 9 08:37:26 UTC 2026
+Linux version 4.19.294 (guillaume@dev-build) (gcc version 10.3.0 (Buildroot 2021.02.4)) #11 SMP PREEMPT Tue Jun 9 09:06:46 UTC 2026
 Machine model: linux,dummy-virt
 earlycon: pl11 at MMIO 0x0000000009000000 (options '')
 bootconsole [pl11] enabled
@@ -13,8 +13,8 @@ psci: PSCIv1.1 detected in firmware.
 psci: Using standard PSCI v0.2 function IDs
 psci: Trusted OS migration not required
 psci: SMC Calling Convention v1.0
-percpu: Embedded 33 pages/cpu s97816 r8192 d29160 u135168
-pcpu-alloc: s97816 r8192 d29160 u135168 alloc=33*4096
+percpu: Embedded 32 pages/cpu s93336 r8192 d29544 u131072
+pcpu-alloc: s93336 r8192 d29544 u131072 alloc=32*4096
 pcpu-alloc: [0] 0 
 Detected PIPT I-cache on CPU0
 ARM_SMCCC_ARCH_WORKAROUND_1 missing from firmware
@@ -27,10 +27,8 @@ Built 1 zonelists, mobility grouping on.  Total pages: 258048
 Kernel command line: earlycon=pl011,0x9000000 keep_bootcon console=ttyAMA0 loglevel=8 rdinit=/init dyndbg="module dhd +p"
 Dentry cache hash table entries: 131072 (order: 8, 1048576 bytes)
 Inode-cache hash table entries: 65536 (order: 7, 524288 bytes)
-Memory: 1012212K/1048576K available (9022K kernel code, 804K rwdata, 2076K rodata, 2688K init, 778K bss, 36364K reserved, 0K cma-reserved)
+Memory: 1014720K/1048576K available (7998K kernel code, 612K rwdata, 1940K rodata, 1536K init, 770K bss, 33856K reserved, 0K cma-reserved)
 SLUB: HWalign=64, Order=0-3, MinObjects=0, CPUs=1, Nodes=1
-ftrace: allocating 28375 entries in 111 pages
-ftrace: allocated 111 pages with 6 groups
 rcu: Preemptible hierarchical RCU implementation.
 rcu: 	RCU restricting CPUs from NR_CPUS=4 to nr_cpu_ids=1.
 	Tasks RCU enabled.
@@ -213,7 +211,7 @@ ebt_vtag registered
 ebt_wmm_mark registered
 ebt_reject registered
 Loading compiled-in X.509 certificates
-Freeing unused kernel memory: 2688K
+Freeing unused kernel memory: 1536K
 Checked W+X mappings: passed, no W+X pages found
 Run /init as init process
 ==== QEMU FullMAC RE harness init (aarch64) ====
@@ -233,43 +231,6 @@ WLCSM Module loaded successfully
      -> OK (rc=0)
 ---- finit_module /bcmlibs.ko ----
 BCMLIBS loaded...
-------------[ cut here ]------------
-WARNING: CPU: 0 PID: 1 at kernel/module.c:1147 module_put+0x170/0x180
-Modules linked in: bcmlibs init_addr(ffffff962633a000 - ffffff962633b000), core_addr(ffffff9626330000 - ffffff9626334000)
- bcm_knvram init_addr(0000000000000000 - 0000000000000000), core_addr(ffffff9626325000 - ffffff9626327000)
-===DDD===
-00400000 - 00478000, [init]
-CPU: 0 PID: 1 Comm: init Not tainted 4.19.294 #10
-Hardware name: linux,dummy-virt (DT)
-pstate: 60400005 (nZCv daif +PAN -UAO)
-pc : module_put+0x170/0x180
-lr : module_put+0x170/0x180
-sp : ffffff800800bbb0
-x29: ffffff800800bbb0 x28: ffffff96263371c0 
-x27: ffffff9626337048 x26: ffffff9626337210 
-x25: ffffff968f786000 x24: ffffff968f7ac890 
-x23: 0000000000000000 x22: ffffff968f7ac890 
-x21: 0000000000000000 x20: ffffff968eacd72c 
-x19: ffffff9626337040 x18: 0000000000000020 
-x17: 0000000000000000 x16: 0000000000000000 
-x15: ffffffffffffffff x14: fffffff27e3d691c 
-x13: 0000000000000000 x12: ffffff968f850000 
-x11: ffffff968f7a8000 x10: ffffff968f851000 
-x9 : 0000000000000000 x8 : ffffff968ee16d50 
-x7 : 656820747563205b x6 : 00000000000000e0 
-x5 : 0000000000000000 x4 : 0000000000000000 
-x3 : 0000000000000000 x2 : 0000000000000000 
-x1 : ffffff968f499000 x0 : 0000000000000024 
-Call trace:
- module_put+0x170/0x180
- do_init_module+0xbc/0x280
- load_module+0x1e5c/0x2270
- __se_sys_finit_module+0xf8/0x130
- __arm64_sys_finit_module+0x28/0x40
- el0_svc_common+0x84/0x180
- el0_svc_handler+0x74/0xa0
- el0_svc+0x8/0x300
----[ end trace 0e3b606fcec91e82 ]---
 ---- finit_module /bdmf.ko ----
 ---- finit_module /bcmmcast.ko ----
 bcm_mcast_init successful
@@ -284,50 +245,13 @@ Loading wlshared Module...
 Loading HND Module
 WL MLO AP IDS assignment -1 -1 -1 -1
 ---- finit_module /rdpa_gpl.ko ----
-Unable to handle kernel access to user memory outside uaccess routines at virtual address 0000000100000021
-Mem abort info:
-  ESR = 0x96000005
-  Exception class = DABT (current EL), IL = 32 bits
-  SET = 0, FnV = 0
-  EA = 0, S1PTW = 0
-Data abort info:
-  ISV = 0, ISS = 0x00000005
-  CM = 0, WnR = 0
-user pgtable: 4k pages, 39-bit VAs, pgdp = 000000000441e5cc
-[0000000100000021] pgd=0000000000000000, pud=0000000000000000
-Internal error: Oops: 96000005 [#1] PREEMPT SMP
-Modules linked in: hnd init_addr(0000000000000000 - 0000000000000000), core_addr(ffffff9626512000 - ffffff962653f000)
- wlshared init_addr(0000000000000000 - 0000000000000000), core_addr(ffffff962650a000 - ffffff962650b000)
- cfg80211 init_addr(0000000000000000 - 0000000000000000), core_addr(ffffff96264b1000 - ffffff96264de000)
- bcmmcast init_addr(0000000000000000 - 0000000000000000), core_addr(ffffff962648b000 - ffffff962649c000)
- bdmf init_addr(0000000000000000 - 0000000000000000), core_addr(ffffff9626340000 - ffffff9626360000)
- bcmlibs init_addr(0000000000000000 - 0000000000000000), core_addr(ffffff9626330000 - ffffff9626334000)
-Process init (pid: 1, stack limit = 0x0000000050250653)
-CPU: 0 PID: 1 Comm: init Tainted: G        W         4.19.294 #10
-pstate: a0400005 (NzCv daif +PAN -UAO)
-pc : resolve_symbol.constprop.0+0xcc/0x300
-lr : resolve_symbol.constprop.0+0x70/0x300
-x29: ffffff800800bbb0 x28: ffffff96265aa3a0 
-x27: ffffff96265a00c8 x26: ffffff80084a332a 
-x25: ffffff968f786000 x24: ffffff9626372f38 
-x23: ffffff9626372c40 x22: ffffff800800bd40 
-x21: ffffff968f7ac890 x20: ffffff96263601d0 
-x19: ffffff96265a00c0 x18: 0000000000000000 
-x15: 5400160b13131717 x14: ff00000000000000 
-x13: 0000000000000000 x12: 0000000000000007 
-x11: 0000000000000030 x10: 0101010101010101 
-x9 : 0000000000000005 x8 : 7f7f7f7f7f7f7f7f 
-x7 : feff6b6475646b5e x6 : 00000000000080e2 
-x5 : 6200000000000000 x4 : 8080000000000000 
-x3 : ffffff96263601d0 x2 : 0000000000000000 
-x1 : 0000000100000001 x0 : 0000000000000000 
- resolve_symbol.constprop.0+0xcc/0x300
- load_module+0x1420/0x2270
-Code: 14000020 f9400021 eb18003f 540003a0 (f9401023) 
----[ end trace 0e3b606fcec91e83 ]---
-Kernel panic - not syncing: Fatal exception
-Kernel Offset: 0x1686800000 from 0xffffff8008000000
-CPU features: 0x30,20806000
-Memory Limit: none
->>>>>>>>>>> BROADCOM WLAN PANIC INFO <<<<<<<<<<<
-Rebooting in 5 seconds..
+---- finit_module /emf.ko ----
+---- finit_module /igs.ko ----
+igs_module_init:882:	 IGS 29 create network socket successful
+---- finit_module /wfd.ko ----
+[1m[34mWifi Forwarding Driver is initialized![0m
+---- finit_module /bcm_enet.ko ----
+---- finit_module /bcm_pcie_hcd.ko ----
+Broadcom PCIe Host Controller Driver (impl1)
+cfg80211: failed to load regulatory.db
+qemu-system-aarch64: terminating on signal 15 from pid 4074308 (timeout)

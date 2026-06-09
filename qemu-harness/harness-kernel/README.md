@@ -16,6 +16,22 @@ kernel from the merlin 4.19.294 source that:
   the SoC-fabric symbols), with vermagic + module-load ABI intact,
 - has FTRACE/KPROBES/KGDB/DYNAMIC_DEBUG on for IPC capture.
 
+## CP-2 UPDATE (loader fault SOLVED; real dhd now PROBES the device)
+
+The `rdpa_gpl` `resolve_symbol` fault below is **root-caused and fixed**. Root cause: the
+harness config's `CONFIG_FUNCTION_TRACER=y` grew `struct module` from 0x280 to 0x340, but the
+closed `.ko`s' `.gnu.linkonce.this_module` is 0x280 — so the kernel's larger struct module
+overran into bdmf's adjacent `.bss`, and bdmf's own `cdev_init()` clobbered its
+`source_list`; the next module's `already_uses()` walk then faulted. Fix = drop the FTRACE
+family from `config_harness` (keep KGDB/KPROBES/DYNAMIC_DEBUG). Full evidence + the live
+gdb-watchpoint capture: `../traces/cp2-rdpa_gpl-rootcause-and-dhd-probe.md`.
+
+With the fix (+ a `bcm_pcie_hcd_shim.ko` to dodge the real hcd's RC-link-up udelay hang), the
+**full dep chain loads and the real `dhd.ko` probes the emulated 14e4 device**
+(`PCI_PROBE … device 6717 (good PCI location)`). dhd currently stops in
+`dhdpcie_scan_resource` (BAR enumeration), upstream of chipid/EROM/IPC — see the CP-2 doc for
+the exact frontier and the M3 verdict (undetermined; path mechanically unblocked).
+
 ## Result — DELIVERED (boots), real-dhd dep-chain load PARTIAL (blocked at rdpa_gpl)
 
 The harness kernel **boots to PID1 under `-M virt`** and the closed dhd dep-chain

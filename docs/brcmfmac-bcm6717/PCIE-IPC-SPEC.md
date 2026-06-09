@@ -29,6 +29,27 @@ Tags used throughout:
 - **[SDK]** — read from the exact SDK headers dhd.ko compiles against (authoritative struct/define; in-binary offset not independently re-derived).
 - **[DYN]** — needs runtime / bench / further-disasm confirmation before coding can finalize.
 
+## CP-2 dynamic-capture status (2026-06-09)
+
+The QEMU harness now boots the disposable kernel, loads the **full closed dhd dep
+chain**, and runs the **real `dhd.ko` probe** against the emulated 14e4 device
+(the CP-1 `rdpa_gpl` loader fault is root-caused + fixed — see
+`qemu-harness/traces/cp2-rdpa_gpl-rootcause-and-dhd-probe.md`). However, the live
+dhd currently stops in **`dhdpcie_scan_resource`** (PCI BAR enumeration), which is
+**upstream of** `si_attach`/chipid/EROM and the entire PCIe-IPC stage. Therefore:
+
+- **No `[DYN]` item in §2–§9 has yet been promoted to `[RE-CONFIRMED]` from a live
+  dhd run** — dhd does not reach the shared-struct/ring/doorbell/HME code on the
+  current device-model. Promoting them would be unsupported; they remain `[DYN]`/`[SDK]`.
+- The only end-to-end IPC transcript so far is the **synthetic** `bcmfmac-probe`
+  exerciser (`qemu-harness/traces/handshake-distilled.txt`), which replays dhd's
+  expected order against tunable props — it confirms the harness mechanism, not the
+  real dongle's field values.
+- Next dynamic-capture step (to start flipping `[DYN]`→`[RE-CONFIRMED]`): RE
+  `dhdpcie_scan_resource`'s BAR acceptance + the cfg-0x110 VSEC that
+  `dhdpcie_prepare_pcie_ep` reads, size the device-model BARs to match, and drive
+  dhd into `si_attach → read_pcie_ipc`. Until then §2/§3/§4/§6/§7/§9 stay as tagged.
+
 dhd.ko v17.10.369.39012 and both `rtecdc.bin` images are the **same firmware
 train** (host/dongle FWID handshake matches), so the headers above describe
 exactly what the firmware speaks.

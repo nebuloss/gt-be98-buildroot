@@ -94,7 +94,16 @@ int main(void)
         "/hnd.ko", "/rdpa_gpl.ko",
         "/emf.ko", "/igs.ko",
         "/wfd.ko",
-        "/bcm_enet.ko", "/bcm_pcie_hcd.ko",
+        "/bcm_enet.ko",
+        /* CP-2: load the harness SHIM instead of the real bcm_pcie_hcd.ko. The
+         * closed bcm_pcie_hcd.ko hangs in init_module spinning in __const_udelay
+         * polling for the Broadcom PCIe root-complex link that does not exist
+         * under -M virt (bcm963xx_hc_is_pcie_link_up / hc_core_reset). dhd only
+         * imports bcm_pcie_{map,config}_bar_addr from it, used solely on the
+         * (disabled) Runner-offload path, NOT on the IPC probe path. The shim
+         * exports those two as no-op stubs so dhd loads + probes the emulated
+         * device without the RC-bring-up hang. See bcm_pcie_hcd_shim.c. */
+        "/bcm_pcie_hcd_shim.ko",
         /* the FullMAC driver under test */
         "/dhd.ko",
         /* stock-kernel exerciser (probe initramfs only) */

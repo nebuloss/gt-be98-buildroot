@@ -1,0 +1,583 @@
+bcm-fmac-stub: realized: vendor=0x14e4 device=0x6717 class=0x0280 BAR0=16384B TCM=8MiB chipid=0x6717 ipc_rev=0x06Booting Linux on physical CPU 0x0000000000 [0x410fd083]
+Linux version 4.19.294 (guillaume@dev-build) (gcc version 10.3.0 (Buildroot 2021.02.4)) #11 SMP PREEMPT Tue Jun 9 09:06:46 UTC 2026
+Machine model: linux,dummy-virt
+earlycon: pl11 at MMIO 0x0000000009000000 (options '')
+bootconsole [pl11] enabled
+debug: skip boot console de-registration.
+On node 0 totalpages: 262144
+  DMA32 zone: 4096 pages used for memmap
+  DMA32 zone: 0 pages reserved
+  DMA32 zone: 262144 pages, LIFO batch:63
+psci: probing for conduit method from DT.
+psci: PSCIv1.1 detected in firmware.
+psci: Using standard PSCI v0.2 function IDs
+psci: Trusted OS migration not required
+psci: SMC Calling Convention v1.0
+percpu: Embedded 32 pages/cpu s93336 r8192 d29544 u131072
+pcpu-alloc: s93336 r8192 d29544 u131072 alloc=32*4096
+pcpu-alloc: [0] 0 
+Detected PIPT I-cache on CPU0
+ARM_SMCCC_ARCH_WORKAROUND_1 missing from firmware
+CPU features: enabling workaround for EL2 vector hardening
+CPU features: enabling workaround for Spectre-BHB
+CPU features: enabling workaround for ARM erratum 1742098
+CPU features: kernel page table isolation forced ON by KASLR
+CPU features: detected: Kernel page table isolation (KPTI)
+Built 1 zonelists, mobility grouping on.  Total pages: 258048
+Kernel command line: earlycon=pl011,0x9000000 keep_bootcon console=ttyAMA0 loglevel=8 rdinit=/init dyndbg="module dhd +p"
+Dentry cache hash table entries: 131072 (order: 8, 1048576 bytes)
+Inode-cache hash table entries: 65536 (order: 7, 524288 bytes)
+Memory: 1014720K/1048576K available (7998K kernel code, 612K rwdata, 1940K rodata, 1536K init, 770K bss, 33856K reserved, 0K cma-reserved)
+SLUB: HWalign=64, Order=0-3, MinObjects=0, CPUs=1, Nodes=1
+rcu: Preemptible hierarchical RCU implementation.
+rcu: 	RCU restricting CPUs from NR_CPUS=4 to nr_cpu_ids=1.
+	Tasks RCU enabled.
+rcu: Adjusting geometry for rcu_fanout_leaf=16, nr_cpu_ids=1
+NR_IRQS: 64, nr_irqs: 64, preallocated irqs: 0
+GICv2m: range[mem 0x08020000-0x08020fff], SPI[80:143]
+arch_timer: cp15 timer(s) running at 62.50MHz (virt).
+clocksource: arch_sys_counter: mask: 0xffffffffffffff max_cycles: 0x1cd42e208c, max_idle_ns: 881590405314 ns
+sched_clock: 56 bits at 62MHz, resolution 16ns, wraps every 4398046511096ns
+Calibrating delay loop (skipped), value calculated using timer frequency.. 125.00 BogoMIPS (lpj=62500)
+pid_max: default: 32768 minimum: 301
+Mount-cache hash table entries: 2048 (order: 2, 16384 bytes)
+Mountpoint-cache hash table entries: 2048 (order: 2, 16384 bytes)
+/cpus/cpu-map: empty cluster
+ASID allocator initialised with 32768 entries
+rcu: Hierarchical SRCU implementation.
+Boot Device: NAND 2K Page
+Boot Device: NAND 2K Page
+Boot Device: NAND 2K Page
+uboot_max_len missing, using defaults 16384
+uboot env missing
+Failed to retrieve boot CFE version from dtb!
+BoardId [], NVRAM_ULBOARDSTUFFOPTION=0 
+Boot Device: NAND 2K Page
+smp: Bringing up secondary CPUs ...
+smp: Brought up 1 node, 1 CPU
+SMP: Total of 1 processors activated.
+CPU features: detected: 32-bit EL0 Support
+CPU features: emulated: Privileged Access Never (PAN) using TTBR0_EL1 switching
+CPU: All CPU(s) started at EL1
+alternatives: patching kernel code
+devtmpfs: initialized
+clocksource: jiffies: mask: 0xffffffff max_cycles: 0xffffffff, max_idle_ns: 1911260446275000 ns
+futex hash table entries: 256 (order: 2, 16384 bytes)
+pinctrl core: initialized pinctrl subsystem
+size of sk_buff 576
+offset of cb in sk_buff 400
+NET: Registered protocol family 16
+OTP driver initcall
+OTP driver scanning DT
+Strap driver initcall
+Failed to find strap dts node
+Strap Register: 0xffffffff
+cpuidle: using governor menu
+BCM UBUS Driver initcall
+BCM UBUS Driver: QEMU-harness stub (SoC fabric init skipped)
+PMC driver initcall
+PMC driver: QEMU-harness stub (PMC init skipped)
+DMA: preallocated 256 KiB pool for atomic allocations
+Serial: AMBA PL011 UART driver
+Powering on XRDP core...
+XRDP: QEMU-harness stub (power-on skipped)
+9000000.pl011: ttyAMA0 at MMIO 0x9000000 (irq = 39, base_baud = 0) is a PL011 rev1
+console [ttyAMA0] enabled
+console [ttyAMA0] enabled
+cryptd: max_cpu_qlen set to 1000
+cryptd: max_cpu_qlen set to 1000
+Broadcom GBPMv0.1 initialized
+Broadcom GBPMv0.1 initialized
+Broadcom IQoS v1.0 initialized
+Broadcom IQoS v1.0 initialized
+Broadcom Logger v0.1
+Broadcom Logger v0.1
+Char device /dev/bcmnet(252) registered
+Char device /dev/bcmnet(252) registered
+Assigning idx[1] for lo
+Assigning idx[1] for lo
+skb_free_task created successfully with start budget 32, period 10ms
+skb_free_task created successfully with start budget 32, period 10ms
+[0;34mBLOG v3.0 Initialized[0m
+[0;34mBLOG v3.0 Initialized[0m
+BLOG Rule v1.0 Initialized
+BLOG Rule v1.0 Initialized
+bcm_tcp_task created successfully with budget 256 ,cpumask:0x0
+bcm_tcp_task created successfully with budget 256 ,cpumask:0x0
+clocksource: Switched to clocksource arch_sys_counter
+clocksource: Switched to clocksource arch_sys_counter
+NET: Registered protocol family 2
+NET: Registered protocol family 2
+IP idents hash table entries: 16384 (order: 5, 131072 bytes)
+IP idents hash table entries: 16384 (order: 5, 131072 bytes)
+tcp_listen_portaddr_hash hash table entries: 512 (order: 1, 8192 bytes)
+tcp_listen_portaddr_hash hash table entries: 512 (order: 1, 8192 bytes)
+TCP established hash table entries: 8192 (order: 4, 65536 bytes)
+TCP established hash table entries: 8192 (order: 4, 65536 bytes)
+TCP bind hash table entries: 8192 (order: 5, 131072 bytes)
+TCP bind hash table entries: 8192 (order: 5, 131072 bytes)
+TCP: Hash tables configured (established 8192 bind 8192)
+TCP: Hash tables configured (established 8192 bind 8192)
+UDP hash table entries: 512 (order: 2, 16384 bytes)
+UDP hash table entries: 512 (order: 2, 16384 bytes)
+UDP-Lite hash table entries: 512 (order: 2, 16384 bytes)
+UDP-Lite hash table entries: 512 (order: 2, 16384 bytes)
+NET: Registered protocol family 1
+NET: Registered protocol family 1
+Assigning idx[2] for blogtcp_local
+Assigning idx[2] for blogtcp_local
+blogtcp_local netdev registered successfully 
+blogtcp_local netdev registered successfully 
+PCI: CLS 0 bytes, default 64
+PCI: CLS 0 bytes, default 64
+Trying to unpack rootfs image as initramfs...
+Trying to unpack rootfs image as initramfs...
+Freeing initrd memory: 1684K
+Freeing initrd memory: 1684K
+Initialise system trusted keyrings
+Initialise system trusted keyrings
+workingset: timestamp_bits=62 max_order=18 bucket_order=0
+workingset: timestamp_bits=62 max_order=18 bucket_order=0
+squashfs: version 4.0 (2009/01/31) Phillip Lougher
+squashfs: version 4.0 (2009/01/31) Phillip Lougher
+jffs2: version 2.2. (NAND) © 2001-2006 Red Hat, Inc.
+jffs2: version 2.2. (NAND) �� 2001-2006 Red Hat, Inc.
+fuse init (API version 7.27)
+fuse init (API version 7.27)
+Key type asymmetric registered
+Key type asymmetric registered
+Asymmetric key parser 'x509' registered
+Asymmetric key parser 'x509' registered
+io scheduler noop registered (default)
+io scheduler noop registered (default)
+io scheduler mq-deadline registered
+io scheduler mq-deadline registered
+io scheduler kyber registered
+io scheduler kyber registered
+pci-host-generic 4010000000.pcie: host bridge /pcie@10000000 ranges:
+pci-host-generic 4010000000.pcie: host bridge /pcie@10000000 ranges:
+pci-host-generic 4010000000.pcie:    IO 0x3eff0000..0x3effffff -> 0x00000000
+pci-host-generic 4010000000.pcie:    IO 0x3eff0000..0x3effffff -> 0x00000000
+pci-host-generic 4010000000.pcie:   MEM 0x10000000..0x3efeffff -> 0x10000000
+pci-host-generic 4010000000.pcie:   MEM 0x10000000..0x3efeffff -> 0x10000000
+pci-host-generic 4010000000.pcie:   MEM 0x8000000000..0xffffffffff -> 0x8000000000
+pci-host-generic 4010000000.pcie:   MEM 0x8000000000..0xffffffffff -> 0x8000000000
+pci-host-generic 4010000000.pcie: ECAM at [mem 0x4010000000-0x401fffffff] for [bus 00-ff]
+pci-host-generic 4010000000.pcie: ECAM at [mem 0x4010000000-0x401fffffff] for [bus 00-ff]
+pci-host-generic 4010000000.pcie: PCI host bridge to bus 0000:00
+pci-host-generic 4010000000.pcie: PCI host bridge to bus 0000:00
+pci_bus 0000:00: root bus resource [bus 00-ff]
+pci_bus 0000:00: root bus resource [bus 00-ff]
+pci_bus 0000:00: root bus resource [io  0x0000-0xffff]
+pci_bus 0000:00: root bus resource [io  0x0000-0xffff]
+pci_bus 0000:00: root bus resource [mem 0x10000000-0x3efeffff]
+pci_bus 0000:00: root bus resource [mem 0x10000000-0x3efeffff]
+pci_bus 0000:00: root bus resource [mem 0x8000000000-0xffffffffff]
+pci_bus 0000:00: root bus resource [mem 0x8000000000-0xffffffffff]
+pci 0000:00:00.0: [1b36:0008] type 00 class 0x060000
+pci 0000:00:00.0: [1b36:0008] type 00 class 0x060000
+pci 0000:00:01.0: [1af4:1000] type 00 class 0x020000
+pci 0000:00:01.0: [1af4:1000] type 00 class 0x020000
+pci 0000:00:01.0: reg 0x10: [io  0x0000-0x001f]
+pci 0000:00:01.0: reg 0x10: [io  0x0000-0x001f]
+pci 0000:00:01.0: reg 0x14: [mem 0x00000000-0x00000fff]
+pci 0000:00:01.0: reg 0x14: [mem 0x00000000-0x00000fff]
+pci 0000:00:01.0: reg 0x20: [mem 0x00000000-0x00003fff 64bit pref]
+pci 0000:00:01.0: reg 0x20: [mem 0x00000000-0x00003fff 64bit pref]
+pci 0000:00:01.0: reg 0x30: [mem 0x00000000-0x0003ffff pref]
+pci 0000:00:01.0: reg 0x30: [mem 0x00000000-0x0003ffff pref]
+bcm-fmac-stub: CFG read  off=0x00 len=4 -> 0x671714e4bcm-fmac-stub: CFG read  off=0x06 len=2 -> 0x00000010bcm-fmac-stub: CFG read  off=0x40 len=2 -> 0x00000005bcm-fmac-stub: CFG read  off=0x08 len=4 -> 0x02800001pci 0000:00:02.0: [14e4:6717] type 00 class 0x028000
+pci 0000:00:02.0: [14e4:6717] type 00 class 0x028000
+bcm-fmac-stub: CFG read  off=0x06 len=2 -> 0x00000010bcm-fmac-stub: CFG read  off=0x40 len=2 -> 0x00000005bcm-fmac-stub: CFG read  off=0x04 len=2 -> 0x00000000bcm-fmac-stub: CFG read  off=0x04 len=2 -> 0x00000400bcm-fmac-stub: CFG read  off=0x04 len=2 -> 0x00000000bcm-fmac-stub: CFG read  off=0x10 len=4 -> 0x00000000bcm-fmac-stub: CFG read  off=0x10 len=4 -> 0xffffc000pci 0000:00:02.0: reg 0x10: [mem 0x00000000-0x00003fff]
+pci 0000:00:02.0: reg 0x10: [mem 0x00000000-0x00003fff]
+bcm-fmac-stub: CFG read  off=0x04 len=2 -> 0x00000000bcm-fmac-stub: CFG read  off=0x14 len=4 -> 0x00000000bcm-fmac-stub: CFG read  off=0x14 len=4 -> 0x00000000bcm-fmac-stub: CFG read  off=0x04 len=2 -> 0x00000000bcm-fmac-stub: CFG read  off=0x18 len=4 -> 0x0000000cbcm-fmac-stub: CFG read  off=0x18 len=4 -> 0xff80000cbcm-fmac-stub: CFG read  off=0x1c len=4 -> 0x00000000bcm-fmac-stub: CFG read  off=0x1c len=4 -> 0xffffffffpci 0000:00:02.0: reg 0x18: [mem 0x00000000-0x007fffff 64bit pref]
+pci 0000:00:02.0: reg 0x18: [mem 0x00000000-0x007fffff 64bit pref]
+bcm-fmac-stub: CFG read  off=0x04 len=2 -> 0x00000000bcm-fmac-stub: CFG read  off=0x20 len=4 -> 0x00000000bcm-fmac-stub: CFG read  off=0x20 len=4 -> 0x00000000bcm-fmac-stub: CFG read  off=0x04 len=2 -> 0x00000000bcm-fmac-stub: CFG read  off=0x24 len=4 -> 0x00000000bcm-fmac-stub: CFG read  off=0x24 len=4 -> 0x00000000bcm-fmac-stub: CFG read  off=0x04 len=2 -> 0x00000000bcm-fmac-stub: CFG read  off=0x30 len=4 -> 0x00000000bcm-fmac-stub: CFG read  off=0x30 len=4 -> 0x00000000bcm-fmac-stub: CFG read  off=0x2c len=2 -> 0x00001af4bcm-fmac-stub: CFG read  off=0x2e len=2 -> 0x00001100bcm-fmac-stub: CFG read  off=0x06 len=2 -> 0x00000010bcm-fmac-stub: CFG read  off=0x40 len=2 -> 0x00000005bcm-fmac-stub: CFG read  off=0x06 len=2 -> 0x00000010bcm-fmac-stub: CFG read  off=0x40 len=2 -> 0x00000005bcm-fmac-stub: CFG read  off=0x42 len=2 -> 0x00000080bcm-fmac-stub: CFG read  off=0x06 len=2 -> 0x00000010bcm-fmac-stub: CFG read  off=0x40 len=2 -> 0x00000005bcm-fmac-stub: CFG read  off=0x06 len=2 -> 0x00000010bcm-fmac-stub: CFG read  off=0x40 len=2 -> 0x00000005bcm-fmac-stub: CFG read  off=0x06 len=2 -> 0x00000010bcm-fmac-stub: CFG read  off=0x40 len=2 -> 0x00000005bcm-fmac-stub: CFG read  off=0x06 len=2 -> 0x00000010bcm-fmac-stub: CFG read  off=0x40 len=2 -> 0x00000005bcm-fmac-stub: CFG read  off=0x06 len=2 -> 0x00000010bcm-fmac-stub: CFG read  off=0x40 len=2 -> 0x00000005bcm-fmac-stub: CFG read  off=0x06 len=2 -> 0x00000010bcm-fmac-stub: CFG read  off=0x40 len=2 -> 0x00000005pci 0000:00:02.0: BAR 2: assigned [mem 0x8000000000-0x80007fffff 64bit pref]
+pci 0000:00:02.0: BAR 2: assigned [mem 0x8000000000-0x80007fffff 64bit pref]
+bcm-fmac-stub: CFG read  off=0x04 len=2 -> 0x00000000bcm-fmac-stub: CFG read  off=0x18 len=4 -> 0x0000000cbcm-fmac-stub: CFG read  off=0x1c len=4 -> 0x00000080pci 0000:00:01.0: BAR 6: assigned [mem 0x10000000-0x1003ffff pref]
+pci 0000:00:01.0: BAR 6: assigned [mem 0x10000000-0x1003ffff pref]
+pci 0000:00:01.0: BAR 4: assigned [mem 0x8000800000-0x8000803fff 64bit pref]
+pci 0000:00:01.0: BAR 4: assigned [mem 0x8000800000-0x8000803fff 64bit pref]
+pci 0000:00:02.0: BAR 0: assigned [mem 0x10040000-0x10043fff]
+pci 0000:00:02.0: BAR 0: assigned [mem 0x10040000-0x10043fff]
+bcm-fmac-stub: CFG read  off=0x10 len=4 -> 0x10040000pci 0000:00:01.0: BAR 1: assigned [mem 0x10044000-0x10044fff]
+pci 0000:00:01.0: BAR 1: assigned [mem 0x10044000-0x10044fff]
+pci 0000:00:01.0: BAR 0: assigned [io  0x1000-0x101f]
+pci 0000:00:01.0: BAR 0: assigned [io  0x1000-0x101f]
+virtio-pci 0000:00:01.0: enabling device (0000 -> 0003)
+virtio-pci 0000:00:01.0: enabling device (0000 -> 0003)
+cacheinfo: Unable to detect cache hierarchy for CPU 0
+cacheinfo: Unable to detect cache hierarchy for CPU 0
+brd: module loaded
+brd: module loaded
+loop: module loaded
+loop: module loaded
+Assigning idx[3] for dummy0
+Assigning idx[3] for dummy0
+Assigning idx[4] for ifb0
+Assigning idx[4] for ifb0
+Assigning idx[5] for ifb1
+Assigning idx[5] for ifb1
+Assigning idx[6] for imq0
+Assigning idx[6] for imq0
+Assigning idx[7] for imq1
+Assigning idx[7] for imq1
+Assigning idx[8] for imq2
+Assigning idx[8] for imq2
+IMQ driver loaded successfully. (numdevs = 3, numqueues = 1, imq_dev_accurate_stats = 1)
+IMQ driver loaded successfully. (numdevs = 3, numqueues = 1, imq_dev_accurate_stats = 1)
+	Hooking IMQ after NAT on PREROUTING.
+	Hooking IMQ after NAT on PREROUTING.
+	Hooking IMQ before NAT on POSTROUTING.
+	Hooking IMQ before NAT on POSTROUTING.
+Assigning idx[9] for eth0
+Assigning idx[9] for eth0
+PPP generic driver version 2.4.2
+PPP generic driver version 2.4.2
+PPP BSD Compression module registered
+PPP BSD Compression module registered
+PPP Deflate Compression module registered
+PPP Deflate Compression module registered
+PPP MPPE Compression module registered
+PPP MPPE Compression module registered
+NET: Registered protocol family 24
+NET: Registered protocol family 24
+PPTP driver version 0.8.5
+PPTP driver version 0.8.5
+i2c /dev entries driver
+i2c /dev entries driver
+sdhci: Secure Digital Host Controller Interface driver
+sdhci: Secure Digital Host Controller Interface driver
+sdhci: Copyright(c) Pierre Ossman
+sdhci: Copyright(c) Pierre Ossman
+sdhci-pltfm: SDHCI platform and OF driver helper
+sdhci-pltfm: SDHCI platform and OF driver helper
+hidraw: raw HID events driver (C) Jiri Kosina
+hidraw: raw HID events driver (C) Jiri Kosina
+GACT probability NOT on
+GACT probability NOT on
+Mirror/redirect action on
+Mirror/redirect action on
+Simple TC action Loaded
+Simple TC action Loaded
+u32 classifier
+u32 classifier
+    Performance counters on
+    Performance counters on
+    input device check on
+    input device check on
+    Actions configured
+    Actions configured
+xt_time: kernel timezone is -0000
+xt_time: kernel timezone is -0000
+gre: GRE over IPv4 demultiplexor driver
+gre: GRE over IPv4 demultiplexor driver
+ip_gre: GRE over IPv4 tunneling driver
+ip_gre: GRE over IPv4 tunneling driver
+Assigning idx[10] for gre0
+Assigning idx[10] for gre0
+Assigning idx[11] for gretap0
+Assigning idx[11] for gretap0
+Assigning idx[12] for erspan0
+Assigning idx[12] for erspan0
+IPv4 over IPsec tunneling driver
+IPv4 over IPsec tunneling driver
+Assigning idx[13] for ip_vti0
+Assigning idx[13] for ip_vti0
+NET: Registered protocol family 10
+NET: Registered protocol family 10
+Segment Routing with IPv6
+Segment Routing with IPv6
+Assigning idx[14] for ip6_vti0
+Assigning idx[14] for ip6_vti0
+sit: IPv6, IPv4 and MPLS over IPv4 tunneling driver
+sit: IPv6, IPv4 and MPLS over IPv4 tunneling driver
+Assigning idx[15] for sit0
+Assigning idx[15] for sit0
+Assigning idx[16] for ip6tnl0
+Assigning idx[16] for ip6tnl0
+ip6_gre: GRE over IPv6 tunneling driver
+ip6_gre: GRE over IPv6 tunneling driver
+Assigning idx[17] for ip6gre0
+Assigning idx[17] for ip6gre0
+NET: Registered protocol family 17
+NET: Registered protocol family 17
+NET: Registered protocol family 15
+NET: Registered protocol family 15
+bridge: filtering via arp/ip/ip6tables is no longer available by default. Update your scripts to load br_netfilter if you need this.
+bridge: filtering via arp/ip/ip6tables is no longer available by default. Update your scripts to load br_netfilter if you need this.
+l2tp_core: L2TP core driver, V2.0
+l2tp_core: L2TP core driver, V2.0
+l2tp_ppp: PPPoL2TP kernel driver, V2.0
+l2tp_ppp: PPPoL2TP kernel driver, V2.0
+8021q: 802.1Q VLAN Support v1.8
+8021q: 802.1Q VLAN Support v1.8
+sctp: Hash tables configured (bind 256/256)
+sctp: Hash tables configured (bind 256/256)
+brcmboard registered
+brcmboard registered
+brcmboard: brcm_board_init entry
+brcmboard: brcm_board_init entry
+ERROR - Invalid number of MAC addresses (0) is configured.
+ERROR - Invalid number of MAC addresses (0) is configured.
+Broadcom GPS GPIO driver
+Broadcom GPS GPIO driver
+Optical detection module loaded.
+Optical detection module loaded.
+Bridge Broadcom hooks registered
+Bridge Broadcom hooks registered
+ebt_blog registered
+ebt_blog registered
+ebt_ftos registered
+ebt_ftos registered
+ebt_qos_map registered
+ebt_qos_map registered
+ebt_time registered
+ebt_time registered
+ebt_dscp registered
+ebt_dscp registered
+ebt_vtag registered
+ebt_vtag registered
+ebt_wmm_mark registered
+ebt_wmm_mark registered
+ebt_reject registered
+ebt_reject registered
+Loading compiled-in X.509 certificates
+Loading compiled-in X.509 certificates
+Freeing unused kernel memory: 1536K
+Freeing unused kernel memory: 1536K
+Checked W+X mappings: passed, no W+X pages found
+Checked W+X mappings: passed, no W+X pages found
+Run /init as init process
+Run /init as init process
+==== QEMU FullMAC RE harness init (aarch64) ====
+---- /sys/bus/pci/devices ----
+  0000:00:01.0 vendor=0x1af4
+  device=0x1000
+  class=0x020000
+  0000:00:00.0 vendor=0x1b36
+  device=0x0008
+  class=0x060000
+  0000:00:02.0 vendor=0x14e4
+  device=0x6717
+  class=0x028000
+---- finit_module /bcm_knvram.ko ----
+Initializing WLCSM Module
+Initializing WLCSM Module
+WLCSM Module loaded successfully 
+WLCSM Module loaded successfully 
+     -> OK (rc=0)
+---- finit_module /bcmlibs.ko ----
+BCMLIBS loaded...
+BCMLIBS loaded...
+     -> OK (rc=0)
+---- finit_module /bdmf.ko ----
+     -> OK (rc=0)
+---- finit_module /bcmmcast.ko ----
+bcm_mcast_init successful
+bcm_mcast_init successful
+     -> OK (rc=0)
+---- finit_module /cfg80211.ko ----
+cfg80211: Loading compiled-in X.509 certificates for regulatory database
+cfg80211: Loading compiled-in X.509 certificates for regulatory database
+cfg80211: Loaded X.509 cert 'sforshee: 00b28ddf47aef9cea7'
+cfg80211: Loaded X.509 cert 'sforshee: 00b28ddf47aef9cea7'
+platform regulatory.0: Direct firmware load for regulatory.db failed with error -2
+platform regulatory.0: Direct firmware load for regulatory.db failed with error -2
+     -> OK (rc=0)
+---- finit_module /wlshared.ko ----platform regulatory.0: Falling back to syfs fallback for: regulatory.db
+platform regulatory.0: Falling back to syfs fallback for: regulatory.db
+Loading wlshared Module...
+Loading wlshared Module...
+     -> OK (rc=0)
+---- finit_module /hnd.ko ----
+Loading HND Module
+Loading HND Module
+WL MLO AP IDS assignment -1 -1 -1 -1
+WL MLO AP IDS assignment -1 -1 -1 -1
+     -> OK (rc=0)
+---- finit_module /rdpa_gpl.ko ----
+     -> OK (rc=0)
+---- finit_module /emf.ko ----
+     -> OK (rc=0)
+---- finit_module /igs.ko ----
+igs_module_init:882:	 IGS 29 create network socket successful
+igs_module_init:882:	 IGS 29 create network socket successful
+     -> OK (rc=0)
+---- finit_module /wfd.ko ----
+[1m[34mWifi Forwarding Driver is initialized![0m
+[1m[34mWifi Forwarding Driver is initialized![0m
+     -> OK (rc=0)
+---- finit_module /bcm_enet.ko ----
+     -> OK (rc=0)
+---- finit_module /bcm_pcie_hcd_shim.ko ----
+bcm_pcie_hcd_shim: loading out-of-tree module taints kernel.
+bcm_pcie_hcd_shim: loading out-of-tree module taints kernel.
+bcm_pcie_hcd_shim: loaded (QEMU -M virt harness; real RC bring-up skipped)
+bcm_pcie_hcd_shim: loaded (QEMU -M virt harness; real RC bring-up skipped)
+     -> OK (rc=0)
+---- finit_module /dhd.ko ----
+dhd_module_init in
+dhd_module_init in
+DHD_FKB_POOL size is:1280 and entry size:2816
+DHD_FKB_POOL size is:1280 and entry size:2816
+DHD_PKTTAG POOL size is:2592 and entry size:128
+DHD_PKTTAG POOL size is:2592 and entry size:128
+[0;32mdhd_pktfwd_sys_init:  [1m[34mdhd_PKTFWD[1.0.0][0m Success[0m
+[0;32mdhd_pktfwd_sys_init:  [1m[34mdhd_PKTFWD[1.0.0][0m Success[0m
+dhd_queue_budget = 256
+dhd_queue_budget = 256
+dhd_sta_threshold = 2048
+dhd_sta_threshold = 2048
+dhd_if_threshold = 65536
+dhd_if_threshold = 65536
+PCI_PROBE:  bus 0, slot 2,vendor 14E4, device 6717(good PCI location)
+PCI_PROBE:  bus 0, slot 2,vendor 14E4, device 6717(good PCI location)
+bcm-fmac-stub: CFG read  off=0x00 len=4 -> 0x671714e4bcm-fmac-stub: CFG read  off=0x6c len=4 -> 0x00000000dhdpcie_init: device not accessible
+dhdpcie_init: device not accessible
+------------[ cut here ]------------
+------------[ cut here ]------------
+pcieh 0000:00:02.0: disabling already-disabled device
+pcieh 0000:00:02.0: disabling already-disabled device
+WARNING: CPU: 0 PID: 1 at drivers/pci/pci.c:1856 pci_disable_device+0x11c/0x150
+WARNING: CPU: 0 PID: 1 at drivers/pci/pci.c:1856 pci_disable_device+0x11c/0x150
+Modules linked in: dhd(+) init_addr(ffffff98b4e46000 - ffffff98b4e47000), core_addr(ffffff98b4cdc000 - ffffff98b4d8a000)
+Modules linked in: dhd(+) init_addr(ffffff98b4e46000 - ffffff98b4e47000), core_addr(ffffff98b4cdc000 - ffffff98b4d8a000)
+ bcm_pcie_hcd_shim(O) init_addr(0000000000000000 - 0000000000000000), core_addr(ffffff98b4cd4000 - ffffff98b4cd5000)
+ bcm_pcie_hcd_shim(O) init_addr(0000000000000000 - 0000000000000000), core_addr(ffffff98b4cd4000 - ffffff98b4cd5000)
+ bcm_enet init_addr(0000000000000000 - 0000000000000000), core_addr(ffffff98b4ca2000 - ffffff98b4cba000)
+ bcm_enet init_addr(0000000000000000 - 0000000000000000), core_addr(ffffff98b4ca2000 - ffffff98b4cba000)
+ wfd init_addr(0000000000000000 - 0000000000000000), core_addr(ffffff98b4c91000 - ffffff98b4c97000)
+ wfd init_addr(0000000000000000 - 0000000000000000), core_addr(ffffff98b4c91000 - ffffff98b4c97000)
+ igs init_addr(0000000000000000 - 0000000000000000), core_addr(ffffff98b4c84000 - ffffff98b4c88000)
+ igs init_addr(0000000000000000 - 0000000000000000), core_addr(ffffff98b4c84000 - ffffff98b4c88000)
+ emf init_addr(0000000000000000 - 0000000000000000), core_addr(ffffff98b4c78000 - ffffff98b4c7b000)
+ emf init_addr(0000000000000000 - 0000000000000000), core_addr(ffffff98b4c78000 - ffffff98b4c7b000)
+ rdpa_gpl init_addr(0000000000000000 - 0000000000000000), core_addr(ffffff98b4c64000 - ffffff98b4c66000)
+ rdpa_gpl init_addr(0000000000000000 - 0000000000000000), core_addr(ffffff98b4c64000 - ffffff98b4c66000)
+ hnd init_addr(0000000000000000 - 0000000000000000), core_addr(ffffff98b4bdb000 - ffffff98b4c08000)
+ hnd init_addr(0000000000000000 - 0000000000000000), core_addr(ffffff98b4bdb000 - ffffff98b4c08000)
+ wlshared init_addr(0000000000000000 - 0000000000000000), core_addr(ffffff98b4bd3000 - ffffff98b4bd4000)
+ wlshared init_addr(0000000000000000 - 0000000000000000), core_addr(ffffff98b4bd3000 - ffffff98b4bd4000)
+ cfg80211 init_addr(0000000000000000 - 0000000000000000), core_addr(ffffff98b4b7a000 - ffffff98b4ba7000)
+ cfg80211 init_addr(0000000000000000 - 0000000000000000), core_addr(ffffff98b4b7a000 - ffffff98b4ba7000)
+ bcmmcast init_addr(0000000000000000 - 0000000000000000), core_addr(ffffff98b4b54000 - ffffff98b4b65000)
+ bcmmcast init_addr(0000000000000000 - 0000000000000000), core_addr(ffffff98b4b54000 - ffffff98b4b65000)
+ bdmf init_addr(0000000000000000 - 0000000000000000), core_addr(ffffff98b4a09000 - ffffff98b4a29000)
+ bdmf init_addr(0000000000000000 - 0000000000000000), core_addr(ffffff98b4a09000 - ffffff98b4a29000)
+ bcmlibs init_addr(0000000000000000 - 0000000000000000), core_addr(ffffff98b49f9000 - ffffff98b49fd000)
+ bcmlibs init_addr(0000000000000000 - 0000000000000000), core_addr(ffffff98b49f9000 - ffffff98b49fd000)
+ bcm_knvram init_addr(0000000000000000 - 0000000000000000), core_addr(ffffff98b49ee000 - ffffff98b49f0000)
+ bcm_knvram init_addr(0000000000000000 - 0000000000000000), core_addr(ffffff98b49ee000 - ffffff98b49f0000)
+===DDD===
+===DDD===
+00400000 - 00478000, [init]
+00400000 - 00478000, [init]
+CPU: 0 PID: 1 Comm: init Tainted: G           O      4.19.294 #11
+CPU: 0 PID: 1 Comm: init Tainted: G           O      4.19.294 #11
+Hardware name: linux,dummy-virt (DT)
+Hardware name: linux,dummy-virt (DT)
+pstate: 60400005 (nZCv daif +PAN -UAO)
+pstate: 60400005 (nZCv daif +PAN -UAO)
+pc : pci_disable_device+0x11c/0x150
+pc : pci_disable_device+0x11c/0x150
+lr : pci_disable_device+0x11c/0x150
+lr : pci_disable_device+0x11c/0x150
+sp : ffffff800800b8d0
+sp : ffffff800800b8d0
+x29: ffffff800800b8d0 x28: ffffff98b4e27f58 
+x29: ffffff800800b8d0 x28: ffffff98b4e27f58 
+x27: ffffff98c6b7b000 x26: ffffff98b4e27e08 
+x27: ffffff98c6b7b000 x26: ffffff98b4e27e08 
+x25: ffffffc37de2d100 x24: ffffff98b4e1dd40 
+x25: ffffffc37de2d100 x24: ffffff98b4e1dd40 
+x23: ffffff98b4dd6000 x22: ffffffc37daeec00 
+x23: ffffff98b4dd6000 x22: ffffffc37daeec00 
+x21: ffffff98b4e2c000 x20: ffffffc37eb418a0 
+x21: ffffff98b4e2c000 x20: ffffffc37eb418a0 
+x19: ffffffc37eb41800 x18: 0000000000000020 
+x19: ffffffc37eb41800 x18: 0000000000000020 
+x17: 0000000000000000 x16: 0000000000000000 
+x17: 0000000000000000 x16: 0000000000000000 
+x15: ffffff98c6d65b00 x14: ffffff98c6de18d2 
+x15: ffffff98c6d65b00 x14: ffffff98c6de18d2 
+x13: 0000000000000000 x12: ffffff98c6de0000 
+x13: 0000000000000000 x12: ffffff98c6de0000 
+x11: ffffff800800b8d0 x10: ffffff800800b8d0 
+x11: ffffff800800b8d0 x10: ffffff800800b8d0 
+x9 : ffffff800800b8d0 x8 : 0000000000000000 
+x9 : ffffff800800b8d0 x8 : 0000000000000000 
+x7 : 69642d7964616572 x6 : ffffff98c6de0f95 
+x7 : 69642d7964616572 x6 : ffffff98c6de0f95 
+x5 : 0000000000000000 x4 : 0000000000000000 
+x5 : 0000000000000000 x4 : 0000000000000000 
+x3 : ffffffffffffffff x2 : 0000000000000000 
+x3 : ffffffffffffffff x2 : 0000000000000000 
+x1 : 0000000000000000 x0 : ffffff98c6b7b000 
+x1 : 0000000000000000 x0 : ffffff98c6b7b000 
+Call trace:
+Call trace:
+ pci_disable_device+0x11c/0x150
+ pci_disable_device+0x11c/0x150
+ dhdpcie_pci_probe+0x26c/0x510 [dhd]
+ dhdpcie_pci_probe+0x26c/0x510 [dhd]
+ pci_device_probe+0xa4/0x130
+ pci_device_probe+0xa4/0x130
+ really_probe+0x214/0x410
+ really_probe+0x214/0x410
+ driver_probe_device+0x48/0xf0
+ driver_probe_device+0x48/0xf0
+ __driver_attach+0x134/0x150
+ __driver_attach+0x134/0x150
+ bus_for_each_dev+0x70/0xd0
+ bus_for_each_dev+0x70/0xd0
+ driver_attach+0x20/0x30
+ driver_attach+0x20/0x30
+ bus_add_driver+0x18c/0x270
+ bus_add_driver+0x18c/0x270
+ driver_register+0x74/0x120
+ driver_register+0x74/0x120
+ __pci_register_driver+0x40/0x50
+ __pci_register_driver+0x40/0x50
+ dhdpcie_bus_register+0x44/0x100 [dhd]
+ dhdpcie_bus_register+0x44/0x100 [dhd]
+ dhd_bus_register+0x18/0x40 [dhd]
+ dhd_bus_register+0x18/0x40 [dhd]
+ dhd_module_init+0x1fc/0x1000 [dhd]
+ dhd_module_init+0x1fc/0x1000 [dhd]
+ do_one_initcall+0x50/0x160
+ do_one_initcall+0x50/0x160
+ do_init_module+0x48/0x200
+ do_init_module+0x48/0x200
+ load_module+0x1bf8/0x1fb0
+ load_module+0x1bf8/0x1fb0
+ __se_sys_finit_module+0xec/0x120
+ __se_sys_finit_module+0xec/0x120
+ __arm64_sys_finit_module+0x18/0x20
+ __arm64_sys_finit_module+0x18/0x20
+ el0_svc_common+0x70/0x170
+ el0_svc_common+0x70/0x170
+ el0_svc_handler+0x64/0x80
+ el0_svc_handler+0x64/0x80
+ el0_svc+0x8/0x300
+ el0_svc+0x8/0x300
+---[ end trace 5eaeece422b1d425 ]---
+---[ end trace 5eaeece422b1d425 ]---
+dhdpcie_pci_probe: PCIe Enumeration failed
+dhdpcie_pci_probe: PCIe Enumeration failed
+dhdpcie_bus_register: dhdpcie initialize failed.
+dhdpcie_bus_register: dhdpcie initialize failed.
+dhd_module_init: Failed to load driver max retry reached**
+dhd_module_init: Failed to load driver max retry reached**
+dhd_module_init out
+dhd_module_init out
+dhd_module_init: Failed to load driver (err=-1)
+dhd_module_init: Failed to load driver (err=-1)
+[0;32mdhd_pktfwd_sys_fini:  [1m[34mdhd_PKTFWD[1.0.0][0m Complete[0m
+[0;32mdhd_pktfwd_sys_fini:  [1m[34mdhd_PKTFWD[1.0.0][0m Complete[0m
+     -> FAIL (rc=-1)
+==== harness done; powering off ====
+cfg80211: failed to load regulatory.db
+cfg80211: failed to load regulatory.db
+reboot: Power down
+reboot: Power down

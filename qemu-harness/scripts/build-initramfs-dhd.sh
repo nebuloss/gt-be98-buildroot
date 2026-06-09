@@ -27,9 +27,11 @@ R="$HERE/rootfs/root-dhd"
 rm -rf "$R"; mkdir -p "$R/proc" "$R/sys" "$R/dev"
 cp "$HERE/rootfs/init" "$R/init"
 
-# the dep chain + dhd (names match init.c's load list)
+# the dep chain + dhd (names match init.c's load list).
+# CP-2: bcm_pcie_hcd is REPLACED by the harness shim (bcm_pcie_hcd_shim.ko) — the
+# real one hangs in init_module polling an absent Broadcom PCIe RC under -M virt.
 for m in bcm_knvram bcmlibs bdmf bcmmcast wlshared hnd rdpa_gpl \
-         emf igs wfd bcm_enet bcm_pcie_hcd dhd; do
+         emf igs wfd bcm_enet dhd; do
     if [ -f "$MODDIR/$m.ko" ]; then
         cp "$MODDIR/$m.ko" "$R/$m.ko"
     else
@@ -37,6 +39,11 @@ for m in bcm_knvram bcmlibs bdmf bcmmcast wlshared hnd rdpa_gpl \
     fi
 done
 [ -f "$CFG80211" ] && cp "$CFG80211" "$R/cfg80211.ko" || echo "WARN: missing cfg80211.ko ($CFG80211)"
+
+# CP-2 shim: bcm_pcie_{map,config}_bar_addr stubs (source+ko in qemu-harness/shim/,
+# see init.c). Prefer the committed prebuilt .ko; rebuild with shim/build-shim.sh.
+SHIM="${SHIM_KO:-$HERE/shim/bcm_pcie_hcd_shim.ko}"
+[ -f "$SHIM" ] && cp "$SHIM" "$R/bcm_pcie_hcd_shim.ko" || echo "WARN: missing shim ($SHIM); build with qemu-harness/shim/build-shim.sh"
 
 ( cd "$R" && find . | cpio -o -H newc 2>/dev/null | gzip -9 ) > "$HERE/rootfs/initramfs-dhd.cpio.gz"
 echo "initramfs: $HERE/rootfs/initramfs-dhd.cpio.gz"
