@@ -1,0 +1,121 @@
+bcm-fmac-stub: realized: vendor=0x14e4 device=0x6717 class=0x0280 BAR0=16384B TCM=8MiB chipid=0x6717 ipc_rev=0x06
+Booting Linux on physical CPU 0x0000000000 [0x410fd083]
+Linux version 4.19.294 (guillaume@dev-build) (gcc version 10.3.0 (Buildroot 2021.02.4)) #5 SMP PREEMPT Mon Jun 8 21:29:51 UTC 2026
+Machine model: linux,dummy-virt
+earlycon: pl11 at MMIO 0x0000000009000000 (options '')
+bootconsole [pl11] enabled
+On node 0 totalpages: 262144
+  DMA32 zone: 4096 pages used for memmap
+  DMA32 zone: 0 pages reserved
+  DMA32 zone: 262144 pages, LIFO batch:63
+psci: probing for conduit method from DT.
+psci: PSCIv1.1 detected in firmware.
+psci: Using standard PSCI v0.2 function IDs
+psci: Trusted OS migration not required
+psci: SMC Calling Convention v1.0
+percpu: Embedded 32 pages/cpu s93272 r8192 d29608 u131072
+pcpu-alloc: s93272 r8192 d29608 u131072 alloc=32*4096
+pcpu-alloc: [0] 0 
+Detected PIPT I-cache on CPU0
+ARM_SMCCC_ARCH_WORKAROUND_1 missing from firmware
+CPU features: enabling workaround for EL2 vector hardening
+CPU features: enabling workaround for Spectre-BHB
+CPU features: enabling workaround for ARM erratum 1742098
+CPU features: kernel page table isolation forced ON by KASLR
+CPU features: detected: Kernel page table isolation (KPTI)
+Built 1 zonelists, mobility grouping on.  Total pages: 258048
+Kernel command line: earlycon console=ttyAMA0 loglevel=8 panic=1
+Dentry cache hash table entries: 131072 (order: 8, 1048576 bytes)
+Inode-cache hash table entries: 65536 (order: 7, 524288 bytes)
+Memory: 1017184K/1048576K available (7742K kernel code, 520K rwdata, 1784K rodata, 1280K init, 734K bss, 31392K reserved, 0K cma-reserved)
+SLUB: HWalign=64, Order=0-3, MinObjects=0, CPUs=1, Nodes=1
+rcu: Preemptible hierarchical RCU implementation.
+rcu: 	RCU restricting CPUs from NR_CPUS=4 to nr_cpu_ids=1.
+	Tasks RCU enabled.
+rcu: Adjusting geometry for rcu_fanout_leaf=16, nr_cpu_ids=1
+NR_IRQS: 64, nr_irqs: 64, preallocated irqs: 0
+GICv2m: range[mem 0x08020000-0x08020fff], SPI[80:143]
+arch_timer: cp15 timer(s) running at 62.50MHz (virt).
+clocksource: arch_sys_counter: mask: 0xffffffffffffff max_cycles: 0x1cd42e208c, max_idle_ns: 881590405314 ns
+sched_clock: 56 bits at 62MHz, resolution 16ns, wraps every 4398046511096ns
+Calibrating delay loop (skipped), value calculated using timer frequency.. 125.00 BogoMIPS (lpj=62500)
+pid_max: default: 32768 minimum: 301
+Mount-cache hash table entries: 2048 (order: 2, 16384 bytes)
+Mountpoint-cache hash table entries: 2048 (order: 2, 16384 bytes)
+/cpus/cpu-map: empty cluster
+ASID allocator initialised with 32768 entries
+rcu: Hierarchical SRCU implementation.
+Boot Device: NAND 2K Page
+Boot Device: NAND 2K Page
+Boot Device: NAND 2K Page
+uboot_max_len missing, using defaults 16384
+uboot env missing
+Failed to retrieve boot CFE version from dtb!
+BoardId [], NVRAM_ULBOARDSTUFFOPTION=0 
+Boot Device: NAND 2K Page
+smp: Bringing up secondary CPUs ...
+smp: Brought up 1 node, 1 CPU
+SMP: Total of 1 processors activated.
+CPU features: detected: 32-bit EL0 Support
+CPU features: emulated: Privileged Access Never (PAN) using TTBR0_EL1 switching
+CPU: All CPU(s) started at EL1
+alternatives: patching kernel code
+devtmpfs: initialized
+clocksource: jiffies: mask: 0xffffffff max_cycles: 0xffffffff, max_idle_ns: 1911260446275000 ns
+futex hash table entries: 256 (order: 2, 16384 bytes)
+pinctrl core: initialized pinctrl subsystem
+size of sk_buff 576
+offset of cb in sk_buff 400
+NET: Registered protocol family 16
+OTP driver initcall
+OTP driver scanning DT
+Strap driver initcall
+Failed to find strap dts node
+Strap Register: 0xffffffff
+cpuidle: using governor menu
+BCM UBUS Driver initcall
+Unable to handle kernel write to read-only memory at virtual address 00000000000000d8
+Mem abort info:
+  ESR = 0x96000045
+  Exception class = DABT (current EL), IL = 32 bits
+  SET = 0, FnV = 0
+  EA = 0, S1PTW = 0
+Data abort info:
+  ISV = 0, ISS = 0x00000045
+  CM = 0, WnR = 1
+[00000000000000d8] user address but active_mm is swapper
+Internal error: Oops: 96000045 [#1] PREEMPT SMP
+Modules linked in:
+Process swapper/0 (pid: 1, stack limit = 0x00000000e459f9f2)
+CPU: 0 PID: 1 Comm: swapper/0 Not tainted 4.19.294 #5
+Hardware name: linux,dummy-virt (DT)
+pstate: 40400005 (nZcv daif +PAN -UAO)
+pc : bcm_ubus_config+0x98/0x150
+lr : bcm_ubus_config+0x84/0x150
+sp : ffffff800800bd70
+x29: ffffff800800bd70 x28: 0000000000000000 
+x27: 0000000000000000 x26: ffffffaa9df60488 
+x25: ffffffaa9dfb6840 x24: ffffffaa9df4c240 
+x23: 0000000000000002 x22: 0000000000000000 
+x21: ffffffaa9e16d000 x20: ffffffaa9def3d68 
+x19: ffffffaa9e16d228 x18: 0000000000000020 
+x17: 0000000000000000 x16: 0000000000000000 
+x15: 6472163a001a0a16 x14: ffffffbefe800000 
+x13: ffffff800800bd94 x12: 0000000000000010 
+x11: 0101010101010101 x10: 7f7f7f7f7f7f7f7f 
+x9 : 0000000000000000 x8 : ffffffd63e8bbe40 
+x7 : 0000000000000000 x6 : ffffffd63e8bbe32 
+x5 : 0000000000000000 x4 : ffffffffffffffff 
+x3 : 000000000000007f x2 : ffffffd63e8e6800 
+x1 : 00000000ffffffff x0 : 0000000000000000 
+Call trace:
+ bcm_ubus_config+0x98/0x150
+ bcm_ubus_drv_init+0x70/0xc8
+ do_one_initcall+0x50/0x160
+ kernel_init_freeable+0x14c/0x1e8
+ kernel_init+0x10/0xfc
+ ret_from_fork+0x10/0x24
+Code: f9412aa2 12800001 52800fe3 f9400840 (b900d801) 
+---[ end trace 3c7ecb2167badcf1 ]---
+Kernel panic - not syncing: Fatal exception
+Rebooting in 1 seconds..

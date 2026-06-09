@@ -1,0 +1,2237 @@
+bcm-fmac-stub: realized: vendor=0x14e4 device=0x6717 class=0x0280 BAR0=16384B TCM=8MiB chipid=0x6717 ipc_rev=0x06
+** 7 printk messages dropped **
+[    0.000000] NUMA: No NUMA configuration found
+[    0.000000] NUMA: Faking a node at [mem 0x0000000040000000-0x000000007fffffff]
+[    0.000000] NUMA: NODE_DATA [mem 0x7dfe9280-0x7dfeaa3f]
+[    0.000000] Zone ranges:
+[    0.000000]   DMA32    [mem 0x0000000040000000-0x000000007fffffff]
+[    0.000000]   Normal   empty
+[    0.000000] Movable zone start for each node
+[    0.000000] Early memory node ranges
+[    0.000000]   node   0: [mem 0x0000000040000000-0x000000007fffffff]
+[    0.000000] Initmem setup node 0 [mem 0x0000000040000000-0x000000007fffffff]
+[    0.000000] On node 0 totalpages: 262144
+[    0.000000]   DMA32 zone: 4096 pages used for memmap
+[    0.000000]   DMA32 zone: 0 pages reserved
+[    0.000000]   DMA32 zone: 262144 pages, LIFO batch:63
+[    0.000000] psci: probing for conduit method from DT.
+[    0.000000] psci: PSCIv1.1 detected in firmware.
+[    0.000000] psci: Using standard PSCI v0.2 function IDs
+[    0.000000] psci: Trusted OS migration not required
+[    0.000000] psci: SMC Calling Convention v1.0
+[    0.000000] percpu: Embedded 22 pages/cpu s52760 r8192 d29160 u90112
+[    0.000000] pcpu-alloc: s52760 r8192 d29160 u90112 alloc=22*4096
+[    0.000000] pcpu-alloc: [0] 0 
+[    0.000000] Detected PIPT I-cache on CPU0
+[    0.000000] ARM_SMCCC_ARCH_WORKAROUND_1 missing from firmware
+[    0.000000] CPU features: enabling workaround for EL2 vector hardening
+[    0.000000] CPU features: enabling workaround for Spectre-BHB
+[    0.000000] CPU features: enabling workaround for ARM erratum 1742098
+[    0.000000] Built 1 zonelists, mobility grouping on.  Total pages: 258048
+[    0.000000] Policy zone: DMA32
+[    0.000000] Kernel command line: console=ttyAMA0 loglevel=8 rdinit=/init dyndbg
+[    0.000000] Memory: 977556K/1048576K available (11516K kernel code, 1714K rwdata, 5196K rodata, 1280K init, 377K bss, 38252K reserved, 32768K cma-reserved)
+[    0.000000] SLUB: HWalign=64, Order=0-3, MinObjects=0, CPUs=1, Nodes=1
+[    0.000000] rcu: Preemptible hierarchical RCU implementation.
+[    0.000000] rcu: 	RCU restricting CPUs from NR_CPUS=64 to nr_cpu_ids=1.
+[    0.000000] 	Tasks RCU enabled.
+[    0.000000] rcu: Adjusting geometry for rcu_fanout_leaf=16, nr_cpu_ids=1
+[    0.000000] NR_IRQS: 64, nr_irqs: 64, preallocated irqs: 0
+[    0.000000] GICv2m: range[mem 0x08020000-0x08020fff], SPI[80:143]
+[    0.000000] arch_timer: cp15 timer(s) running at 62.50MHz (virt).
+[    0.000000] clocksource: arch_sys_counter: mask: 0xffffffffffffff max_cycles: 0x1cd42e208c, max_idle_ns: 881590405314 ns
+[    0.000281] sched_clock: 56 bits at 62MHz, resolution 16ns, wraps every 4398046511096ns
+[    0.012201] Console: colour dummy device 80x25
+[    0.015254] Calibrating delay loop (skipped), value calculated using timer frequency.. 125.00 BogoMIPS (lpj=250000)
+[    0.015474] pid_max: default: 32768 minimum: 301
+[    0.017568] Security Framework initialized
+[    0.020664] Dentry cache hash table entries: 131072 (order: 8, 1048576 bytes)
+[    0.022323] Inode-cache hash table entries: 65536 (order: 7, 524288 bytes)
+[    0.022708] Mount-cache hash table entries: 2048 (order: 2, 16384 bytes)
+[    0.022816] Mountpoint-cache hash table entries: 2048 (order: 2, 16384 bytes)
+[    0.062863] /cpus/cpu-map: empty cluster
+[    0.073386] ASID allocator initialised with 32768 entries
+[    0.074915] rcu: Hierarchical SRCU implementation.
+[    0.152087] EFI services will not be available.
+[    0.154031] smp: Bringing up secondary CPUs ...
+[    0.154403] smp: Brought up 1 node, 1 CPU
+[    0.154470] SMP: Total of 1 processors activated.
+[    0.154592] CPU features: detected: 32-bit EL0 Support
+[    0.159912] CPU: All CPU(s) started at EL1
+[    0.160292] alternatives: patching kernel code
+[    0.180956] devtmpfs: initialized
+[    0.197186] device: 'platform': device_add
+[    0.198773] PM: Adding info for No Bus:platform
+[    0.201527] bus: 'platform': registered
+[    0.202266] bus: 'cpu': registered
+[    0.202470] device: 'cpu': device_add
+[    0.202957] PM: Adding info for No Bus:cpu
+[    0.203997] bus: 'container': registered
+[    0.204054] device: 'container': device_add
+[    0.204478] PM: Adding info for No Bus:container
+[    0.205785] doing pure, parsing ARGS: 'console=ttyAMA0 loglevel=8 rdinit=/init dyndbg'
+[    0.205943] doing pure: console='ttyAMA0'
+[    0.206030] doing pure: loglevel='8'
+[    0.206083] doing pure: rdinit='/init'
+[    0.206135] doing pure: dyndbg='(null)'
+[    0.209020] doing core, parsing ARGS: 'console=ttyAMA0 loglevel=8 rdinit=/init dyndbg'
+[    0.209082] doing core: console='ttyAMA0'
+[    0.209131] doing core: loglevel='8'
+[    0.209173] doing core: rdinit='/init'
+[    0.209215] doing core: dyndbg='(null)'
+[    0.211991] bus: 'workqueue': registered
+[    0.212096] device: 'workqueue': device_add
+[    0.212311] PM: Adding info for No Bus:workqueue
+[    0.218789] clocksource: jiffies: mask: 0xffffffff max_cycles: 0xffffffff, max_idle_ns: 7645041785100000 ns
+[    0.219050] futex hash table entries: 256 (order: 2, 16384 bytes)
+[    0.236744] securityfs: creating file 'lsm'
+[    0.238169] pinctrl core: initialized pinctrl subsystem
+[    0.240848] debugfs: creating file 'pinctrl'
+[    0.241745] debugfs: creating file 'pinctrl-devices'
+[    0.242009] debugfs: creating file 'pinctrl-maps'
+[    0.242120] debugfs: creating file 'pinctrl-handles'
+[    0.243506] bus: 'gpio': registered
+[    0.243999] bus: 'platform': add driver hi3516cv300-crg
+[    0.245491] bus: 'platform': add driver hi3519-clk
+[    0.246394] bus: 'platform': add driver hi3660-clk
+[    0.247301] bus: 'platform': add driver hi3798cv200-crg
+[    0.248203] bus: 'platform': add driver qcom,gcc-ipq8074
+[    0.249250] bus: 'platform': add driver gcc-msm8916
+[    0.250042] bus: 'platform': add driver gcc-msm8994
+[    0.252217] bus: 'platform': add driver gcc-msm8996
+[    0.252998] bus: 'platform': add driver qcom-clk-smd-rpm
+[    0.254480] bus: 'platform': add driver exynos5433-cmu
+[    0.257101] bus: 'platform': add driver stratix10-clkmgr
+[    0.257643] bus: 'platform': add driver vexpress-osc
+[    0.258228] bus: 'platform': add driver zx296718-clkc
+[    0.258786] bus: 'platform': add driver fsl-guts
+[    0.263891] bus: 'virtio': registered
+[    0.264028] device class 'regulator': registering
+[    0.265011] debugfs: creating file 'regulator'
+[    0.265167] debugfs: creating file 'supply_map'
+[    0.265252] debugfs: creating file 'regulator_summary'
+[    0.265571] Registering platform device 'reg-dummy'. Parent at platform
+[    0.265626] device: 'reg-dummy': device_add
+[    0.265834] bus: 'platform': add device reg-dummy
+[    0.266400] PM: Adding info for platform:reg-dummy
+[    0.269717] bus: 'platform': add driver reg-dummy
+[    0.270001] bus: 'platform': driver_probe_device: matched device reg-dummy with driver reg-dummy
+[    0.270960] bus: 'platform': really_probe: probing driver reg-dummy with device reg-dummy
+[    0.272865] reg-dummy reg-dummy: no of_node; not parsing pinctrl DT
+[    0.273303] reg-dummy reg-dummy: no default pinctrl state
+[    0.275914] regulator-dummy: no parameters
+[    0.276226] device: 'regulator.0': device_add
+[    0.277377] PM: Adding info for No Bus:regulator.0
+[    0.278018] debugfs: creating file 'reg-dummy-regulator-dummy'
+[    0.278220] debugfs: creating file 'use_count'
+[    0.278321] debugfs: creating file 'open_count'
+[    0.278442] debugfs: creating file 'bypass_count'
+[    0.278898] driver: 'reg-dummy': driver_bound: bound to device 'reg-dummy'
+[    0.279573] bus: 'platform': really_probe: bound device reg-dummy to driver reg-dummy
+[    0.281364] debugfs: creating file 'device_component'
+[    0.282255] bus: 'genpd': registered
+[    0.284922] bus: 'soc': registered
+[    0.285100] bus: 'platform': add driver vexpress-syscfg
+[    0.285922] bus: 'platform': add driver vexpress-sysreg
+[    0.286511] debugfs: creating file 'opp'
+[    0.286966] DMI not present or invalid.
+[    0.287086] bus: 'platform': add driver tegra-bpmp
+[    0.287688] bus: 'platform': add driver hi3660-mbox
+[    0.288599] bus: 'platform': add driver hi6220-mbox
+[    0.289728] bus: 'platform': add driver tegra-hsp
+[    0.299498] NET: Registered protocol family 16
+[    0.302602] doing postcore, parsing ARGS: 'console=ttyAMA0 loglevel=8 rdinit=/init dyndbg'
+[    0.302722] doing postcore: console='ttyAMA0'
+[    0.302766] doing postcore: loglevel='8'
+[    0.302808] doing postcore: rdinit='/init'
+[    0.302850] doing postcore: dyndbg='(null)'
+[    0.304388] audit: initializing netlink subsys (disabled)
+[    0.307728] device class 'bdi': registering
+[    0.309259] audit: type=2000 audit(0.284:1): state=initialized audit_enabled=0 res=1
+[    0.309721] debugfs: creating file 'bdi'
+[    0.309992] bus: 'platform': add driver renesas_irqc
+[    0.310898] bus: 'platform': add driver rockchip-pinctrl
+[    0.311910] bus: 'platform': add driver samsung-pinctrl
+[    0.312536] bus: 'platform': add driver sh-pfc
+[    0.314217] device class 'pci_bus': registering
+[    0.316073] bus: 'pci': registered
+[    0.316182] device class 'backlight': registering
+[    0.318435] bus: 'amba': registered
+[    0.319683] bus: 'platform': add driver rockchip-pm-domain
+[    0.321505] bus: 'platform': add driver exynos-pmu
+[    0.322189] bus: 'platform': add driver reset-hi6220
+[    0.322727] device class 'tty': registering
+[    0.323288] device class 'vtconsole': registering
+[    0.324109] device: 'vtcon0': device_add
+[    0.324541] PM: Adding info for No Bus:vtcon0
+[    0.327939] bus: 'serial': registered
+[    0.328042] device class 'iommu': registering
+[    0.330253] bus: 'mipi-dsi': registered
+[    0.330344] debugfs: creating file 'wakeup_sources'
+[    0.331493] bus: 'node': registered
+[    0.331549] device: 'node': device_add
+[    0.331831] PM: Adding info for No Bus:node
+[    0.332020] debugfs: creating file 'regmap'
+[    0.332253] bus: 'platform': add driver sram
+[    0.333383] bus: 'platform': add driver syscon
+[    0.335681] bus: 'spi': registered
+[    0.335749] device class 'spi_master': registering
+[    0.337198] bus: 'spmi': registered
+[    0.340035] bus: 'i2c': registered
+[    0.340353] bus: 'i2c': add driver dummy
+[    0.341191] i2c-core: driver [dummy] registered
+[    0.343430] cpuidle: using governor menu
+[    0.343586] bus: 'platform': add driver qcom_apcs_ipc
+[    0.344480] bus: 'platform': add driver qcom_hwspinlock
+[    0.345812] bus: 'rpmsg': registered
+[    0.346685] doing arch, parsing ARGS: 'console=ttyAMA0 loglevel=8 rdinit=/init dyndbg'
+[    0.346753] doing arch: console='ttyAMA0'
+[    0.346795] doing arch: loglevel='8'
+[    0.346836] doing arch: rdinit='/init'
+[    0.346877] doing arch: dyndbg='(null)'
+[    0.348228] hw-breakpoint: found 6 breakpoint and 4 watchpoint registers.
+[    0.349693] cma: cma_alloc(cma 0000000059047bb4, count 64, align 6)
+[    0.362907] cma: cma_alloc(): returned 00000000ec6314c4
+[    0.363996] DMA: preallocated 256 KiB pool for atomic allocations
+[    0.364414] bus: 'platform': add driver tegra124-pinctrl
+[    0.365111] bus: 'platform': add driver tegra210-pinctrl
+[    0.365701] bus: 'platform': add driver ns2-pinmux
+[    0.366339] bus: 'platform': add driver ipq8074-pinctrl
+[    0.367154] bus: 'platform': add driver msm8916-pinctrl
+[    0.367763] bus: 'platform': add driver msm8994-pinctrl
+[    0.369269] bus: 'platform': add driver msm8996-pinctrl
+[    0.370102] bus: 'platform': add driver qdf2xxx-pinctrl
+[    0.371607] bus: 'platform': add driver mediatek-mt2712-pinctrl
+[    0.372492] bus: 'platform': add driver mtk-pinctrl
+[    0.373379] bus: 'platform': add driver mediatek-mt8173-pinctrl
+[    0.374029] bus: 'platform': add driver clk-mt6797
+[    0.375161] bus: 'platform': add driver clk-mt2712
+[    0.376101] bus: 'platform': add driver clk-mt7622
+[    0.378037] device class 'dma': registering
+[    0.381211] bus: 'rpmsg': add driver qcom_smd_rpm
+[    0.382576] bus: 'platform': add driver qcom-smem
+[    0.383686] bus: 'platform': add driver hi3660-reset
+[    0.384269] Serial: AMBA PL011 UART driver
+[    0.384344] bus: 'platform': add driver sbsa-uart
+[    0.384966] bus: 'amba': add driver uart-pl011
+[    0.386443] bus: 'platform': add driver xuartps
+[    0.388964] bus: 'platform': add driver mvebu-uart
+[    0.389883] bus: 'platform': add driver tegra-mc
+[    0.390460] bus: 'platform': add driver iproc-gpio
+[    0.393874] device: 'psci': device_add
+[    0.394038] bus: 'platform': add device psci
+[    0.394259] PM: Adding info for platform:psci
+[    0.398602] device: 'platform-bus@c000000': device_add
+[    0.398753] bus: 'platform': add device platform-bus@c000000
+[    0.398964] PM: Adding info for platform:platform-bus@c000000
+[    0.402268] device: '9020000.fw-cfg': device_add
+[    0.402444] bus: 'platform': add device 9020000.fw-cfg
+[    0.402636] PM: Adding info for platform:9020000.fw-cfg
+[    0.407217] device: 'a000000.virtio_mmio': device_add
+[    0.407388] bus: 'platform': add device a000000.virtio_mmio
+[    0.407581] PM: Adding info for platform:a000000.virtio_mmio
+[    0.410840] device: 'a000200.virtio_mmio': device_add
+[    0.410979] bus: 'platform': add device a000200.virtio_mmio
+[    0.411204] PM: Adding info for platform:a000200.virtio_mmio
+[    0.414978] device: 'a000400.virtio_mmio': device_add
+[    0.415145] bus: 'platform': add device a000400.virtio_mmio
+[    0.415403] PM: Adding info for platform:a000400.virtio_mmio
+[    0.418740] device: 'a000600.virtio_mmio': device_add
+[    0.418878] bus: 'platform': add device a000600.virtio_mmio
+[    0.419087] PM: Adding info for platform:a000600.virtio_mmio
+[    0.422834] device: 'a000800.virtio_mmio': device_add
+[    0.422972] bus: 'platform': add device a000800.virtio_mmio
+[    0.423203] PM: Adding info for platform:a000800.virtio_mmio
+[    0.426678] device: 'a000a00.virtio_mmio': device_add
+[    0.426814] bus: 'platform': add device a000a00.virtio_mmio
+[    0.427014] PM: Adding info for platform:a000a00.virtio_mmio
+[    0.430829] device: 'a000c00.virtio_mmio': device_add
+[    0.430967] bus: 'platform': add device a000c00.virtio_mmio
+[    0.431174] PM: Adding info for platform:a000c00.virtio_mmio
+[    0.434433] device: 'a000e00.virtio_mmio': device_add
+[    0.434575] bus: 'platform': add device a000e00.virtio_mmio
+[    0.434781] PM: Adding info for platform:a000e00.virtio_mmio
+[    0.438566] device: 'a001000.virtio_mmio': device_add
+[    0.438706] bus: 'platform': add device a001000.virtio_mmio
+[    0.438898] PM: Adding info for platform:a001000.virtio_mmio
+[    0.442554] device: 'a001200.virtio_mmio': device_add
+[    0.442697] bus: 'platform': add device a001200.virtio_mmio
+[    0.442891] PM: Adding info for platform:a001200.virtio_mmio
+[    0.447273] device: 'a001400.virtio_mmio': device_add
+[    0.447446] bus: 'platform': add device a001400.virtio_mmio
+[    0.447639] PM: Adding info for platform:a001400.virtio_mmio
+[    0.451211] device: 'a001600.virtio_mmio': device_add
+[    0.451356] bus: 'platform': add device a001600.virtio_mmio
+[    0.451564] PM: Adding info for platform:a001600.virtio_mmio
+[    0.455510] device: 'a001800.virtio_mmio': device_add
+[    0.455651] bus: 'platform': add device a001800.virtio_mmio
+[    0.455846] PM: Adding info for platform:a001800.virtio_mmio
+[    0.459161] device: 'a001a00.virtio_mmio': device_add
+[    0.459308] bus: 'platform': add device a001a00.virtio_mmio
+[    0.459497] PM: Adding info for platform:a001a00.virtio_mmio
+[    0.463625] device: 'a001c00.virtio_mmio': device_add
+[    0.463764] bus: 'platform': add device a001c00.virtio_mmio
+[    0.463977] PM: Adding info for platform:a001c00.virtio_mmio
+[    0.467299] device: 'a001e00.virtio_mmio': device_add
+[    0.467442] bus: 'platform': add device a001e00.virtio_mmio
+[    0.467633] PM: Adding info for platform:a001e00.virtio_mmio
+[    0.471498] device: 'a002000.virtio_mmio': device_add
+[    0.471660] bus: 'platform': add device a002000.virtio_mmio
+[    0.471863] PM: Adding info for platform:a002000.virtio_mmio
+[    0.475680] device: 'a002200.virtio_mmio': device_add
+[    0.475826] bus: 'platform': add device a002200.virtio_mmio
+[    0.476043] PM: Adding info for platform:a002200.virtio_mmio
+[    0.479640] device: 'a002400.virtio_mmio': device_add
+[    0.479778] bus: 'platform': add device a002400.virtio_mmio
+[    0.479968] PM: Adding info for platform:a002400.virtio_mmio
+[    0.483617] device: 'a002600.virtio_mmio': device_add
+[    0.483778] bus: 'platform': add device a002600.virtio_mmio
+[    0.483967] PM: Adding info for platform:a002600.virtio_mmio
+[    0.487667] device: 'a002800.virtio_mmio': device_add
+[    0.487830] bus: 'platform': add device a002800.virtio_mmio
+[    0.488019] PM: Adding info for platform:a002800.virtio_mmio
+[    0.491612] device: 'a002a00.virtio_mmio': device_add
+[    0.491761] bus: 'platform': add device a002a00.virtio_mmio
+[    0.491974] PM: Adding info for platform:a002a00.virtio_mmio
+[    0.494905] device: 'a002c00.virtio_mmio': device_add
+[    0.495632] bus: 'platform': add device a002c00.virtio_mmio
+[    0.495827] PM: Adding info for platform:a002c00.virtio_mmio
+[    0.498801] device: 'a002e00.virtio_mmio': device_add
+[    0.498939] bus: 'platform': add device a002e00.virtio_mmio
+[    0.499987] PM: Adding info for platform:a002e00.virtio_mmio
+[    0.503095] device: 'a003000.virtio_mmio': device_add
+[    0.503867] bus: 'platform': add device a003000.virtio_mmio
+[    0.504112] PM: Adding info for platform:a003000.virtio_mmio
+[    0.507054] device: 'a003200.virtio_mmio': device_add
+[    0.507221] bus: 'platform': add device a003200.virtio_mmio
+[    0.508001] PM: Adding info for platform:a003200.virtio_mmio
+[    0.510959] device: 'a003400.virtio_mmio': device_add
+[    0.511114] bus: 'platform': add device a003400.virtio_mmio
+[    0.511309] PM: Adding info for platform:a003400.virtio_mmio
+[    0.514846] device: 'a003600.virtio_mmio': device_add
+[    0.514985] bus: 'platform': add device a003600.virtio_mmio
+[    0.515207] PM: Adding info for platform:a003600.virtio_mmio
+[    0.518743] device: 'a003800.virtio_mmio': device_add
+[    0.518881] bus: 'platform': add device a003800.virtio_mmio
+[    0.519082] PM: Adding info for platform:a003800.virtio_mmio
+[    0.522865] device: 'a003a00.virtio_mmio': device_add
+[    0.523038] bus: 'platform': add device a003a00.virtio_mmio
+[    0.523254] PM: Adding info for platform:a003a00.virtio_mmio
+[    0.526686] device: 'a003c00.virtio_mmio': device_add
+[    0.526843] bus: 'platform': add device a003c00.virtio_mmio
+[    0.527033] PM: Adding info for platform:a003c00.virtio_mmio
+[    0.530788] device: 'a003e00.virtio_mmio': device_add
+[    0.530927] bus: 'platform': add device a003e00.virtio_mmio
+[    0.531158] PM: Adding info for platform:a003e00.virtio_mmio
+[    0.533331] device: 'gpio-keys': device_add
+[    0.533530] bus: 'platform': add device gpio-keys
+[    0.533738] PM: Adding info for platform:gpio-keys
+[    0.541004] device: '9030000.pl061': device_add
+[    0.541188] bus: 'amba': add device 9030000.pl061
+[    0.541413] PM: Adding info for amba:9030000.pl061
+[    0.542918] device: '4010000000.pcie': device_add
+[    0.543060] bus: 'platform': add device 4010000000.pcie
+[    0.543275] PM: Adding info for platform:4010000000.pcie
+[    0.547808] device: '9010000.pl031': device_add
+[    0.547968] bus: 'amba': add device 9010000.pl031
+[    0.548187] PM: Adding info for amba:9010000.pl031
+[    0.551899] device: '9000000.pl011': device_add
+[    0.552042] bus: 'amba': add device 9000000.pl011
+[    0.552289] PM: Adding info for amba:9000000.pl011
+[    0.553298] bus: 'amba': driver_probe_device: matched device 9000000.pl011 with driver uart-pl011
+[    0.553361] bus: 'amba': really_probe: probing driver uart-pl011 with device 9000000.pl011
+[    0.553629] uart-pl011 9000000.pl011: no pinctrl handle
+[    0.554229] uart-pl011 9000000.pl011: device is dma coherent
+[    0.554496] uart-pl011 9000000.pl011: device is not behind an iommu
+[    0.557641] 9000000.pl011: ttyAMA0 at MMIO 0x9000000 (irq = 39, base_baud = 0) is a PL011 rev1
+[    1.230922] console [ttyAMA0] enabled
+[    1.231735] serial serial0: allocated controller 0x0000000068842543 id 0
+[    1.232321] device: 'serial0': device_add
+[    1.233576] bus: 'serial': add device serial0
+[    1.233982] PM: Adding info for serial:serial0
+[    1.236643] serial serial0: no devices registered: of:-19 acpi:-19
+[    1.241415] bus: 'serial': remove device serial0
+[    1.242507] PM: Removing info for serial:serial0
+[    1.248080] device: 'ttyAMA0': device_add
+[    1.250079] PM: Adding info for No Bus:ttyAMA0
+[    1.258484] driver: 'uart-pl011': driver_bound: bound to device '9000000.pl011'
+[    1.261336] bus: 'amba': really_probe: bound device 9000000.pl011 to driver uart-pl011
+[    1.269015] device: 'pmu': device_add
+[    1.269952] bus: 'platform': add device pmu
+[    1.270570] PM: Adding info for platform:pmu
+[    1.280117] device: '0.flash': device_add
+[    1.281344] bus: 'platform': add device 0.flash
+[    1.281821] PM: Adding info for platform:0.flash
+[    1.301876] device: 'timer': device_add
+[    1.303091] bus: 'platform': add device timer
+[    1.303576] PM: Adding info for platform:timer
+[    1.308035] doing subsys, parsing ARGS: 'console=ttyAMA0 loglevel=8 rdinit=/init dyndbg'
+[    1.308661] doing subsys: console='ttyAMA0'
+[    1.308965] doing subsys: loglevel='8'
+[    1.309259] doing subsys: rdinit='/init'
+[    1.309528] doing subsys: dyndbg='(null)'
+[    1.310063] device: 'node0': device_add
+[    1.311172] bus: 'node': add device node0
+[    1.311889] PM: Adding info for node:node0
+[    1.314168] device: 'cpu0': device_add
+[    1.315170] bus: 'cpu': add device cpu0
+[    1.315612] PM: Adding info for cpu:cpu0
+[    2.276758] device: 'writeback': device_add
+[    2.277667] bus: 'workqueue': add device writeback
+[    2.278157] PM: Adding info for workqueue:writeback
+[    2.285147] HugeTLB registered 2.00 MiB page size, pre-allocated 0 pages
+[    2.294393] cryptd: max_cpu_qlen set to 1000
+[    2.296091] device class 'block': registering
+[    2.298994] debugfs: creating file 'block'
+[    2.300210] debugfs: creating file 'gpio'
+[    2.300590] bus: 'i2c': add driver pca953x
+[    2.303349] i2c-core: driver [pca953x] registered
+[    2.303760] bus: 'platform': add driver tegra-gpio
+[    2.307288] debugfs: creating file 'pwm'
+[    2.307642] device class 'pwm': registering
+[    2.311977] bus: 'platform': add driver xgene-msi
+[    2.315520] device class 'graphics': registering
+[    2.318045] device: 'fbcon': device_add
+[    2.318360] PM: Adding info for No Bus:fbcon
+[    2.321890] ACPI: Interpreter disabled.
+[    2.328689] bus: 'pnp': registered
+[    2.329006] bus: 'platform': add driver s2mps11-clk
+[    2.332112] bus: 'platform': add driver hi6220-stub-clk
+[    2.335286] bus: 'platform': add driver hi3660-stub-clk
+[    2.339033] bus: 'platform': add driver renesas-cpg-mssr
+[    2.343789] bus: 'platform': remove driver renesas-cpg-mssr
+[    2.349634] driver: 'renesas-cpg-mssr': driver_release
+[    2.350466] xenbus: (xenbus_probe_backend_init:265) 
+[    2.356164] bus: 'xen-backend': registered
+[    2.357146] xenbus_probe_frontend: (xenbus_probe_frontend_init:475) 
+[    2.362625] bus: 'xen': registered
+[    2.362961] bus: 'platform': add driver reg-fixed-voltage
+[    2.366457] bus: 'platform': add driver gpio-regulator
+[    2.369832] bus: 'platform': add driver qcom_rpm_smd_regulator
+[    2.374224] device class 'misc': registering
+[    2.376334] device class 'tpm': registering
+[    2.379172] device class 'tpmrm': registering
+[    2.381611] bus: 'platform': add driver rk_iommu
+[    2.385273] device: 'vga_arbiter': device_add
+[    2.387228] PM: Adding info for No Bus:vga_arbiter
+[    2.389635] vgaarb: loaded
+[    2.390006] bus: 'i2c': add driver sec_pmic
+[    2.393156] i2c-core: driver [sec_pmic] registered
+[    2.393521] debugfs: creating file 'dma_buf'
+[    2.393880] debugfs: creating file 'bufinfo'
+[    2.396056] device class 'scsi_host': registering
+[    2.404520] bus: 'scsi': registered
+[    2.404827] device class 'scsi_device': registering
+[    2.407022] SCSI subsystem initialized
+[    2.408268] device class 'ata_link': registering
+[    2.410817] device class 'ata_port': registering
+[    2.413561] device class 'ata_device': registering
+[    2.416096] libata version 3.00 loaded.
+[    2.417235] bus: 'amba': add driver ssp-pl022
+[    2.419692] device class 'mdio_bus': registering
+[    2.428268] bus: 'mdio_bus': registered
+[    2.428711] bus: 'mdio_bus': add driver Generic 10G PHY
+[    2.432050] libphy: Generic 10G PHY: Registered new driver
+[    2.432508] bus: 'mdio_bus': add driver Generic PHY
+[    2.435312] libphy: Generic PHY: Registered new driver
+[    2.436001] device class 'hnae': registering
+[    2.438772] debugfs: creating file 'usb'
+[    2.439132] debugfs: creating file 'devices'
+[    2.444895] bus: 'usb': registered
+[    2.445378] bus: 'usb': add driver usbfs
+[    2.449024] usbcore: registered new interface driver usbfs
+[    2.449469] bus: 'usb': add driver hub
+[    2.452197] usbcore: registered new interface driver hub
+[    2.452744] bus: 'usb': add driver usb
+[    2.455388] usbcore: registered new device driver usb
+[    2.455830] bus: 'platform': add driver usb_phy_generic
+[    2.459176] device class 'udc': registering
+[    2.466954] bus: 'ulpi': registered
+[    2.473423] bus: 'serio': registered
+[    2.473742] device class 'input': registering
+[    2.476247] device class 'rtc': registering
+[    2.478614] bus: 'platform': add driver i2c_designware
+[    2.482062] bus: 'platform': add driver imx-i2c
+[    2.485572] bus: 'platform': add driver pxa2xx-i2c
+[    2.489376] bus: 'platform': add driver i2c-sh_mobile
+[    2.494167] bus: 'platform': add driver tegra-i2c
+[    2.498159] device class 'pps': registering
+[    2.500178] pps_core: LinuxPPS API ver. 1 registered
+[    2.500525] pps_core: Software ver. 5.3.6 - Copyright 2005-2007 Rodolfo Giometti <giometti@linux.it>
+[    2.501137] device class 'ptp': registering
+[    2.503877] PTP clock support registered
+[    2.504229] bus: 'platform': add driver brcmstb-reboot
+[    2.507916] bus: 'platform': remove driver brcmstb-reboot
+[    2.512143] driver: 'brcmstb-reboot': driver_release
+[    2.512795] device class 'power_supply': registering
+[    2.515867] device class 'hwmon': registering
+[    2.518613] EDAC MC: Ver: 3.0.0
+[    2.524940] bus: 'edac': registered
+[    2.525219] device: 'edac': device_add
+[    2.526202] PM: Adding info for No Bus:edac
+[    2.528291] device: 'mc': device_add
+[    2.529156] bus: 'edac': add device mc
+[    2.529575] PM: Adding info for edac:mc
+[    2.537847] bus: 'mmc': registered
+[    2.538165] device class 'mmc_host': registering
+[    2.546669] bus: 'sdio': registered
+[    2.546996] device class 'leds': registering
+[    2.549713] bus: 'platform': add driver qcom_scm
+[    2.553790] bus: 'platform': add driver qcom_glink_rpm
+[    2.557334] bus: 'platform': add driver qcom-smd
+[    2.560622] device class 'devfreq': registering
+[    2.569131] bus: 'iio': registered
+[    2.570146] debugfs: creating file 'iio'
+[    2.570638] debugfs: creating file 'ras'
+[    2.570999] debugfs: creating file 'daemon_active'
+[    2.577016] bus: 'nvmem': registered
+[    2.577327] device class 'tee': registering
+[    2.580019] device class 'sound': registering
+[    2.583448] Advanced Linux Sound Architecture Driver Initialized.
+[    2.584264] device class 'net': registering
+[    2.589316] device: 'lo': device_add
+[    2.592263] PM: Adding info for No Bus:lo
+[    2.611279] device class 'watchdog': registering
+[    2.614294] doing fs, parsing ARGS: 'console=ttyAMA0 loglevel=8 rdinit=/init dyndbg'
+[    2.614802] doing fs: console='ttyAMA0'
+[    2.615082] doing fs: loglevel='8'
+[    2.615337] doing fs: rdinit='/init'
+[    2.615590] doing fs: dyndbg='(null)'
+[    2.615917] debugfs: creating file 'debug_enabled'
+[    2.617696] clocksource: Switched to clocksource arch_sys_counter
+[    2.619218] VFS: Disk quotas dquot_6.6.0
+[    2.619893] VFS: Dquot-cache hash table entries: 512 (order 0, 4096 bytes)
+[    2.622675] debugfs: creating file 'dynamic_debug'
+[    2.623087] debugfs: creating file 'control'
+[    2.623522] bus: 'pnp': add driver system
+[    2.627597] pnp: PnP ACPI: disabled
+[    2.627973] device class 'mem': registering
+[    2.631640] device: 'mem': device_add
+[    2.633585] PM: Adding info for No Bus:mem
+[    2.635769] device: 'null': device_add
+[    2.636850] PM: Adding info for No Bus:null
+[    2.639433] device: 'port': device_add
+[    2.640488] PM: Adding info for No Bus:port
+[    2.642784] device: 'zero': device_add
+[    2.643786] PM: Adding info for No Bus:zero
+[    2.646219] device: 'full': device_add
+[    2.647266] PM: Adding info for No Bus:full
+[    2.649676] device: 'random': device_add
+[    2.650731] PM: Adding info for No Bus:random
+[    2.652843] device: 'urandom': device_add
+[    2.654242] PM: Adding info for No Bus:urandom
+[    2.656411] device: 'kmsg': device_add
+[    2.658014] PM: Adding info for No Bus:kmsg
+[    2.659950] device: 'tty': device_add
+[    2.662204] PM: Adding info for No Bus:tty
+[    2.664289] device: 'console': device_add
+[    2.665694] PM: Adding info for No Bus:console
+[    2.667930] device: 'tty0': device_add
+[    2.669502] PM: Adding info for No Bus:tty0
+[    2.671262] device class 'vc': registering
+[    2.673555] device: 'vcs': device_add
+[    2.675030] PM: Adding info for No Bus:vcs
+[    2.677781] device: 'vcsu': device_add
+[    2.678845] PM: Adding info for No Bus:vcsu
+[    2.681323] device: 'vcsa': device_add
+[    2.682382] PM: Adding info for No Bus:vcsa
+[    2.684667] device: 'vcs1': device_add
+[    2.686261] PM: Adding info for No Bus:vcs1
+[    2.688335] device: 'vcsu1': device_add
+[    2.689966] PM: Adding info for No Bus:vcsu1
+[    2.691833] device: 'vcsa1': device_add
+[    2.692876] PM: Adding info for No Bus:vcsa1
+[    2.695529] device: 'tty1': device_add
+[    2.696554] PM: Adding info for No Bus:tty1
+[    2.699809] device: 'tty2': device_add
+[    2.700824] PM: Adding info for No Bus:tty2
+[    2.704371] device: 'tty3': device_add
+[    2.705694] PM: Adding info for No Bus:tty3
+[    2.708361] device: 'tty4': device_add
+[    2.709780] PM: Adding info for No Bus:tty4
+[    2.713268] device: 'tty5': device_add
+[    2.714184] PM: Adding info for No Bus:tty5
+[    2.717307] device: 'tty6': device_add
+[    2.718231] PM: Adding info for No Bus:tty6
+[    2.721519] device: 'tty7': device_add
+[    2.722478] PM: Adding info for No Bus:tty7
+[    2.725778] device: 'tty8': device_add
+[    2.726774] PM: Adding info for No Bus:tty8
+[    2.730061] device: 'tty9': device_add
+[    2.730955] PM: Adding info for No Bus:tty9
+[    2.734414] device: 'tty10': device_add
+[    2.735351] PM: Adding info for No Bus:tty10
+[    2.738768] device: 'tty11': device_add
+[    2.739754] PM: Adding info for No Bus:tty11
+[    2.743057] device: 'tty12': device_add
+[    2.744074] PM: Adding info for No Bus:tty12
+[    2.747956] device: 'tty13': device_add
+[    2.749287] PM: Adding info for No Bus:tty13
+[    2.751916] device: 'tty14': device_add
+[    2.753290] PM: Adding info for No Bus:tty14
+[    2.756569] device: 'tty15': device_add
+[    2.758002] PM: Adding info for No Bus:tty15
+[    2.760820] device: 'tty16': device_add
+[    2.762371] PM: Adding info for No Bus:tty16
+[    2.765713] device: 'tty17': device_add
+[    2.766748] PM: Adding info for No Bus:tty17
+[    2.770177] device: 'tty18': device_add
+[    2.771239] PM: Adding info for No Bus:tty18
+[    2.774816] device: 'tty19': device_add
+[    2.775848] PM: Adding info for No Bus:tty19
+[    2.779466] device: 'tty20': device_add
+[    2.780562] PM: Adding info for No Bus:tty20
+[    2.784358] device: 'tty21': device_add
+[    2.785706] PM: Adding info for No Bus:tty21
+[    2.788152] device: 'tty22': device_add
+[    2.789445] PM: Adding info for No Bus:tty22
+[    2.792481] device: 'tty23': device_add
+[    2.794167] PM: Adding info for No Bus:tty23
+[    2.797372] device: 'tty24': device_add
+[    2.798368] PM: Adding info for No Bus:tty24
+[    2.801854] device: 'tty25': device_add
+[    2.802852] PM: Adding info for No Bus:tty25
+[    2.805808] device: 'tty26': device_add
+[    2.806793] PM: Adding info for No Bus:tty26
+[    2.810128] device: 'tty27': device_add
+[    2.811139] PM: Adding info for No Bus:tty27
+[    2.814613] device: 'tty28': device_add
+[    2.815578] PM: Adding info for No Bus:tty28
+[    2.818947] device: 'tty29': device_add
+[    2.819810] PM: Adding info for No Bus:tty29
+[    2.823113] device: 'tty30': device_add
+[    2.824141] PM: Adding info for No Bus:tty30
+[    2.827797] device: 'tty31': device_add
+[    2.828790] PM: Adding info for No Bus:tty31
+[    2.832183] device: 'tty32': device_add
+[    2.833562] PM: Adding info for No Bus:tty32
+[    2.837387] device: 'tty33': device_add
+[    2.838480] PM: Adding info for No Bus:tty33
+[    2.841889] device: 'tty34': device_add
+[    2.842998] PM: Adding info for No Bus:tty34
+[    2.846627] device: 'tty35': device_add
+[    2.847709] PM: Adding info for No Bus:tty35
+[    2.851348] device: 'tty36': device_add
+[    2.852504] PM: Adding info for No Bus:tty36
+[    2.856425] device: 'tty37': device_add
+[    2.857819] PM: Adding info for No Bus:tty37
+[    2.860832] device: 'tty38': device_add
+[    2.862259] PM: Adding info for No Bus:tty38
+[    2.865951] device: 'tty39': device_add
+[    2.866956] PM: Adding info for No Bus:tty39
+[    2.870246] device: 'tty40': device_add
+[    2.871281] PM: Adding info for No Bus:tty40
+[    2.874875] device: 'tty41': device_add
+[    2.875872] PM: Adding info for No Bus:tty41
+[    2.879509] device: 'tty42': device_add
+[    2.880542] PM: Adding info for No Bus:tty42
+[    2.883703] device: 'tty43': device_add
+[    2.884709] PM: Adding info for No Bus:tty43
+[    2.887988] device: 'tty44': device_add
+[    2.889369] PM: Adding info for No Bus:tty44
+[    2.892729] device: 'tty45': device_add
+[    2.894110] PM: Adding info for No Bus:tty45
+[    2.897415] device: 'tty46': device_add
+[    2.898409] PM: Adding info for No Bus:tty46
+[    2.901621] device: 'tty47': device_add
+[    2.902578] PM: Adding info for No Bus:tty47
+[    2.905722] device: 'tty48': device_add
+[    2.906682] PM: Adding info for No Bus:tty48
+[    2.909932] device: 'tty49': device_add
+[    2.910872] PM: Adding info for No Bus:tty49
+[    2.914226] device: 'tty50': device_add
+[    2.915143] PM: Adding info for No Bus:tty50
+[    2.917572] device: 'tty51': device_add
+[    2.918578] PM: Adding info for No Bus:tty51
+[    2.922171] device: 'tty52': device_add
+[    2.923317] PM: Adding info for No Bus:tty52
+[    2.926989] device: 'tty53': device_add
+[    2.928123] PM: Adding info for No Bus:tty53
+[    2.931775] device: 'tty54': device_add
+[    2.932892] PM: Adding info for No Bus:tty54
+[    2.936803] device: 'tty55': device_add
+[    2.938255] PM: Adding info for No Bus:tty55
+[    2.941727] device: 'tty56': device_add
+[    2.942836] PM: Adding info for No Bus:tty56
+[    2.946632] device: 'tty57': device_add
+[    2.947710] PM: Adding info for No Bus:tty57
+[    2.951165] device: 'tty58': device_add
+[    2.952197] PM: Adding info for No Bus:tty58
+[    2.955949] device: 'tty59': device_add
+[    2.957358] PM: Adding info for No Bus:tty59
+[    2.960173] device: 'tty60': device_add
+[    2.961566] PM: Adding info for No Bus:tty60
+[    2.965424] device: 'tty61': device_add
+[    2.966429] PM: Adding info for No Bus:tty61
+[    2.969638] device: 'tty62': device_add
+[    2.970678] PM: Adding info for No Bus:tty62
+[    2.974082] device: 'tty63': device_add
+[    2.975198] PM: Adding info for No Bus:tty63
+[    2.982192] device class 'thermal': registering
+[    2.987196] unable to find thermal zones
+[    2.988708] NET: Registered protocol family 2
+[    2.991292] IP idents hash table entries: 16384 (order: 5, 131072 bytes)
+[    2.999983] tcp_listen_portaddr_hash hash table entries: 512 (order: 1, 8192 bytes)
+[    3.000777] TCP established hash table entries: 8192 (order: 4, 65536 bytes)
+[    3.001897] TCP bind hash table entries: 8192 (order: 5, 131072 bytes)
+[    3.002556] TCP: Hash tables configured (established 8192 bind 8192)
+[    3.004788] TCP: reno registered
+[    3.005582] UDP hash table entries: 512 (order: 2, 16384 bytes)
+[    3.006312] UDP-Lite hash table entries: 512 (order: 2, 16384 bytes)
+[    3.008190] NET: Registered protocol family 1
+[    3.012384] RPC: Registered named UNIX socket transport module.
+[    3.012833] RPC: Registered udp transport module.
+[    3.013639] RPC: Registered tcp transport module.
+[    3.013975] RPC: Registered tcp NFSv4.1 backchannel transport module.
+[    3.014548] PCI: CLS 0 bytes, default 64
+[    3.019930] Unpacking initramfs...
+[    3.020336] Compressed data magic: 0x1f 0x8b
+[    3.020738] Detected gzip compressed data
+[    3.056775] Freeing initrd memory: 368K
+[    3.057531] doing device, parsing ARGS: 'console=ttyAMA0 loglevel=8 rdinit=/init dyndbg'
+[    3.058117] doing device: console='ttyAMA0'
+[    3.058413] doing device: loglevel='8'
+[    3.058673] doing device: rdinit='/init'
+[    3.058942] doing device: dyndbg='(null)'
+[    3.060413] bus: 'platform': add driver armv8-pmu
+[    3.062973] bus: 'platform': driver_probe_device: matched device pmu with driver armv8-pmu
+[    3.063508] bus: 'platform': really_probe: probing driver armv8-pmu with device pmu
+[    3.064025] armv8-pmu pmu: no pinctrl handle
+[    3.064760] armv8-pmu pmu: device is dma coherent
+[    3.065378] armv8-pmu pmu: device is not behind an iommu
+[    3.072920] hw perfevents: enabled with armv8_pmuv3 PMU driver, 7 counters available
+[    3.073670] driver: 'armv8-pmu': driver_bound: bound to device 'pmu'
+[    3.075492] bus: 'platform': really_probe: bound device pmu to driver armv8-pmu
+[    3.077751] kvm [1]: HYP mode not available
+[    3.098455] debugfs: creating file 'clear_warn_once'
+[    3.099304] device: 'snapshot': device_add
+[    3.100400] PM: Adding info for No Bus:snapshot
+[    3.108852] bus: 'clocksource': registered
+[    3.109803] device: 'clocksource': device_add
+[    3.110896] PM: Adding info for No Bus:clocksource
+[    3.112376] device: 'clocksource0': device_add
+[    3.113687] bus: 'clocksource': add device clocksource0
+[    3.114207] PM: Adding info for clocksource:clocksource0
+[    3.116376] bus: 'platform': add driver alarmtimer
+[    3.119862] Registering platform device 'alarmtimer'. Parent at platform
+[    3.120304] device: 'alarmtimer': device_add
+[    3.121808] bus: 'platform': add device alarmtimer
+[    3.122315] PM: Adding info for platform:alarmtimer
+[    3.124571] bus: 'platform': driver_probe_device: matched device alarmtimer with driver alarmtimer
+[    3.125492] bus: 'platform': really_probe: probing driver alarmtimer with device alarmtimer
+[    3.126050] alarmtimer alarmtimer: no of_node; not parsing pinctrl DT
+[    3.126489] alarmtimer alarmtimer: no default pinctrl state
+[    3.126930] driver: 'alarmtimer': driver_bound: bound to device 'alarmtimer'
+[    3.129524] bus: 'platform': really_probe: bound device alarmtimer to driver alarmtimer
+[    3.136522] bus: 'clockevents': registered
+[    3.136825] device: 'clockevents': device_add
+[    3.138418] PM: Adding info for No Bus:clockevents
+[    3.140000] device: 'clockevent0': device_add
+[    3.141444] bus: 'clockevents': add device clockevent0
+[    3.141936] PM: Adding info for clockevents:clockevent0
+[    3.143723] device: 'broadcast': device_add
+[    3.144656] bus: 'clockevents': add device broadcast
+[    3.145476] PM: Adding info for clockevents:broadcast
+[    3.154598] bus: 'event_source': registered
+[    3.155084] device: 'armv8_pmuv3': device_add
+[    3.156241] bus: 'event_source': add device armv8_pmuv3
+[    3.156766] PM: Adding info for event_source:armv8_pmuv3
+[    3.158802] device: 'breakpoint': device_add
+[    3.159750] bus: 'event_source': add device breakpoint
+[    3.160264] PM: Adding info for event_source:breakpoint
+[    3.162577] device: 'software': device_add
+[    3.163479] bus: 'event_source': add device software
+[    3.163966] PM: Adding info for event_source:software
+[    3.166118] Initialise system trusted keyrings
+[    3.168188] debugfs: creating file 'extfrag'
+[    3.168597] debugfs: creating file 'unusable_index'
+[    3.169308] debugfs: creating file 'extfrag_index'
+[    3.169920] workingset: timestamp_bits=44 max_order=18 bucket_order=0
+[    3.170519] debugfs: creating file 'memblock'
+[    3.170874] debugfs: creating file 'memory'
+[    3.171224] debugfs: creating file 'reserved'
+[    3.439672] squashfs: version 4.0 (2009/01/31) Phillip Lougher
+[    3.460900] NFS: Registering the id_resolver key type
+[    3.461793] Key type id_resolver registered
+[    3.462154] Key type id_legacy registered
+[    3.462632] nfs4filelayout_init: NFSv4 File Layout Driver Registering...
+[    3.463230] nfs4flexfilelayout_init: NFSv4 Flexfile Layout Driver Registering...
+[    3.464326] device: 'autofs': device_add
+[    3.465946] PM: Adding info for No Bus:autofs
+[    3.467964] 9p: Installing v9fs 9p2000 file system support
+[    3.496461] Key type asymmetric registered
+[    3.496834] Asymmetric key parser 'x509' registered
+[    3.497968] device class 'bsg': registering
+[    3.500593] Block layer SCSI generic (bsg) driver version 0.4 loaded (major 244)
+[    3.501880] io scheduler noop registered
+[    3.502277] io scheduler deadline registered
+[    3.505632] io scheduler cfq registered (default)
+[    3.506061] io scheduler mq-deadline registered
+[    3.506461] io scheduler kyber registered
+[    3.507853] bus: 'platform': add driver Hisilicon MBIGEN-V2
+[    3.511696] bus: 'platform': add driver mvebu-gicp
+[    3.515294] bus: 'platform': add driver mvebu-icu
+[    3.518820] bus: 'platform': add driver mvebu-pic
+[    3.522357] bus: 'platform': add driver ls-scfg-msi
+[    3.526585] bus: 'platform': add driver qcom-irq-combiner
+[    3.530134] bus: 'platform': add driver uniphier-aidet
+[    3.534583] bus: 'platform': add driver hisi-lpc
+[    3.538190] bus: 'platform': add driver brcm-gisb-arb
+[    3.542758] bus: 'platform': remove driver brcm-gisb-arb
+[    3.547510] driver: 'brcm-gisb-arb': driver_release
+[    3.548279] bus: 'platform': add driver qcom-ebi2
+[    3.551944] bus: 'platform': add driver sun50i-de2-bus
+[    3.562274] bus: 'sunxi-rsb': registered
+[    3.562633] bus: 'platform': add driver sunxi-rsb
+[    3.566059] bus: 'platform': add driver simple-pm-bus
+[    3.569747] bus: 'platform': add driver uniphier-system-bus
+[    3.573653] device class 'phy': registering
+[    3.575822] bus: 'platform': add driver xgene-phy
+[    3.579454] bus: 'platform': add driver sun4i-usb-phy
+[    3.584220] bus: 'platform': add driver phy-meson-usb2
+[    3.588049] bus: 'platform': add driver phy-meson-gxl-usb2
+[    3.591738] bus: 'platform': add driver phy-meson-gxl-usb3
+[    3.595478] bus: 'platform': add driver phy_rcar_gen3_usb2
+[    3.599409] bus: 'platform': add driver rockchip-emmc-phy
+[    3.603176] bus: 'platform': add driver rockchip-usb2phy
+[    3.607130] bus: 'platform': add driver rockchip-typec-phy
+[    3.611051] bus: 'platform': add driver tegra-xusb-padctl
+[    3.615085] libphy: mdio_driver_register: phy-bcm-ns2-pci
+[    3.615506] bus: 'mdio_bus': add driver phy-bcm-ns2-pci
+[    3.619000] bus: 'platform': add driver bcm-ns2-usbphy
+[    3.622834] bus: 'platform': add driver brcm-sata-phy
+[    3.627138] bus: 'platform': add driver brcmstb-usb-phy
+[    3.630858] bus: 'platform': add driver sr-pcie-phy
+[    3.634340] bus: 'platform': add driver hi6220-usb-phy
+[    3.637986] bus: 'platform': add driver combphy
+[    3.641579] bus: 'platform': add driver hisi-inno-phy
+[    3.645477] bus: 'platform': add driver mvebu-comphy
+[    3.648471] bus: 'ulpi': add driver qcom_usb_hs_phy
+[    3.651856] bus: 'platform': add driver exynos-dp-video-phy
+[    3.655719] bus: 'platform': add driver exynos-mipi-video-phy
+[    3.659746] bus: 'platform': add driver samsung-usb2-phy
+[    3.662910] bus: 'platform': add driver exynos5_usb3drd_phy
+[    3.666901] bus: 'platform': add driver max77620-pinctrl
+[    3.670385] bus: 'platform': add driver meson-gxbb-pinctrl
+[    3.674288] bus: 'platform': add driver meson-gxl-pinctrl
+[    3.677935] bus: 'platform': add driver meson-axg-pinctrl
+[    3.681590] bus: 'platform': add driver pinctrl-single
+[    3.685967] bus: 'platform': add driver pinctrl-bcm2835
+[    3.689820] bus: 'platform': add driver armada-ap806-pinctrl
+[    3.693744] bus: 'platform': add driver armada-cp110-pinctrl
+[    3.697852] bus: 'platform': add driver armada-37xx-pinctrl
+[    3.702062] bus: 'platform': remove driver armada-37xx-pinctrl
+[    3.706623] driver: 'armada-37xx-pinctrl': driver_release
+[    3.707404] bus: 'platform': add driver qcom-spmi-gpio
+[    3.711449] bus: 'platform': add driver qcom-spmi-mpp
+[    3.715680] bus: 'platform': add driver sun50i-a64-pinctrl
+[    3.719580] bus: 'platform': add driver sun50i-a64-r-pinctrl
+[    3.723022] bus: 'platform': add driver sun8i-h3-r-pinctrl
+[    3.726644] bus: 'platform': add driver sun50i-h5-pinctrl
+[    3.730403] bus: 'platform': add driver sun50i-h6-pinctrl
+[    3.734191] bus: 'platform': add driver sun50i-h6-r-pinctrl
+[    3.737942] bus: 'platform': add driver uniphier-ld11-pinctrl
+[    3.742030] bus: 'platform': add driver uniphier-ld20-pinctrl
+[    3.745739] bus: 'platform': add driver uniphier-pxs3-pinctrl
+[    3.749640] bus: 'platform': add driver basic-mmio-gpio
+[    3.753921] bus: 'platform': add driver raspberrypi-exp-gpio
+[    3.757377] bus: 'platform': add driver brcmstb-gpio
+[    3.760748] bus: 'platform': add driver gpio-dwapb
+[    3.764640] bus: 'platform': add driver max77620-gpio
+[    3.768016] bus: 'platform': add driver mb86s70-gpio
+[    3.771810] bus: 'platform': add driver mvebu-gpio
+[    3.775978] bus: 'amba': add driver pl061_gpio
+[    3.777402] bus: 'amba': driver_probe_device: matched device 9030000.pl061 with driver pl061_gpio
+[    3.778008] bus: 'amba': really_probe: probing driver pl061_gpio with device 9030000.pl061
+[    3.778603] pl061_gpio 9030000.pl061: no pinctrl handle
+[    3.779400] pl061_gpio 9030000.pl061: device is dma coherent
+[    3.779800] pl061_gpio 9030000.pl061: device is not behind an iommu
+[    3.781878] gpiochip_find_base: found new base at 504
+[    3.783156] device: 'gpiochip0': device_add
+[    3.784228] bus: 'gpio': add device gpiochip0
+[    3.784671] PM: Adding info for gpio:gpiochip0
+[    3.787231] gpio gpiochip0: (9030000.pl061): added GPIO chardev (254:0)
+[    3.787744] gpiochip_setup_dev: registered GPIOs 504 to 511 on device: gpiochip0 (9030000.pl061)
+[    3.788705] irq: Added domain :pl061@9030000
+[    3.790841] pl061_gpio 9030000.pl061: PL061 GPIO chip @0x0000000009030000 registered
+[    3.791250] driver: 'pl061_gpio': driver_bound: bound to device '9030000.pl061'
+[    3.793325] bus: 'amba': really_probe: bound device 9030000.pl061 to driver pl061_gpio
+[    3.795254] bus: 'platform': add driver gpio_rcar
+[    3.799981] bus: 'platform': add driver tegra186-gpio
+[    3.803951] bus: 'platform': add driver uniphier-gpio
+[    3.807318] bus: 'platform': add driver xgene-gpio
+[    3.811126] bus: 'platform': add driver xgene-gpio-sb
+[    3.814991] bus: 'platform': add driver bcm-iproc-pwm
+[    3.818758] bus: 'platform': add driver rockchip-pwm
+[    3.822814] bus: 'platform': add driver samsung-pwm
+[    3.826846] bus: 'platform': add driver advk-pcie
+[    3.830359] bus: 'platform': add driver tegra-pcie
+[    3.834323] bus: 'platform': add driver rcar-pcie
+[    3.838320] bus: 'platform': add driver pci-host-generic
+[    3.840168] bus: 'platform': driver_probe_device: matched device 4010000000.pcie with driver pci-host-generic
+[    3.840804] bus: 'platform': really_probe: probing driver pci-host-generic with device 4010000000.pcie
+[    3.842021] pci-host-generic 4010000000.pcie: no pinctrl handle
+[    3.842859] pci-host-generic 4010000000.pcie: device is dma coherent
+[    3.843283] pci-host-generic 4010000000.pcie: device is not behind an iommu
+[    3.844282] pci-host-generic 4010000000.pcie: host bridge /pcie@10000000 ranges:
+[    3.845407] pci-host-generic 4010000000.pcie: Parsing ranges property...
+[    3.848167] pci-host-generic 4010000000.pcie:    IO 0x3eff0000..0x3effffff -> 0x00000000
+[    3.851539] pci-host-generic 4010000000.pcie:   MEM 0x10000000..0x3efeffff -> 0x10000000
+[    3.853473] pci-host-generic 4010000000.pcie:   MEM 0x8000000000..0xffffffffff -> 0x8000000000
+[    3.856227] pci-host-generic 4010000000.pcie: ECAM at [mem 0x4010000000-0x401fffffff] for [bus 00-ff]
+[    3.857828] device: 'pci0000:00': device_add
+[    3.858900] PM: Adding info for No Bus:pci0000:00
+[    3.860878] device: '0000:00': device_add
+[    3.862978] PM: Adding info for No Bus:0000:00
+[    3.864898] pci-host-generic 4010000000.pcie: PCI host bridge to bus 0000:00
+[    3.865775] pci_bus 0000:00: root bus resource [bus 00-ff]
+[    3.866316] pci_bus 0000:00: root bus resource [io  0x0000-0xffff]
+[    3.866730] pci_bus 0000:00: root bus resource [mem 0x10000000-0x3efeffff]
+[    3.867197] pci_bus 0000:00: root bus resource [mem 0x8000000000-0xffffffffff]
+[    3.867792] pci_bus 0000:00: scanning bus
+[    3.869963] pci 0000:00:00.0: [1b36:0008] type 00 class 0x060000
+[    3.874257] PCI: OF: /pcie@10000000: msi-map, using mask ffffffff, rid-base: 00000000, out-base: 00000000, length: 00010000, rid: 00000000 -> 00000000
+[    3.875244] device: '0000:00:00.0': device_add
+[    3.876532] bus: 'pci': add device 0000:00:00.0
+[    3.877592] PM: Adding info for pci:0000:00:00.0
+[    3.878001] pci 0000:00:00.0: vgaarb: pci_notify
+[    3.880898] pci 0000:00:01.0: [1af4:1000] type 00 class 0x020000
+[    3.882112] pci 0000:00:01.0: reg 0x10: [io  0x0000-0x001f]
+[    3.882589] pci 0000:00:01.0: reg 0x14: [mem 0x00000000-0x00000fff]
+[    3.883241] pci 0000:00:01.0: reg 0x20: [mem 0x00000000-0x00003fff 64bit pref]
+[    3.883731] pci 0000:00:01.0: reg 0x30: [mem 0x00000000-0x0003ffff pref]
+[    3.884598] PCI: OF: /pcie@10000000: msi-map, using mask ffffffff, rid-base: 00000000, out-base: 00000000, length: 00010000, rid: 00000008 -> 00000008
+[    3.886004] device: '0000:00:01.0': device_add
+[    3.886975] bus: 'pci': add device 0000:00:01.0
+[    3.887616] PM: Adding info for pci:0000:00:01.0
+[    3.887787] pci 0000:00:01.0: vgaarb: pci_notify
+[    3.889547] pci 0000:00:02.0: [14e4:6717] type 00 class 0x028000
+[    3.890043] pci 0000:00:02.0: reg 0x10: [mem 0x00000000-0x00003fff]
+[    3.890619] pci 0000:00:02.0: reg 0x18: [mem 0x00000000-0x007fffff 64bit pref]
+[    3.891421] PCI: OF: /pcie@10000000: msi-map, using mask ffffffff, rid-base: 00000000, out-base: 00000000, length: 00010000, rid: 00000010 -> 00000010
+[    3.892305] device: '0000:00:02.0': device_add
+[    3.894044] bus: 'pci': add device 0000:00:02.0
+[    3.894789] PM: Adding info for pci:0000:00:02.0
+[    3.895134] pci 0000:00:02.0: vgaarb: pci_notify
+[    3.902972] pci_bus 0000:00: fixups for bus
+[    3.903416] pci_bus 0000:00: bus scan returning with max=00
+[    3.905917] pci 0000:00:02.0: BAR 2: assigned [mem 0x8000000000-0x80007fffff 64bit pref]
+[    3.906759] pci 0000:00:01.0: BAR 6: assigned [mem 0x10000000-0x1003ffff pref]
+[    3.907305] pci 0000:00:01.0: BAR 4: assigned [mem 0x8000800000-0x8000803fff 64bit pref]
+[    3.907894] pci 0000:00:02.0: BAR 0: assigned [mem 0x10040000-0x10043fff]
+[    3.908459] pci 0000:00:01.0: BAR 1: assigned [mem 0x10044000-0x10044fff]
+[    3.909315] pci 0000:00:01.0: BAR 0: assigned [io  0x1000-0x101f]
+[    3.910675] driver: 'pci-host-generic': driver_bound: bound to device '4010000000.pcie'
+[    3.912647] bus: 'platform': really_probe: bound device 4010000000.pcie to driver pci-host-generic
+[    3.915162] bus: 'platform': add driver iproc-pcie
+[    3.919326] bus: 'platform': add driver layerscape-pcie
+[    3.924060] bus: 'platform': remove driver layerscape-pcie
+[    3.928361] driver: 'layerscape-pcie': driver_release
+[    3.929900] bus: 'platform': add driver qcom-pcie
+[    3.933543] bus: 'platform': add driver armada8k-pcie
+[    3.936707] bus: 'platform': add driver kirin-pcie
+[    3.940377] bus: 'platform': add driver histb-pcie
+[    3.943599] bus: 'platform': add driver hisi-pcie
+[    3.947303] bus: 'platform': add driver hisi-pcie-almost-ecam
+[    3.951332] bus: 'platform': add driver pci_thunder_ecam
+[    3.954979] bus: 'platform': add driver pci_thunder_pem
+[    3.958539] bus: 'platform': add driver xgene-pcie
+[    3.962184] bus: 'amba': add driver clcd-pl11x
+[    3.965250] bus: 'platform': add driver acpi-ged
+[    3.968159] bus: 'platform': add driver acpi-fan
+[    3.973871] EINJ: ACPI disabled.
+[    3.974323] bus: 'platform': add driver tegra-ahb
+[    3.978171] bus: 'platform': add driver of_fixed_factor_clk
+[    3.981704] bus: 'platform': add driver of_fixed_clk
+[    3.985457] bus: 'platform': add driver gpio-clk
+[    3.988889] bus: 'i2c': add driver cs2000-cp
+[    3.991563] i2c-core: driver [cs2000-cp] registered
+[    3.992025] bus: 'platform': add driver pwm-clock
+[    3.995684] bus: 'platform': add driver rk808-clkout
+[    3.998973] bus: 'platform': add driver hi655x-clk
+[    4.002380] bus: 'platform': add driver scpi_clocks
+[    4.006105] bus: 'platform': add driver bcm2835-clk
+[    4.009703] bus: 'platform': add driver bcm2835-aux-clk
+[    4.013614] bus: 'platform': add driver sr-clk
+[    4.017435] bus: 'platform': add driver gxbb-clkc
+[    4.020739] bus: 'platform': add driver gxbb-aoclkc
+[    4.024693] bus: 'platform': add driver axg-clkc
+[    4.028301] bus: 'platform': add driver axg-aoclkc
+[    4.031997] bus: 'platform': add driver marvell-armada-3700-xtal-clock
+[    4.036063] bus: 'platform': add driver marvell-armada-3700-tbg-clock
+[    4.040239] bus: 'platform': add driver marvell-armada-3700-periph-clock
+[    4.044510] bus: 'platform': add driver marvell-ap806-system-controller
+[    4.048652] bus: 'platform': add driver marvell-ap806-clock
+[    4.052383] bus: 'platform': add driver marvell-cp110-system-controller0
+[    4.056467] bus: 'platform': add driver marvell-cp110-clock
+[    4.060403] bus: 'platform': add driver mmcc-msm8996
+[    4.064263] bus: 'platform': add driver qcom-a53pll
+[    4.067917] bus: 'platform': add driver qcom-apcs-msm8916-clk
+[    4.071673] bus: 'platform': add driver exynos-audss-clk
+[    4.075694] bus: 'platform': add driver sc9860-clk
+[    4.081355] bus: 'platform': add driver sun4i-a10-mod0-clk
+[    4.084586] bus: 'platform': add driver sun9i-a80-mmc-config-clk
+[    4.090006] bus: 'platform': add driver sun50i-a64-ccu
+[    4.093682] bus: 'platform': add driver sun50i-h6-ccu
+[    4.097454] bus: 'platform': add driver uniphier-clk
+[    4.103556] bus: 'platform': add driver k3-dma
+[    4.106940] bus: 'platform': add driver mv_xor_v2
+[    4.110404] bus: 'amba': add driver dma-pl330
+[    4.113397] bus: 'platform': add driver shdma-of
+[    4.116553] bus: 'platform': add driver rcar-dmac
+[    4.120229] bus: 'platform': add driver tegra-apbdma
+[    4.124407] bus: 'platform': add driver bam-dma-engine
+[    4.128635] bus: 'platform': add driver hidma-mgmt
+[    4.132195] bus: 'platform': add driver hidma
+[    4.135787] bus: 'platform': add driver raspberrypi-power
+[    4.139436] bus: 'platform': add driver mtk-scpsys
+[    4.143803] bus: 'platform': add driver meson_gx_pwrc_vpu
+[    4.148394] bus: 'platform': add driver qcom_smp2p
+[    4.151689] bus: 'platform': add driver qcom-smsm
+[    4.155261] bus: 'platform': add driver sunxi-sram
+[    4.159815] bus: 'platform': remove driver sunxi-sram
+[    4.164611] driver: 'sunxi-sram': driver_release
+[    4.165905] bus: 'platform': add driver tegra-fuse
+[    4.169895] bus: 'platform': add driver tegra-flowctrl
+[    4.174213] bus: 'platform': add driver tegra-pmc
+[    4.178202] bus: 'platform': add driver virtio-mmio
+[    4.179263] bus: 'platform': driver_probe_device: matched device a000000.virtio_mmio with driver virtio-mmio
+[    4.179897] bus: 'platform': really_probe: probing driver virtio-mmio with device a000000.virtio_mmio
+[    4.180568] virtio-mmio a000000.virtio_mmio: no pinctrl handle
+[    4.182010] virtio-mmio a000000.virtio_mmio: device is dma coherent
+[    4.182463] virtio-mmio a000000.virtio_mmio: device is not behind an iommu
+[    4.184718] virtio-mmio: probe of a000000.virtio_mmio rejects match -19
+[    4.185695] bus: 'platform': driver_probe_device: matched device a000200.virtio_mmio with driver virtio-mmio
+[    4.186206] bus: 'platform': really_probe: probing driver virtio-mmio with device a000200.virtio_mmio
+[    4.186770] virtio-mmio a000200.virtio_mmio: no pinctrl handle
+[    4.187601] virtio-mmio a000200.virtio_mmio: device is dma coherent
+[    4.188035] virtio-mmio a000200.virtio_mmio: device is not behind an iommu
+[    4.189666] virtio-mmio: probe of a000200.virtio_mmio rejects match -19
+[    4.190130] bus: 'platform': driver_probe_device: matched device a000400.virtio_mmio with driver virtio-mmio
+[    4.190747] bus: 'platform': really_probe: probing driver virtio-mmio with device a000400.virtio_mmio
+[    4.191375] virtio-mmio a000400.virtio_mmio: no pinctrl handle
+[    4.192211] virtio-mmio a000400.virtio_mmio: device is dma coherent
+[    4.192639] virtio-mmio a000400.virtio_mmio: device is not behind an iommu
+[    4.194137] virtio-mmio: probe of a000400.virtio_mmio rejects match -19
+[    4.194587] bus: 'platform': driver_probe_device: matched device a000600.virtio_mmio with driver virtio-mmio
+[    4.195215] bus: 'platform': really_probe: probing driver virtio-mmio with device a000600.virtio_mmio
+[    4.195816] virtio-mmio a000600.virtio_mmio: no pinctrl handle
+[    4.196660] virtio-mmio a000600.virtio_mmio: device is dma coherent
+[    4.197322] virtio-mmio a000600.virtio_mmio: device is not behind an iommu
+[    4.198498] virtio-mmio: probe of a000600.virtio_mmio rejects match -19
+[    4.198930] bus: 'platform': driver_probe_device: matched device a000800.virtio_mmio with driver virtio-mmio
+[    4.199576] bus: 'platform': really_probe: probing driver virtio-mmio with device a000800.virtio_mmio
+[    4.200197] virtio-mmio a000800.virtio_mmio: no pinctrl handle
+[    4.201344] virtio-mmio a000800.virtio_mmio: device is dma coherent
+[    4.201779] virtio-mmio a000800.virtio_mmio: device is not behind an iommu
+[    4.202951] virtio-mmio: probe of a000800.virtio_mmio rejects match -19
+[    4.203412] bus: 'platform': driver_probe_device: matched device a000a00.virtio_mmio with driver virtio-mmio
+[    4.204028] bus: 'platform': really_probe: probing driver virtio-mmio with device a000a00.virtio_mmio
+[    4.204674] virtio-mmio a000a00.virtio_mmio: no pinctrl handle
+[    4.205773] virtio-mmio a000a00.virtio_mmio: device is dma coherent
+[    4.206198] virtio-mmio a000a00.virtio_mmio: device is not behind an iommu
+[    4.207378] virtio-mmio: probe of a000a00.virtio_mmio rejects match -19
+[    4.207833] bus: 'platform': driver_probe_device: matched device a000c00.virtio_mmio with driver virtio-mmio
+[    4.208477] bus: 'platform': really_probe: probing driver virtio-mmio with device a000c00.virtio_mmio
+[    4.209244] virtio-mmio a000c00.virtio_mmio: no pinctrl handle
+[    4.210107] virtio-mmio a000c00.virtio_mmio: device is dma coherent
+[    4.210523] virtio-mmio a000c00.virtio_mmio: device is not behind an iommu
+[    4.211717] virtio-mmio: probe of a000c00.virtio_mmio rejects match -19
+[    4.212184] bus: 'platform': driver_probe_device: matched device a000e00.virtio_mmio with driver virtio-mmio
+[    4.212822] bus: 'platform': really_probe: probing driver virtio-mmio with device a000e00.virtio_mmio
+[    4.213594] virtio-mmio a000e00.virtio_mmio: no pinctrl handle
+[    4.214468] virtio-mmio a000e00.virtio_mmio: device is dma coherent
+[    4.214885] virtio-mmio a000e00.virtio_mmio: device is not behind an iommu
+[    4.216112] virtio-mmio: probe of a000e00.virtio_mmio rejects match -19
+[    4.216585] bus: 'platform': driver_probe_device: matched device a001000.virtio_mmio with driver virtio-mmio
+[    4.217451] bus: 'platform': really_probe: probing driver virtio-mmio with device a001000.virtio_mmio
+[    4.218087] virtio-mmio a001000.virtio_mmio: no pinctrl handle
+[    4.218929] virtio-mmio a001000.virtio_mmio: device is dma coherent
+[    4.219369] virtio-mmio a001000.virtio_mmio: device is not behind an iommu
+[    4.220568] virtio-mmio: probe of a001000.virtio_mmio rejects match -19
+[    4.221352] bus: 'platform': driver_probe_device: matched device a001200.virtio_mmio with driver virtio-mmio
+[    4.221992] bus: 'platform': really_probe: probing driver virtio-mmio with device a001200.virtio_mmio
+[    4.222620] virtio-mmio a001200.virtio_mmio: no pinctrl handle
+[    4.223490] virtio-mmio a001200.virtio_mmio: device is dma coherent
+[    4.223912] virtio-mmio a001200.virtio_mmio: device is not behind an iommu
+[    4.225398] virtio-mmio: probe of a001200.virtio_mmio rejects match -19
+[    4.225873] bus: 'platform': driver_probe_device: matched device a001400.virtio_mmio with driver virtio-mmio
+[    4.226513] bus: 'platform': really_probe: probing driver virtio-mmio with device a001400.virtio_mmio
+[    4.227136] virtio-mmio a001400.virtio_mmio: no pinctrl handle
+[    4.228004] virtio-mmio a001400.virtio_mmio: device is dma coherent
+[    4.228430] virtio-mmio a001400.virtio_mmio: device is not behind an iommu
+[    4.229880] virtio-mmio: probe of a001400.virtio_mmio rejects match -19
+[    4.230282] bus: 'platform': driver_probe_device: matched device a001600.virtio_mmio with driver virtio-mmio
+[    4.230933] bus: 'platform': really_probe: probing driver virtio-mmio with device a001600.virtio_mmio
+[    4.231548] virtio-mmio a001600.virtio_mmio: no pinctrl handle
+[    4.232424] virtio-mmio a001600.virtio_mmio: device is dma coherent
+[    4.232867] virtio-mmio a001600.virtio_mmio: device is not behind an iommu
+[    4.234423] virtio-mmio: probe of a001600.virtio_mmio rejects match -19
+[    4.234893] bus: 'platform': driver_probe_device: matched device a001800.virtio_mmio with driver virtio-mmio
+[    4.235517] bus: 'platform': really_probe: probing driver virtio-mmio with device a001800.virtio_mmio
+[    4.236139] virtio-mmio a001800.virtio_mmio: no pinctrl handle
+[    4.237264] virtio-mmio a001800.virtio_mmio: device is dma coherent
+[    4.237698] virtio-mmio a001800.virtio_mmio: device is not behind an iommu
+[    4.238945] virtio-mmio: probe of a001800.virtio_mmio rejects match -19
+[    4.239438] bus: 'platform': driver_probe_device: matched device a001a00.virtio_mmio with driver virtio-mmio
+[    4.240061] bus: 'platform': really_probe: probing driver virtio-mmio with device a001a00.virtio_mmio
+[    4.240695] virtio-mmio a001a00.virtio_mmio: no pinctrl handle
+[    4.241790] virtio-mmio a001a00.virtio_mmio: device is dma coherent
+[    4.242228] virtio-mmio a001a00.virtio_mmio: device is not behind an iommu
+[    4.243409] virtio-mmio: probe of a001a00.virtio_mmio rejects match -19
+[    4.243866] bus: 'platform': driver_probe_device: matched device a001c00.virtio_mmio with driver virtio-mmio
+[    4.244516] bus: 'platform': really_probe: probing driver virtio-mmio with device a001c00.virtio_mmio
+[    4.245403] virtio-mmio a001c00.virtio_mmio: no pinctrl handle
+[    4.246252] virtio-mmio a001c00.virtio_mmio: device is dma coherent
+[    4.246665] virtio-mmio a001c00.virtio_mmio: device is not behind an iommu
+[    4.247848] virtio-mmio: probe of a001c00.virtio_mmio rejects match -19
+[    4.248304] bus: 'platform': driver_probe_device: matched device a001e00.virtio_mmio with driver virtio-mmio
+[    4.249195] bus: 'platform': really_probe: probing driver virtio-mmio with device a001e00.virtio_mmio
+[    4.249806] virtio-mmio a001e00.virtio_mmio: no pinctrl handle
+[    4.250648] virtio-mmio a001e00.virtio_mmio: device is dma coherent
+[    4.251076] virtio-mmio a001e00.virtio_mmio: device is not behind an iommu
+[    4.252320] virtio-mmio: probe of a001e00.virtio_mmio rejects match -19
+[    4.252798] bus: 'platform': driver_probe_device: matched device a002000.virtio_mmio with driver virtio-mmio
+[    4.253769] bus: 'platform': really_probe: probing driver virtio-mmio with device a002000.virtio_mmio
+[    4.254436] virtio-mmio a002000.virtio_mmio: no pinctrl handle
+[    4.255293] virtio-mmio a002000.virtio_mmio: device is dma coherent
+[    4.255703] virtio-mmio a002000.virtio_mmio: device is not behind an iommu
+[    4.256910] virtio-mmio: probe of a002000.virtio_mmio rejects match -19
+[    4.257569] bus: 'platform': driver_probe_device: matched device a002200.virtio_mmio with driver virtio-mmio
+[    4.258146] bus: 'platform': really_probe: probing driver virtio-mmio with device a002200.virtio_mmio
+[    4.258831] virtio-mmio a002200.virtio_mmio: no pinctrl handle
+[    4.259659] virtio-mmio a002200.virtio_mmio: device is dma coherent
+[    4.260106] virtio-mmio a002200.virtio_mmio: device is not behind an iommu
+[    4.261620] virtio-mmio: probe of a002200.virtio_mmio rejects match -19
+[    4.262107] bus: 'platform': driver_probe_device: matched device a002400.virtio_mmio with driver virtio-mmio
+[    4.262742] bus: 'platform': really_probe: probing driver virtio-mmio with device a002400.virtio_mmio
+[    4.263390] virtio-mmio a002400.virtio_mmio: no pinctrl handle
+[    4.264257] virtio-mmio a002400.virtio_mmio: device is dma coherent
+[    4.264704] virtio-mmio a002400.virtio_mmio: device is not behind an iommu
+[    4.266241] virtio-mmio: probe of a002400.virtio_mmio rejects match -19
+[    4.266698] bus: 'platform': driver_probe_device: matched device a002600.virtio_mmio with driver virtio-mmio
+[    4.267342] bus: 'platform': really_probe: probing driver virtio-mmio with device a002600.virtio_mmio
+[    4.267935] virtio-mmio a002600.virtio_mmio: no pinctrl handle
+[    4.268833] virtio-mmio a002600.virtio_mmio: device is dma coherent
+[    4.269550] virtio-mmio a002600.virtio_mmio: device is not behind an iommu
+[    4.270748] virtio-mmio: probe of a002600.virtio_mmio rejects match -19
+[    4.271237] bus: 'platform': driver_probe_device: matched device a002800.virtio_mmio with driver virtio-mmio
+[    4.271899] bus: 'platform': really_probe: probing driver virtio-mmio with device a002800.virtio_mmio
+[    4.272556] virtio-mmio a002800.virtio_mmio: no pinctrl handle
+[    4.273681] virtio-mmio a002800.virtio_mmio: device is dma coherent
+[    4.274103] virtio-mmio a002800.virtio_mmio: device is not behind an iommu
+[    4.275330] virtio-mmio: probe of a002800.virtio_mmio rejects match -19
+[    4.275801] bus: 'platform': driver_probe_device: matched device a002a00.virtio_mmio with driver virtio-mmio
+[    4.276474] bus: 'platform': really_probe: probing driver virtio-mmio with device a002a00.virtio_mmio
+[    4.277387] virtio-mmio a002a00.virtio_mmio: no pinctrl handle
+[    4.278233] virtio-mmio a002a00.virtio_mmio: device is dma coherent
+[    4.278662] virtio-mmio a002a00.virtio_mmio: device is not behind an iommu
+[    4.279854] virtio-mmio: probe of a002a00.virtio_mmio rejects match -19
+[    4.280339] bus: 'platform': driver_probe_device: matched device a002c00.virtio_mmio with driver virtio-mmio
+[    4.281251] bus: 'platform': really_probe: probing driver virtio-mmio with device a002c00.virtio_mmio
+[    4.281874] virtio-mmio a002c00.virtio_mmio: no pinctrl handle
+[    4.282761] virtio-mmio a002c00.virtio_mmio: device is dma coherent
+[    4.283198] virtio-mmio a002c00.virtio_mmio: device is not behind an iommu
+[    4.284413] virtio-mmio: probe of a002c00.virtio_mmio rejects match -19
+[    4.284890] bus: 'platform': driver_probe_device: matched device a002e00.virtio_mmio with driver virtio-mmio
+[    4.285778] bus: 'platform': really_probe: probing driver virtio-mmio with device a002e00.virtio_mmio
+[    4.286438] virtio-mmio a002e00.virtio_mmio: no pinctrl handle
+[    4.287362] virtio-mmio a002e00.virtio_mmio: device is dma coherent
+[    4.287852] virtio-mmio a002e00.virtio_mmio: device is not behind an iommu
+[    4.289380] virtio-mmio: probe of a002e00.virtio_mmio rejects match -19
+[    4.289867] bus: 'platform': driver_probe_device: matched device a003000.virtio_mmio with driver virtio-mmio
+[    4.290538] bus: 'platform': really_probe: probing driver virtio-mmio with device a003000.virtio_mmio
+[    4.291171] virtio-mmio a003000.virtio_mmio: no pinctrl handle
+[    4.292012] virtio-mmio a003000.virtio_mmio: device is dma coherent
+[    4.292475] virtio-mmio a003000.virtio_mmio: device is not behind an iommu
+[    4.293894] virtio-mmio: probe of a003000.virtio_mmio rejects match -19
+[    4.294385] bus: 'platform': driver_probe_device: matched device a003200.virtio_mmio with driver virtio-mmio
+[    4.295049] bus: 'platform': really_probe: probing driver virtio-mmio with device a003200.virtio_mmio
+[    4.295688] virtio-mmio a003200.virtio_mmio: no pinctrl handle
+[    4.296570] virtio-mmio a003200.virtio_mmio: device is dma coherent
+[    4.297273] virtio-mmio a003200.virtio_mmio: device is not behind an iommu
+[    4.298441] virtio-mmio: probe of a003200.virtio_mmio rejects match -19
+[    4.298890] bus: 'platform': driver_probe_device: matched device a003400.virtio_mmio with driver virtio-mmio
+[    4.299499] bus: 'platform': really_probe: probing driver virtio-mmio with device a003400.virtio_mmio
+[    4.300118] virtio-mmio a003400.virtio_mmio: no pinctrl handle
+[    4.301246] virtio-mmio a003400.virtio_mmio: device is dma coherent
+[    4.301656] virtio-mmio a003400.virtio_mmio: device is not behind an iommu
+[    4.302815] virtio-mmio: probe of a003400.virtio_mmio rejects match -19
+[    4.303275] bus: 'platform': driver_probe_device: matched device a003600.virtio_mmio with driver virtio-mmio
+[    4.303885] bus: 'platform': really_probe: probing driver virtio-mmio with device a003600.virtio_mmio
+[    4.304535] virtio-mmio a003600.virtio_mmio: no pinctrl handle
+[    4.305644] virtio-mmio a003600.virtio_mmio: device is dma coherent
+[    4.306064] virtio-mmio a003600.virtio_mmio: device is not behind an iommu
+[    4.307283] virtio-mmio: probe of a003600.virtio_mmio rejects match -19
+[    4.307702] bus: 'platform': driver_probe_device: matched device a003800.virtio_mmio with driver virtio-mmio
+[    4.308370] bus: 'platform': really_probe: probing driver virtio-mmio with device a003800.virtio_mmio
+[    4.309277] virtio-mmio a003800.virtio_mmio: no pinctrl handle
+[    4.310146] virtio-mmio a003800.virtio_mmio: device is dma coherent
+[    4.310575] virtio-mmio a003800.virtio_mmio: device is not behind an iommu
+[    4.311790] virtio-mmio: probe of a003800.virtio_mmio rejects match -19
+[    4.312263] bus: 'platform': driver_probe_device: matched device a003a00.virtio_mmio with driver virtio-mmio
+[    4.313206] bus: 'platform': really_probe: probing driver virtio-mmio with device a003a00.virtio_mmio
+[    4.313816] virtio-mmio a003a00.virtio_mmio: no pinctrl handle
+[    4.314688] virtio-mmio a003a00.virtio_mmio: device is dma coherent
+[    4.315164] virtio-mmio a003a00.virtio_mmio: device is not behind an iommu
+[    4.316431] virtio-mmio: probe of a003a00.virtio_mmio rejects match -19
+[    4.316919] bus: 'platform': driver_probe_device: matched device a003c00.virtio_mmio with driver virtio-mmio
+[    4.317834] bus: 'platform': really_probe: probing driver virtio-mmio with device a003c00.virtio_mmio
+[    4.318500] virtio-mmio a003c00.virtio_mmio: no pinctrl handle
+[    4.319353] virtio-mmio a003c00.virtio_mmio: device is dma coherent
+[    4.319808] virtio-mmio a003c00.virtio_mmio: device is not behind an iommu
+[    4.321297] virtio-mmio: probe of a003c00.virtio_mmio rejects match -19
+[    4.321746] bus: 'platform': driver_probe_device: matched device a003e00.virtio_mmio with driver virtio-mmio
+[    4.322373] bus: 'platform': really_probe: probing driver virtio-mmio with device a003e00.virtio_mmio
+[    4.322981] virtio-mmio a003e00.virtio_mmio: no pinctrl handle
+[    4.323825] virtio-mmio a003e00.virtio_mmio: device is dma coherent
+[    4.324244] virtio-mmio a003e00.virtio_mmio: device is not behind an iommu
+[    4.325742] virtio-mmio: probe of a003e00.virtio_mmio rejects match -19
+[    4.327960] bus: 'pci': add driver virtio-pci
+[    4.329609] bus: 'pci': driver_probe_device: matched device 0000:00:01.0 with driver virtio-pci
+[    4.330189] bus: 'pci': really_probe: probing driver virtio-pci with device 0000:00:01.0
+[    4.330716] virtio-pci 0000:00:01.0: no of_node; not parsing pinctrl DT
+[    4.331169] virtio-pci 0000:00:01.0: no default pinctrl state
+[    4.332125] virtio-pci 0000:00:01.0: device is dma coherent
+[    4.332711] virtio-pci 0000:00:01.0: device is not behind an iommu
+[    4.333841] virtio-pci 0000:00:01.0: vgaarb: pci_notify
+[    4.341982] virtio-pci 0000:00:01.0: assign IRQ: got 41
+[    4.343756] virtio-pci 0000:00:01.0: enabling device (0000 -> 0003)
+[    4.347049] virtio-pci 0000:00:01.0: enabling bus mastering
+[    4.348099] device: 'virtio0': device_add
+[    4.349430] bus: 'virtio': add device virtio0
+[    4.349923] PM: Adding info for virtio:virtio0
+[    4.352084] driver: 'virtio-pci': driver_bound: bound to device '0000:00:01.0'
+[    4.352535] virtio-pci 0000:00:01.0: vgaarb: pci_notify
+[    4.354815] bus: 'pci': really_probe: bound device 0000:00:01.0 to driver virtio-pci
+[    4.358180] bus: 'virtio': add driver virtio_balloon
+[    4.361737] bus: 'platform': add driver axp20x-regulator
+[    4.365375] bus: 'platform': add driver bd9571mwv-regulator
+[    4.368628] bus: 'i2c': add driver fan53555-regulator
+[    4.371615] i2c-core: driver [fan53555-regulator] registered
+[    4.372130] bus: 'platform': add driver hi6421v530-regulator
+[    4.375748] bus: 'platform': add driver hi655x-regulator
+[    4.379209] bus: 'platform': add driver max77620-pmic
+[    4.382677] bus: 'platform': add driver qcom-spmi-regulator
+[    4.386854] bus: 'platform': add driver pwm-regulator
+[    4.390491] bus: 'platform': add driver rk808-regulator
+[    4.393903] bus: 'platform': add driver s2mps11-pmic
+[    4.397496] bus: 'platform': add driver uniphier-regulator
+[    4.401887] bus: 'platform': add driver berlin2-reset
+[    4.404849] bus: 'platform': add driver meson_reset
+[    4.408862] bus: 'platform': add driver simple-reset
+[    4.413504] bus: 'platform': add driver uniphier-reset
+[    4.419752] bus: 'platform': add driver uniphier-usb3-reset
+[    4.423827] device: 'ptyp0': device_add
+[    4.424927] PM: Adding info for No Bus:ptyp0
+[    4.428373] device: 'ptyp1': device_add
+[    4.429903] PM: Adding info for No Bus:ptyp1
+[    4.433578] device: 'ptyp2': device_add
+[    4.434546] PM: Adding info for No Bus:ptyp2
+[    4.437376] device: 'ptyp3': device_add
+[    4.438320] PM: Adding info for No Bus:ptyp3
+[    4.441574] device: 'ptyp4': device_add
+[    4.442589] PM: Adding info for No Bus:ptyp4
+[    4.445720] device: 'ptyp5': device_add
+[    4.446752] PM: Adding info for No Bus:ptyp5
+[    4.450079] device: 'ptyp6': device_add
+[    4.451163] PM: Adding info for No Bus:ptyp6
+[    4.454619] device: 'ptyp7': device_add
+[    4.455650] PM: Adding info for No Bus:ptyp7
+[    4.459572] device: 'ptyp8': device_add
+[    4.460631] PM: Adding info for No Bus:ptyp8
+[    4.464570] device: 'ptyp9': device_add
+[    4.466006] PM: Adding info for No Bus:ptyp9
+[    4.468927] device: 'ptypa': device_add
+[    4.470265] PM: Adding info for No Bus:ptypa
+[    4.473431] device: 'ptypb': device_add
+[    4.474300] PM: Adding info for No Bus:ptypb
+[    4.477626] device: 'ptypc': device_add
+[    4.478601] PM: Adding info for No Bus:ptypc
+[    4.481834] device: 'ptypd': device_add
+[    4.482806] PM: Adding info for No Bus:ptypd
+[    4.485999] device: 'ptype': device_add
+[    4.487324] PM: Adding info for No Bus:ptype
+[    4.490628] device: 'ptypf': device_add
+[    4.491593] PM: Adding info for No Bus:ptypf
+[    4.495004] device: 'ttyp0': device_add
+[    4.495996] PM: Adding info for No Bus:ttyp0
+[    4.499333] device: 'ttyp1': device_add
+[    4.500283] PM: Adding info for No Bus:ttyp1
+[    4.503778] device: 'ttyp2': device_add
+[    4.504762] PM: Adding info for No Bus:ttyp2
+[    4.507777] device: 'ttyp3': device_add
+[    4.508773] PM: Adding info for No Bus:ttyp3
+[    4.511998] device: 'ttyp4': device_add
+[    4.513745] PM: Adding info for No Bus:ttyp4
+[    4.516795] device: 'ttyp5': device_add
+[    4.518165] PM: Adding info for No Bus:ttyp5
+[    4.521697] device: 'ttyp6': device_add
+[    4.522677] PM: Adding info for No Bus:ttyp6
+[    4.525646] device: 'ttyp7': device_add
+[    4.526622] PM: Adding info for No Bus:ttyp7
+[    4.529927] device: 'ttyp8': device_add
+[    4.530931] PM: Adding info for No Bus:ttyp8
+[    4.534347] device: 'ttyp9': device_add
+[    4.535315] PM: Adding info for No Bus:ttyp9
+[    4.538612] device: 'ttypa': device_add
+[    4.539576] PM: Adding info for No Bus:ttypa
+[    4.542772] device: 'ttypb': device_add
+[    4.543858] PM: Adding info for No Bus:ttypb
+[    4.547283] device: 'ttypc': device_add
+[    4.548243] PM: Adding info for No Bus:ttypc
+[    4.551490] device: 'ttypd': device_add
+[    4.552518] PM: Adding info for No Bus:ttypd
+[    4.555858] device: 'ttype': device_add
+[    4.556831] PM: Adding info for No Bus:ttype
+[    4.559997] device: 'ttypf': device_add
+[    4.561650] PM: Adding info for No Bus:ttypf
+[    4.564727] device: 'ptmx': device_add
+[    4.565964] PM: Adding info for No Bus:ptmx
+[    4.568264] sysrq: No sysrq node found
+[    4.568466] Serial: 8250/16550 driver, 4 ports, IRQ sharing enabled
+[    4.569869] bus: 'pnp': add driver serial
+[    4.571950] Registering platform device 'serial8250'. Parent at platform
+[    4.572429] device: 'serial8250': device_add
+[    4.573754] bus: 'platform': add device serial8250
+[    4.574245] PM: Adding info for platform:serial8250
+[    4.578548] serial serial0: allocated controller 0x0000000011ff189f id 0
+[    4.578950] device: 'serial0': device_add
+[    4.579853] bus: 'serial': add device serial0
+[    4.580197] PM: Adding info for serial:serial0
+[    4.582048] serial serial0: no devices registered: of:-19 acpi:-19
+[    4.583545] bus: 'serial': remove device serial0
+[    4.583774] PM: Removing info for serial:serial0
+[    4.587742] device: 'ttyS0': device_add
+[    4.590129] PM: Adding info for No Bus:ttyS0
+[    4.593617] serial serial0: allocated controller 0x00000000feaf82a9 id 0
+[    4.594090] device: 'serial0': device_add
+[    4.595063] bus: 'serial': add device serial0
+[    4.595434] PM: Adding info for serial:serial0
+[    4.597933] serial serial0: no devices registered: of:-19 acpi:-19
+[    4.599526] bus: 'serial': remove device serial0
+[    4.599783] PM: Removing info for serial:serial0
+[    4.603807] device: 'ttyS1': device_add
+[    4.605687] PM: Adding info for No Bus:ttyS1
+[    4.608758] serial serial0: allocated controller 0x0000000019aabdf0 id 0
+[    4.609658] device: 'serial0': device_add
+[    4.610629] bus: 'serial': add device serial0
+[    4.610987] PM: Adding info for serial:serial0
+[    4.613298] serial serial0: no devices registered: of:-19 acpi:-19
+[    4.614836] bus: 'serial': remove device serial0
+[    4.615158] PM: Removing info for serial:serial0
+[    4.619059] device: 'ttyS2': device_add
+[    4.620316] PM: Adding info for No Bus:ttyS2
+[    4.623756] serial serial0: allocated controller 0x00000000c853411b id 0
+[    4.624404] device: 'serial0': device_add
+[    4.626120] bus: 'serial': add device serial0
+[    4.626496] PM: Adding info for serial:serial0
+[    4.628205] serial serial0: no devices registered: of:-19 acpi:-19
+[    4.630464] bus: 'serial': remove device serial0
+[    4.630790] PM: Removing info for serial:serial0
+[    4.634913] device: 'ttyS3': device_add
+[    4.636162] PM: Adding info for No Bus:ttyS3
+[    4.639786] bus: 'platform': add driver serial8250
+[    4.641543] bus: 'platform': driver_probe_device: matched device serial8250 with driver serial8250
+[    4.642165] bus: 'platform': really_probe: probing driver serial8250 with device serial8250
+[    4.642722] serial8250 serial8250: no of_node; not parsing pinctrl DT
+[    4.643179] serial8250 serial8250: no default pinctrl state
+[    4.643752] driver: 'serial8250': driver_bound: bound to device 'serial8250'
+[    4.646165] bus: 'platform': really_probe: bound device serial8250 to driver serial8250
+[    4.648134] bus: 'pci': add driver serial
+[    4.651477] bus: 'pci': add driver exar_serial
+[    4.654697] bus: 'platform': add driver bcm2835-aux-uart
+[    4.658432] bus: 'platform': add driver dw-apb-uart
+[    4.662771] bus: 'platform': add driver mt6577-uart
+[    4.666472] bus: 'platform': add driver uniphier-uart
+[    4.670172] bus: 'platform': add driver of_serial
+[    4.675348] bus: 'platform': add driver samsung-uart
+[    4.679878] SuperH (H)SCI(F) driver initialized
+[    4.680323] bus: 'platform': add driver sh-sci
+[    4.684572] bus: 'platform': add driver meson_uart
+[    4.689979] bus: 'platform': add driver msm_serial
+[    4.693353] msm_serial: driver initialized
+[    4.694544] bus: 'platform': add driver serial-tegra
+[    4.698374] device class 'virtio-ports': registering
+[    4.701262] debugfs: creating file 'virtio-ports'
+[    4.701699] bus: 'virtio': add driver virtio_console
+[    4.704673] bus: 'virtio': add driver virtio_rproc_serial
+[    4.707490] bus: 'i2c': add driver tpm_i2c_infineon
+[    4.710729] i2c-core: driver [tpm_i2c_infineon] registered
+[    4.711248] bus: 'platform': add driver arm-smmu
+[    4.715330] bus: 'platform': add driver arm-smmu-v3
+[    4.719305] bus: 'platform': add driver qcom-iommu-ctx
+[    4.722618] bus: 'platform': add driver qcom-iommu
+[    4.727285] cacheinfo: Unable to detect cache hierarchy for CPU 0
+[    4.728201] device class 'devcoredump': registering
+[    4.731234] device: 'loop-control': device_add
+[    4.732340] PM: Adding info for No Bus:loop-control
+[    4.742135] device: '7:0': device_add
+[    4.743838] PM: Adding info for No Bus:7:0
+[    4.745887] debugfs: creating file '7:0'
+[    4.746340] debugfs: creating file 'stats'
+[    4.746946] device: 'loop0': device_add
+[    4.748816] PM: Adding info for No Bus:loop0
+[    4.759688] debugfs: creating file 'loop0'
+[    4.760088] debugfs: creating file 'poll_stat'
+[    4.760486] debugfs: creating file 'requeue_list'
+[    4.760822] debugfs: creating file 'pm_only'
+[    4.761488] debugfs: creating file 'state'
+[    4.761796] debugfs: creating file 'write_hints'
+[    4.762209] debugfs: creating file 'zone_wlock'
+[    4.762649] debugfs: creating file 'hctx0'
+[    4.763011] debugfs: creating file 'state'
+[    4.763382] debugfs: creating file 'flags'
+[    4.763688] debugfs: creating file 'dispatch'
+[    4.764038] debugfs: creating file 'busy'
+[    4.764343] debugfs: creating file 'ctx_map'
+[    4.764662] debugfs: creating file 'tags'
+[    4.765285] debugfs: creating file 'tags_bitmap'
+[    4.765666] debugfs: creating file 'sched_tags'
+[    4.765984] debugfs: creating file 'sched_tags_bitmap'
+[    4.766346] debugfs: creating file 'io_poll'
+[    4.766663] debugfs: creating file 'dispatched'
+[    4.767059] debugfs: creating file 'queued'
+[    4.767424] debugfs: creating file 'run'
+[    4.767752] debugfs: creating file 'active'
+[    4.768040] debugfs: creating file 'dispatch_busy'
+[    4.768504] debugfs: creating file 'cpu0'
+[    4.768830] debugfs: creating file 'rq_list'
+[    4.769569] debugfs: creating file 'dispatched'
+[    4.769918] debugfs: creating file 'merged'
+[    4.770246] debugfs: creating file 'completed'
+[    4.775193] device: '7:1': device_add
+[    4.776246] PM: Adding info for No Bus:7:1
+[    4.778160] debugfs: creating file '7:1'
+[    4.778505] debugfs: creating file 'stats'
+[    4.778865] device: 'loop1': device_add
+[    4.780087] PM: Adding info for No Bus:loop1
+[    4.789765] debugfs: creating file 'loop1'
+[    4.790098] debugfs: creating file 'poll_stat'
+[    4.790485] debugfs: creating file 'requeue_list'
+[    4.790837] debugfs: creating file 'pm_only'
+[    4.791183] debugfs: creating file 'state'
+[    4.791540] debugfs: creating file 'write_hints'
+[    4.791904] debugfs: creating file 'zone_wlock'
+[    4.792272] debugfs: creating file 'hctx0'
+[    4.792657] debugfs: creating file 'state'
+[    4.793607] debugfs: creating file 'flags'
+[    4.793994] debugfs: creating file 'dispatch'
+[    4.794343] debugfs: creating file 'busy'
+[    4.794651] debugfs: creating file 'ctx_map'
+[    4.794953] debugfs: creating file 'tags'
+[    4.795251] debugfs: creating file 'tags_bitmap'
+[    4.795627] debugfs: creating file 'sched_tags'
+[    4.795977] debugfs: creating file 'sched_tags_bitmap'
+[    4.796364] debugfs: creating file 'io_poll'
+[    4.796690] debugfs: creating file 'dispatched'
+[    4.797305] debugfs: creating file 'queued'
+[    4.797612] debugfs: creating file 'run'
+[    4.797907] debugfs: creating file 'active'
+[    4.798244] debugfs: creating file 'dispatch_busy'
+[    4.798596] debugfs: creating file 'cpu0'
+[    4.798883] debugfs: creating file 'rq_list'
+[    4.799229] debugfs: creating file 'dispatched'
+[    4.799535] debugfs: creating file 'merged'
+[    4.799830] debugfs: creating file 'completed'
+[    4.804358] device: '7:2': device_add
+[    4.805653] PM: Adding info for No Bus:7:2
+[    4.807129] debugfs: creating file '7:2'
+[    4.807452] debugfs: creating file 'stats'
+[    4.807798] device: 'loop2': device_add
+[    4.809591] PM: Adding info for No Bus:loop2
+[    4.818735] debugfs: creating file 'loop2'
+[    4.819064] debugfs: creating file 'poll_stat'
+[    4.819449] debugfs: creating file 'requeue_list'
+[    4.819829] debugfs: creating file 'pm_only'
+[    4.820178] debugfs: creating file 'state'
+[    4.820512] debugfs: creating file 'write_hints'
+[    4.820853] debugfs: creating file 'zone_wlock'
+[    4.821521] debugfs: creating file 'hctx0'
+[    4.821844] debugfs: creating file 'state'
+[    4.822211] debugfs: creating file 'flags'
+[    4.822515] debugfs: creating file 'dispatch'
+[    4.822890] debugfs: creating file 'busy'
+[    4.823236] debugfs: creating file 'ctx_map'
+[    4.823557] debugfs: creating file 'tags'
+[    4.823905] debugfs: creating file 'tags_bitmap'
+[    4.824271] debugfs: creating file 'sched_tags'
+[    4.824623] debugfs: creating file 'sched_tags_bitmap'
+[    4.825585] debugfs: creating file 'io_poll'
+[    4.825939] debugfs: creating file 'dispatched'
+[    4.826278] debugfs: creating file 'queued'
+[    4.826607] debugfs: creating file 'run'
+[    4.826909] debugfs: creating file 'active'
+[    4.827249] debugfs: creating file 'dispatch_busy'
+[    4.827617] debugfs: creating file 'cpu0'
+[    4.828006] debugfs: creating file 'rq_list'
+[    4.828343] debugfs: creating file 'dispatched'
+[    4.828702] debugfs: creating file 'merged'
+[    4.829325] debugfs: creating file 'completed'
+[    4.834044] device: '7:3': device_add
+[    4.835116] PM: Adding info for No Bus:7:3
+[    4.836620] debugfs: creating file '7:3'
+[    4.837215] debugfs: creating file 'stats'
+[    4.837568] device: 'loop3': device_add
+[    4.838731] PM: Adding info for No Bus:loop3
+[    4.847708] debugfs: creating file 'loop3'
+[    4.848042] debugfs: creating file 'poll_stat'
+[    4.848395] debugfs: creating file 'requeue_list'
+[    4.848805] debugfs: creating file 'pm_only'
+[    4.849725] debugfs: creating file 'state'
+[    4.850052] debugfs: creating file 'write_hints'
+[    4.850428] debugfs: creating file 'zone_wlock'
+[    4.850762] debugfs: creating file 'hctx0'
+[    4.851058] debugfs: creating file 'state'
+[    4.851433] debugfs: creating file 'flags'
+[    4.851742] debugfs: creating file 'dispatch'
+[    4.852093] debugfs: creating file 'busy'
+[    4.852411] debugfs: creating file 'ctx_map'
+[    4.852778] debugfs: creating file 'tags'
+[    4.853544] debugfs: creating file 'tags_bitmap'
+[    4.854050] debugfs: creating file 'sched_tags'
+[    4.854433] debugfs: creating file 'sched_tags_bitmap'
+[    4.854801] debugfs: creating file 'io_poll'
+[    4.855161] debugfs: creating file 'dispatched'
+[    4.855503] debugfs: creating file 'queued'
+[    4.855896] debugfs: creating file 'run'
+[    4.856207] debugfs: creating file 'active'
+[    4.856546] debugfs: creating file 'dispatch_busy'
+[    4.856932] debugfs: creating file 'cpu0'
+[    4.857589] debugfs: creating file 'rq_list'
+[    4.857905] debugfs: creating file 'dispatched'
+[    4.858257] debugfs: creating file 'merged'
+[    4.858606] debugfs: creating file 'completed'
+[    4.862910] device: '7:4': device_add
+[    4.864007] PM: Adding info for No Bus:7:4
+[    4.865844] debugfs: creating file '7:4'
+[    4.866197] debugfs: creating file 'stats'
+[    4.866575] device: 'loop4': device_add
+[    4.867751] PM: Adding info for No Bus:loop4
+[    4.877930] debugfs: creating file 'loop4'
+[    4.878291] debugfs: creating file 'poll_stat'
+[    4.878641] debugfs: creating file 'requeue_list'
+[    4.879035] debugfs: creating file 'pm_only'
+[    4.879412] debugfs: creating file 'state'
+[    4.879734] debugfs: creating file 'write_hints'
+[    4.880059] debugfs: creating file 'zone_wlock'
+[    4.880400] debugfs: creating file 'hctx0'
+[    4.880740] debugfs: creating file 'state'
+[    4.881370] debugfs: creating file 'flags'
+[    4.881702] debugfs: creating file 'dispatch'
+[    4.882017] debugfs: creating file 'busy'
+[    4.882340] debugfs: creating file 'ctx_map'
+[    4.882692] debugfs: creating file 'tags'
+[    4.883004] debugfs: creating file 'tags_bitmap'
+[    4.883361] debugfs: creating file 'sched_tags'
+[    4.883776] debugfs: creating file 'sched_tags_bitmap'
+[    4.884183] debugfs: creating file 'io_poll'
+[    4.884545] debugfs: creating file 'dispatched'
+[    4.884933] debugfs: creating file 'queued'
+[    4.885573] debugfs: creating file 'run'
+[    4.885889] debugfs: creating file 'active'
+[    4.886225] debugfs: creating file 'dispatch_busy'
+[    4.886588] debugfs: creating file 'cpu0'
+[    4.886910] debugfs: creating file 'rq_list'
+[    4.887292] debugfs: creating file 'dispatched'
+[    4.887644] debugfs: creating file 'merged'
+[    4.887980] debugfs: creating file 'completed'
+[    4.895105] device: '7:5': device_add
+[    4.895899] PM: Adding info for No Bus:7:5
+[    4.897687] debugfs: creating file '7:5'
+[    4.898065] debugfs: creating file 'stats'
+[    4.898442] device: 'loop5': device_add
+[    4.899644] PM: Adding info for No Bus:loop5
+[    4.909631] debugfs: creating file 'loop5'
+[    4.910044] debugfs: creating file 'poll_stat'
+[    4.910391] debugfs: creating file 'requeue_list'
+[    4.910745] debugfs: creating file 'pm_only'
+[    4.911095] debugfs: creating file 'state'
+[    4.911399] debugfs: creating file 'write_hints'
+[    4.911749] debugfs: creating file 'zone_wlock'
+[    4.912116] debugfs: creating file 'hctx0'
+[    4.912486] debugfs: creating file 'state'
+[    4.912787] debugfs: creating file 'flags'
+[    4.913424] debugfs: creating file 'dispatch'
+[    4.913750] debugfs: creating file 'busy'
+[    4.914123] debugfs: creating file 'ctx_map'
+[    4.914467] debugfs: creating file 'tags'
+[    4.914775] debugfs: creating file 'tags_bitmap'
+[    4.915171] debugfs: creating file 'sched_tags'
+[    4.915513] debugfs: creating file 'sched_tags_bitmap'
+[    4.915870] debugfs: creating file 'io_poll'
+[    4.916190] debugfs: creating file 'dispatched'
+[    4.916534] debugfs: creating file 'queued'
+[    4.916838] debugfs: creating file 'run'
+[    4.917457] debugfs: creating file 'active'
+[    4.917776] debugfs: creating file 'dispatch_busy'
+[    4.918132] debugfs: creating file 'cpu0'
+[    4.918346] debugfs: creating file 'rq_list'
+[    4.918827] debugfs: creating file 'dispatched'
+[    4.919166] debugfs: creating file 'merged'
+[    4.919511] debugfs: creating file 'completed'
+[    4.924027] device: '7:6': device_add
+[    4.925450] PM: Adding info for No Bus:7:6
+[    4.927426] debugfs: creating file '7:6'
+[    4.927775] debugfs: creating file 'stats'
+[    4.928168] device: 'loop6': device_add
+[    4.929702] PM: Adding info for No Bus:loop6
+[    4.939960] debugfs: creating file 'loop6'
+[    4.940376] debugfs: creating file 'poll_stat'
+[    4.940771] debugfs: creating file 'requeue_list'
+[    4.941503] debugfs: creating file 'pm_only'
+[    4.941856] debugfs: creating file 'state'
+[    4.942269] debugfs: creating file 'write_hints'
+[    4.942678] debugfs: creating file 'zone_wlock'
+[    4.943080] debugfs: creating file 'hctx0'
+[    4.943486] debugfs: creating file 'state'
+[    4.943824] debugfs: creating file 'flags'
+[    4.944170] debugfs: creating file 'dispatch'
+[    4.944543] debugfs: creating file 'busy'
+[    4.944889] debugfs: creating file 'ctx_map'
+[    4.945585] debugfs: creating file 'tags'
+[    4.945952] debugfs: creating file 'tags_bitmap'
+[    4.946348] debugfs: creating file 'sched_tags'
+[    4.946741] debugfs: creating file 'sched_tags_bitmap'
+[    4.947207] debugfs: creating file 'io_poll'
+[    4.947668] debugfs: creating file 'dispatched'
+[    4.948033] debugfs: creating file 'queued'
+[    4.948373] debugfs: creating file 'run'
+[    4.948752] debugfs: creating file 'active'
+[    4.949424] debugfs: creating file 'dispatch_busy'
+[    4.949775] debugfs: creating file 'cpu0'
+[    4.950143] debugfs: creating file 'rq_list'
+[    4.950450] debugfs: creating file 'dispatched'
+[    4.950767] debugfs: creating file 'merged'
+[    4.951101] debugfs: creating file 'completed'
+[    4.955461] device: '7:7': device_add
+[    4.956599] PM: Adding info for No Bus:7:7
+[    4.958718] debugfs: creating file '7:7'
+[    4.959072] debugfs: creating file 'stats'
+[    4.959581] device: 'loop7': device_add
+[    4.961586] PM: Adding info for No Bus:loop7
+[    4.970825] debugfs: creating file 'loop7'
+[    4.971176] debugfs: creating file 'poll_stat'
+[    4.971517] debugfs: creating file 'requeue_list'
+[    4.971871] debugfs: creating file 'pm_only'
+[    4.972307] debugfs: creating file 'state'
+[    4.972651] debugfs: creating file 'write_hints'
+[    4.973349] debugfs: creating file 'zone_wlock'
+[    4.973711] debugfs: creating file 'hctx0'
+[    4.974052] debugfs: creating file 'state'
+[    4.974381] debugfs: creating file 'flags'
+[    4.974693] debugfs: creating file 'dispatch'
+[    4.975012] debugfs: creating file 'busy'
+[    4.975333] debugfs: creating file 'ctx_map'
+[    4.975746] debugfs: creating file 'tags'
+[    4.976138] debugfs: creating file 'tags_bitmap'
+[    4.976530] debugfs: creating file 'sched_tags'
+[    4.976920] debugfs: creating file 'sched_tags_bitmap'
+[    4.977699] debugfs: creating file 'io_poll'
+[    4.978078] debugfs: creating file 'dispatched'
+[    4.978424] debugfs: creating file 'queued'
+[    4.978744] debugfs: creating file 'run'
+[    4.979050] debugfs: creating file 'active'
+[    4.979396] debugfs: creating file 'dispatch_busy'
+[    4.979782] debugfs: creating file 'cpu0'
+[    4.980098] debugfs: creating file 'rq_list'
+[    4.980432] debugfs: creating file 'dispatched'
+[    4.980778] debugfs: creating file 'merged'
+[    4.981428] debugfs: creating file 'completed'
+[    4.984647] loop: module loaded
+[    4.985408] bus: 'virtio': add driver virtio_blk
+[    4.987951] bus: 'i2c': add driver bd9571mwv
+[    4.990847] i2c-core: driver [bd9571mwv] registered
+[    4.991460] bus: 'sunxi-rsb': add driver axp20x-rsb
+[    4.994881] bus: 'i2c': add driver max77620
+[    4.997335] i2c-core: driver [max77620] registered
+[    4.997737] bus: 'spmi': add driver pmic-spmi
+[    5.001314] bus: 'i2c': add driver rk808
+[    5.003347] i2c-core: driver [rk808] registered
+[    5.003861] bus: 'platform': add driver hi6421_pmic
+[    5.007583] bus: 'platform': add driver hi655x-pmic
+[    5.011248] device class 'sas_host': registering
+[    5.013500] device class 'sas_phy': registering
+[    5.016395] device class 'sas_port': registering
+[    5.018947] device class 'sas_device': registering
+[    5.021397] device class 'sas_end_device': registering
+[    5.024559] device class 'sas_expander': registering
+[    5.027731] device class 'scsi_disk': registering
+[    5.033758] bus: 'scsi': add driver sd
+[    5.037683] bus: 'platform': add driver hisi_sas_v1_hw
+[    5.040883] bus: 'platform': add driver hisi_sas_v2_hw
+[    5.044628] bus: 'pci': add driver hisi_sas_v3_hw
+[    5.047989] bus: 'pci': add driver ahci
+[    5.051458] bus: 'platform': add driver ahci
+[    5.055250] bus: 'pci': add driver sata_sil24
+[    5.058811] bus: 'platform': add driver ahci-ceva
+[    5.062284] bus: 'platform': add driver ahci-mvebu
+[    5.065722] bus: 'platform': add driver xgene-ahci
+[    5.069434] bus: 'platform': add driver ahci-qoriq
+[    5.073329] bus: 'platform': add driver sata_rcar
+[    5.077610] bus: 'platform': add driver pata_platform
+[    5.081380] bus: 'platform': add driver pata_of_platform
+[    5.084470] device class 'mtd': registering
+[    5.087290] device: 'mtd-0': device_add
+[    5.088443] PM: Adding info for No Bus:mtd-0
+[    5.090882] debugfs: creating file 'mtd-0'
+[    5.091216] debugfs: creating file 'stats'
+[    5.091776] debugfs: creating file 'mtd'
+[    5.092759] bus: 'spi': add driver m25p80
+[    5.095773] bus: 'platform': add driver denali-nand-dt
+[    5.099716] bus: 'platform': add driver marvell-nfc
+[    5.103940] bus: 'platform': add driver qcom-nandc
+[    5.107694] bus: 'platform': add driver armada_3700_spi
+[    5.111482] bus: 'platform': add driver bcm_iproc
+[    5.115223] bus: 'platform': add driver brcmstb_qspi
+[    5.119226] bus: 'platform': add driver orion_spi
+[    5.123304] bus: 'platform': add driver spi_qup
+[    5.126973] bus: 'platform': add driver rockchip-spi
+[    5.131045] bus: 'platform': add driver s3c64xx-spi
+[    5.135293] bus: 'platform': add driver spmi_pmic_arb
+[    5.139156] bus: 'platform': add driver mdio-mux-iproc
+[    5.142719] bus: 'platform': add driver mdio-mux-mmioreg
+[    5.146196] bus: 'pci': add driver mdio_thunder
+[    5.149468] bus: 'platform': add driver xgene-mdio
+[    5.153405] Registering platform device 'Fixed MDIO bus.0'. Parent at platform
+[    5.153842] device: 'Fixed MDIO bus.0': device_add
+[    5.154915] bus: 'platform': add device Fixed MDIO bus.0
+[    5.155471] PM: Adding info for platform:Fixed MDIO bus.0
+[    5.160085] device: 'fixed-0': device_add
+[    5.162516] PM: Adding info for No Bus:fixed-0
+[    5.164507] mdio_bus fixed-0: GPIO lookup for consumer reset
+[    5.165280] mdio_bus fixed-0: using lookup tables for GPIO lookup
+[    5.165835] mdio_bus fixed-0: No GPIO consumer reset found
+[    5.166989] mdio_bus fixed-0: probed
+[    5.167418] bus: 'mdio_bus': add driver Micrel KS8737
+[    5.170415] libphy: Micrel KS8737: Registered new driver
+[    5.170869] bus: 'mdio_bus': add driver Micrel KSZ8021 or KSZ8031
+[    5.174322] libphy: Micrel KSZ8021 or KSZ8031: Registered new driver
+[    5.174748] bus: 'mdio_bus': add driver Micrel KSZ8031
+[    5.177880] libphy: Micrel KSZ8031: Registered new driver
+[    5.178270] bus: 'mdio_bus': add driver Micrel KSZ8041
+[    5.181214] libphy: Micrel KSZ8041: Registered new driver
+[    5.181593] bus: 'mdio_bus': add driver Micrel KSZ8041RNLI
+[    5.184880] libphy: Micrel KSZ8041RNLI: Registered new driver
+[    5.185585] bus: 'mdio_bus': add driver Micrel KSZ8051
+[    5.188096] libphy: Micrel KSZ8051: Registered new driver
+[    5.188487] bus: 'mdio_bus': add driver Micrel KSZ8001 or KS8721
+[    5.191684] libphy: Micrel KSZ8001 or KS8721: Registered new driver
+[    5.192097] bus: 'mdio_bus': add driver Micrel KSZ8081 or KSZ8091
+[    5.195458] libphy: Micrel KSZ8081 or KSZ8091: Registered new driver
+[    5.195850] bus: 'mdio_bus': add driver Micrel KSZ8061
+[    5.198680] libphy: Micrel KSZ8061: Registered new driver
+[    5.199041] bus: 'mdio_bus': add driver Micrel KSZ9021 Gigabit PHY
+[    5.202468] libphy: Micrel KSZ9021 Gigabit PHY: Registered new driver
+[    5.202883] bus: 'mdio_bus': add driver Micrel KSZ9031 Gigabit PHY
+[    5.206144] libphy: Micrel KSZ9031 Gigabit PHY: Registered new driver
+[    5.206604] bus: 'mdio_bus': add driver Micrel KSZ8873MLL Switch
+[    5.209807] libphy: Micrel KSZ8873MLL Switch: Registered new driver
+[    5.210253] bus: 'mdio_bus': add driver Micrel KSZ886X Switch
+[    5.213411] libphy: Micrel KSZ886X Switch: Registered new driver
+[    5.213831] bus: 'mdio_bus': add driver Micrel KSZ8795
+[    5.216765] libphy: Micrel KSZ8795: Registered new driver
+[    5.217426] bus: 'mdio_bus': add driver Microchip KSZ9477
+[    5.219989] libphy: Microchip KSZ9477: Registered new driver
+[    5.220474] bus: 'mdio_bus': add driver Rockchip integrated EPHY
+[    5.223943] libphy: Rockchip integrated EPHY: Registered new driver
+[    5.224424] tun: Universal TUN/TAP device driver, 1.6
+[    5.225509] device: 'tun': device_add
+[    5.226565] PM: Adding info for No Bus:tun
+[    5.229455] bus: 'virtio': add driver virtio_net
+[    5.230543] bus: 'virtio': driver_probe_device: matched device virtio0 with driver virtio_net
+[    5.231088] bus: 'virtio': really_probe: probing driver virtio_net with device virtio0
+[    5.231724] virtio_net virtio0: no of_node; not parsing pinctrl DT
+[    5.232181] virtio_net virtio0: no default pinctrl state
+[    5.240770] virtio-pci 0000:00:01.0: irq [42-42] for MSI
+[    5.242097] virtio-pci 0000:00:01.0: irq [43-43] for MSI
+[    5.242516] virtio-pci 0000:00:01.0: irq [44-44] for MSI
+[    5.249780] device: 'eth0': device_add
+[    5.251863] PM: Adding info for No Bus:eth0
+[    5.261638] virtio_net virtio0 eth0: Dropping NETIF_F_GSO since no SG feature.
+[    5.262233] virtio_net virtio0 eth0: Features changed: 0x0000000000004a20 -> 0x0000000000004220
+[    5.266021] virtnet: registered device eth0 with 1 RX and TX vq's
+[    5.266628] driver: 'virtio_net': driver_bound: bound to device 'virtio0'
+[    5.268755] bus: 'virtio': really_probe: bound device virtio0 to driver virtio_net
+[    5.271429] bus: 'platform': add driver amd-xgbe
+[    5.275248] bus: 'pci': add driver amd-xgbe
+[    5.279085] bus: 'platform': add driver xgene-enet
+[    5.282965] bus: 'platform': add driver macb
+[    5.288026] bus: 'platform': add driver bgmac-enet
+[    5.292018] bus: 'pci': add driver cavium_ptp
+[    5.295138] thunder_xcv, ver 1.0
+[    5.295408] bus: 'pci': add driver thunder_xcv
+[    5.299193] thunder_bgx, ver 1.0
+[    5.299455] bus: 'pci': add driver thunder_bgx
+[    5.303083] nicpf, ver 1.0
+[    5.303334] bus: 'pci': add driver nicpf
+[    5.307044] bus: 'platform': add driver hisi-gmac
+[    5.311095] bus: 'platform': add driver Hi-HNS_MDIO
+[    5.314875] bus: 'platform': add driver hns_dsaf
+[    5.318495] bus: 'platform': add driver hns-nic
+[    5.322100] e1000e: Intel(R) PRO/1000 Network Driver - 3.2.6-k
+[    5.322511] e1000e: Copyright(c) 1999 - 2015 Intel Corporation.
+[    5.322948] bus: 'pci': add driver e1000e
+[    5.326533] igb: Intel(R) Gigabit Ethernet Network Driver - version 5.4.0-k
+[    5.326972] igb: Copyright (c) 2007-2014 Intel Corporation.
+[    5.327377] bus: 'pci': add driver igb
+[    5.330827] igbvf: Intel(R) Gigabit Virtual Function Network Driver - version 2.4.0-k
+[    5.331348] igbvf: Copyright (c) 2009 - 2012 Intel Corporation.
+[    5.331743] bus: 'pci': add driver igbvf
+[    5.335196] bus: 'platform': add driver orion-mdio
+[    5.338963] bus: 'platform': add driver mvneta
+[    5.342714] bus: 'platform': add driver mvpp2
+[    5.346162] sky2: driver version 1.30
+[    5.346477] bus: 'pci': add driver sky2
+[    5.350277] bus: 'platform': add driver ravb
+[    5.354213] bus: 'platform': add driver smc91x
+[    5.357709] bus: 'platform': add driver smsc911x
+[    5.360766] bus: 'platform': add driver ave
+[    5.364395] bus: 'platform': add driver netsec
+[    5.367872] device: 'vfio': device_add
+[    5.369718] PM: Adding info for No Bus:vfio
+[    5.371772] device class 'vfio': registering
+[    5.374570] VFIO - User Level meta-driver version: 0.3
+[    5.376543] bus: 'pci': add driver vfio-pci
+[    5.380357] bus: 'platform': add driver dwc3
+[    5.384043] bus: 'platform': add driver exynos-dwc3
+[    5.387670] bus: 'pci': add driver dwc3-pci
+[    5.390693] bus: 'pci': add driver dwc3-haps
+[    5.393720] bus: 'platform': add driver dwc3-of-simple
+[    5.398164] bus: 'platform': add driver dwc3-qcom
+[    5.401944] bus: 'platform': add driver dwc2
+[    5.412680] bus: 'platform': add driver isp1760
+[    5.415881] bus: 'pci': add driver isp1760
+[    5.418744] ehci_hcd: USB 2.0 'Enhanced' Host Controller (EHCI) Driver
+[    5.419216] ehci_hcd: block sizes: qh 144 qtd 96 itd 192 sitd 96
+[    5.419565] debugfs: creating file 'ehci'
+[    5.419971] ehci-pci: EHCI PCI platform driver
+[    5.420499] bus: 'pci': add driver ehci-pci
+[    5.423272] ehci-platform: EHCI generic platform driver
+[    5.423731] bus: 'platform': add driver ehci-platform
+[    5.427218] ehci-orion: EHCI orion driver
+[    5.427635] bus: 'platform': add driver orion-ehci
+[    5.431133] ehci-exynos: EHCI EXYNOS driver
+[    5.431484] bus: 'platform': add driver exynos-ehci
+[    5.434829] ohci_hcd: USB 1.1 'Open' Host Controller (OHCI) Driver
+[    5.435253] ohci_hcd: block sizes: ed 112 td 96
+[    5.435578] debugfs: creating file 'ohci'
+[    5.435957] ohci-pci: OHCI PCI platform driver
+[    5.436439] bus: 'pci': add driver ohci-pci
+[    5.439401] ohci-platform: OHCI generic platform driver
+[    5.439878] bus: 'platform': add driver ohci-platform
+[    5.443503] ohci-exynos: OHCI EXYNOS driver
+[    5.443923] bus: 'platform': add driver exynos-ohci
+[    5.447333] debugfs: creating file 'xhci'
+[    5.447909] bus: 'pci': add driver xhci_hcd
+[    5.451117] bus: 'platform': add driver xhci-hcd
+[    5.455722] bus: 'platform': add driver tegra-xusb
+[    5.459380] bus: 'usb': add driver usb-storage
+[    5.463033] usbcore: registered new interface driver usb-storage
+[    5.463524] bus: 'i2c': add driver usb3503
+[    5.466374] i2c-core: driver [usb3503] registered
+[    5.466837] bus: 'platform': add driver usb3503
+[    5.470540] bus: 'platform': add driver musb-hdrc
+[    5.473807] bus: 'platform': add driver musb-sunxi
+[    5.477874] bus: 'platform': add driver ci_hdrc
+[    5.480683] bus: 'platform': add driver chipidea-usb2
+[    5.484499] bus: 'platform': add driver msm_hsusb
+[    5.488278] bus: 'platform': add driver zevio_usb
+[    5.491741] bus: 'pci': add driver ci_hdrc_pci
+[    5.494914] bus: 'platform': add driver usbmisc_imx
+[    5.499168] bus: 'platform': add driver imx_usb
+[    5.503374] bus: 'platform': add driver tegra-udc
+[    5.507054] bus: 'platform': add driver snps-udc-plat
+[    5.510870] bus: 'platform': add driver bdc
+[    5.514250] bus: 'amba': add driver kmi-pl050
+[    5.516640] bus: 'serio': add driver atkbd
+[    5.520168] bus: 'platform': add driver cros-ec-keyb
+[    5.523920] bus: 'serio': add driver psmouse
+[    5.527971] bus: 'platform': add driver hi65xx-powerkey
+[    5.531461] bus: 'platform': add driver pm8941-pwrkey
+[    5.535294] bus: 'platform': add driver armada38x-rtc
+[    5.539125] bus: 'platform': remove driver armada38x-rtc
+[    5.543678] driver: 'armada38x-rtc': driver_release
+[    5.544517] bus: 'platform': add driver brcmstb-waketimer
+[    5.548236] bus: 'platform': add driver cros-ec-rtc
+[    5.551676] bus: 'i2c': add driver rtc-ds3232
+[    5.554581] i2c-core: driver [rtc-ds3232] registered
+[    5.554986] bus: 'spi': add driver ds3234
+[    5.557884] bus: 'platform': add driver rtc-efi
+[    5.561530] bus: 'platform': remove driver rtc-efi
+[    5.566093] driver: 'rtc-efi': driver_release
+[    5.566834] bus: 'platform': add driver max77686-rtc
+[    5.570199] bus: 'amba': add driver rtc-pl031
+[    5.571210] bus: 'amba': driver_probe_device: matched device 9010000.pl031 with driver rtc-pl031
+[    5.571781] bus: 'amba': really_probe: probing driver rtc-pl031 with device 9010000.pl031
+[    5.572247] rtc-pl031 9010000.pl031: no pinctrl handle
+[    5.572891] rtc-pl031 9010000.pl031: device is dma coherent
+[    5.573867] rtc-pl031 9010000.pl031: device is not behind an iommu
+[    5.575059] rtc-pl031 9010000.pl031: designer ID = 0x41
+[    5.575466] rtc-pl031 9010000.pl031: revision = 0x1
+[    5.578348] device: 'rtc0': device_add
+[    5.580124] PM: Adding info for No Bus:rtc0
+[    5.582561] rtc rtc0: pl031: dev (250:0)
+[    5.583025] rtc-pl031 9010000.pl031: rtc core: registered pl031 as rtc0
+[    5.583942] driver: 'rtc-pl031': driver_bound: bound to device '9010000.pl031'
+[    5.586210] bus: 'amba': really_probe: bound device 9010000.pl031 to driver rtc-pl031
+[    5.588130] bus: 'platform': add driver s3c-rtc
+[    5.592021] bus: 'platform': add driver s5m-rtc
+[    5.595382] bus: 'platform': add driver sun6i-rtc
+[    5.598904] bus: 'platform': add driver tegra_rtc
+[    5.602721] bus: 'platform': remove driver tegra_rtc
+[    5.607031] driver: 'tegra_rtc': driver_release
+[    5.607835] bus: 'platform': add driver xgene-rtc
+[    5.611421] i2c /dev entries driver
+[    5.611763] device class 'i2c-dev': registering
+[    5.614889] bus: 'platform': add driver bcm-iproc-i2c
+[    5.618743] bus: 'platform': add driver exynos5-hsi2c
+[    5.622822] bus: 'platform': add driver meson-i2c
+[    5.626681] bus: 'platform': add driver mv64xxx_i2c
+[    5.630660] bus: 'platform': add driver i2c_qup
+[    5.634356] bus: 'platform': add driver rk3x-i2c
+[    5.638663] bus: 'platform': add driver tegra-bpmp-i2c
+[    5.642352] bus: 'platform': add driver uniphier-fi2c
+[    5.645863] bus: 'platform': add driver i2c-rcar
+[    5.650641] bus: 'platform': add driver zx2967_i2c
+[    5.654146] bus: 'platform': add driver brcmstb-i2c
+[    5.657906] bus: 'platform': add driver cros-ec-i2c-tunnel
+[    5.661747] bus: 'i2c': add driver pca954x
+[    5.664047] i2c-core: driver [pca954x] registered
+[    5.664573] bus: 'platform': add driver ptp-dte
+[    5.668137] bus: 'platform': add driver rockchip-iodomain
+[    5.673517] bus: 'platform': add driver msm-restart
+[    5.676770] bus: 'platform': add driver vexpress-reset
+[    5.680845] bus: 'platform': add driver xgene-reboot
+[    5.684210] bus: 'platform': add driver syscon-reboot
+[    5.687786] bus: 'platform': add driver syscon-reboot-mode
+[    5.691593] bus: 'i2c': add driver bq27xxx-battery
+[    5.694575] i2c-core: driver [bq27xxx-battery] registered
+[    5.695121] bus: 'platform': add driver scpi-hwmon
+[    5.698752] bus: 'platform': add driver ns-thermal
+[    5.702393] bus: 'platform': add driver rcar_gen3_thermal
+[    5.706195] bus: 'platform': add driver exynos-tmu
+[    5.710779] bus: 'platform': add driver armada_thermal
+[    5.715013] bus: 'platform': add driver qcom-tsens
+[    5.719003] bus: 'platform': add driver hisi_thermal
+[    5.723835] bus: 'platform': add driver mtk-thermal
+[    5.729375] bus: 'platform': add driver uniphier-thermal
+[    5.732799] bus: 'amba': add driver sp805-wdt
+[    5.736075] bus: 'platform': add driver s3c2410-wdt
+[    5.739711] bus: 'platform': add driver bcm2835-wdt
+[    5.743302] bus: 'platform': add driver renesas_wdt
+[    5.746996] bus: 'platform': add driver uniphier-wdt
+[    5.750702] bus: 'platform': add driver cpufreq-dt
+[    5.754209] bus: 'platform': add driver brcmstb-avs-cpufreq
+[    5.758198] bus: 'platform': add driver scpi-cpufreq
+[    5.761298] bus: 'platform': add driver tegra20-cpufreq
+[    5.764318] bus: 'platform': add driver tegra186-cpufreq
+[    5.768429] bus: 'platform': add driver pwrseq_simple
+[    5.772109] bus: 'platform': add driver pwrseq_emmc
+[    5.780741] bus: 'mmc_rpmb': registered
+[    5.782081] bus: 'mmc': add driver mmcblk
+[    5.784250] bus: 'amba': add driver mmci-pl18x
+[    5.787120] sdhci: Secure Digital Host Controller Interface driver
+[    5.787500] sdhci: Copyright(c) Pierre Ossman
+[    5.787954] bus: 'platform': add driver sdhci-acpi
+[    5.791466] bus: 'platform': add driver f_sdh30
+[    5.794980] bus: 'spi': add driver mmc_spi
+[    5.797677] bus: 'platform': add driver renesas_sdhi_internal_dmac
+[    5.802061] Synopsys Designware Multimedia Card Interface Driver
+[    5.802604] bus: 'platform': add driver dw_mmc
+[    5.805742] bus: 'platform': add driver dwmmc_exynos
+[    5.809715] bus: 'platform': add driver dwmmc_hi3798cv200
+[    5.813722] bus: 'platform': add driver dwmmc_k3
+[    5.816772] bus: 'platform': add driver dwmmc_rockchip
+[    5.820734] bus: 'platform': add driver meson-gx-mmc
+[    5.824793] bus: 'platform': add driver sunxi-mmc
+[    5.828879] bus: 'platform': add driver sdhost-bcm2835
+[    5.832151] sdhci-pltfm: SDHCI platform and OF driver helper
+[    5.832679] bus: 'platform': add driver sdhci-cdns
+[    5.836238] bus: 'platform': add driver sdhci-tegra
+[    5.840318] bus: 'platform': add driver sdhci-arasan
+[    5.844194] bus: 'platform': add driver sdhci-esdhc
+[    5.848363] bus: 'platform': add driver sdhci-iproc
+[    5.852159] bus: 'platform': add driver sdhci_msm
+[    5.856711] bus: 'platform': add driver sdhci-brcmstb
+[    5.860530] bus: 'platform': add driver xenon-sdhci
+[    5.864370] bus: 'platform': add driver leds-gpio
+[    5.868029] bus: 'platform': add driver leds_pwm
+[    5.871389] bus: 'platform': add driver leds-syscon
+[    5.875492] ledtrig-cpu: registered to indicate activity on CPUs
+[    5.876166] bus: 'platform': add driver scpi_protocol
+[    5.879915] bus: 'platform': add driver scpi_power_domain
+[    5.883754] bus: 'platform': add driver raspberrypi-firmware
+[    5.887620] bus: 'platform': add driver meson-sm
+[    5.891234] bus: 'platform': remove driver meson-sm
+[    5.897476] driver: 'meson-sm': driver_release
+[    5.898145] esrt: esrt-sysfs: loading.
+[    5.904343] bus: 'hid': registered
+[    5.904680] debugfs: creating file 'hid'
+[    5.905508] bus: 'hid': add driver hid-generic
+[    5.908044] bus: 'hid': add driver a4tech
+[    5.911161] bus: 'hid': add driver apple
+[    5.914715] bus: 'hid': add driver belkin
+[    5.917602] bus: 'hid': add driver cherry
+[    5.920150] bus: 'hid': add driver chicony
+[    5.923012] bus: 'hid': add driver cypress
+[    5.926096] bus: 'hid': add driver ezkey
+[    5.927921] bus: 'hid': add driver itetech
+[    5.931044] bus: 'hid': add driver kensington
+[    5.934301] bus: 'hid': add driver logitech
+[    5.937446] bus: 'hid': add driver microsoft
+[    5.940002] bus: 'hid': add driver monterey
+[    5.942886] bus: 'hid': add driver redragon
+[    5.946041] bus: 'usb': add driver usbhid
+[    5.949751] usbcore: registered new interface driver usbhid
+[    5.950185] usbhid: USB HID core driver
+[    5.950576] bus: 'i2c': add driver cros-ec-i2c
+[    5.953609] i2c-core: driver [cros-ec-i2c] registered
+[    5.954018] bus: 'spi': add driver cros-ec-spi
+[    5.957338] bus: 'amba': add driver mhu
+[    5.959653] bus: 'platform': add driver platform-mhu
+[    5.963187] bus: 'platform': add driver bcm2835-mbox
+[    5.966737] device class 'extcon': registering
+[    5.968837] bus: 'platform': add driver extcon-usb-gpio
+[    5.972619] bus: 'platform': add driver extcon-usbc-cros-ec
+[    5.976206] bus: 'platform': add driver brcmstb-dpfe
+[    5.979689] bus: 'platform': add driver tegra186-mc
+[    5.983167] bus: 'platform': add driver exynos-adc
+[    5.987732] bus: 'platform': add driver meson-saradc
+[    5.991789] bus: 'platform': add driver hisi_l3c_pmu
+[    5.995139] bus: 'platform': add driver hisi_hha_pmu
+[    5.998499] bus: 'platform': add driver hisi_ddrc_pmu
+[    6.001956] bus: 'platform': add driver qcom-l2cache-pmu
+[    6.005703] bus: 'platform': add driver qcom-l3cache-pmu
+[    6.008657] bus: 'platform': add driver brcm-otpc
+[    6.012566] bus: 'platform': add driver qcom,qfprom
+[    6.016183] bus: 'platform': add driver rockchip-efuse
+[    6.021327] bus: 'platform': add driver uniphier-efuse
+[    6.025391] device: 'timer': device_add
+[    6.026832] PM: Adding info for No Bus:timer
+[    6.030006] debugfs: creating file 'asoc'
+[    6.030400] debugfs: creating file 'dais'
+[    6.030759] debugfs: creating file 'components'
+[    6.031216] Registering platform device 'snd-soc-dummy'. Parent at platform
+[    6.031664] device: 'snd-soc-dummy': device_add
+[    6.032673] bus: 'platform': add device snd-soc-dummy
+[    6.033833] PM: Adding info for platform:snd-soc-dummy
+[    6.038532] bus: 'platform': add driver snd-soc-dummy
+[    6.039833] bus: 'platform': driver_probe_device: matched device snd-soc-dummy with driver snd-soc-dummy
+[    6.040492] bus: 'platform': really_probe: probing driver snd-soc-dummy with device snd-soc-dummy
+[    6.041714] snd-soc-dummy snd-soc-dummy: no of_node; not parsing pinctrl DT
+[    6.042198] snd-soc-dummy snd-soc-dummy: no default pinctrl state
+[    6.043250] snd-soc-dummy snd-soc-dummy: ASoC: dai register snd-soc-dummy #1
+[    6.043789] snd-soc-dummy snd-soc-dummy: ASoC: dynamically register DAI snd-soc-dummy
+[    6.044509] snd-soc-dummy snd-soc-dummy: ASoC: Registered DAI 'snd-soc-dummy-dai'
+[    6.045540] snd-soc-dummy snd-soc-dummy: ASoC: dai register snd-soc-dummy #0
+[    6.046032] driver: 'snd-soc-dummy': driver_bound: bound to device 'snd-soc-dummy'
+[    6.047887] bus: 'platform': really_probe: bound device snd-soc-dummy to driver snd-soc-dummy
+[    6.050462] bus: 'platform': add driver soc-audio
+[    6.056215] TCP: cubic registered
+[    6.056576] NET: Registered protocol family 17
+[    6.060874] 9pnet: Installing 9P2000 support
+[    6.061644] bus: 'virtio': add driver 9pnet_virtio
+[    6.064870] Key type dns_resolver registered
+[    6.065771] doing late, parsing ARGS: 'console=ttyAMA0 loglevel=8 rdinit=/init dyndbg'
+[    6.066290] doing late: console='ttyAMA0'
+[    6.066552] doing late: loglevel='8'
+[    6.066772] doing late: rdinit='/init'
+[    6.067004] doing late: dyndbg='(null)'
+[    6.067898] debugfs: creating file 'pm_qos'
+[    6.068216] debugfs: creating file 'cpu_dma_latency'
+[    6.068556] device: 'cpu_dma_latency': device_add
+[    6.070082] PM: Adding info for No Bus:cpu_dma_latency
+[    6.072012] debugfs: creating file 'network_latency'
+[    6.072383] device: 'network_latency': device_add
+[    6.073644] PM: Adding info for No Bus:network_latency
+[    6.075722] debugfs: creating file 'network_throughput'
+[    6.076100] device: 'network_throughput': device_add
+[    6.077672] PM: Adding info for No Bus:network_throughput
+[    6.079576] debugfs: creating file 'memory_bandwidth'
+[    6.079982] device: 'memory_bandwidth': device_add
+[    6.081341] PM: Adding info for No Bus:memory_bandwidth
+[    6.083527] debugfs: creating file 'suspend_stats'
+[    6.084022] debugfs: creating file 'sleep_time'
+[    6.084601] registered taskstats version 1
+[    6.084914] Loading compiled-in X.509 certificates
+[    6.085962] debugfs: creating file 'fault_around_bytes'
+[    6.086365] debugfs: creating file 'split_huge_pages'
+[    6.088801] securityfs: creating file 'integrity'
+[    6.091179] debugfs: creating file 'clk'
+[    6.091519] debugfs: creating file 'clk_summary'
+[    6.091882] debugfs: creating file 'clk_dump'
+[    6.092243] debugfs: creating file 'clk_orphan_summary'
+[    6.092622] debugfs: creating file 'clk_orphan_dump'
+[    6.093610] debugfs: creating file 'clk24mhz'
+[    6.093982] debugfs: creating file 'clk_rate'
+[    6.094358] debugfs: creating file 'clk_accuracy'
+[    6.094781] debugfs: creating file 'clk_phase'
+[    6.095135] debugfs: creating file 'clk_flags'
+[    6.095494] debugfs: creating file 'clk_prepare_count'
+[    6.095910] debugfs: creating file 'clk_enable_count'
+[    6.096326] debugfs: creating file 'clk_protect_count'
+[    6.096737] debugfs: creating file 'clk_notifier_count'
+[    6.097658] debugfs: creating file 'clk_duty_cycle'
+[    6.098296] debugfs: creating file 'devices_deferred'
+[    6.099214] debugfs: creating file 'pm_genpd'
+[    6.099594] debugfs: creating file 'pm_genpd_summary'
+[    6.100240] bus: 'platform': add driver gpio-keys
+[    6.101859] bus: 'platform': driver_probe_device: matched device gpio-keys with driver gpio-keys
+[    6.102440] bus: 'platform': really_probe: probing driver gpio-keys with device gpio-keys
+[    6.102993] gpio-keys gpio-keys: no pinctrl handle
+[    6.103756] gpio-keys gpio-keys: device is dma coherent
+[    6.104150] gpio-keys gpio-keys: device is not behind an iommu
+[    6.108187] of_get_named_gpiod_flags: parsed 'gpios' property of node '/gpio-keys/poweroff[0]' - status (0)
+[    6.110149] gpio-507 (GPIO Key Poweroff): gpiod_set_debounce: missing set() or set_config() operations
+[    6.110909] irq: irq_create_mapping(0x000000005f15c35c, 0x3)
+[    6.111353] irq: -> using domain @000000005f15c35c
+[    6.113412] irq: irq 3 on domain pl061@9030000 mapped to virtual irq 45
+[    6.114678] pl061_gpio 9030000.pl061: line 3: IRQ on both edges
+[    6.116035] device: 'input0': device_add
+[    6.118265] PM: Adding info for No Bus:input0
+[    6.122023] input: gpio-keys as /devices/platform/gpio-keys/input/input0
+[    6.124398] device: 'event0': device_add
+[    6.125992] PM: Adding info for No Bus:event0
+[    6.128276] gpio-keys gpio-keys: input_register_device: registering input0 with devres.
+[    6.129238] driver: 'gpio-keys': driver_bound: bound to device 'gpio-keys'
+[    6.131344] bus: 'platform': really_probe: bound device gpio-keys to driver gpio-keys
+[    6.134912] rtc-pl031 9010000.pl031: setting system clock to 2026-06-09 08:11:48 UTC (1780992708)
+[    6.138874] ALSA device list:
+[    6.139165]   No soundcards found.
+[    6.144222] uart-pl011 9000000.pl011: no DMA platform data
+[    6.175796] Freeing unused kernel memory: 1280K
+[    6.177589] mempolicy: setting mode 0 flags 0 nodes[0] ffffffffffffffff
+[    6.178247] Run /init as init process
+
+==== QEMU FullMAC RE harness init (aarch64) ====
+---- /sys/bus/pci/devices ----
+  0000:00:01.0 vendor=0x1af4
+  device=0x1000
+  class=0x020000
+  0000:00:00.0 vendor=0x1b36
+  device=0x0008
+  class=0x060000
+  0000:00:02.0 vendor=0x14e4
+  device=0x6717
+  class=0x028000
+---- finit_module /bcmfmac_probe.ko ----
+[    6.247434] finit_module: fd=3, uargs=00000000a7d5ff94, flags=0
+[    6.250281] bcmfmac_probe: loading out-of-tree module taints kernel.
+[    6.251877] Core section allocation order:
+[    6.252348] 	.text
+[    6.252550] 	.text.unlikely
+[    6.252728] 	.exit.text
+[    6.252918] 	.plt
+[    6.253321] 	.text.ftrace_trampoline
+[    6.253653] 	.note.gnu.build-id
+[    6.253860] 	.note.Linux
+[    6.254044] 	.rodata.str1.8
+[    6.254253] 	.altinstructions
+[    6.254455] 	.rodata
+[    6.254619] 	.eh_frame
+[    6.254889] 	.data
+[    6.255050] 	.gnu.linkonce.this_module
+[    6.255296] 	.bss
+[    6.255508] Init section allocation order:
+[    6.255938] 	.init.text
+[    6.256159] 	.init.plt
+[    6.256560] 	.symtab
+[    6.257306] 	.strtab
+[    6.257721] final section addresses:
+[    6.258128] 	0xffff000000bc1000 .note.gnu.build-id
+[    6.258461] 	0xffff000000bc1024 .note.Linux
+[    6.258721] 	0xffff000000bc0000 .text
+[    6.258969] 	0xffff000000bc00f4 .text.unlikely
+[    6.259307] 	0xffff000000bc5000 .init.text
+[    6.259563] 	0xffff000000bc0478 .exit.text
+[    6.259821] 	0xffff000000bc1040 .rodata.str1.8
+[    6.260103] 	0xffff000000bc1466 .altinstructions
+[    6.260395] 	0xffff000000bc14b0 .rodata
+[    6.260641] 	0xffff000000bc1510 .eh_frame
+[    6.260915] 	0xffff000000bc04c0 .plt
+[    6.261287] 	0xffff000000bc5040 .init.plt
+[    6.261545] 	0xffff000000bc04d0 .text.ftrace_trampoline
+[    6.261856] 	0xffff000000bc2000 .data
+[    6.262100] 	0xffff000000bc2140 .gnu.linkonce.this_module
+[    6.262442] 	0xffff000000bc2440 .bss
+[    6.262677] 	0xffff000000bc6000 .symtab
+[    6.262930] 	0xffff000000bc66d8 .strtab
+[    6.264157] Absolute symbol: 0x00000000
+[    6.264428] Absolute symbol: 0x00000000
+[    6.271860] bus: 'pci': add driver bcmfmac-probe
+[    6.272842] bus: 'pci': driver_probe_device: matched device 0000:00:02.0 with driver bcmfmac-probe
+[    6.273417] bus: 'pci': really_probe: probing driver bcmfmac-probe with device 0000:00:02.0
+[    6.273859] bcmfmac-probe 0000:00:02.0: no of_node; not parsing pinctrl DT
+[    6.274307] bcmfmac-probe 0000:00:02.0: no default pinctrl state
+[    6.275133] bcmfmac-probe 0000:00:02.0: device is dma coherent
+[    6.275503] bcmfmac-probe 0000:00:02.0: device is not behind an iommu
+[    6.275913] bcmfmac-probe 0000:00:02.0: vgaarb: pci_notify
+[    6.285546] bcmfmac-probe 0000:00:02.0: assign IRQ: got 46
+[    6.285967] bcmfmac-probe: PROBE vendor=0x14e4 device=0x6717 class=0x028000
+[    6.286647] bcmfmac-probe 0000:00:02.0: enabling device (0000 -> 0002)
+[    6.287531] bcmfmac-probe 0000:00:02.0: enabling bus mastering
+[    6.288342] bcmfmac-probe: BAR0=ffff000009914000 (len=16384) TCM=ffff00000a000000 (len=8388608)
+bcm-fmac-stub: CFG BAR0_WINDOW <= backplane 0x18000000
+bcm-fmac-stub: BAR0 read CHIPID bp=0x18000000 -> 0x00006717  (id=0x6717 rev=0)  [si_attach]
+[    6.289234] bcmfmac-probe: [si_attach] ChipCommon chipid reg = 0x00006717 (id=0x6717 rev=0)
+[    6.289753] bcmfmac-probe: [fw download] writing 64 KiB sentinel image into TCM...
+bcm-fmac-stub: firmware download begins (first TCM write @0x00000000)
+[    6.299600] bcmfmac-probe: [core release] re-pointing BAR0 window (reset deassert)
+bcm-fmac-stub: CFG BAR0_WINDOW <= backplane 0x18000000
+bcm-fmac-stub: fw downloaded (65536 bytes); core release assumed -> publishing candidate IPC shared struct
+bcm-fmac-stub: stamped shared-ptr @TCM[0x003ffffc] = 0x00001000  (-> info @0x00001000)
+bcm-fmac-stub: stamped IPC shared-info @TCM[0x00001000]: rev=0x06 flags=0
+bcm-fmac-stub: *** TCM read SHARED-PTR @0x003ffffc -> 0x00001000  [dhd read_pcie_ipc]
+[    6.304033] bcmfmac-probe: [read_pcie_ipc] shared-ptr @TCM[0x003ffffc] = 0x00001000
+bcm-fmac-stub: *** TCM read SHARED-INFO @0x00001000 (+0x000) sz=4 -> 0x00000006
+bcm-fmac-stub:     >>> IPC training commences <<<
+[    6.304608] bcmfmac-probe: [read_pcie_ipc] shared-info @0x00001000: word0=0x00000006 (ipc_rev=0x06)
+bcm-fmac-stub: *** TCM read SHARED-INFO @0x00001000 (+0x000) sz=4 -> 0x00000006
+[    6.305275] bcmfmac-probe:   shared+0x00 = 0x00000006
+bcm-fmac-stub: *** TCM read SHARED-INFO @0x00001004 (+0x004) sz=4 -> 0xa5a5a5a5
+[    6.305591] bcmfmac-probe:   shared+0x04 = 0xa5a5a5a5
+bcm-fmac-stub: *** TCM read SHARED-INFO @0x00001008 (+0x008) sz=4 -> 0xa5a5a5a5
+[    6.305904] bcmfmac-probe:   shared+0x08 = 0xa5a5a5a5
+bcm-fmac-stub: *** TCM read SHARED-INFO @0x0000100c (+0x00c) sz=4 -> 0xa5a5a5a5
+[    6.306226] bcmfmac-probe:   shared+0x0c = 0xa5a5a5a5
+bcm-fmac-stub: *** TCM read SHARED-INFO @0x00001010 (+0x010) sz=4 -> 0xa5a5a5a5
+[    6.306582] bcmfmac-probe:   shared+0x10 = 0xa5a5a5a5
+bcm-fmac-stub: *** TCM read SHARED-INFO @0x00001014 (+0x014) sz=4 -> 0xa5a5a5a5
+[    6.306891] bcmfmac-probe:   shared+0x14 = 0xa5a5a5a5
+bcm-fmac-stub: *** TCM read SHARED-INFO @0x00001018 (+0x018) sz=4 -> 0xa5a5a5a5
+[    6.307200] bcmfmac-probe:   shared+0x18 = 0xa5a5a5a5
+bcm-fmac-stub: *** TCM read SHARED-INFO @0x0000101c (+0x01c) sz=4 -> 0xa5a5a5a5
+[    6.307521] bcmfmac-probe:   shared+0x1c = 0xa5a5a5a5
+bcm-fmac-stub: *** TCM read SHARED-INFO @0x00001020 (+0x020) sz=4 -> 0xa5a5a5a5
+[    6.307778] bcmfmac-probe:   shared+0x20 = 0xa5a5a5a5
+bcm-fmac-stub: *** TCM read SHARED-INFO @0x00001024 (+0x024) sz=4 -> 0xa5a5a5a5
+[    6.308119] bcmfmac-probe:   shared+0x24 = 0xa5a5a5a5
+bcm-fmac-stub: *** TCM read SHARED-INFO @0x00001028 (+0x028) sz=4 -> 0xa5a5a5a5
+[    6.308479] bcmfmac-probe:   shared+0x28 = 0xa5a5a5a5
+bcm-fmac-stub: *** TCM read SHARED-INFO @0x0000102c (+0x02c) sz=4 -> 0xa5a5a5a5
+[    6.308800] bcmfmac-probe:   shared+0x2c = 0xa5a5a5a5
+bcm-fmac-stub: *** TCM read SHARED-INFO @0x00001030 (+0x030) sz=4 -> 0xa5a5a5a5
+[    6.309286] bcmfmac-probe:   shared+0x30 = 0xa5a5a5a5
+bcm-fmac-stub: *** TCM read SHARED-INFO @0x00001034 (+0x034) sz=4 -> 0xa5a5a5a5
+[    6.309629] bcmfmac-probe:   shared+0x34 = 0xa5a5a5a5
+bcm-fmac-stub: *** TCM read SHARED-INFO @0x00001038 (+0x038) sz=4 -> 0xa5a5a5a5
+[    6.309958] bcmfmac-probe:   shared+0x38 = 0xa5a5a5a5
+bcm-fmac-stub: *** TCM read SHARED-INFO @0x0000103c (+0x03c) sz=4 -> 0xa5a5a5a5
+[    6.310296] bcmfmac-probe:   shared+0x3c = 0xa5a5a5a5
+[    6.311927] bcmfmac-probe 0000:00:02.0: irq [47-47] for MSI
+[    6.313326] bcmfmac-probe: IRQ 47 hooked (MSI)
+[    6.313669] bcmfmac-probe: [doorbell] ring H2D_MAILBOX_0
+bcm-fmac-stub: DOORBELL H2D_MAILBOX_0 <= 0x00000001  (ring kick; state=4)
+bcm-fmac-stub: raise MSI (mailboxint=0x0000f000)
+bcm-fmac-stub: BAR0 read  off=0x048 -> 0x0000f000
+bcm-fmac-stub: BAR0 read  off=0x090 -> 0x0000f000
+[    6.314398] bcmfmac-probe: ISR fired irq=47 MAILBOXINT=0x0000f000 INTSTATUS=0x0000f000
+bcm-fmac-stub: BAR0 write MAILBOXINT = 0x0000f000 (W1C)
+[    6.319695] bcmfmac-probe: probe sequence complete (handshake transcript captured)
+[    6.320209] driver: 'bcmfmac-probe': driver_bound: bound to device '0000:00:02.0'
+[    6.320777] bcmfmac-probe 0000:00:02.0: vgaarb: pci_notify
+[    6.322995] bus: 'pci': really_probe: bound device 0000:00:02.0 to driver bcmfmac-probe
+     -> OK (rc=0)
+==== harness done; powering off ====
+[    7.338621] reboot: Power down

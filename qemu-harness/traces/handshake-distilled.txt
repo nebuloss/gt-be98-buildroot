@@ -1,0 +1,58 @@
+bcm-fmac-stub: realized: vendor=0x14e4 device=0x6717 class=0x0280 BAR0=16384B TCM=8MiB chipid=0x6717 ipc_rev=0x06
+bcmfmac-probe: PROBE vendor=0x14e4 device=0x6717 class=0x028000
+bcmfmac-probe: BAR0=ffff000009914000 (len=16384) TCM=ffff00000a000000 (len=8388608)
+bcm-fmac-stub: CFG BAR0_WINDOW <= backplane 0x18000000
+bcm-fmac-stub: BAR0 read CHIPID bp=0x18000000 -> 0x00006717  (id=0x6717 rev=0)  [si_attach]
+bcmfmac-probe: [si_attach] ChipCommon chipid reg = 0x00006717 (id=0x6717 rev=0)
+bcmfmac-probe: [fw download] writing 64 KiB sentinel image into TCM...
+bcm-fmac-stub: firmware download begins (first TCM write @0x00000000)
+bcmfmac-probe: [core release] re-pointing BAR0 window (reset deassert)
+bcm-fmac-stub: fw downloaded (65536 bytes); core release assumed -> publishing candidate IPC shared struct
+bcm-fmac-stub: stamped shared-ptr @TCM[0x003ffffc] = 0x00001000  (-> info @0x00001000)
+bcm-fmac-stub: stamped IPC shared-info @TCM[0x00001000]: rev=0x06 flags=0
+bcm-fmac-stub: *** TCM read SHARED-PTR @0x003ffffc -> 0x00001000  [dhd read_pcie_ipc]
+bcmfmac-probe: [read_pcie_ipc] shared-ptr @TCM[0x003ffffc] = 0x00001000
+bcm-fmac-stub: *** TCM read SHARED-INFO @0x00001000 (+0x000) sz=4 -> 0x00000006
+bcm-fmac-stub:     >>> IPC training commences <<<
+bcmfmac-probe: [read_pcie_ipc] shared-info @0x00001000: word0=0x00000006 (ipc_rev=0x06)
+bcm-fmac-stub: *** TCM read SHARED-INFO @0x00001000 (+0x000) sz=4 -> 0x00000006
+bcmfmac-probe:   shared+0x00 = 0x00000006
+bcm-fmac-stub: *** TCM read SHARED-INFO @0x00001004 (+0x004) sz=4 -> 0xa5a5a5a5
+bcmfmac-probe:   shared+0x04 = 0xa5a5a5a5
+bcm-fmac-stub: *** TCM read SHARED-INFO @0x00001008 (+0x008) sz=4 -> 0xa5a5a5a5
+bcmfmac-probe:   shared+0x08 = 0xa5a5a5a5
+bcm-fmac-stub: *** TCM read SHARED-INFO @0x0000100c (+0x00c) sz=4 -> 0xa5a5a5a5
+bcmfmac-probe:   shared+0x0c = 0xa5a5a5a5
+bcm-fmac-stub: *** TCM read SHARED-INFO @0x00001010 (+0x010) sz=4 -> 0xa5a5a5a5
+bcmfmac-probe:   shared+0x10 = 0xa5a5a5a5
+bcm-fmac-stub: *** TCM read SHARED-INFO @0x00001014 (+0x014) sz=4 -> 0xa5a5a5a5
+bcmfmac-probe:   shared+0x14 = 0xa5a5a5a5
+bcm-fmac-stub: *** TCM read SHARED-INFO @0x00001018 (+0x018) sz=4 -> 0xa5a5a5a5
+bcmfmac-probe:   shared+0x18 = 0xa5a5a5a5
+bcm-fmac-stub: *** TCM read SHARED-INFO @0x0000101c (+0x01c) sz=4 -> 0xa5a5a5a5
+bcmfmac-probe:   shared+0x1c = 0xa5a5a5a5
+bcm-fmac-stub: *** TCM read SHARED-INFO @0x00001020 (+0x020) sz=4 -> 0xa5a5a5a5
+bcmfmac-probe:   shared+0x20 = 0xa5a5a5a5
+bcm-fmac-stub: *** TCM read SHARED-INFO @0x00001024 (+0x024) sz=4 -> 0xa5a5a5a5
+bcmfmac-probe:   shared+0x24 = 0xa5a5a5a5
+bcm-fmac-stub: *** TCM read SHARED-INFO @0x00001028 (+0x028) sz=4 -> 0xa5a5a5a5
+bcmfmac-probe:   shared+0x28 = 0xa5a5a5a5
+bcm-fmac-stub: *** TCM read SHARED-INFO @0x0000102c (+0x02c) sz=4 -> 0xa5a5a5a5
+bcmfmac-probe:   shared+0x2c = 0xa5a5a5a5
+bcm-fmac-stub: *** TCM read SHARED-INFO @0x00001030 (+0x030) sz=4 -> 0xa5a5a5a5
+bcmfmac-probe:   shared+0x30 = 0xa5a5a5a5
+bcm-fmac-stub: *** TCM read SHARED-INFO @0x00001034 (+0x034) sz=4 -> 0xa5a5a5a5
+bcmfmac-probe:   shared+0x34 = 0xa5a5a5a5
+bcm-fmac-stub: *** TCM read SHARED-INFO @0x00001038 (+0x038) sz=4 -> 0xa5a5a5a5
+bcmfmac-probe:   shared+0x38 = 0xa5a5a5a5
+bcm-fmac-stub: *** TCM read SHARED-INFO @0x0000103c (+0x03c) sz=4 -> 0xa5a5a5a5
+bcmfmac-probe:   shared+0x3c = 0xa5a5a5a5
+bcmfmac-probe: IRQ 47 hooked (MSI)
+bcmfmac-probe: [doorbell] ring H2D_MAILBOX_0
+bcm-fmac-stub: DOORBELL H2D_MAILBOX_0 <= 0x00000001  (ring kick; state=4)
+bcm-fmac-stub: raise MSI (mailboxint=0x0000f000)
+bcm-fmac-stub: BAR0 read  off=0x048 -> 0x0000f000
+bcm-fmac-stub: BAR0 read  off=0x090 -> 0x0000f000
+bcmfmac-probe: ISR fired irq=47 MAILBOXINT=0x0000f000 INTSTATUS=0x0000f000
+bcm-fmac-stub: BAR0 write MAILBOXINT = 0x0000f000 (W1C)
+bcmfmac-probe: probe sequence complete (handshake transcript captured)
