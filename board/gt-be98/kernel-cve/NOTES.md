@@ -227,3 +227,78 @@ exports unchanged, loads against either vmlinux).
 
 **Trial**: same GATE as Step 4; flash `GT-BE98_openrc-init-v33_nand_squashfs.pkgtb`
 to the spare slot. NO FLASH done here — repack only.
+
+## Step 6 — v34: land the wireless-CVE cfg80211 + trim 3 unused modules (ROOTFS-MODIFY repack, 2026-06-09)
+
+**Why**: v33 carries the 61 built-in CVE fixes in the hardened **vmlinux**, but its
+rootfs still ships the **pre-CVE cfg80211.ko** (the wireless-CVE fix to scan/sme
+lives in this in-tree module because `CONFIG_MAC80211` is OFF and cfg80211 is the
+only CVE-relevant in-tree `.ko` in the rootfs). v34 = v33 with two **rootfs-only**
+changes: (1) drop in the hardened cfg80211.ko, (2) strip 3 unused, not-loaded
+modules (`bcm_pondrv`, `bcm_bca_usb`, `nat46`). The hardened **bootfs.itb is
+unchanged** (byte-identical to v33). Pure rootfs-modify + repack — nothing rebuilt.
+
+| Artifact | sha256 | size |
+|---|---|---|
+| `artifacts-br/GT-BE98_openrc-init-v34_nand_squashfs.pkgtb` | `76fa7a1da7e0b590eb8f37dcbd05f0cd2b977cccc5e72bd07e428ca172179d17` | 48 798 804 B |
+| ↳ bootfs.itb (image 0, UNCHANGED == v33) | `d73dfafa40a5ccaa6c93318ae7e43b5db03bc4ed80dce1d7d7950db7cdcb94cd` | 13 314 200 B |
+| ↳ nand_squashfs (image 1, v34 rootfs) | `3eb19543b395699520edaf9061ed7fb69461bdf0aff2de7d326ab7ed9f721406` | 35 483 648 B |
+| hardened cfg80211.ko dropped in | `6c3d777931d324152d366ca7498245b076e97dd74a3d391eaaebb6481d0cd634` | 477 968 B |
+
+**Inputs** (pre-validated):
+- v33 `GT-BE98_openrc-init-v33_nand_squashfs.pkgtb` (sha `566dc968`) → split into
+  image 0 (hardened bootfs.itb `d73dfafa`, kept verbatim) + image 1 (v32 rootfs
+  squashfs `0de17e56`, modified).
+- `job-tmp/kernel-fromsrc/hardened-modules/cfg80211.ko` (sha `6c3d7779`, vermagic
+  `4.19.294 SMP preempt mod_unload aarch64`, 116 `__ksymtab_` exports — identical
+  count to the pre-CVE one it replaces; the rebuilt-from-source hardened module).
+
+**Method**: `repack-v34-cfg80211-modtrim.sh` — `dumpimage -p 0/-p 1` split (same as
+open-flash.sh) → `unsquashfs` (verify superblock = xz / -b 131072, matching
+openrc-assemble.sh) → modify → `mksquashfs … -noappend -all-root -comp xz -b 131072
+-no-progress` (the **exact** openrc-assemble.sh invocation, so the image is bootable
++ fits) → `repack-pkgtb.py` verbatim (same external-data FIT as v31/v32/v33).
+
+**Rootfs changes**:
+- `lib/modules/4.19.294/kernel/net/wireless/cfg80211.ko` ← hardened (target path +
+  vermagic verified before swap; byte-identical to the staged hardened `.ko`).
+- removed `lib/modules/4.19.294/extra/{bcm_pondrv,bcm_bca_usb,nat46}.ko` (181 144 B
+  uncompressed across the 3). Inode count 2945 → 2942 (exactly −3).
+- stripped their 3 (sole) references in `modules.order`; **no `depmod` run** — the 3
+  are leaf, non-dependency `.ko` with ZERO references in any
+  `modules.dep/.alias/.symbols`(+`.bin`), so the binary indices need no rebuild
+  (host depmod against an aarch64 4.19 tree avoided to not perturb the `.bin`s).
+
+**Removal safety** (the 3 are referenced only by 3 init scripts, none of which
+unconditionally fail on a missing `.ko`):
+- `bcm-base-drivers.sh`: a **comment** (`# extra/bcm_bca_usb.ko`), no insmod.
+- `hndmfg.sh`: a best-effort `mfg_insmod bcm_pondrv.ko`, only in the CFE
+  `mfg_nvram_mode=1` manufacturing path (not normal boot).
+- `disk.sh`: `bcm_bca_usb` in a SATA/USB module list iterated under `/proc/modules`
+  guards (rmmod/insmod only if already present) — never force-loaded.
+
+**Verified**:
+- `dumpimage -l` → well-formed FIT; image 0 = `d73dfafa` (hardened kernel,
+  unchanged), image 1 = `3eb19543` (v34 rootfs).
+- open-flash split (`-p 0`/`-p 1`) recovers both segments **byte-exact** (`cmp`).
+- v34 squashfs: valid SQUASHFS 4.0, xz, block 131072 (`unsquashfs -s`); 35 483 648 B
+  — **40 960 B smaller** than v33 (35 524 608 B) and far under the slot ceiling
+  71 106 560 B (margin ~35.6 MB). NB: the raw delta is ~40 KB not ~0.5 MB because the
+  3 dropped `.ko` (181 KB uncompressed) are highly xz-compressible and the hardened
+  cfg80211 is ~1.6 KB larger — content is exactly −3 modules + hardened cfg80211.
+- Content (extracted from the FINAL pkgtb's rootfs): cfg80211.ko sha `6c3d7779`
+  (== hardened); `bcm_pondrv/bcm_bca_usb/nat46` **absent**; keep-set intact — wl.ko
+  (21 MB), dhd.ko (2.5 MB), rdpa.ko (7.2 MB), `usr/sbin/hostapd` (OpenSSL **3.6.2**,
+  PQC ML-DSA/X25519 strings present), `sbin/openrc-init` all present.
+
+**Reproduce**: `board/gt-be98/kernel-cve/repack-v34-cfg80211-modtrim.sh` (sha-gates
+all inputs; squashfs carries a creation-timestamp so the pkgtb sha is not
+byte-reproducible across runs — content is identical, the shas above are the
+committed on-disk artifact).
+
+**CVE status now**: 61 built-in kernel CVE fixes (vmlinux) + the wireless-CVE
+cfg80211 fix (rootfs module) both land in v34. Closed wl/dhd/rdpa stack unaffected.
+
+**Trial**: same GATE as Step 4 (operator MUST check loaded-module vermagic +
+`lsmod` + WiFi-assoc + datapath after boot — a `.ko` vermagic/symbol mismatch is a
+SILENT module-load failure the auto-revert won't catch). NO FLASH done here.
