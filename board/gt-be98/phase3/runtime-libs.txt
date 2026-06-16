@@ -1,0 +1,88 @@
+# GT-BE98 Phase-3 graft: runtime extras BEYOND the static DT_NEEDED closure
+# Companion machine-readable list for docs/device/plans/phase3-runtime-deps.md
+# Generated 2026-06-06 by validating board/gt-be98/phase3/gen-graft-manifest.py's
+# INFERRED gaps against the LIVE br-0043 device (admin@10.0.0.8:2222, read-only)
+# and the unsquashed 0031 blob (sha256 dfbf98b4...3ab28d2c).
+#
+# ----------------------------------------------------------------------------
+# DERIVATION COMMANDS (all read-only)
+# ----------------------------------------------------------------------------
+# 1. LIVE mapped-libs per KEEP daemon (ground truth for dlopen):
+#      ssh dev 'grep -oE "/[^ ]+\.so[^ ]*" /proc/<pid>/maps | sort -u'
+#      pids: rc=1 eapd=3601 hostapd=3668 wlceventd=3755 mcpd=3740
+#            httpd=3769 watchdog=3771(->rc) envrams=4949
+# 2. Per-binary recursive DT_NEEDED closure (host readelf over the blob):
+#      python3 closure.py <rootfs0031> /usr/sbin/httpd /sbin/rc ...
+#    -> a lib MAPPED but NOT in that binary's closure == runtime-loaded (dlopen)
+# 3. dlopen string literals:
+#      strings -a <bin|lib> | grep -oE 'lib[A-Za-z0-9_.-]+\.so[0-9.]*'
+#    keep only names that resolve in the rootfs AND are absent from the closure
+#    (versioned-soname hits like libcurl.so.4 are just [link] aliases - excluded)
+# 4. Absolute path tokens:  strings -a <bin> | grep -oE '^/[A-Za-z0-9_./-]+'
+# 5. Module order: rom/etc/init.d/bcm-base-drivers.sh insmod lines +
+#      bcm-wlan-drivers.sh all_wlan_modules + LIVE lsmod dep tree.
+#
+# format: <class> <path-or-name> <evidence> <action>
+# class: LIB-DLOPEN | LIB-CLOSURE-GAP | PATH-MUSTEXIST | PATH-RUNTIME | PATH-KERNEL
+
+## ============================================================================
+## A. EXTRA SHARED LIBRARIES the graft must add beyond the static closure
+## ============================================================================
+# A1. True runtime dlopen (NOT in any DT_NEEDED; not mapped now = feature idle):
+LIB-DLOPEN     /usr/lib/libshn_pctrl.so   strings:libbwdpi.so(dlopen /usr/lib/libshn_pctrl.so + /tmp/bwdpi/libshn_pctrl.so)   ADD-to-graft-core   # 1116716 B; Trend Micro DPI engine; own closure = libc only
+#
+# A2. DT_NEEDED libs MISSED by the closure walk because httpd (Tier B) was
+#     never a seed. LIVE-VERIFIED mapped in httpd pid 3769. Regular NEEDED,
+#     not dlopen. Sub-closures add only libssl/libcrypto/libc (already present).
+LIB-CLOSURE-GAP /usr/lib/libdns_app_client.so  live:/proc/3769/maps + readelf httpd  ADD-to-graft-webui   # 22064 B
+LIB-CLOSURE-GAP /usr/lib/libmssl.so            live:/proc/3769/maps + readelf httpd  ADD-to-graft-webui   # 13860 B; needs libssl+libcrypto (in closure)
+LIB-CLOSURE-GAP /usr/lib/libpasswd.so          live:/proc/3769/maps + readelf httpd  ADD-to-graft-webui   # 5444 B
+#
+# NOTE: NSS modules (libnss_files.so.2, libnss_dns.so.2, libresolv.so.2) are
+# glibc-dlopened but ALREADY in the static closure (generator adds them). OK.
+# NOTE: rc/eapd/hostapd/wlceventd/mcpd/envrams - LIVE maps == DT_NEEDED closure
+# exactly; ZERO dlopen surplus observed at steady state.
+
+## ============================================================================
+## B. ABSOLUTE PATHS the graft must PROVIDE as files (must-exist-in-rootfs)
+##    that are NOT already covered by the wholesale /rom + /lib/modules trees
+## ============================================================================
+# (/rom/* and /lib/modules/* refs are covered by the manifest's wholesale trees.
+#  zoneinfo lives at /rom/usr/share/zoneinfo -> covered. /etc/* are tmpfs, rc
+#  populates /tmp/etc from /rom/etc at boot -> NOT shipped at /etc, see class C.)
+PATH-MUSTEXIST /www                 live:ls -d /www (22 entries) + httpd strings    graft-webui (Tier B, already planned)
+PATH-MUSTEXIST /usr/lighttpd        live:ls -d /usr/lighttpd + rc strings(/usr/lighttpd/css/uam.html,uam.js,Bypass.html,js/jquery.js)  graft-webui/lighttpd feature (NOT under /rom - NEW)
+PATH-MUSTEXIST /usr/share/samba     blob:usr/share/{samba,share,strongswan}         graft if samba kept (NOT under /rom - NEW)
+PATH-MUSTEXIST /usr/share/strongswan blob:usr/share/strongswan                      graft if strongswan/ipsec kept (NOT under /rom - NEW)
+PATH-MUSTEXIST /usr/share/share     blob:usr/share/share                            graft with /usr/share (NOT under /rom - NEW)
+PATH-MUSTEXIST /.init_enable_core   blob:/.init_enable_core (rc coredump flag)       already STRUCT in manifest
+
+## ============================================================================
+## C. ABSOLUTE PATHS created-at-runtime (graft must provide the MOUNTPOINT/dir
+##    only, NOT the content) - confirmed LIVE via mount + ls
+## ============================================================================
+PATH-RUNTIME   /etc        live:/etc -> tmp/etc (symlink; rc fills /tmp/etc from /rom/etc)   skeleton symlink only
+PATH-RUNTIME   /tmp        live:tmpfs on /tmp                                                 skeleton dir (tmpfs at boot)
+PATH-RUNTIME   /var        live:tmpfs on /var                                                 skeleton dir (tmpfs via /rom/etc/fstab)
+PATH-RUNTIME   /tmp/mnt    live:tmpfs size=128k                                              skeleton dir
+PATH-RUNTIME   /jffs       live:ubi:jffs2 ubifs vol=13                                        skeleton mountpoint (persistent, kernel/ubi)
+PATH-RUNTIME   /data       live:ubi:data  ubifs vol=10                                        skeleton mountpoint (persistent; dead-man flag home)
+PATH-RUNTIME   /tmp/mnt/defaults  live:ubi:defaults ubifs vol=11                              skeleton mountpoint
+
+## ============================================================================
+## D. KERNEL-PROVIDED paths (no graft action; kernel/devtmpfs/proc/sysfs)
+## ============================================================================
+PATH-KERNEL    /proc /sys /dev   live:/proc/mounts (proc,sysfs,devtmpfs; rc mknods /dev/console)   mountpoints only
+
+## ============================================================================
+## E. KERNEL MODULE LOAD ORDER (graft must preserve; /lib/modules/4.19.294,
+##    163 files, aarch64, vermagic-locked to the prebuilt .itb kernel)
+## ============================================================================
+# E1. Base/datapath - exact insmod order from rom/etc/init.d/bcm-base-drivers.sh:
+MODORDER-BASE  bcmlibs bcm_knvram bdmf rdpa_gpl bcm_mpm bcm_bpm bcmvlan rdpa_gpl_ext rdpa[/rdpa_prv] rdpa_usr rdpa_mw bcm_bp3drv bcm_ingqos pktflow cmdlist gdx sw_gso bcm_enet pcap rdpa_cmd pktrunner bcmmcast bcm_pcie_hcd wfd hs_uart_drv bcmflex bcmspu bcm_thermal
+# E2. WLAN - all_wlan_modules order from bcm-wlan-drivers.sh (prepend-built):
+MODORDER-WLAN  wlshared firmware_class cfg80211 hnd emf igs wl
+# E2-note: on THIS board the "wl" slot loads dhd (DHD/fullmac); LIVE lsmod:
+#   dhd used-by {igs,emf,hnd,cfg80211,wlshared,wfd,bcm_pcie_hcd,bcmmcast,bcm_knvram}
+#   load order (reverse lsmod, LIVE-VERIFIED): wlshared,firmware_class,cfg80211,
+#   hnd,emf,igs,dhd  (wfd+bcmmcast already up from base rail)

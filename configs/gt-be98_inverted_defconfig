@@ -1,0 +1,58 @@
+# GT-BE98 Phase-3 INVERSION — Step-0 (build-only) defconfig.
+#
+# Lives BESIDE gt-be98_full_defconfig (the Phase-2 committed baseline), never
+# replaces it. This is the "inverted" model skeleton: a real Buildroot build
+# (external gcc-10.3 toolchain + Buildroot busybox + skeleton) that supplies the
+# OPEN half of the rootfs. The ASUS half (the graft manifest set: rc + closure +
+# /rom + /lib/modules + rc farm) is grafted by the Step-0 assembly script
+# (board/gt-be98/phase3/step0-assemble.sh) from the validated 0031 blob, then a
+# parity check (phase3-parity-check.sh) compares against the Phase-2 baseline.
+#
+# DELIBERATELY MINIMAL: busybox only. The graft supplies every ASUS component,
+# so we do NOT pull modern upstream packages (openvpn/strongswan/lighttpd/samba)
+# that can trip the gcc-10.3 (< 11) constraint. PID1 stays ASUS rc in the
+# assembled rootfs (skeleton /sbin/init -> rc); this Buildroot build's own init
+# choice is irrelevant — the target dir is consumed only for /bin/busybox + links.
+#
+# Build (isolated output, never clobbers the shared full build):
+#   make BR2_EXTERNAL=/home/guillaume/be98/gt-be98-buildroot \
+#        O=/home/guillaume/be98/buildroot/output-p3step0 gt-be98_inverted_defconfig
+#   make O=/home/guillaume/be98/buildroot/output-p3step0
+
+# --- Target architecture (same tuple as the Phase-2 baseline) ----------------
+BR2_arm=y
+BR2_cortex_a9=y
+BR2_ARM_EABI=y
+BR2_ARM_ENABLE_VFP=y
+BR2_ARM_FPU_VFPV3=y
+
+# --- External toolchain (gt-be98-toolchain, gcc-10.3, cached in dl/) ----------
+BR2_TOOLCHAIN_EXTERNAL=y
+BR2_TOOLCHAIN_EXTERNAL_CUSTOM=y
+BR2_TOOLCHAIN_EXTERNAL_DOWNLOAD=y
+BR2_TOOLCHAIN_EXTERNAL_URL="https://github.com/nebuloss/gt-be98-toolchain/releases/download/arm_softfp-gcc10.3/gt-be98-toolchain-arm_softfp-gcc10.3.tar.gz"
+BR2_TOOLCHAIN_EXTERNAL_CUSTOM_PREFIX="arm-buildroot-linux-gnueabi"
+BR2_TOOLCHAIN_EXTERNAL_GCC_10=y
+BR2_TOOLCHAIN_EXTERNAL_HEADERS_4_19=y
+BR2_TOOLCHAIN_EXTERNAL_CUSTOM_GLIBC=y
+BR2_TOOLCHAIN_EXTERNAL_CXX=y
+# BR2_TOOLCHAIN_EXTERNAL_INET_RPC is not set
+
+# --- Init / base userspace: Buildroot busybox (the inverted-skeleton half) ----
+BR2_INIT_BUSYBOX=y
+BR2_PACKAGE_BUSYBOX=y
+
+# --- Root filesystem: squashfs, merlin-exact compressor ----------------------
+BR2_TARGET_ROOTFS_SQUASHFS=y
+BR2_TARGET_ROOTFS_SQUASHFS4_XZ=y
+# Empty device table — the ASUS skeleton uses devtmpfs (empty /dev) and has
+# /etc,/var,/root as tmpfs symlinks; the default table makedevs would fail.
+BR2_ROOTFS_DEVICE_TABLE=""
+
+# --- Host image tooling (squashfs-tools + FIT mkimage for the pkgtb bundle) ---
+BR2_PACKAGE_HOST_UBOOT_TOOLS=y
+BR2_PACKAGE_HOST_UBOOT_TOOLS_FIT_SUPPORT=y
+
+# Note: no BR2_ROOTFS_POST_IMAGE_SCRIPT here. The inverted-rootfs assembly +
+# parity check run as a separate, auditable Step-0 stage AFTER this build, so
+# the build itself stays a clean skeleton+busybox compile.

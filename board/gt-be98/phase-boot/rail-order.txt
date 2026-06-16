@@ -1,0 +1,60 @@
+# GT-BE98 boot rail order (machine-readable) — Phase 3 PID1 enabler
+#
+# DERIVATION (all paths relative to the validated 0031 rootfs blob unless noted):
+#  - PID1 = /sbin/init -> rc (symlink); kernel cmdline has NO init= (VERIFIED live,
+#    /proc/1/exe = /sbin/rc). rc's init_main() drives the whole sequence.
+#  - The rc3.d rail is launched by:  system("bcm_boot_launcher start")
+#    at release/src/router/rc/init.c:25000 — FIRST action of init_main's boot path,
+#    immediately followed by start_hw_wdt() at :25001.
+#  - bcm_boot_launcher (ELF, default dir hardcoded "/rom/etc/rc3.d", VERIFIED via
+#    strings) runs every S* script in lexical order with arg "start" ("%s/%s start"),
+#    and on shutdown runs the K* scripts with "stop".
+#  - /etc/rc3.d -> /rom/etc/rc3.d (tmpfs symlink materialized by rc).
+#  - Stock S* set = VERIFIED from firmware target fs:
+#      .../targets/96813GW/fs/rom/etc/rc3.d/  (and the validated 0031 blob).
+#  - Sxx scripts are symlinks into ../init.d/<name>.sh (VERIFIED ls -la).
+#  - Our grafted rails (S26/S27/S28) are NEW overlay files in
+#    board/gt-be98/rootfs-overlay-full/rom/etc/rc3.d/ (M3+ images).
+#
+# COLUMNS:  order | rail | init.d target | origin | when-it-runs | what-it-does (key)
+#
+# === phase 0: kernel -> PID1 (before any rail) ===========================
+-    kernel            -                      kernel   pre-init   devtmpfs mounts /dev; cmdline ubi.block=0,4(slot1)|0,6(slot2) = booted-slot TRUTH
+-    /sbin/init->rc    -                      blob     pid1-exec  rc init_main() begins; NO init= in cmdline
+-    bcm_boot_launcher -                      blob     init.c:25000 execs /rom/etc/rc3.d/S* in order, arg "start"
+-    start_hw_wdt()    -                      blob     init.c:25001 HW watchdog feeder armed (a wedged userspace is fed -> no auto-reset)
+#
+# === phase 1: the rc3.d S* rail (run by bcm_boot_launcher) ===============
+S25  S25mount-fs       mount-fs.sh            blob     rail#1     mount -a (proc/var/mnt/sys/debugfs); CONSUMES ONCE (echo steadystate>/proc/bootstate/reset_reason); boot_failed_count=0; mdev -s; make_static_devnodes.sh; mount_data() -> UBIFS ubi:data on /data  [/jffs NOT yet]
+S26  S26trial-deadman  trial-deadman.sh       OVERLAY  rail#2     launches /sbin/trial-deadman (reads /data/.trial-armed, just-mounted by S25); Layer-B rollback
+S27  S27boot-breadcrumb boot-breadcrumb.sh    OVERLAY  rail#3     forensic logger -> /data/boot-breadcrumb.log (uptime/ps/dmesg every 20s, 10 min)
+S28  S28br-dropbear    br-dropbear.sh         OVERLAY  rail#4     parallel dropbear 2025.89 on :2223 (key-only), hostkey on /data/br/dropbear; rc stays PID1
+S32  S32check-and-restore check-and-restore.sh blob    rail#5     config restore checks
+S33  S33init-defaults  init-defaults.sh       blob     rail#6     defaults init
+S35  S35system-config  system-config.sh       blob     rail#7     system config
+S39  S39hndmfg         hndmfg.sh              blob     rail#8     mfg-mode hooks ONLY (starts envrams only if mfg) — NOT a normal-boot envrams start
+S40  S40hndnvram       hndnvram.sh            blob     rail#9     HND nvram bring-up
+S41  S41wluboot2knvram wluboot2knvram.sh      blob     rail#10    u-boot wl params -> kernel nvram
+S45  S45bcm-base-drivers   *.sh               blob     rail#11    base BCM drivers (insmod)
+S45  S45bcm-wlan-drivers   *.sh               blob     rail#12    wlan drivers (dhd/wl)
+S45  S45gre-tunnel-drivers *.sh               blob     rail#13    gre tunnel drivers
+S50  S50ssl            ssl.sh                 blob     rail#14    ssl/cert setup
+# (shutdown counterparts: K82check-and-restore, K82init-defaults, K95mount-fs — run with "stop")
+#
+# === phase 2: rc's own engine (AFTER the rail returns, still init_main) ===
+-    rc service engine -                      blob     post-rail  mknod /dev/console; nvram init; /jffs mounted here (NOT at S25 on pureUBI); start_services -> fires /jffs/scripts/services-start (the /jffs-bootstrap dead-man, if present)
+-    success_start_svc -                      blob     init.c:27091 nvram_set("success_start_service","1")
+-    start_misc_services -                     blob     init.c:27096 misc services
+-    sync_boot_state() -                      blob     init.c:27102 THE SELF-COMMIT (see spec §2): commits a ONCE-trial slot if booted!=reboot-policy
+#
+# ORDERING CONSTRAINTS (load-bearing, br-0033-proven):
+#  C1  /data is mounted at S25 (rail#1) BEFORE the S26 dead-man reads its flag. The
+#      dead-man flag MUST live on /data, never /jffs (jffs is mounted only in phase 2
+#      by rc; a pre-jffs hang leaves a jffs-based dead-man blind — br-0033 incident).
+#  C2  S25 consumes the ONCE (reset_reason->steadystate) very early; any rollback
+#      logic must NOT depend on the ONCE still being armed after S25.
+#  C3  the HW watchdog (start_hw_wdt, init.c:25001) is fed regardless of progress,
+#      so a wedged userspace does NOT self-reset — the dead-man is the only SW escape.
+#  C4  sync_boot_state() (self-commit) runs LATE (init.c:27102), after services-start
+#      has already launched the dead-man -> the dead-man is alive before the commit
+#      flips, and its fire action re-commits the good slot to undo the self-commit.
