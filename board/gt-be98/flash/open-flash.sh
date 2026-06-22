@@ -27,7 +27,10 @@ say(){ echo "== $*"; }; die(){ echo "!! $*" >&2; exit 1; }
 
 # --- 1. preflight: determine GOOD (booted+committed) and TRIAL (spare) slots ---
 ST="$($SSH 'bcm_bootstate 2>/dev/null; echo CMD=$(grep -o ubi.block=0,[0-9] /proc/cmdline); echo RR=$(cat /proc/bootstate/reset_reason)')"
-BOOT=$(echo "$ST" | grep -o '0,[0-9]'); case "$BOOT" in 0,4) GOOD=1;; 0,6) GOOD=2;; *) die "cannot read booted slot";; esac
+# extract the booted slot from the CMD= line ONLY: a loose `grep -o '0,[0-9]'`
+# over the whole output also matches the spurious "0,9" inside "seq 100,97" once
+# a slot seq reaches 3 digits, returning two lines and breaking the case.
+BOOT=$(echo "$ST" | sed -n 's/.*CMD=ubi.block=\(0,[0-9]\).*/\1/p'); case "$BOOT" in 0,4) GOOD=1;; 0,6) GOOD=2;; *) die "cannot read booted slot";; esac
 COMMIT=$(echo "$ST" | grep -om1 'committed [0-9]' | awk '{print $2}')
 echo "$ST" | grep -q 'valid 1,2' || die "both slots must be valid"
 [ "$GOOD" = "$COMMIT" ] || die "booted($GOOD)!=committed($COMMIT) — clean up first"
