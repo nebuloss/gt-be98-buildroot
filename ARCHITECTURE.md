@@ -102,3 +102,55 @@ busybox, rc (init/services), libc + dynamic linker, wl + dhd + `rtecdc.bin`
 (6717a0/6726b0), httpd + web UI, openvpn, samba (smbd), nvram, cjson, lighttpd,
 strongswan (charon/stroke); boot chain ATF + U-Boot + kernel + fdt in the ITB;
 pkgtb embeds the squashfs rootfs. Target ~74M pkgtb / ~61M rootfs.
+
+## Step 1 status + Step 2b — kernel build: detailed plan
+
+**Step 1 (external toolchain): DONE.** Both variants are published as
+`gt-be98-toolchain` Release assets and consumed by URL:
+`arm_softfp-gcc10.3` (userspace, prefix `arm-buildroot-linux-gnueabi`) and
+`aarch64-gcc10.3` (kernel, prefix `aarch64-buildroot-linux-gnu`, sha256
+`ffde9b4c…ed7e`). The `gt-be98-kernel` repo already builds the kernel against the
+aarch64 Release end-to-end: `TC_FROM_RELEASE=1 scripts/build-kernel.sh kernel`
+fetches it (`scripts/fetch-toolchain.sh`) and forces `KCROSS_COMPILE` onto it —
+verified to produce a fresh GT-BE98 aarch64 Image (with kprobes), kernel-space
+only (the SDK `recipe_kernel` phase; `userspace` not run).
+
+### The hard part of Step 2b
+The GT-BE98 kernel is **not** a stock `make defconfig && make`. `BCM_KF=y`
+compiles **bcmdrivers into the kernel** (`brcmdrivers-y`), needs bcmkernel headers
+(`-I .../kernel/bcmkernel/include`), the merlin kbuild vars (`BCM_KF`,
+`BRCM_CHIP=6813`, `LINUX_VER_STR=4.19.294`, `MODEL=GTBE98`), and the **closed
+prebuilt `.o`** (bpm/cmdlist/wl/dhd…). Of the 196 `CONFIG_BCM_*`: 68 `BCM_KF_*`
+are core-kernel patches (intrinsic), 94 are `=y` platform/accel drivers (in
+vmlinux), only 34 are `=m` modules. So Buildroot's stock `linux` package cannot
+express this build.
+
+### Approaches
+- **A — custom `linux` package** replicating the merlin kbuild (most BR-native;
+  must encode all the BCM glue).
+- **B — thin wrapper**: Buildroot drives the merlin kernel build (`recipe_kernel`)
+  with BR2's external toolchain (pragmatic; "reuse merlin initially").
+- **C — decoupled**: `gt-be98-kernel`'s `build-kernel.sh kernel TC_FROM_RELEASE=1`
+  runs as a post-step; Buildroot owns userspace/rootfs only (cleanest given the
+  kernel can't be stock-Buildroot). **Already working today.**
+
+### Inputs to move into gt-be98-packages
+bcmdrivers + bcmkernel + the closed prebuilt `.o` (bpm/cmdlist/wl/dhd/`rtecdc.bin`)
++ the kernel-source delta (`gt-be98-kernel`'s `patches/` + `overlay/`). Currently
+sourced ad-hoc from `~/re-sdk`; package as Release blobs.
+
+### Milestones
+1. **Foundation** — run upstream Buildroot with `BR2_EXTERNAL=$(this repo)` +
+   `gt-be98_defconfig` + the published `arm_softfp` external toolchain → build
+   busybox+base (proves Buildroot + external toolchain + target arch).
+2. **Blobs** — package bcmdrivers/bcmkernel/prebuilts/kernel-source as
+   gt-be98-packages release assets (Buildroot-fetchable, hash-verified).
+3. **Kernel** — add the aarch64 kernel build (approach B or C) using the external
+   toolchain → Image + `.ko`.
+4. **Image** — reuse merlin's ITB/pkgtb packaging (board/gt-be98 post-image).
+5. **Parity** — boot the BR-built kernel on slot1; diff vs the merlin artifact.
+
+### Risks
+Closed-prebuilt ABI tie to the exact kernel; extent of the merlin kbuild glue;
+reproducing the ITB/pkgtb format. Keep `gt-be98-firmware` as the reference until
+parity.
