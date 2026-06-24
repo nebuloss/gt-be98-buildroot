@@ -139,16 +139,26 @@ bcmdrivers + bcmkernel + the closed prebuilt `.o` (bpm/cmdlist/wl/dhd/`rtecdc.bi
 + the kernel-source delta (`gt-be98-kernel`'s `patches/` + `overlay/`). Currently
 sourced ad-hoc from `~/re-sdk`; package as Release blobs.
 
-### Milestones
-1. **Foundation** — run upstream Buildroot with `BR2_EXTERNAL=$(this repo)` +
-   `gt-be98_defconfig` + the published `arm_softfp` external toolchain → build
-   busybox+base (proves Buildroot + external toolchain + target arch).
-2. **Blobs** — package bcmdrivers/bcmkernel/prebuilts/kernel-source as
-   gt-be98-packages release assets (Buildroot-fetchable, hash-verified).
-3. **Kernel** — add the aarch64 kernel build (approach B or C) using the external
-   toolchain → Image + `.ko`.
-4. **Image** — reuse merlin's ITB/pkgtb packaging (board/gt-be98 post-image).
-5. **Parity** — boot the BR-built kernel on slot1; diff vs the merlin artifact.
+### Milestones — status (2026-06-24)
+1. **Foundation** ✅ — upstream Buildroot 2026.02.2 + `BR2_EXTERNAL=$(this repo)`
+   + `gt-be98_defconfig` + the published `arm_softfp` external toolchain builds a
+   busybox+base ARM rootfs (proven; busybox is ELF ARM EABI5).
+2. **Blobs** ✅ — all 4 `gt-be98-packages` Release assets live (`bootfs-0031`,
+   `dhd-firmware-1.0`, `userspace-base-1.0`, `samba-1.0`); the full
+   `gt-be98_defconfig` build produces a 27M flashable `.pkgtb` (= **Step 2a**:
+   Buildroot rootfs + prebuilt bootfs).
+3. **Kernel from source (Step 2b)** ✅ *integration proven* — `gt-be98-kernel`
+   builds the kernel against the external aarch64 toolchain
+   (`TC_FROM_RELEASE=1 build-kernel.sh full` → bootfs `.itb`), and
+   `scripts/step2b-pkgtb.sh <bootfs.itb>` wraps Buildroot's rootfs around it via
+   the `GT_BE98_BOOTFS_ITB` override (prebuilt `gt-be98-bootfs` disabled). Verified:
+   the pkgtb's embedded bootfs sha = the from-source bootfs, not the prebuilt.
+   TODO: a lightweight kernel→FIT-only target (standalone merlin `image_linux`
+   needs the full `IMAGE_GOAL`/`BCM_FLASH_LAYOUTS` context) so we don't run `full`.
+4. **Image** ✅ — `board/gt-be98/post-image.sh` bundles the `.pkgtb` (bootfs `.itb`
+   + Buildroot `rootfs.squashfs`) with the u-boot `mkimage`, reproducing the merlin
+   bundle; emits bootfs-FIT + rootfs-squashfs + combined pkgtb.
+5. **Parity** ⏭ — boot the BR-built kernel on slot1; diff vs the merlin artifact.
 
 ### Risks
 Closed-prebuilt ABI tie to the exact kernel; extent of the merlin kbuild glue;
