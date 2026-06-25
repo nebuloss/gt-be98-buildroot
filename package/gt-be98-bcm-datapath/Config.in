@@ -1,0 +1,19 @@
+config BR2_PACKAGE_GT_BE98_BCM_DATAPATH
+	bool "gt-be98-bcm-datapath"
+	help
+	  Closed Broadcom datapath bring-up for the GT-BE98 (BCM6813):
+
+	    /lib/modules/4.19.294/   the BCM_KF datapath kernel modules
+	                             (bcm_knvram, bdmf, rdpa*, pktflow, cmdlist,
+	                             bcm_enet, pktrunner, bcmmcast, wfd, ... + wl/dhd)
+	    /bin/bcm_boot_launcher   runs the /rom/etc/rc3.d S25-S50 early-init
+	    /rom/etc/                rc3.d -> init.d/*.sh, rdpa_init.sh,
+	                             make_static_devnodes.sh, fstab, modprobe.conf,
+	                             sf2/vlan/soft_bridge, ... (wlan + adsl1 excluded)
+
+	  This is the kernel-space + early-init half that a fully-generated rootfs
+	  needs to load the HW datapath and come up reachable. Userspace (rc, nvram,
+	  shared libs) is gt-be98-userspace-base; wifi firmware is gt-be98-dhd-firmware.
+
+	  Proprietary, non-redistributable. Fetched from a gt-be98-packages
+	  GitHub Release asset.
