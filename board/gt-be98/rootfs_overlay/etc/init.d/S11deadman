@@ -1,0 +1,21 @@
+#!/bin/sh
+# S11deadman — in-image launch of the trial-boot dead-man (flash-safety Layer B).
+#
+# busybox-init does NOT run the asus /jffs/scripts/services-start that normally
+# bootstraps the dead-man, so a from-scratch trial slot would have no auto-revert
+# if it boots but is unreachable. trial-deadman.sh's header explicitly anticipates
+# this: "started from /jffs/scripts/services-start OR an in-image early-init hook
+# (Buildroot-mutated images)". This is that hook.
+#
+# INERT in a normal (non-trial) image: trial-deadman exits immediately unless
+# /data/.trial-armed exists, and /jffs/scripts/trial-deadman only exists after a
+# trial-flash. Runs AFTER S10 (which mounts /data, where the flag + log live).
+# The dead-man waits WINDOW for /tmp/deadman-disarm, else commits the good slot
+# and reboots -> auto-revert.
+
+[ "$1" = start ] || exit 0
+
+if [ -f /data/.trial-armed ] && [ -x /jffs/scripts/trial-deadman ]; then
+	echo "S11deadman: trial armed -> launching dead-man"
+	/jffs/scripts/trial-deadman &
+fi
