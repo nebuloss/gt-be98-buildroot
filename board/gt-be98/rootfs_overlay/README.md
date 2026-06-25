@@ -35,10 +35,24 @@ trial-harness scaffolding, not a committed baseline).
 
 - **NOT yet device-validated.** These scripts are build-ready (build on dev-build),
   but no flash/boot trial has been run (device validation deferred by operator).
-- **bcm_boot_launcher + closed `.ko` must be present.** A pure from-scratch rootfs
-  must ship the userspace blob that provides `/bin/bcm_boot_launcher` + `/rom/etc/rc3.d`
-  (currently via `gt-be98-userspace-base`) and the kernel modules under
-  `/lib/modules/4.19.294/`. `S15bcm-platform`/`S10bcm-knvram` warn (don't fail) if absent.
+- **Datapath bring-up blobs are NOT yet packaged (VERIFIED 2026-06-25).** A
+  full `gt-be98_defconfig` build was inspected: `gt-be98-userspace-base` ships
+  ONLY userspace (`/sbin/rc`, `/bin/nvram`, `lib/*.so`). The pieces this overlay's
+  init depends on are ABSENT from the image:
+    - `/bin/bcm_boot_launcher`         — missing (S15bcm-platform just warns)
+    - `/rom/etc/rc3.d/` (S25-S50)      — missing
+    - `/lib/modules/4.19.294/*.ko`     — missing entirely (0 modules: no
+      bcm_knvram, bdmf, rdpa*, pktflow, bcm_enet, pktrunner, wl, dhd)
+  => as built today the image BOOTS but comes up with NO datapath + NO network.
+  All missing pieces exist on dev-build in the assembled merlin target and are
+  ready to package from:
+    - modules:  .../src-rt-5.04behnd.4916/targets/96813GW/fs/lib/modules/4.19.294/
+    - launcher: .../src-rt-5.04behnd.4916/.../bcm_boot_launcher/prebuilt/
+    - rc3.d:    .../src-rt-5.04behnd.4916/targets/96813GW/fs/rom/etc/rc3.d/
+  REMEDIATION (owed): a dedicated blob package (e.g. gt-be98-bcm-datapath:
+  kernel modules + bcm_boot_launcher + rc3.d), published via gt-be98-packages,
+  selected by gt-be98_defconfig — mirroring the gt-be98-userspace-base pattern.
+  `S15bcm-platform`/`S10bcm-knvram` warn (don't fail) when these are absent.
 - **First-boot nvram seeding.** With an empty `/data`, nvram is empty → `S40lan`
   falls back to the merlin defaults (10.0.0.8 / .254). Seeding a default nvram set
   (lan_ifnames etc.) on first boot is still owed.
