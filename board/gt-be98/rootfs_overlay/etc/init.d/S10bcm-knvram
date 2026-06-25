@@ -1,0 +1,36 @@
+#!/bin/sh
+# S10bcm-knvram — mount the persistent /data UBI volume and load the closed
+# kernel-NVRAM module, so nvram_*() works for the rest of boot.
+#
+# Busybox-init port of the proven OpenRC `bcm-knvram` service (phase3/openrc).
+# Replicates the ASUS rc inline early step (init.c:26149-26151) run at the very
+# top of init_main(), BEFORE sysinit().
+#
+# GRAFT-DEPENDENT: bcm_knvram.ko is a pinned closed Broadcom kernel module
+# (built by the kernel repo); the nvram CLI + libnvram come from
+# gt-be98-userspace-base (or gt-be98-nvram from source).
+
+KMOD=/lib/modules/4.19.294/extra/bcm_knvram.ko
+
+start() {
+	if ! mountpoint -q /data 2>/dev/null; then
+		echo "S10bcm-knvram: mounting ubi:data -> /data"
+		mount -t ubifs ubi:data /data 2>/dev/null \
+			|| mount -t ext4 /dev/data /data 2>/dev/null \
+			|| echo "S10bcm-knvram: WARN /data mount failed (nvram persistence unavailable)"
+	fi
+	if ! grep -q '^bcm_knvram ' /proc/modules 2>/dev/null; then
+		if [ -f "$KMOD" ]; then
+			echo "S10bcm-knvram: insmod bcm_knvram.ko"
+			insmod "$KMOD"
+		else
+			echo "S10bcm-knvram: WARN $KMOD absent (kernel modules not installed?)"
+		fi
+	fi
+}
+
+case "$1" in
+	start) start ;;
+	stop)  : ;;
+	*) echo "usage: $0 {start|stop}" >&2; exit 1 ;;
+esac

@@ -1,0 +1,69 @@
+#!/bin/sh
+# S40lan — wired LAN bring-up: br0 over the nvram lan_ifnames + LAN IP + the
+# DEFAULT ROUTE. This is the committable core of the proven OpenRC `net-lan`
+# service, stripped of all trial/diagnostic instrumentation.
+#
+# ★The default route (v21 fix) is the reachability key★: without a default gw,
+# the bcm stack drops inbound SYNs from a different subnet before the socket
+# (the return path for the SYN-ACK has nowhere to go). With it, the box is
+# externally reachable. KEEP it.
+#
+# Falls back to the merlin defaults (10.0.0.8 / 255.255.255.0 / gw 10.0.0.254)
+# when nvram is empty (e.g. a first boot with no seeded /data nvram).
+
+BR=br0
+
+nm2cidr() {
+	local nm="$1" b n=0
+	case "$nm" in *.*.*.*) ;; *) echo 24; return;; esac
+	local IFS=.
+	for b in $nm; do
+		while [ "$b" -gt 0 ] 2>/dev/null; do n=$((n + (b & 1))); b=$((b >> 1)); done
+	done
+	[ "$n" -ge 1 ] && [ "$n" -le 32 ] && echo "$n" || echo 24
+}
+
+start() {
+	local ifs ip nm cidr gw i
+	ifs=$(nvram get lan_ifnames 2>/dev/null)
+	ip=$(nvram get lan_ipaddr 2>/dev/null);  [ -n "$ip" ] || ip=10.0.0.8
+	nm=$(nvram get lan_netmask 2>/dev/null); [ -n "$nm" ] || nm=255.255.255.0
+	gw=$(nvram get lan_gateway 2>/dev/null); [ -n "$gw" ] || gw=10.0.0.254
+	cidr=$(nm2cidr "$nm")
+	echo "S40lan: lan_ifnames='$ifs' ip=$ip/$cidr gw=$gw"
+
+	if ! brctl show 2>/dev/null | grep -q "^${BR}[[:space:]]"; then
+		brctl addbr "$BR" 2>/dev/null && echo "S40lan: created bridge $BR"
+	fi
+	for i in $ifs; do
+		[ "$i" = "$BR" ] && continue
+		ifconfig "$i" up allmulti 2>/dev/null \
+			|| { ip link set "$i" up 2>/dev/null; ip link set "$i" allmulticast on 2>/dev/null; }
+		brctl addif "$BR" "$i" 2>/dev/null && echo "S40lan: added $i to $BR"
+	done
+
+	ifconfig "$BR" "$ip" netmask "$nm" up allmulti 2>/dev/null \
+		|| { ip link set "$BR" up 2>/dev/null
+		     ip link set "$BR" allmulticast on 2>/dev/null
+		     ip addr add "$ip/$cidr" dev "$BR" 2>/dev/null; }
+	echo "S40lan: $BR up with $ip/$cidr"
+
+	# ★ default route — the inbound-reachability fix ★
+	if ip route replace default via "$gw" dev "$BR" 2>/dev/null; then
+		echo "S40lan: default route -> $gw dev $BR"
+	elif route add default gw "$gw" dev "$BR" 2>/dev/null; then
+		echo "S40lan: default route (route cmd) -> $gw dev $BR"
+	else
+		echo "S40lan: WARN could not set default route via $gw"
+	fi
+}
+
+stop() {
+	ip link set "$BR" down 2>/dev/null
+}
+
+case "$1" in
+	start) start ;;
+	stop)  stop ;;
+	*) echo "usage: $0 {start|stop}" >&2; exit 1 ;;
+esac

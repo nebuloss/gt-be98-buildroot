@@ -1,0 +1,56 @@
+#!/bin/sh
+# S50dropbear — admin SSH on :2222 (merlin convention), key-auth only.
+# Overrides Buildroot's stock dropbear init (which would listen on :22). Port of
+# the committable core of the proven OpenRC `net-lan` admin-sshd block, minus the
+# trial-only debug instances (:2229/:2230 -E) and the br-0045 authkey byte-match.
+#
+# Host keys: persisted under /jffs/.ssh if present (merlin layout), else generated
+# under /etc/dropbear. authorized_keys: from /jffs/.ssh/authorized_keys, else the
+# nvram `sshd_authkeys` value.
+
+DBIN=/usr/sbin/dropbear
+JFFS_SSH=/jffs/.ssh
+PIDF=/tmp/dropbear-2222.pid
+
+install_authkeys() {
+	local home="${HOME:-/root}" akdir ak nk
+	akdir="$home/.ssh"; ak="$akdir/authorized_keys"
+	mkdir -p "$akdir" 2>/dev/null; chmod 700 "$home" "$akdir" 2>/dev/null
+	if [ -f "$JFFS_SSH/authorized_keys" ]; then
+		cp "$JFFS_SSH/authorized_keys" "$ak" 2>/dev/null
+	else
+		nk=$(nvram get sshd_authkeys 2>/dev/null)
+		[ -n "$nk" ] && printf '%s\n' "$nk" | tr -d '\r' > "$ak" 2>/dev/null
+	fi
+	[ -f "$ak" ] && chmod 600 "$ak" 2>/dev/null
+}
+
+start() {
+	[ -x "$DBIN" ] || { echo "S50dropbear: $DBIN missing"; exit 1; }
+	if netstat -ltn 2>/dev/null | grep -q ":2222 "; then
+		echo "S50dropbear: :2222 already listening"; return
+	fi
+	# host keys
+	if [ -d "$JFFS_SSH" ]; then
+		mkdir -p /etc/dropbear 2>/dev/null
+		for k in ecdsa ed25519 rsa; do
+			[ -f "$JFFS_SSH/dropbear_${k}_host_key" ] && \
+				ln -sf "$JFFS_SSH/dropbear_${k}_host_key" \
+					"/etc/dropbear/dropbear_${k}_host_key" 2>/dev/null
+		done
+	fi
+	install_authkeys
+	echo "S50dropbear: starting admin sshd on :2222 (key-auth)"
+	# -p 2222 listen, -j -k disable local/remote port forwarding, -P pidfile
+	"$DBIN" -p 2222 -j -k -P "$PIDF"
+}
+
+stop() {
+	[ -f "$PIDF" ] && kill "$(cat "$PIDF")" 2>/dev/null
+}
+
+case "$1" in
+	start) start ;;
+	stop)  stop ;;
+	*) echo "usage: $0 {start|stop}" >&2; exit 1 ;;
+esac
