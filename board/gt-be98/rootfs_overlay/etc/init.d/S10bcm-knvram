@@ -27,6 +27,9 @@ start() {
 			echo "S10bcm-knvram: WARN $KMOD absent (kernel modules not installed?)"
 		fi
 	fi
+	# breadcrumb to persistent /data (survives a trial revert)
+	echo "=== fromscratch boot $(cat /proc/uptime 2>/dev/null) ===" >> /data/fromscratch-boot.log 2>/dev/null
+	echo "S10 data_mounted=$(mountpoint -q /data && echo y || echo n) knvram=$(grep -c '^bcm_knvram ' /proc/modules)" >> /data/fromscratch-boot.log 2>/dev/null
 }
 
 case "$1" in

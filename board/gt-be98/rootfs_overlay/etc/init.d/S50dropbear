@@ -43,6 +43,8 @@ start() {
 	echo "S50dropbear: starting admin sshd on :2222 (key-auth)"
 	# -p 2222 listen, -j -k disable local/remote port forwarding, -P pidfile
 	"$DBIN" -p 2222 -j -k -P "$PIDF"
+	sleep 1
+	echo "S50 dropbear_rc=$? listen2222=$(netstat -ltn 2>/dev/null | grep -c ':2222 ') authkeys=$([ -s /root/.ssh/authorized_keys ] && echo y || echo n)" >> /data/fromscratch-boot.log 2>/dev/null
 }
 
 stop() {

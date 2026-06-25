@@ -56,6 +56,7 @@ start() {
 	else
 		echo "S40lan: WARN could not set default route via $gw"
 	fi
+	{ echo "S40 br0:"; ip addr show "$BR" 2>/dev/null | grep -E 'inet |state '; ip route 2>/dev/null | grep default; } >> /data/fromscratch-boot.log 2>/dev/null
 }
 
 stop() {
