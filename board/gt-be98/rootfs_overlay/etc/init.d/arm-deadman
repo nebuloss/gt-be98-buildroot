@@ -1,0 +1,19 @@
+#!/bin/sh
+# arm-deadman — mount /data + /jffs and arm the trial dead-man, called from
+# inittab AFTER /proc + /sys are mounted (a fresh `mount -t ubifs ubi:data` run
+# BEFORE /proc hangs busybox — the trial-#3 failure). Runs before rcS so a later
+# init stall still auto-reverts. NOT an S?? script, so rcS won't re-run it.
+# Idempotent: the dead-man self-locks (/tmp/.deadman-lock), so S11 calling it
+# again is a no-op. INERT in non-trial images (deadman exits without the flag).
+LOG=/data/fromscratch-boot.log
+
+mountpoint -q /data 2>/dev/null || mount -t ubifs ubi:data /data 2>/dev/null || mount -t ubifs /dev/ubi0_10 /data 2>/dev/null
+mountpoint -q /jffs 2>/dev/null || { mkdir -p /jffs 2>/dev/null; mount -t ubifs ubi:jffs2 /jffs 2>/dev/null || mount -t ubifs /dev/ubi0_13 /jffs 2>/dev/null; }
+
+echo "=== boot $(cat /proc/uptime 2>/dev/null) ===" >> "$LOG" 2>/dev/null
+echo "arm-deadman: data=$(mountpoint -q /data && echo y || echo n) jffs=$(mountpoint -q /jffs && echo y || echo n)" >> "$LOG" 2>/dev/null
+
+if [ -f /data/.trial-armed ] && [ -x /jffs/scripts/trial-deadman ]; then
+	/jffs/scripts/trial-deadman &
+	echo "arm-deadman: dead-man launched" >> "$LOG" 2>/dev/null
+fi
