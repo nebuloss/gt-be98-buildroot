@@ -19,6 +19,13 @@ start() {
 			|| mount -t ext4 /dev/data /data 2>/dev/null \
 			|| echo "S10bcm-knvram: WARN /data mount failed (nvram persistence unavailable)"
 	fi
+	# /jffs (ubi vol "jffs2") — needed by S11deadman (/jffs/scripts/trial-deadman)
+	# and merlin-style persistence. Mirrors the live OS (ubi:jffs2 on /jffs).
+	if ! mountpoint -q /jffs 2>/dev/null; then
+		mkdir -p /jffs 2>/dev/null
+		mount -t ubifs ubi:jffs2 /jffs 2>/dev/null \
+			|| echo "S10bcm-knvram: WARN /jffs mount failed"
+	fi
 	if ! grep -q '^bcm_knvram ' /proc/modules 2>/dev/null; then
 		if [ -f "$KMOD" ]; then
 			echo "S10bcm-knvram: insmod bcm_knvram.ko"
