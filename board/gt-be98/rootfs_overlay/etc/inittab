@@ -4,21 +4,24 @@
 # to the committed slot2 (proven in trial #1) — so a diagnostic boot can NEVER get
 # stuck and needs NO power-cycle. Init has ~30s to localize the early-boot stall.
 #
-# Markers go to /jffs (mounted first) so we can tell which ubifs mount stalls:
-#   J1 present, D1 absent  -> `mount ubi:data` hangs
-#   J1 absent              -> proc/sys or `mount ubi:jffs2` hangs (ubifs-at-boot)
-#   J1+D1+R1, no R2        -> reached rcS; stall/slowness is in rcS (datapath)
+# Markers go to /jffs (mounted first), each followed by `sync` so they survive the
+# 30s watchdog HARD reset. Per-script BEGIN/END markers localize the stall exactly:
+#   (empty log)            -> proc/sys or `mount ubi:jffs2` hangs (ubifs-at-boot)
+#   J1, no D1              -> `mount ubi:data` hangs
+#   J1+D1+R1, BEGIN Sxx but no END Sxx -> Sxx is where boot stalls (or is slow)
+#   ...END S11..., BEGIN S15bcm-platform, no END -> datapath load is the long pole
 # Read /jffs/diag.log on slot2 after the ~30s auto-revert.
 #
 # Format: <id>:<runlevels>:<action>:<process>
 
 ::sysinit:/bin/mount -t proc proc /proc
 ::sysinit:/bin/mount -t sysfs sysfs /sys
-::sysinit:/bin/sh -c 'mkdir -p /jffs; mount -t ubifs ubi:jffs2 /jffs 2>/tmp/je || mount -t ubifs /dev/ubi0_13 /jffs 2>>/tmp/je; echo "J1 proc+sys+jffs t=$(cut -d. -f1 /proc/uptime) jffs=$(mountpoint -q /jffs && echo y || echo n) err=[$(cat /tmp/je 2>/dev/null)]" >> /jffs/diag.log 2>/dev/null'
-::sysinit:/bin/sh -c 'mkdir -p /data; mount -t ubifs ubi:data /data 2>/tmp/de || mount -t ubifs /dev/ubi0_10 /data 2>>/tmp/de; echo "D1 data t=$(cut -d. -f1 /proc/uptime) data=$(mountpoint -q /data && echo y || echo n) err=[$(cat /tmp/de 2>/dev/null)]" >> /jffs/diag.log 2>/dev/null'
-::sysinit:/bin/sh -c 'echo "R1 pre-rcS t=$(cut -d. -f1 /proc/uptime)" >> /jffs/diag.log 2>/dev/null'
-::sysinit:/etc/init.d/rcS
-::sysinit:/bin/sh -c 'echo "R2 post-rcS t=$(cut -d. -f1 /proc/uptime)" >> /jffs/diag.log 2>/dev/null'
+::sysinit:/bin/sh -c 'mkdir -p /jffs; mount -t ubifs ubi:jffs2 /jffs 2>/tmp/je || mount -t ubifs /dev/ubi0_13 /jffs 2>>/tmp/je; echo "J1 proc+sys+jffs t=$(cut -d. -f1 /proc/uptime) jffs=$(mountpoint -q /jffs && echo y || echo n) err=[$(cat /tmp/je 2>/dev/null)]" >> /jffs/diag.log 2>/dev/null; sync'
+::sysinit:/bin/sh -c 'mkdir -p /data; mount -t ubifs ubi:data /data 2>/tmp/de || mount -t ubifs /dev/ubi0_10 /data 2>>/tmp/de; echo "D1 data t=$(cut -d. -f1 /proc/uptime) data=$(mountpoint -q /data && echo y || echo n) err=[$(cat /tmp/de 2>/dev/null)]" >> /jffs/diag.log 2>/dev/null; sync'
+::sysinit:/bin/sh -c 'echo "R1 pre-rcS t=$(cut -d. -f1 /proc/uptime)" >> /jffs/diag.log 2>/dev/null; sync'
+# instrumented rcS: log BEGIN/END around each S-script (sync each marker so it
+# survives the hard reset). Reveals exactly which script stalls, in ONE boot.
+::sysinit:/bin/sh -c 'for s in /etc/init.d/S??*; do n=$(basename "$s"); echo "BEGIN $n t=$(cut -d. -f1 /proc/uptime)" >> /jffs/diag.log 2>/dev/null; sync; "$s" start >> /jffs/diag.log 2>&1; echo "END $n rc=$? t=$(cut -d. -f1 /proc/uptime)" >> /jffs/diag.log 2>/dev/null; sync; done; echo "ALLDONE t=$(cut -d. -f1 /proc/uptime)" >> /jffs/diag.log 2>/dev/null; sync'
 
 console::respawn:/sbin/getty -L  console 0 vt100 # GENERIC_SERIAL
 ::shutdown:/bin/umount -a -r
