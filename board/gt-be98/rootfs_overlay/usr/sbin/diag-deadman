@@ -1,57 +1,30 @@
 #!/bin/sh
-# diag-deadman — in-image, mount-INDEPENDENT dead-man + forensic capture.
+# diag-deadman — mount-independent dead-man that reports the boot stage via TIMING.
 #
-# Spawned FIRST from inittab, backgrounded, so it runs even if PID1 wedges (the
-# kernel schedules this detached child regardless of what init is blocked on).
-# Validated on hardware: it reliably fires and reverts to the committed slot.
+# Every persistent store on this board is ubifs, and the early-boot hang holds a
+# ubi lock that blocks all ubifs writes (proven: no marker channel ever survived).
+# There is no serial and no pstore. So we report with ZERO persistence:
 #
-# After WINDOW, if the boot has not disarmed (/tmp/diag-ok), it captures — from
-# OUTSIDE the hung init — exactly where boot is stuck: PID1's wait-channel, every
-# process's comm/wchan/cmdline (the hung sysinit step shows here), and dmesg, and
-# persists that across the reset, then reboots to the good slot REGARDLESS.
+#   init drops /dev/.sN (devtmpfs = RAM, writable with no mount) after each step.
+#   This dead-man (same boot, so it sees that RAM) reads the highest N reached and
+#   ENCODES it into how long it waits before reverting:  dark = BASE + N*STEP.
+#   Measure the dark time on the host, decode N -> the exact step that wedged.
 #
-# Persist strategy (fixed): write to every ubifs ALREADY mounted (the common case
-# when init mounted /data then hung on the next step — a fresh mount would just
-# EBUSY); only if none are mounted do we try a fresh, time-boxed mount.
-WINDOW=200
+# Spawned FIRST from inittab, backgrounded, so it runs even if PID1 wedges.
+BASE=120     # quiet window before we act
+STEP=30      # seconds of extra delay per completed stage (host decodes N)
 
-sleep "$WINDOW"
-[ -f /tmp/diag-ok ] && exit 0     # healthy boot disarmed us
+sleep "$BASE"
+[ -f /tmp/diag-ok ] && exit 0     # init reached the end and disarmed us -> healthy
 
-F=/tmp/deadman-forensics.txt
-{
-  echo "=== DEADMAN FORENSICS uptime=$(cut -d. -f1 /proc/uptime 2>/dev/null)s window=${WINDOW}s ==="
-  echo "--- PID1 wchan (where init is blocked) ---"; cat /proc/1/wchan 2>/dev/null; echo
-  echo "--- /proc/mounts ---"; cat /proc/mounts 2>/dev/null
-  echo "--- processes: pid comm wchan state cmdline ---"
-  for p in /proc/[0-9]*; do
-    [ -r "$p/comm" ] || continue
-    echo "$(basename "$p") comm=$(cat "$p/comm" 2>/dev/null) wchan=$(cat "$p/wchan" 2>/dev/null) state=$(cut -d' ' -f3 "$p/stat" 2>/dev/null) cmd=[$(tr '\0' ' ' < "$p/cmdline" 2>/dev/null)]"
-  done
-  echo "--- dmesg tail ---"; dmesg 2>/dev/null | tail -70
-} > "$F" 2>&1
-
-# 1) write to every ubifs already mounted (no fresh mount -> no EBUSY/contention)
-wrote=0
-for mp in $(grep -w ubifs /proc/mounts 2>/dev/null | cut -d' ' -f2); do
-  if cp "$F" "$mp/deadman-forensics.txt" 2>/dev/null; then sync; wrote=1; fi
+S=0
+for n in 1 2 3 4 5 6 7 8 9 10 11 12; do
+  [ -e "/dev/.s$n" ] && S=$n
 done
+# leave a breadcrumb in RAM too (visible if anything is live)
+echo "$S" > /dev/.stage-reached 2>/dev/null
 
-# 2) only if nothing was mounted yet, try a fresh time-boxed mount of each vol
-if [ "$wrote" = 0 ]; then
-  (
-    for v in "jffs2 13" "data 10"; do
-      set -- $v; n=$1; idx=$2
-      mkdir -p "/mnt/$n" 2>/dev/null
-      mount -t ubifs "ubi:$n" "/mnt/$n" 2>/dev/null || mount -t ubifs "/dev/ubi0_$idx" "/mnt/$n" 2>/dev/null
-      cp "$F" "/mnt/$n/deadman-forensics.txt" 2>/dev/null && sync
-    done
-  ) &
-  PP=$!
-  sleep 10
-  kill "$PP" 2>/dev/null
-fi
-
+sleep $(( S * STEP ))
 bcm_bootstate +2 2>/dev/null   # harmless if absent; ONCE is already consumed
 sync
 reboot -f

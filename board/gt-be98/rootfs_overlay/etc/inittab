@@ -1,47 +1,35 @@
-# /etc/inittab — GT-BE98 from-scratch :: LIVE-DIAG MODE (pet + in-image dead-man)
+# /etc/inittab — GT-BE98 from-scratch :: STAGE-TIMING DIAG
 #
-# Lesson from the no-pet probe: a 30s bootloader-watchdog window left NO trace at
-# all (jffs not even mounted in time / or slot1 didn't boot — indistinguishable
-# with only a ubifs marker channel and no serial/pstore). So this image instead:
-#
-#  Layer 0 (FIRST, mount-INDEPENDENT dead-man): a backgrounded `(sleep N; revert)`
-#    spawned before anything can hang. It runs even if a later sysinit line wedges
-#    PID1 (the kernel schedules the detached child regardless), and needs NO
-#    ubifs/jffs/data — fixing the exact reason the old /jffs-based dead-man never
-#    fired. Reverts to slot2 at N seconds unless /tmp/diag-ok exists.
-#  Layer 1: pet the HW watchdog so the (slow) ubifs mounts + closed datapath load
-#    are not killed at the bootloader's 30s. Layer 0 is the real net now.
-#
-# Net effect: the full boot gets to run; if it reaches the network I read dmesg +
-# diag.log LIVE; if it wedges, Layer 0 auto-reverts in N s — no stuck, no power
-# cycle. Triple safety: Layer 0 dead-man + (if pet fails) 30s bootloader watchdog
-# + ONCE already consumed this boot (any reset returns to committed slot2).
-#
-# diag.log lives on /data so it is decoupled from /jffs; markers are sync'd.
-# To keep a healthy boot up:  ssh ... 'touch /tmp/diag-ok'  (cancels the revert).
+# The early-boot hang holds a ubi lock that blocks every ubifs write, there is no
+# serial and no pstore, so NO persistent marker channel works. Instead each step
+# drops /dev/.sN (devtmpfs = RAM, no mount needed) and diag-deadman encodes the
+# highest N reached into its revert delay -> host decodes the wedged step from the
+# dark time.  Stage map:
+#   s1  init+sh alive (pre-mount)         s7  /etc/init.d/S10bcm-knvram (data+knvram)
+#   s2  /proc mounted                     s8  /etc/init.d/S15bcm-platform (datapath)
+#   s3  /sys mounted                      s9  /etc/init.d/S40lan (br0 + IP) -> reachable
+#   s4  remount-rw + mount -a             s10 /etc/init.d/S50dropbear (ssh) + disarm
+#   s5  mount ubi:data /data
+#   s6  mount ubi:jffs2 /jffs
+# Reaching s10 touches /tmp/diag-ok (cancels revert) so a HEALTHY boot stays up and
+# is reachable on 10.0.0.8 (fallback) or 10.0.0.95 (nvram). Triple safety unchanged.
 #
 # Format: <id>:<runlevels>:<action>:<process>
 
-# ★ Layer 0 — in-image, mount-independent dead-man + FORENSIC capture ★
-# Spawned FIRST; fires at its WINDOW even if PID1 wedges, captures where init is
-# stuck (PID1 wchan + every proc's wchan/cmdline + dmesg) to the free ubifs vol,
-# then reverts to slot2. See /usr/sbin/diag-deadman.
 ::sysinit:/bin/sh -c '/bin/sh /usr/sbin/diag-deadman &'
-
-# ★ Layer 1 — pet the HW watchdog (backgrounded) so slow mounts/datapath survive ★
 ::sysinit:/bin/sh -c '/sbin/watchdog -t 5 /dev/watchdog &'
-
-# standard early mounts
+::sysinit:/bin/sh -c ': > /dev/.s1'
 ::sysinit:/bin/mount -t proc proc /proc
-::sysinit:/bin/mount -o remount,rw /
-::sysinit:/bin/mkdir -p /dev/pts /dev/shm
-::sysinit:/bin/mount -a
-
-# mount /data + /jffs (now with time) and drop a first marker on /data
-::sysinit:/bin/sh -c 'mkdir -p /data /jffs; t0=$(cut -d. -f1 /proc/uptime); mount -t ubifs ubi:data /data 2>/tmp/de || mount -t ubifs /dev/ubi0_10 /data 2>>/tmp/de; t1=$(cut -d. -f1 /proc/uptime); mount -t ubifs ubi:jffs2 /jffs 2>/tmp/je || mount -t ubifs /dev/ubi0_13 /jffs 2>>/tmp/je; t2=$(cut -d. -f1 /proc/uptime); echo "MNT t0=$t0 dataT=$t1 jffsT=$t2 data=$(mountpoint -q /data && echo y||echo n) jffs=$(mountpoint -q /jffs && echo y||echo n) derr=[$(cat /tmp/de 2>/dev/null)] jerr=[$(cat /tmp/je 2>/dev/null)]" >> /data/diag.log 2>/dev/null; sync'
-
-# instrumented rcS: BEGIN/END per S-script (sync'd) -> exact stall point
-::sysinit:/bin/sh -c 'for s in /etc/init.d/S??*; do n=$(basename "$s"); echo "BEGIN $n t=$(cut -d. -f1 /proc/uptime)" >> /data/diag.log 2>/dev/null; sync; "$s" start >> /data/diag.log 2>&1; echo "END $n rc=$? t=$(cut -d. -f1 /proc/uptime)" >> /data/diag.log 2>/dev/null; sync; done; echo "ALLDONE t=$(cut -d. -f1 /proc/uptime)" >> /data/diag.log 2>/dev/null; sync'
+::sysinit:/bin/sh -c ': > /dev/.s2'
+::sysinit:/bin/mount -t sysfs sysfs /sys
+::sysinit:/bin/sh -c ': > /dev/.s3'
+::sysinit:/bin/sh -c 'mount -o remount,rw / 2>/dev/null; mkdir -p /dev/pts /dev/shm; mount -a; : > /dev/.s4'
+::sysinit:/bin/sh -c 'mount -t ubifs ubi:data /data 2>/dev/null || mount -t ubifs /dev/ubi0_10 /data 2>/dev/null; : > /dev/.s5'
+::sysinit:/bin/sh -c 'mount -t ubifs ubi:jffs2 /jffs 2>/dev/null || mount -t ubifs /dev/ubi0_13 /jffs 2>/dev/null; : > /dev/.s6'
+::sysinit:/bin/sh -c '/etc/init.d/S10bcm-knvram start; : > /dev/.s7'
+::sysinit:/bin/sh -c '/etc/init.d/S15bcm-platform start; : > /dev/.s8'
+::sysinit:/bin/sh -c '/etc/init.d/S40lan start; : > /dev/.s9'
+::sysinit:/bin/sh -c '/etc/init.d/S50dropbear start; : > /dev/.s10; touch /tmp/diag-ok'
 
 console::respawn:/sbin/getty -L  console 0 vt100 # GENERIC_SERIAL
 ::shutdown:/bin/umount -a -r
