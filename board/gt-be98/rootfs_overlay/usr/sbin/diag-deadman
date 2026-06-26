@@ -25,6 +25,8 @@ done
 echo "$S" > /dev/.stage-reached 2>/dev/null
 
 sleep $(( S * STEP ))
-bcm_bootstate +2 2>/dev/null   # harmless if absent; ONCE is already consumed
-sync
+# CRITICAL: reboot -f ONLY — no sync, no fs touch. sync() blocks forever on a
+# wedged ubifs mount (the early-boot hang), which would defeat the revert and
+# leave the box stuck with the watchdog still petted. reboot(2)/RB_AUTOBOOT is a
+# direct syscall that cannot block. ONCE is already consumed -> lands on slot2.
 reboot -f
