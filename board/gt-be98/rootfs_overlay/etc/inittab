@@ -1,27 +1,44 @@
-# /etc/inittab — GT-BE98 from-scratch :: DIAGNOSTIC MODE
+# /etc/inittab — GT-BE98 from-scratch :: LIVE-DIAG MODE (pet + in-image dead-man)
 #
-# Deliberately does NOT pet the BCM HW watchdog: it fires at ~30s and HARD-REVERTS
-# to the committed slot2 (proven in trial #1) — so a diagnostic boot can NEVER get
-# stuck and needs NO power-cycle. Init has ~30s to localize the early-boot stall.
+# Lesson from the no-pet probe: a 30s bootloader-watchdog window left NO trace at
+# all (jffs not even mounted in time / or slot1 didn't boot — indistinguishable
+# with only a ubifs marker channel and no serial/pstore). So this image instead:
 #
-# Markers go to /jffs (mounted first), each followed by `sync` so they survive the
-# 30s watchdog HARD reset. Per-script BEGIN/END markers localize the stall exactly:
-#   (empty log)            -> proc/sys or `mount ubi:jffs2` hangs (ubifs-at-boot)
-#   J1, no D1              -> `mount ubi:data` hangs
-#   J1+D1+R1, BEGIN Sxx but no END Sxx -> Sxx is where boot stalls (or is slow)
-#   ...END S11..., BEGIN S15bcm-platform, no END -> datapath load is the long pole
-# Read /jffs/diag.log on slot2 after the ~30s auto-revert.
+#  Layer 0 (FIRST, mount-INDEPENDENT dead-man): a backgrounded `(sleep N; revert)`
+#    spawned before anything can hang. It runs even if a later sysinit line wedges
+#    PID1 (the kernel schedules the detached child regardless), and needs NO
+#    ubifs/jffs/data — fixing the exact reason the old /jffs-based dead-man never
+#    fired. Reverts to slot2 at N seconds unless /tmp/diag-ok exists.
+#  Layer 1: pet the HW watchdog so the (slow) ubifs mounts + closed datapath load
+#    are not killed at the bootloader's 30s. Layer 0 is the real net now.
+#
+# Net effect: the full boot gets to run; if it reaches the network I read dmesg +
+# diag.log LIVE; if it wedges, Layer 0 auto-reverts in N s — no stuck, no power
+# cycle. Triple safety: Layer 0 dead-man + (if pet fails) 30s bootloader watchdog
+# + ONCE already consumed this boot (any reset returns to committed slot2).
+#
+# diag.log lives on /data so it is decoupled from /jffs; markers are sync'd.
+# To keep a healthy boot up:  ssh ... 'touch /tmp/diag-ok'  (cancels the revert).
 #
 # Format: <id>:<runlevels>:<action>:<process>
 
+# ★ Layer 0 — in-image, mount-independent dead-man (backgrounded FIRST) ★
+::sysinit:/bin/sh -c '(sleep 240; [ -f /tmp/diag-ok ] || { bcm_bootstate +2 2>/dev/null; sync; reboot -f; }) &'
+
+# ★ Layer 1 — pet the HW watchdog (backgrounded) so slow mounts/datapath survive ★
+::sysinit:/bin/sh -c '/sbin/watchdog -t 5 /dev/watchdog &'
+
+# standard early mounts
 ::sysinit:/bin/mount -t proc proc /proc
-::sysinit:/bin/mount -t sysfs sysfs /sys
-::sysinit:/bin/sh -c 'mkdir -p /jffs; mount -t ubifs ubi:jffs2 /jffs 2>/tmp/je || mount -t ubifs /dev/ubi0_13 /jffs 2>>/tmp/je; echo "J1 proc+sys+jffs t=$(cut -d. -f1 /proc/uptime) jffs=$(mountpoint -q /jffs && echo y || echo n) err=[$(cat /tmp/je 2>/dev/null)]" >> /jffs/diag.log 2>/dev/null; sync'
-::sysinit:/bin/sh -c 'mkdir -p /data; mount -t ubifs ubi:data /data 2>/tmp/de || mount -t ubifs /dev/ubi0_10 /data 2>>/tmp/de; echo "D1 data t=$(cut -d. -f1 /proc/uptime) data=$(mountpoint -q /data && echo y || echo n) err=[$(cat /tmp/de 2>/dev/null)]" >> /jffs/diag.log 2>/dev/null; sync'
-::sysinit:/bin/sh -c 'echo "R1 pre-rcS t=$(cut -d. -f1 /proc/uptime)" >> /jffs/diag.log 2>/dev/null; sync'
-# instrumented rcS: log BEGIN/END around each S-script (sync each marker so it
-# survives the hard reset). Reveals exactly which script stalls, in ONE boot.
-::sysinit:/bin/sh -c 'for s in /etc/init.d/S??*; do n=$(basename "$s"); echo "BEGIN $n t=$(cut -d. -f1 /proc/uptime)" >> /jffs/diag.log 2>/dev/null; sync; "$s" start >> /jffs/diag.log 2>&1; echo "END $n rc=$? t=$(cut -d. -f1 /proc/uptime)" >> /jffs/diag.log 2>/dev/null; sync; done; echo "ALLDONE t=$(cut -d. -f1 /proc/uptime)" >> /jffs/diag.log 2>/dev/null; sync'
+::sysinit:/bin/mount -o remount,rw /
+::sysinit:/bin/mkdir -p /dev/pts /dev/shm
+::sysinit:/bin/mount -a
+
+# mount /data + /jffs (now with time) and drop a first marker on /data
+::sysinit:/bin/sh -c 'mkdir -p /data /jffs; t0=$(cut -d. -f1 /proc/uptime); mount -t ubifs ubi:data /data 2>/tmp/de || mount -t ubifs /dev/ubi0_10 /data 2>>/tmp/de; t1=$(cut -d. -f1 /proc/uptime); mount -t ubifs ubi:jffs2 /jffs 2>/tmp/je || mount -t ubifs /dev/ubi0_13 /jffs 2>>/tmp/je; t2=$(cut -d. -f1 /proc/uptime); echo "MNT t0=$t0 dataT=$t1 jffsT=$t2 data=$(mountpoint -q /data && echo y||echo n) jffs=$(mountpoint -q /jffs && echo y||echo n) derr=[$(cat /tmp/de 2>/dev/null)] jerr=[$(cat /tmp/je 2>/dev/null)]" >> /data/diag.log 2>/dev/null; sync'
+
+# instrumented rcS: BEGIN/END per S-script (sync'd) -> exact stall point
+::sysinit:/bin/sh -c 'for s in /etc/init.d/S??*; do n=$(basename "$s"); echo "BEGIN $n t=$(cut -d. -f1 /proc/uptime)" >> /data/diag.log 2>/dev/null; sync; "$s" start >> /data/diag.log 2>&1; echo "END $n rc=$? t=$(cut -d. -f1 /proc/uptime)" >> /data/diag.log 2>/dev/null; sync; done; echo "ALLDONE t=$(cut -d. -f1 /proc/uptime)" >> /data/diag.log 2>/dev/null; sync'
 
 console::respawn:/sbin/getty -L  console 0 vt100 # GENERIC_SERIAL
 ::shutdown:/bin/umount -a -r
