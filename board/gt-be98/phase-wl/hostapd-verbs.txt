@@ -1,0 +1,141 @@
+# hostapd-verbs.txt — hostapd_cli <-> hostapd ctrl_interface verb + nvram->conf map
+# GT-BE98 (BCM6813, wl impl105). Complement to wl-ioctl-calls.txt (driver side).
+# Narrative + open WiFi-apply recipe: docs/device/hostapd-control-map.md
+#
+# hostapd version: 2.10 (Broadcom CONFIG_DRIVER_BRCM patched) [V-src version.h]
+# binaries (0031 rootfs): /usr/sbin/hostapd (1.47MB), /usr/sbin/hostapd_cli (84KB),
+#                         /bin/eapd (55KB), /usr/sbin/wlceventd (59KB)  [V: file]
+#
+# CTRL_INTERFACE (the hostapd_cli <-> hostapd transport):
+#   dir   = /var/run/hostapd/                                  [V-live ls + V-src obj]
+#   sock  = /var/run/hostapd/<ifname>   (UNIX SOCK_DGRAM, one per radio + per BSS)
+#           live: wl0 wl0.1 wl0.2 wl1 wl1.1 wl1.2 wl2 wl3 wl3.2 wl3.3 wl3.4 wl3.5  [V-live]
+#   group = ctrl_interface_group=0  (perms srwxrwx--- admin:root)               [V-live/src]
+#   target a BSS purely by ifname:  hostapd_cli -i wl3.2 <verb>   (== wl ioctl targeting)
+#   wpa_supplicant (STA/DPP) uses a SEPARATE dir: /var/run/<ifname>_wpa_supplicant/  [V-src obj]
+#
+# DERIVATION (read-only):
+#   verbs (daemon side): grep 'os_str(n)cmp(buf,"VERB"' hostapd/ctrl_iface.c  (147 dispatch arms)
+#   verbs (cli side):    struct hostapd_cli_cmd table in hostapd/hostapd_cli.c (~85 cmds)
+#     <fw>/src-rt-5.04behnd.4916/bcmdrivers/broadcom/net/wl/impl105/main/components/
+#       opensource/router_tools/hostapd/hostapd/{ctrl_iface.c,hostapd_cli.c}
+#   conf fields + nvram keys: strings of the CLOSED conf generator (prebuilt object)
+#     <fw>/src/router/rc/prebuild/GT-BE98/hostapd_config_be.o   (.c source is NOT shipped)
+#   live: ssh admin@10.0.0.8 -p2222 (read-only) — ctrl dir listing + ps + conf schema
+#
+# FORMAT (verbs): cli_verb | CTRL_WIRE_VERB | args | effect | open-ctrl use | V/I
+#   V=verified(src/binary/live)  I=inferred
+
+# --- BSS bring-up / edit (the durable management verbs an open controller issues) ---
+enable          | ENABLE          | -                  | bring iface (radio+BSSes) up from DISABLED   | apply a freshly-written conf            | V
+disable         | DISABLE         | -                  | tear iface down to DISABLED (beacons stop)   | disable a BSS durably (wl bss down is reverted) | V
+reload          | RELOAD          | -                  | re-read conf, reconfigure BSS in place       | push conf edits w/o full down/up         | V
+update_beacon   | UPDATE_BEACON   | -                  | rebuild+push beacon/probe-resp IEs           | apply ssid/hide change live (zero outage)| V
+reload_wpa_psk  | RELOAD_WPA_PSK  | -                  | reload wpa_psk_file, deauth PSK-mismatch STAs| no-restart PSK change IF conf uses psk_file | V
+stop_ap         | STOP_AP         | -                  | stop beaconing (whole iface)                 | (heavier than disable; rarely needed)    | V
+set             | SET             | <field> <value>    | set one conf field in memory (needs update_beacon/reload to take effect) | live SSID/visibility edit | V
+get             | GET             | <field>            | read one running conf field                  | read-back / verify                       | V
+get_config      | GET_CONFIG     | -                  | dump active security config (ssid/key_mgmt/cipher/MFP) | audit a running BSS            | V
+status          | STATUS          | -                  | iface/BSS state (ENABLED/DISABLED, bssid, channel) | health + existence probe         | V
+
+# --- station ops (read + kick); event stream ---
+sta             | STA <mac>       | <mac>              | one STA's stats/state                        | per-client read                          | V
+all_sta         | STA-FIRST/STA-NEXT | -               | iterate all associated STAs                  | assoc table (parallels wl assoclist)     | V
+list_sta        | (LIST_STA)      | -                  | MAC list of associated STAs                  | assoc table                              | V
+deauthenticate  | DEAUTHENTICATE  | <mac> [reason=]    | deauth a STA (802.11)                         | kick STA via hostapd (parallels wl deauth)| V
+disassociate    | DISASSOCIATE    | <mac> [reason=]    | disassoc a STA                                | kick STA                                 | V
+(daemon)        | ATTACH / DETACH | -                  | subscribe/unsubscribe to the event stream    | hostapd_cli -a <script> -B = AP-STA-* events (netctl events) | V
+poll_sta        | POLL_STA        | <mac>              | null-frame liveness poll                      | presence check                           | V
+sa_query        | SA_QUERY        | <mac>              | 802.11w SA Query                              | MFP test                                 | V
+
+# --- roaming / 802.11k/v/r (BSS-transition mgmt; used by ASUS amas/roamast, optional open) ---
+bss_tm_req      | BSS_TM_REQ      | <mac> ...          | send 802.11v BSS Transition Mgmt request     | steer a client (optional)                | V
+disassoc_imminent | DISASSOC_IMMINENT | <mac> ...       | BTM disassoc-imminent                         | graceful steer                           | V
+req_beacon      | REQ_BEACON      | <mac> ...          | 802.11k beacon report request                 | neighbor survey (optional)               | V
+set_neighbor / remove_neighbor / show_neighbor | SET_NEIGHBOR/... | <bssid> ... | 802.11k neighbor report list mgmt | RRM list (optional) | V
+chan_switch     | CHAN_SWITCH     | <count> <freq> ... | hostapd-driven CSA                            | NON-VIABLE on this build (use wl csa)    | V
+
+# --- WPS (KEEP via ASUS path; an open controller normally leaves WPS off) ---
+wps_pbc / wps_pin / wps_cancel / wps_ap_pin / wps_config | WPS_PBC/WPS_PIN/... | ... | WPS enrollment | optional | V
+
+# --- BRCM-added cli verbs present in hostapd_cli table but NOT in impl105 daemon dispatch ---
+start_bss       | START_BSS       | -                  | (cli sends START_BSS) — NO matching arm in impl105 ctrl_iface.c | use ENABLE instead | I
+stop_bss        | STOP_BSS        | -                  | (cli sends STOP_BSS)  — NO matching arm in impl105 ctrl_iface.c | use DISABLE instead | I
+# Live evidence (netctl-verified.md P0.4) agrees: `disable`/`enable` work; start_bss/stop_bss are not the effective path.
+
+# ============================================================================
+# nvram -> /tmp/wlX_hapd.conf  field map  (closed generator: hostapd_config_be.o)
+# The generator builds key names as  "<prefix>_<suffix>"  where <prefix> is the
+# iface nvram prefix (radio "wl0".."wl3"; secondary BSS "wlX.Y"; SDN nets resolve
+# their apg<N>_* fields into a wlX.Y prefix via sync_apgx_to_wlunit). An open
+# controller that writes the conf directly can SKIP nvram and emit these fields.
+# FORMAT: conf_field | nvram_key(suffix) | notes | V/I
+# ============================================================================
+interface       | (ifname)              | radio root, e.g. wl0                              | V
+bss             | (ifname)              | bss=wlX.Y section header for each secondary BSS   | V
+ctrl_interface  | (const)               | =/var/run/hostapd                                 | V
+ctrl_interface_group | (const)          | =0                                                | V
+driver          | (const)               | =nl80211                                          | V
+bridge          | (per-BSS bridge)      | =br0 / br<VID> (the VLAN bridge the BSS joins)    | V
+bssid           | <prefix>_hwaddr / _bssid | fixed per-slot MAC (must match the netdev)     | V
+hw_mode         | (band)                | a (5/6G) / g (2.4G)                               | V
+channel         | <prefix>_chanspec/channel | 0=ACS                                         | V
+country_code    | <prefix>_country_code | E0 etc.                                           | V
+ssid            | <prefix>_ssid         | the SSID                                          | V
+ignore_broadcast_ssid | <prefix>_closed | 1=hidden 0=visible (mirrors wl `closed`)          | V
+auth_algs       | (from _auth_mode)     | 1=open/WPA, 2=shared(WEP), 3=both                 | V
+wpa             | <prefix>_akm/_auth_mode | 0/1/2/3 bitmask (2=WPA2 RSN, 3=WPA2+WPA3 mix)   | V
+wpa_key_mgmt    | <prefix>_akm          | WPA-PSK | SAE | WPA-PSK SAE | WPA-EAP | FT-* | *-SHA256 | V
+wpa_pairwise / rsn_pairwise | <prefix>_crypto | CCMP | GCMP-256 | CCMP GCMP-256             | V
+wpa_passphrase  | <prefix>_wpa_psk      | PSK ASCII passphrase (WPA2 PSK)                   | V
+sae_password    | <prefix>_sae_password / _wpa_psk | WPA3-SAE password (6G mandatory)       | V
+wep_key0 / wep_default_key | <prefix>_wep / _key* | legacy WEP                              | V
+ieee80211w      | <prefix>_mfp          | 0 disabled / 1 optional / 2 required (6G=2)       | V
+sae_require_mfp | (6G/SAE)              | 1 when SAE                                        | V
+sae_pwe         | (6G/SAE)              | 1/2 (H2E)                                         | V
+beacon_int      | <prefix>_bcn / const  | 100                                               | V
+ieee80211d      | (const/reg)           | 1                                                 | V
+ieee80211h      | (DFS)                 | 1                                                 | V
+ieee80211be     | <prefix>_11be / _eht_features | 1=Wi-Fi7 on (primary) 0 on legacy BSS     | V
+wmm_enabled     | <prefix>_wme          | 1                                                 | V
+ap_isolate      | <prefix>_ap_isolate / apg<N>_ap_isolate | client isolation                 | V
+wpa_group_rekey / wpa_gtk_rekey | <prefix>_wpa_gtk_rekey | GTK rekey seconds                 | V
+max_num_sta     | <prefix>_bss_maxassoc/_maxassoc | per-BSS assoc cap                       | V
+disable_dgaf    | (hs20)                | Hotspot 2.0 (unused on home AP)                   | I
+# WPA-Enterprise (RADIUS) fields — needed only for WPA-EAP BSSes:
+auth_server_addr / _port / _shared_secret | <prefix>_radius_ipaddr/_port/_key | RADIUS server | V
+radius_acct ...  | <prefix>_radius_acct_enabled / _das_* | accounting / dynamic-auth         | V
+# 802.11r fast-transition (optional):
+mobility_domain / r0kh / r1kh / nas_identifier | <prefix>_fbt*/_r0kh_*/_r1kh_*/_mdid | FT/FBT | V
+
+# ============================================================================
+# eapd / wlceventd — KEEP-vs-replace verdict (RE from binaries; no .c shipped)
+# ============================================================================
+# eapd  (/bin/eapd): the wl-driver EVENT FAN-OUT + EAPOL/preauth relay. Opens raw
+#   PF_PACKET "drvSocket" per wl iface for (a) brcm-event packets and (b) preauth
+#   (802.11r/pre-auth EAPOL) packets, then re-emits to consumer apps over localhost
+#   (127.0.0.1) UDP "appSocket"s: nas, bsd, wlceventd, wps-monitor.  [V: strings]
+#   On br-0043 only wlceventd remains as a consumer (nas/wps_monitor absent;
+#   bsd retired in M4). hostapd gets its OWN driver events via nl80211 and does NOT
+#   depend on eapd.  VERDICT: KEEP in the hybrid (cheap wifi-core; feeds wlceventd
+#   + 802.11r preauth). REPLACEABLE in a fully-open stack (hostapd ctrl-iface
+#   AP-STA-* events + nl80211 cover STA events; preauth only matters if FT is used).
+# wlceventd (/usr/sbin/wlceventd): wl-event LOGGER/bridge. Binds a loopback socket,
+#   reads driver Assoc/Auth/Deauth/Disassoc/ReAssoc events (validates BRCM OUI),
+#   logs them, populates a shmem event table, and writes /jffs/cbp_event_file +
+#   /tmp/cbp_channel.  [V: strings + V-live pid 3752]  Does NOT touch hostapd.
+#   VERDICT: KEEP in the hybrid (cheap; ASUS shmem/CBP consumers). REPLACEABLE in a
+#   fully-open stack — hostapd's own ATTACH event stream (AP-STA-CONNECTED/
+#   DISCONNECTED) + wl ioctls supply the same association data (netctl events proves it).
+
+# ============================================================================
+# OPEN "WiFi APPLY" RECIPE (rc-free) — combine with wl-ioctl-calls.txt
+#   slot:   rc sync_apgx_to_wlunit           (allocate/destroy wlX.Y vif — the ONE closed dep)
+#   driver: wl ioctls (SIOCDEVPRIVATE): WLC_UP/DOWN, WLC_SET_RADIO, csa, scan, deauth
+#   conf:   write /tmp/<bss>.conf with the fields above (own dir e.g. /tmp/webui-hapd/)
+#   bring:  hostapd -B -P <pid> <bss>.conf   (per-BSS instance, as webui-go already does live)
+#   edit:   hostapd_cli -i <bss> set <field> <val> ; update_beacon | reload | reload_wpa_psk
+#   on/off: hostapd_cli -i <bss> disable | enable
+#   nvram:  set <prefix>_{ssid,closed,akm,crypto,wpa_psk,sae_password,mfp,bss_enabled} for persistence
+#   NOTE: wl SET verbs (ssid/bss/closed) are reverted by the managing hostapd — use hostapd_cli.
+# ============================================================================

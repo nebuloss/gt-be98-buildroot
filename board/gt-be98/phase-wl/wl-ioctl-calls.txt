@@ -1,0 +1,81 @@
+# wl-ioctl-calls.txt — machine-readable wl subcommand -> driver ioctl/iovar map
+# GT-BE98 (BCM6813, wl impl105, driver 17.10.369.39012 r839077 BSPv1W13).
+# Companion narrative + ownership analysis: docs/device/wl-ioctl-map.md
+#
+# TRANSPORT (all rows): ioctl(SIOCDEVPRIVATE=0x89F0) on AF_INET/SOCK_DGRAM socket,
+#   ifr.ifr_name=<netdev = radio "wlX" or BSS "wlX.Y">, ifr.ifr_data=&wl_ioctl_t.
+#   wl_ioctl_t { u32 cmd; void* buf; u32 len; u8 set; u32 used; u32 needed; }  (24B, 32-bit ARM)
+#   WLC_IOCTL_MAGIC=0x14e46c77  WLC_IOCTL_MAXLEN=16384  WLC_GET_MAGIC=cmd0 (presence probe)
+#   iovars: cmd=WLC_GET_VAR(262)/WLC_SET_VAR(263); buf = "name\0"[+payload].
+#
+# DERIVATION (read-only):
+#   struct/magic/numbers:
+#     grep -n 'wl_ioctl\|WLC_IOCTL_MAGIC\|FOREACH_WLIOCTL' \
+#       <fw>/bcmdrivers/broadcom/net/wl/impl105/main/components/wlioctl/include/{wlioctl.h,wlioctl_defs.h}
+#   transport:  read <fw>/release/src/router/shared/wl_linux.c (wl_ioctl)
+#   iovar wrappers: grep wl_iovar_ <fw>/release/src/router/shared/wlutils.h
+#   rc usage:   grep -roE 'eval\("wl"...|wl_iovar_(set|get)int?\(...,"name"' <fw>/release/src/router/rc/*.c
+#   binary:     readelf -d / strings  /usr/sbin/wl  (0031 rootfs; links only librt/libc/ld)
+#   live:       ssh admin@10.0.0.8 -p2222  'wl [-i IF] {ver,status,bss,ssid,radio,chanspec,isup,assoclist}'  (GET only)
+#
+# FORMAT: verb | scope | WLC_ioctl_or_iovar | num | set/get | arg_encoding | V/I
+# scope: R=per-radio(wlX)  B=per-BSS(wlX.Y)  drv=driver-owned-write-sticks  hap=hostapd-reasserts-on-managed-BSS
+# V=verified (source/binary/live), I=inferred.
+
+# --- radio / driver state (per-radio) ---
+up                | R   | WLC_UP                          | 2   | act | none                         | V
+down              | R   | WLC_DOWN                        | 3   | act | none                         | V
+isup              | R   | WLC_GET_UP                      | 162 | get | int(1/0)                     | V
+radio             | R   | WLC_GET_RADIO/WLC_SET_RADIO     | 37/38 | g/s | u32 mask (0=on)            | V
+ver               | R   | getvar:ver                      | 262 | get | string                       | V
+revinfo           | R   | WLC_GET_REVINFO                 | 98  | get | wlc_rev_info_t               | V
+band              | R   | WLC_GET_BAND                    | 141 | get | int                          | I
+bandlist          | R   | WLC_GET_BANDLIST                | 140 | get | int[]                        | I
+country           | R   | WLC_GET_COUNTRY/WLC_SET_COUNTRY | 83/84 | g/s | wl_country_t               | V
+txchain           | R   | setvar:txchain                  | 263 | set | int                          | V
+rxchain           | R   | setvar:rxchain                  | 263 | set | int                          | V
+spect             | R   | WLC_GET/SET_SPECT_MANAGMENT     | 245/244 | g/s | int                      | V
+instance          | R   | WLC_GET_INSTANCE                | 14  | get | int(radio idx)               | V
+
+# --- channel / chanspec (per-radio PHY) ---
+channel           | R   | WLC_GET_CHANNEL                 | 29  | get | channel_info_t               | V
+chanspec          | R   | getvar/setvar:chanspec          | 262/263 | g/s | u16 (e.g.0xe02a); SET reasserted on AP radio | V
+csa               | R,drv | setvar:csa                    | 263 | set | wl_chan_switch_t (zero-outage CSA) | V
+autochannel       | R   | WLC_START_CHANNEL_SEL/acs       | 216 | set | -- ; UNSUPPORTED on this driver | V
+valid_channels    | R   | WLC_GET_VALID_CHANNELS          | 217 | get | chan list                    | I
+scan              | R,drv | WLC_SCAN                      | 50  | set | wl_scan_params_t (off-channel dwell) | V
+scanresults       | R   | WLC_SCAN_RESULTS                | 51  | get | versioned wl_scan_results_t (parse via stock wl) | V
+
+# --- BSS / SSID / security (per-BSS) ---
+ssid              | B,hap | WLC_GET_SSID/WLC_SET_SSID     | 25/26 | g/s | wlc_ssid_t{u32 len;u8[32]}; SET reasserted by hostapd | V
+bssid             | B   | WLC_GET_BSSID                   | 23  | get | ether_addr(6B)               | V
+bss               | B,hap | getvar/setvar:bss             | 262/263 | g/s | int(1=up); real BSS up-state | V
+closed            | B,hap | WLC_GET/SET_CLOSED or :closed | 67/68 | g/s | int (hide SSID)            | V
+bss_info          | B   | WLC_GET_BSS_INFO                | 136 | get | wl_bss_info_t                | V
+assoclist         | B   | WLC_GET_ASSOCLIST               | 159 | get | maclist{u32 cnt;ea[]}        | V
+rssi              | B   | WLC_GET_RSSI                    | 127 | get | int(dBm)                     | V
+deauthenticate    | B,drv | WLC_SCB_DEAUTHENTICATE_FOR_REASON | 201 | set | scb_val_t{u32 reason;ea}  | V
+disassoc          | B   | WLC_DISASSOC                    | 52  | set | none/ea                      | V
+authorize         | B   | WLC_SCB_AUTHORIZE               | 121 | set | ether_addr                   | V
+deauthorize       | B   | WLC_SCB_DEAUTHORIZE             | 122 | set | ether_addr                   | V
+wsec              | B   | WLC_GET_WSEC/WLC_SET_WSEC       | 133/134 | g/s | u32 cipher mask (wlconf)   | V
+wpa_auth          | B   | WLC_GET_WPA_AUTH/WLC_SET_WPA_AUTH | 164/165 | g/s | u32 AKM mask (wlconf)    | V
+auth              | B   | WLC_GET_AUTH/WLC_SET_AUTH       | 21/22 | g/s | int                        | V
+wep               | B   | WLC_GET_KEY/WLC_SET_KEY         | 44/45 | g/s | wl_wsec_key_t               | V
+maxassoc          | B   | setvar:maxassoc                 | 263 | set | int                          | V
+bss_maxassoc      | B   | setvar:bss_maxassoc             | 263 | set | int                          | V
+
+# --- board glue (NOT wireless control; stays rc-owned, listed for completeness) ---
+ledbh             | R   | board LED iovar/ioctl           | -   | set | int,int (rc 298x)            | V
+gpioout           | R   | gpioout ioctl                   | -   | set | mask,val (rc 28x)            | V
+sr_config         | R   | sr_config iovar                 | -   | set | -- (rc 8x)                   | V
+
+# --- MINIMAL OPEN-CONTROLLER SET (replace rc restart_wireless/sync_apgx) ---
+# READ (owl, done): WLC_GET_MAGIC(0) WLC_GET_VAR(262) WLC_GET_SSID(25) WLC_GET_BSSID(23)
+#                   WLC_GET_ASSOCLIST(159) WLC_GET_RSSI(127) WLC_GET_UP(162) WLC_GET_RADIO(37)
+# DRIVER-WRITE (sticks on driver-owned ifaces): WLC_SET_RADIO(38) WLC_UP(2) WLC_DOWN(3)
+#                   setvar:csa(263) WLC_SCB_DEAUTHENTICATE_FOR_REASON(201) WLC_SCAN(50)/WLC_SCAN_RESULTS(51)
+# EDIT managed BSS: NO wl-SET (hostapd reasserts) -> use hostapd_cli + nvram.
+# SLOT create/delete (the ONE gap, no open wl-ioctl): keep `rc sync_apgx_to_wlunit`
+#                   (open handle into closed wlconf/libcfgmnt) + restart_wireless/restart_sdn.
+</content>

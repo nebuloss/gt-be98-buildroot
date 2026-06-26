@@ -1,0 +1,48 @@
+# GT-BE98 Phase-3 STATIC dlopen targets for the KEEP daemons
+# generated: 2026-06-06 (static binary analysis; companion to phase3-dlopen-static.md)
+# blob: gt-be98-rootfs-0031 rootfs.img sha256 dfbf98b4d3a474887ad029e9e6347da081f013e615a607f4f083bb2f3ab28d2c
+# tree: /home/guillaume/.claude/jobs/fe440078/tmp/rootfs0031 (read-only unsquash)
+#
+# Machine-readable flat list of additional .so files the graft package must
+# include BEYOND the static DT_NEEDED closure, due to dlopen/dlmopen/
+# __libc_dlopen_mode resolved statically.  Format per line:
+#   <status>  <so>  <loader>  <class>  <note>
+#   status = ADD | ALREADY-IN-CLOSURE | NONE | CONDITIONAL
+#
+# Derivation (reproduce):
+#   RE=~/be98/buildroot/output/host/bin/arm-buildroot-linux-gnueabi-readelf
+#   OD=~/be98/buildroot/output/host/bin/arm-buildroot-linux-gnueabi-objdump
+#   R=/home/guillaume/.claude/jobs/fe440078/tmp/rootfs0031
+#   # 1. KEEP daemons import no dlopen:
+#   $RE --dyn-syms $R/sbin/rc | grep -E 'UND.*\b(dlopen|dlmopen|__libc_dlopen_mode)\b'   # empty (same for all KEEP bins/libs)
+#   # 2. closure libs that DO dlopen:
+#   for so in $R/lib/*.so $R/usr/lib/*.so*; do $RE --dyn-syms "$so" 2>/dev/null \
+#       | grep -q 'UND.*\bdlopen\b' && echo "$so"; done | <intersect with manifest closure>
+#       => /lib/libbcm_util.so , /usr/lib/libcrypto.so.1.1
+#   # 3. resolve r0 at each `bl <dlopen@plt>` (ARM: ldr r0,[pc,#k]; add r0,pc,r0 -> .rodata string)
+#   $OD -d $R/lib/libbcm_util.so | grep -B6 '<dlopen@plt>'          # site 0x2384 -> "libc.so.6"
+#   $OD -d $R/usr/lib/libcrypto.so.1.1 | grep '<dlopen@plt>'        # sites 0xd27fc,0xd2dc4 (DSO/engine loader, computed)
+#   # 4. openssl ENGINESDIR has zero .so in blob:
+#   strings $R/usr/lib/libcrypto.so.1.1 | grep ENGINESDIR           # /usr/lib/engines-1.1
+#   find $R -path '*engines*' -name '*.so'                          # empty
+#
+# RESULT: 3 dlopen call sites in the KEEP closure (1 resolved-static, 2 computed);
+#         ZERO additional .so required beyond the existing DT_NEEDED closure.
+
+# --- resolved dlopen targets (KEEP daemons + closure) ---
+ALREADY-IN-CLOSURE  libc.so.6              /lib/libbcm_util.so@0x2384      RESOLVED-static   clock_gettime fallback shim; /lib/libc.so.6 already grafted
+NONE                (engines-1.1/*.so)     /usr/lib/libcrypto.so.1.1       COMPUTED          ENGINESDIR=/usr/lib/engines-1.1 has NO .so in blob; built-in engines only
+ALREADY-IN-CLOSURE  libnss_files.so.2      libc.so.6 __libc_dlopen_mode    COMPUTED-NSS      already in manifest (/lib + /lib64)
+ALREADY-IN-CLOSURE  libnss_dns.so.2        libc.so.6 __libc_dlopen_mode    COMPUTED-NSS      already in manifest (/lib + /lib64)
+ALREADY-IN-CLOSURE  libresolv.so.2         libc.so.6 __libc_dlopen_mode    COMPUTED-NSS      already in manifest (/lib)
+
+# --- correction: NOT a dlopen target (was mis-attributed to libbwdpi) ---
+# libbwdpi.so has the path strings but NO dlopen capability (no dl* import, no libdl).
+# The real loader is /usr/sbin/wred via ordinary DT_NEEDED. Add ONLY if wred is kept,
+# and then through the normal seed+DT_NEEDED walk (NOT as a dlopen target).
+CONDITIONAL  libshn_pctrl.so   /usr/sbin/wred (DT_NEEDED)  not-dlopen   leaf: DT_NEEDED={libc.so.6,ld-linux.so.3}; needed iff wred kept
+CONDITIONAL  libshn_utils.so   /usr/sbin/wred (DT_NEEDED)  not-dlopen   leaf: DT_NEEDED={libc.so.6,ld-linux.so.3}; needed iff wred kept
+
+# --- net additions to the graft beyond DT_NEEDED closure ---
+# UNCONDITIONAL: 0
+# CONDITIONAL (only if /usr/sbin/wred is added as a seed): 2 (libshn_pctrl.so, libshn_utils.so)

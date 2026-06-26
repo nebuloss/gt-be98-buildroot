@@ -1,0 +1,129 @@
+# gt-be98 nvram store — machine-readable interface list
+# Derivation: offline analysis of unsquashed 0031 rootfs
+#   (~/.claude/jobs/fe440078/tmp/rootfs0031): readelf --dyn-syms / -d,
+#   strings(1) on /bin/nvram, /lib/libnvram.so, /usr/lib/libshared.so,
+#   /lib/modules/4.19.294/extra/bcm_knvram.ko, /usr/sbin/envram(s);
+#   cross-ref vendor source ~/be98/gt-be98-firmware
+#   (bcm_knvram/impl1: wlcsm_netlink.c, wlcsm_linux.h; uapi/linux/bcm_netlink.h).
+# Tags: V-blob=read in shipped binary, V-src=read in open source, INFERRED.
+# Companion prose: docs/device/nvram-interface-map.md
+# Authored 2026-06-06. NO device writes. Live AP is READ-ONLY (get/getall only).
+
+[transport]
+mechanism      = netlink datagram socket          # V-src/V-blob
+proto_name     = NETLINK_WLCSM                     # V-src bcm_netlink.h:38
+proto_number   = 31                                # V-src
+socket_call    = sock_create(AF_NETLINK,SOCK_RAW,NETLINK_WLCSM)  # V-src wlcsm_netlink.c:527
+kserver_call   = netlink_kernel_create(&init_net,NETLINK_WLCSM,&cfg)  # V-src :531
+max_pair_bytes = 1024     # WLCSM_NAMEVALUEPAIR_MAX / NL_PACKET_SIZE  # V-src wlcsm_linux.h:64-65
+krecv_buf      = 1280     # MAX_NLRCV_BUF_SIZE                        # V-src wlcsm_linux.h:66
+inproc_lock    = pthread mutex g_WLCSM_NVRAM_MUTEX / nvram_op_mutex   # V-blob libnvram
+commit_lock    = lockf(/var/nvram.lock)                              # V-blob libnvram
+store_location = kernel RAM tuple tree (bcm_knvram.ko)               # V-blob
+NOT            = no mmap shm, no /dev char node, no ioctl, no daemon socket  # V-blob
+
+[backing.runtime]      # the store 'nvram commit' persists
+file       = /data/.kernel_nvram.setting           # V-blob
+file_new   = /data/.kernel_nvram.setting_new        # commit-in-progress  # V-blob
+file_old   = /data/.kernel_nvram.setting_old        # rollback            # V-blob
+fs         = UBIFS volume on /data (NAND)           # V-blob hndnvram.sh
+image_dflt = /rom/etc/wlan/kernel_nvram.setting     # fallback default    # V-blob
+format     = flat name=value tuple dump (== nvram getall/savefile)  # INFERRED
+
+[backing.mfg]          # read-only factory defaults / MAC / calibration
+partition  = misc1 (NAND: UBI vol 'nvram'; NOR: jffs2 'data'; eMMC: ext4)  # V-blob hndnvram.sh
+file       = nvram.nvm  (mounted /mnt/nvram)        # V-blob
+calib      = /data/.wlsromcustomerfile.nvm (wl srom) # V-blob
+mac_source = /proc/nvram/BaseMacAddr                # V-blob /bin/nvram
+
+[backing.envram]       # SEPARATE CFE/uboot env region (NOT the runtime store)
+server     = /usr/sbin/envrams   (TCP, default port :5152)  # V-blob
+client     = /usr/sbin/envram                               # V-blob
+note       = MAC-derivation source; BANNED for modify; kill+firewall only  # V-src AGENTS.md
+
+[commit.path]          # full-blob rewrite == flash-wear mechanism
+step1 = lockf(/var/nvram.lock)                      # V-blob
+step2 = nvram_file_save_raw -> write WHOLE tree to *_new  # V-blob
+step3 = fflush + fsync(*_new)                        # V-blob
+step4 = rename(*_new -> setting); rotate *_old       # V-blob
+wear  = one full /data/.kernel_nvram.setting rewrite PER commit  # INFERRED
+noop  = wlcsm_nvram_commit_reqd dirty-flag; "# skip nvram commit #"  # V-blob
+guard = asus_stop_commit (CLI honours to suppress commits)  # V-blob
+hazard= watchdog httpd_check nvram_commit()/tick = 1 full rewrite/tick  # V-src patch-0033 notes (watchdog.c:8020)
+
+[cli.verbs]            # /bin/nvram   (V-blob)
+get        name                 # read one var
+getall                          # dump all (alias: show, dump)
+show                            # == getall
+set        name=value           # stage one var (RAM tree; needs commit to persist)
+unset      name                 # remove one var
+commit                          # persist tree -> /data file (full rewrite)
+kset       name=value           # set directly in kernel nvram (RAM only)
+kcommit                         # kernel-side commit
+kernelset  <file>               # load file -> kernel tree (boot populate)
+savefile   <file>               # dump tuples to file
+restore    <file>               # load tuples from file
+restore_mfg <file>              # restore factory mfg nvram (reads BaseMacAddr)
+fb_save                         # save feedback romfile (/tmp/fb_save_nvram.txt)
+getbit / setbit                 # bitflag get/set
+
+[lib.libnvram.so.exports]       # primitives  (V-blob readelf --dyn-syms)
+nvram_get
+nvram_set
+nvram_unset
+nvram_getall
+nvram_commit
+nvram_kset
+nvram_kcommit
+nvram_get_bitflag
+nvram_set_bitflag
+nvram_get_salt
+nvram_file_init
+nvram_file_deinit
+nvram_file_save_raw
+# wlcsm layer (underlying):
+wlcsm_nvram_get
+wlcsm_nvram_set
+wlcsm_nvram_unset
+wlcsm_nvram_getall
+wlcsm_nvram_commit
+wlcsm_nvram_xfr
+wlcsm_init / wlcsm_shutdown / wlcsm_reinit
+netlink_send_mesg / netlink_recv_mesg
+
+[lib.libshared.so.exports]      # convenience wrappers  (V-blob)
+nvram_get_int
+nvram_set_int
+nvram_get_hex
+nvram_set_hex
+nvram_get_double
+nvram_set_double
+nvram_default_get
+nvram_get_r
+nvram_get_file / nvram_set_file
+nvram_contains_word
+nvram_is_empty
+nvram_commit_x
+nvram_pf_get / nvram_pf_set
+nvram_pf_get_int / nvram_pf_set_int
+nvram_pf_match / nvram_pf_invmatch
+nvram_pf_restore_default
+nvram_split_get / nvram_split_set
+nvram_valid_get_int
+nvram_initialize_all / nvram_validate_all
+# header inlines (resolve to nvram_get): nvram_safe_get nvram_match nvram_invmatch
+
+[kmod.bcm_knvram.exported_symbols]   # in-kernel API for wl/dhd  (V-blob __ksymtab_*)
+nvram_k_get
+nvram_k_set
+wlcsm_nvram_k_get
+wlcsm_nvram_k_set
+wlcsm_nvram_getall
+
+[landmines]
+- NEVER write/commit MAC vars: et0macaddr, *_hwaddr (derived from BaseMacAddr).  # V-blob
+- envrams gated-off => BSP-MAC fallback => et0macaddr poisoned+committed = br-0033.  # V-src
+- envrams: BANNED to modify/wrap/rename/gate-binary; kill+firewall only.          # V-src
+- commit = full-blob NAND write: batch all sets, ONE commit; never per-tick/loop.  # INFERRED
+- per-pair value cap = 1024 bytes.                                                 # V-src
+- live trial AP READ-ONLY: nvram get/getall only; no set/commit/unset.             # operator rule

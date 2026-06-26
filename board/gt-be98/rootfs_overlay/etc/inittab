@@ -26,7 +26,7 @@
 # Spawned FIRST; fires at its WINDOW even if PID1 wedges, captures where init is
 # stuck (PID1 wchan + every proc's wchan/cmdline + dmesg) to the free ubifs vol,
 # then reverts to slot2. See /usr/sbin/diag-deadman.
-::sysinit:/bin/sh -c '/usr/sbin/diag-deadman &'
+::sysinit:/bin/sh -c '/bin/sh /usr/sbin/diag-deadman &'
 
 # ★ Layer 1 — pet the HW watchdog (backgrounded) so slow mounts/datapath survive ★
 ::sysinit:/bin/sh -c '/sbin/watchdog -t 5 /dev/watchdog &'

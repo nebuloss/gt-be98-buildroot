@@ -1,0 +1,89 @@
+# slot-alloc-notes.txt - machine-readable SSID->slot->bridge map + open vif-create/bridge-bind spec
+# GT-BE98 (BCM6813, wl impl105, driver 17.10.369.39012 r839077 BSPv1W13).
+# Companion narrative + reproducibility verdict: docs/device/sync-apgx-slot-alloc.md
+#
+# DERIVATION (read-only):
+#   rc handle:        rc/rc.c:540 -> sync_apgx_to_wlunit(NULL); rc/services.c:26612.
+#   closed symbol:    cfg_mnt/cfg_mtlan.h:49-50 _sync_apgx_to_wlunit(json2jffs=1,..) in libcfgmnt.so
+#                     (cfg_mnt/ ships headers + prebuilt .so/.bin only; NO .c source).
+#   allocator helpers: cfg_mtlan.h get_unused_ifname_by_dut(36,56-57,97-101),
+#                     update_apg_ifnames_used(83), gen_wifi_band_cap(36).
+#   vif create/remove: strings /usr/sbin/wl  (interface_create / interface_remove);
+#                     struct: wlioctl.h:12850-12959 (WL_INTERFACE_TYPE_*, wl_interface_create_v1/2/3_t).
+#   bring-up path:    rc/lan.c:6569 restart_wireless; lan.c:2081 wlconf(); lan.c:2283/2328 brctl addif.
+#   live (PRIOR sessions, this session auth-blocked): netctl-verified.md, sdn_investigation.md.
+# TAGS: V=verified(source/binary/live)  I=inferred.
+
+# ============================================================
+# A. WHAT sync_apgx_to_wlunit DOES  (pure allocation bookkeeping; NO wl-ioctl, NO brctl) [V]
+#    INPUT  (nvram): sdn_rl, vlan_rl, subnet_rl, apg<N>_{enable,ssid,security,dut_list}, wifi-band cap
+#    ALGO  : for each enabled SDN -> decode apg<N>_dut_list MASK to bands -> per band,
+#            get_unused_ifname_by_dut() picks lowest-free MBSS subunit wlX.Y (idempotent).
+#    OUTPUT: (1) /jffs/.sys/cfg_mnt/apg_ifnames_used.json  (json2jffs=1, persists, perms 000)
+#            (2) nvram wl<X>_vifs + wl<X>.<Y>_bss_enabled=1 + per-vif cfg  (uncommitted)
+#    NOT done here: vif netdev create, radio up, bridge bind  -> those are restart_wireless's job.
+#    Proof it is allocation-only: `rc sync_apgx_to_wlunit` alone = ZERO outage, no BSS/bridge appears. [V]
+
+# ============================================================
+# B. BAND-MASK -> RADIO -> BAND   (apg<N>_dut_list = <MAC|*>MASK> ; MASK = OR of band_idx) [V live]
+# mask_bit | band_idx | radio | band        | netctl --bands token
+1          | 1        | wl3   | 2.4GHz      | 2.4
+2          | -        | (none)| reserved (allocates nothing) | -
+4          | 4        | wl0   | 5GHz-low    | 5l (or 5)
+8          | 8        | wl1   | 5GHz-high   | 5h (or 5)
+16         | 16       | wl2   | 6GHz(SAE)   | 6
+# useful MASK values: 1=2.4only  13=2.4,5(3-band)  16=6Gonly  29=all(2.4+5l+5h+6)  31==29(bit2 ignored)
+
+# ============================================================
+# C. LIVE-CONFIRMED SSID -> SLOT -> BRIDGE MAP   (prior VERIFIED-live; matches algo exactly) [V]
+# ssid/network        | sdn/apg     | vid | bridge | beaconing_BSS_slot(s)          | fronthaul(silent) | bands
+MyPrivateNetwork/MAINFH| sdn2/apm2  | 0   | br0    | wl3.1                          | -                 | 2.4
+NetB                  | sdn3/apg3   | 30  | br30   | wl3.2                          | wl*.30            | 2.4
+NetA                  | sdn4/apg4   | 20  | br20   | wl3.3 wl0.1 wl2.1              | wl*.20            | 2.4,5,6
+netctl-t40 (mask 29)  | sdn6/apg5   | 40  | br40   | wl3.6 wl0.3 wl1.3 wl2.1        | wl*.40            | all
+netctl-t40 (mask 13)  | sdn6/apg5   | 40  | br40   | wl3.6 wl0.3 wl1.3              | wl*.40            | 2.4,5l,5h
+# RULES [V]: kernel bridge name ALWAYS br<VID>. beaconing slot = wlX.<low-subunit>(1,2,3,6..);
+#            wlX.<VID> ifaces are silent bridge members. apg_ifnames_used.json band_idx == dut_list MASK bits.
+# CURRENT br-0043 trial baseline = STRIPPED: vlan_rl/subnet_rl empty, sdn_rl=DEFAULT/MAINBH/MAINFH,
+#            wl3_vifs="wl3.1 wl3.4", apg_ifnames_used.json EMPTY (no user SDN nets allocated). [V]
+
+# ============================================================
+# D. REPRODUCIBILITY VERDICT: REPRODUCIBLE (not irreducible). [V primitives / I runtime-integration]
+#   vif CREATE  = OPEN iovar  wl interface_create  (NOT closed-only as Tier-3 assumed)
+#   vif DELETE  = OPEN iovar  wl interface_remove
+#   bridge BIND = OPEN        brctl addif br<VID> wlX.Y   (holds; rc itself uses it) [V live]
+#   residual closed sliver = deterministic subunit-index choice + BSSID derivation in libcfgmnt;
+#                            NOT a blocker (deterministic; netctl already reproduced it; clean delete).
+
+# ============================================================
+# E. CANDIDATE OPEN vif-create / bridge-bind SEQUENCE  (replaces the closed slot allocator)
+#
+# Transport (all wl rows): ioctl(SIOCDEVPRIVATE=0x89F0) on AF_INET/SOCK_DGRAM,
+#   ifr.ifr_name=<radio wlX>, ifr.ifr_data=&wl_ioctl_t{cmd=WLC_SET_VAR(263), buf="interface_create\0"+struct,...}
+#   (same transport owl uses; no ASUS .so needed).
+#
+# wl_interface_create_v2_t  (wlioctl.h:12929) :
+#   uint16 ver=WL_INTERFACE_CREATE_VER_2(2); u8 pad1[2];
+#   uint32 flags;            // OR of: WL_INTERFACE_MAC_USE(1<<1) if -m, WL_INTERFACE_BSSID_INDEX_USE(1<<4) if -b,
+#                            //        WL_INTERFACE_IF_INDEX_USE(1<<3) if -f, WL_INTERFACE_WLC_INDEX_USE(1<<2) if wlc set
+#   struct ether_addr mac_addr;
+#   uint8  iftype = WL_INTERFACE_TYPE_AP(1);   // AP MBSS slot
+#   uint8  pad2; uint32 wlc_index;
+#   -> returns wl_interface_info_v1{ver; ether_addr mac_addr; char ifname[]}  (the new wlX.Y name)
+#
+# PATH B  (pure runtime; no nvram, no rc, no restart_wireless) -- per selected radio:
+#   1. wl -i wl<X> interface_create 1 [-m <bssid>]      # 1 = WL_INTERFACE_TYPE_AP -> new wl<X>.<Y>
+#   2. ip link add br<VID> type bridge 2>/dev/null; ip link set br<VID> up        # if new
+#      ip link add link eth<P> name eth<P>.<VID> type vlan id <VID>; brctl addif br<VID> eth<P>.<VID>  # uplink tag, if new
+#   3. brctl addif br<VID> wl<X>.<Y>                    # OPEN bind (holds at t+20s) [V]
+#   4. hostapd /tmp/wl<X>.<Y>_hapd.conf -B   (or hostapd_cli set ssid/.. ; update_beacon ; enable)
+#   DELETE: brctl delif br<VID> wl<X>.<Y> ; wl -i wl<X>.<Y> interface_remove   (or interface_remove -C <bsscfg_idx>)
+#   STATUS: interface_create iovar + struct VERIFIED present in stock wl binary + wlioctl.h [V];
+#           that it yields a hostapd-attachable AP vif on THIS NIC-mode driver = INFERRED (not live-tested;
+#           mutating, so untestable under the current read-only hardware trial). [I]
+#
+# PATH A  (lowest-effort; what netctl does today, minus the rc handle) [V]:
+#   open allocator writes the SAME outputs as sync (wl<X>_vifs + wl<X>.<Y>_bss_enabled + apg/sdn nvram
+#   + apg_ifnames_used.json deterministically) -> single restart_wireless: stock wlconf materializes
+#   the vif, start_lan brctl-binds it. netctl proved this end-to-end + byte-clean inverse. The only
+#   reason netctl still calls `rc sync_apgx_to_wlunit` is convenience (reuse the correct allocator).
