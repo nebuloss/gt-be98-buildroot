@@ -7,9 +7,12 @@
 #
 # After WINDOW, if the boot has not disarmed (/tmp/diag-ok), it captures — from
 # OUTSIDE the hung init — exactly where boot is stuck: PID1's wait-channel, every
-# process's comm/wchan/cmdline (the hung sysinit step shows here), and dmesg. It
-# persists that to whichever ubifs volume PID1 is NOT wedged on (the two volumes
-# don't block each other), time-boxed, then reboots to the good slot REGARDLESS.
+# process's comm/wchan/cmdline (the hung sysinit step shows here), and dmesg, and
+# persists that across the reset, then reboots to the good slot REGARDLESS.
+#
+# Persist strategy (fixed): write to every ubifs ALREADY mounted (the common case
+# when init mounted /data then hung on the next step — a fresh mount would just
+# EBUSY); only if none are mounted do we try a fresh, time-boxed mount.
 WINDOW=200
 
 sleep "$WINDOW"
@@ -19,29 +22,35 @@ F=/tmp/deadman-forensics.txt
 {
   echo "=== DEADMAN FORENSICS uptime=$(cut -d. -f1 /proc/uptime 2>/dev/null)s window=${WINDOW}s ==="
   echo "--- PID1 wchan (where init is blocked) ---"; cat /proc/1/wchan 2>/dev/null; echo
-  echo "--- /proc/mounts (what mounted before the hang) ---"; cat /proc/mounts 2>/dev/null
+  echo "--- /proc/mounts ---"; cat /proc/mounts 2>/dev/null
   echo "--- processes: pid comm wchan state cmdline ---"
   for p in /proc/[0-9]*; do
     [ -r "$p/comm" ] || continue
     echo "$(basename "$p") comm=$(cat "$p/comm" 2>/dev/null) wchan=$(cat "$p/wchan" 2>/dev/null) state=$(cut -d' ' -f3 "$p/stat" 2>/dev/null) cmd=[$(tr '\0' ' ' < "$p/cmdline" 2>/dev/null)]"
   done
-  echo "--- dmesg tail ---"; dmesg 2>/dev/null | tail -60
+  echo "--- dmesg tail ---"; dmesg 2>/dev/null | tail -70
 } > "$F" 2>&1
 
-# persist to whichever ubifs volume is free (the one PID1 is NOT stuck on);
-# time-boxed in a sub-shell so a contended mount cannot wedge the revert.
-(
-  mkdir -p /jffs /data 2>/dev/null
-  if mount -t ubifs ubi:jffs2 /jffs 2>/dev/null || mount -t ubifs /dev/ubi0_13 /jffs 2>/dev/null; then
-    cp "$F" /jffs/deadman-forensics.txt 2>/dev/null; sync
-  fi
-  if mount -t ubifs ubi:data /data 2>/dev/null || mount -t ubifs /dev/ubi0_10 /data 2>/dev/null; then
-    cp "$F" /data/deadman-forensics.txt 2>/dev/null; sync
-  fi
-) &
-PP=$!
-sleep 10
-kill "$PP" 2>/dev/null
+# 1) write to every ubifs already mounted (no fresh mount -> no EBUSY/contention)
+wrote=0
+for mp in $(grep -w ubifs /proc/mounts 2>/dev/null | cut -d' ' -f2); do
+  if cp "$F" "$mp/deadman-forensics.txt" 2>/dev/null; then sync; wrote=1; fi
+done
+
+# 2) only if nothing was mounted yet, try a fresh time-boxed mount of each vol
+if [ "$wrote" = 0 ]; then
+  (
+    for v in "jffs2 13" "data 10"; do
+      set -- $v; n=$1; idx=$2
+      mkdir -p "/mnt/$n" 2>/dev/null
+      mount -t ubifs "ubi:$n" "/mnt/$n" 2>/dev/null || mount -t ubifs "/dev/ubi0_$idx" "/mnt/$n" 2>/dev/null
+      cp "$F" "/mnt/$n/deadman-forensics.txt" 2>/dev/null && sync
+    done
+  ) &
+  PP=$!
+  sleep 10
+  kill "$PP" 2>/dev/null
+fi
 
 bcm_bootstate +2 2>/dev/null   # harmless if absent; ONCE is already consumed
 sync
