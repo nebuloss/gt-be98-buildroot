@@ -23,7 +23,7 @@
 #
 ################################################################################
 
-GT_BE98_ROOTFS_VERSION = 0035
+GT_BE98_ROOTFS_VERSION = 0034
 GT_BE98_ROOTFS_SITE = https://github.com/nebuloss/gt-be98-packages/releases/download/rootfs-$(GT_BE98_ROOTFS_VERSION)
 GT_BE98_ROOTFS_SOURCE = gt-be98-rootfs-$(GT_BE98_ROOTFS_VERSION).tar.gz
 GT_BE98_ROOTFS_LICENSE = PROPRIETARY
