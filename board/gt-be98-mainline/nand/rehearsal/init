@@ -177,6 +177,21 @@ gate metadata_unchanged "[ \$(sha256sum /dev/ubi0_1 | cut -d' ' -f1) = $STOCK_ME
 mount -t ubifs -o ro ubi0:jffs2 /mnt && gate jffs2_mounts_with_marker "grep -q 'rehearsal marker' /mnt/mainline-os/marker" && umount /mnt
 ubidetach -d 0
 
+# ---- U: the image after the fenced sessions and power cuts, attached by an
+# unmodified UBI (gate off, no fence: writes allowed, as stock): attach, erase
+# whatever the fence left alone, mount UBIFS read-write (G6 second half) -----
+say "unmodified UBI (no gate, no fence) on the post-session image"
+echo 0 > $FW
+dmesg -c > /dev/null
+ubiattach -m 1 -d 0 -O 2048 > /dev/null
+gate unmodified_ubi_attaches "[ -e /dev/ubi0_13 ] && [ \"\$(cat /sys/class/ubi/ubi0/ro_mode)\" = 0 ]"
+dmesg | grep -E 'corrupted PEBs|bad PEBs' | sed 's/^/RH: /'
+gate unmodified_ubi_0_corrupted "dmesg | grep -q 'corrupted PEBs: 0'"
+gate unmodified_ubifs_mounts_rw "mount -t ubifs ubi0:jffs2 /mnt && grep -q 'rehearsal marker' /mnt/mainline-os/marker && echo stock > /mnt/stock-side && sync && umount /mnt"
+gate unmodified_ubifs_no_errors "! dmesg | grep -qE 'UBIFS error|ubi0 error'"
+ubidetach -d 0
+echo 1 > $FW
+
 # ---- R: restore the raw backup (G5 restore half) ---------------------------------
 gt-be98-nandrestore --dry-run /tmp/backup.raw /dev/mtd1 | tail -n 3
 gt-be98-nandrestore /tmp/backup.raw /dev/mtd1 > /tmp/restore.txt; rc=$?
