@@ -6,7 +6,11 @@
 description="System logger (sysklogd)"
 
 command="/sbin/syslogd"
-command_args="-F ${SYSLOGD_OPTS}"
+# -l: keep the kernel's console logging. Without it syslogd turns it off
+# (klogctl CONSOLE_OFF: console loglevel 1) after opening /dev/kmsg, and the
+# "<2>BE98PC xx" post-codes no longer reach the be98pc earlycon. The level
+# stays the one of loglevel=4 / kernel.printk / conf.d/dmesg.
+command_args="-F -l ${SYSLOGD_OPTS}"
 supervisor="supervise-daemon"
 respawn_delay=2
 
