@@ -123,3 +123,52 @@ Before promotion is acceptable:
 4. The commit itself would be done from **stock** with the open metadata writer
    (`board/gt-be98/flash/open-flash.sh`: seq bump + CRC, then the committed
    field), never from mainline.
+
+## Plan: secrets off the served rootfs (not implemented yet)
+
+Today `rootfs.squashfs`, served over HTTP to the box, contains the SSH host
+private keys (`SSH_HOSTKEY_DIR`, so that the box keeps its identity) and the
+web UI password hash (`/etc/webui/auth.conf`, a single salted SHA-256).
+Anyone who can fetch the URL can impersonate the box over SSH or brute-force
+the hash. Mitigation in place: the lab HTTP server only answers the box's
+addresses. Plan to remove the secrets from the image:
+
+1. **Build**: stop baking `ssh_host_*_key` and `auth.conf` into the rootfs.
+   Keep only public material: `authorized_keys` (public keys) and, for
+   provisioning, nothing secret. `SSH_HOSTKEY_DIR` and `WEBUI_PASSWORD*`
+   move to a separate *provisioning bundle* (below).
+2. **Storage**: the `GTBE98-DATA` USB stick (ext4, mounted on `/data` by
+   `gt-be98-persist`, before sshd and webui) holds
+   `/data/secrets/ssh/ssh_host_{ed25519,ecdsa,rsa}_key{,.pub}` (0600, root)
+   and `/data/secrets/webui/` (auth.conf, later webui.db). `/data/secrets`
+   is 0700. Nothing secret ever goes to the NAND.
+3. **First boot** (a new `gt-be98-secrets` service, boot runlevel, after
+   `gt-be98-persist`, before sshd/webui):
+   - stick present, secrets present: bind-mount or copy them into place
+     (`/etc/ssh`, `/etc/webui`), sshd and webui start with the persistent
+     identity;
+   - stick present, no secrets yet: `ssh-keygen -A` into
+     `/data/secrets/ssh`, then as above (generated on the box, never on a
+     server); the webui stays disabled until a password exists there;
+   - no stick: generate ephemeral host keys in RAM (new fingerprint each
+     boot; the operator uses `StrictHostKeyChecking=accept-new` with a
+     dedicated known_hosts entry for the box), webui disabled.
+4. **Web UI password without a server-side secret**: either
+   - the operator sets it once over SSH (`gt-be98-webui-passwd`, a small
+     wrapper writing `/data/secrets/webui/auth.conf` in the webui format and
+     enabling the service), or
+   - a one-time *provisioning bundle* on the stick
+     (`/data/provision/webui-password-hash`, `/data/provision/ssh/`) that the
+     secrets service consumes, installs under `/data/secrets` and deletes.
+   The build host's local.conf keeps only `SSH_AUTHORIZED_KEYS` (public).
+5. **UI state**: `/etc/webui` on the stick
+   (`/data/secrets/webui` bind-mounted on `/etc/webui`), so UI changes and
+   `webui.db` survive reboots: this is PERSISTENCE.md level 4 for the web UI.
+6. **Migration**: a one-shot `build.sh` helper copies the current
+   `SSH_HOSTKEY_DIR` keys and the webui hash onto a stick
+   (`/provision/...`) so the box keeps its current SSH fingerprint.
+7. **Rescue path** stays secret-free (telnet on the lifeline, as today).
+
+Order of work: secrets service + stick layout, then drop the secrets from
+the build, then the webui password tool; each step keeps the box reachable
+(authorized_keys is unaffected).
