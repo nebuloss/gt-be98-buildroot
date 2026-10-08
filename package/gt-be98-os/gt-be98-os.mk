@@ -52,7 +52,7 @@ define GT_BE98_OS_FINALIZE
 		$(TARGET_DIR)/etc/init.d/rcK
 	rm -f $(TARGET_DIR)/etc/runlevels/*/sysv-rcs
 	# /var/log: a real directory (the skeleton links it to /tmp)
-	rm -f $(TARGET_DIR)/var/log
+	if [ -L $(TARGET_DIR)/var/log ]; then rm -f $(TARGET_DIR)/var/log; fi
 	mkdir -p $(TARGET_DIR)/var/log
 	mkdir -p $(TARGET_DIR)/etc/runlevels/boot $(TARGET_DIR)/etc/runlevels/default
 	for s in gt-be98-watchdog gt-be98-persist syslogd; do \
