@@ -278,6 +278,8 @@ umount /jffs; ubidetach -d 0
 # mainline, fence on jffs2, /jffs rw (what gt-be98-jffs does)
 echo jffs2 > $UF
 ubiattach -m 1 -d 0 -O 2048 >/dev/null
+AWP=/sys/module/brcmnand/parameters/allow_write	# built in; no brcmnand chip here
+[ -w $AWP ] && echo 1 > $AWP
 mount -t ubifs -o ro ubi0:jffs2 /jffs && mount -o remount,rw /jffs
 gate g8_check "$K/jffs-mainline.sh check"
 gate g8_test "$K/jffs-mainline.sh test"
@@ -291,6 +293,7 @@ gate g8_verify "W=/tmp/g8 $K/jffs-mainline.sh verify"
 $K/jffs-mainline.sh status | grep -E '^(state|volumes|pebs|writes|mtd_gate)' | sed 's/^/RH: /'
 gate g8_rootfs2_refused "! gt-be98-ubileb write /dev/ubi0_6 /tmp/small"
 cd /; umount /jffs; ubidetach -d 0; echo "" > $UF
+[ -w $AWP ] && echo 0 > $AWP
 gate g8_pebdiff "W=/tmp/g8 $K/jffs-mainline.sh after"
 tail -n 1 /tmp/g8/pebdiff.txt | sed 's/^/RH: /'
 rm -f /tmp/g8/*.data

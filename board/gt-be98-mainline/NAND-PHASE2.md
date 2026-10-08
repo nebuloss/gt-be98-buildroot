@@ -1,8 +1,9 @@
 # GT-BE98 mainline OS - NAND PHASE 2: mainline read-write on /jffs only
 
 Status: **approved and implemented** (2026-10-08), every switch default-OFF;
-validated in simulation (G5, G6, restore). Nothing has been enabled on the
-box. Phase 1 (read-only, NAND.md) stays the default and the fallback.
+validated in simulation (G5, G6, restore); G7 passed on the box (writes to
+the sacrificial `mltest` volume only). Phase 1 behaviour is still what every
+image does unless `FENCE_VOLUMES` is set on the box. Phase 1 (read-only, NAND.md) stays the default and the fallback.
 
 ## Gate status
 
@@ -15,9 +16,37 @@ labels: its "(a) fence" is G5's subject, its "G5 restore half" is G9, its
 | G1-G4 layout / ECC | **PASSED** 2026-10-08 (validation step 1, see below) |
 | G5 fenced rehearsal: only jffs2 + free PEBs change | **PASSED in simulation** 2026-10-08 (`nand/rehearsal/results-20261008.txt`) |
 | G6 power cuts: UBI attaches, UBIFS mounts (fenced and unmodified UBI) | **PASSED in simulation** 2026-10-08 (5 emulated power cuts, same results file) |
-| G7 sacrificial volume (stock <-> mainline encode) | approved for the box; procedure `nand/phase2/G7.md`, G7 itb `nand/build-g7-image.sh`; the whole sequence rehearsed in simulation (run 9) |
-| G8 first real /jffs session | not started (after G7) |
+| G7 sacrificial volume (stock <-> mainline encode) | **PASSED on the box** 2026-10-08, see "G7 on the box" below |
+| G8 first real /jffs session | kit and procedure ready (`nand/phase2/G8.md`), rehearsed in simulation; owner approved; next on the box |
 | G9 backup + restore | backup taken 2026-10-08 (`~/oe-tool/backup/nand-raw-20261008`, raw + corrected, `SHA256SUMS`); restore procedure + tool (`nand/RESTORE.md`) **PASSED in simulation** (bit-exact), never run on the box. **Deviation**: the criterion says "without mainline"; that is not achievable on this box (stock keeps UBI attached to the whole partition and has no raw-write tool or fence, no UART for U-Boot), so the restore runs from the mainline netroot OS with UBI detached. Revised criterion: restore from mainline with no NAND-resident mainline component, rehearsed bit-exact; ASUS rescue (TFTP) remains the firmware-only last resort |
+
+## G7 on the box PASSED - 2026-10-08
+
+Procedure `nand/phase2/G7.md`; G7 itb `6a8170c5...` (production kernel,
+`image` partition writable in the DT), production rootfs `872a92fc...`.
+
+- Stock: `create` / `write-a` / `verify-a` / `flips` OK; mltest = vol 0,
+  4 PEBs, worst sector 0 flips.
+- Mainline before the switch: `allow_write` N, fence empty, `/jffs` ro,
+  `image` flags 0x400 (writable in the DT), nothing attempted a write
+  (`mtd_gate refused 0`, no UBI error). Pre-G7 raw dump of the partition
+  kept on the build host (`mtd1-image-raw-oob-preG7.bin`, sha256 `3cc4ea7e...`).
+- Fenced on mltest: `state active`, `volumes mltest:0`, `pebs fenced 4 free
+  697 fenced_off 1323`; `verify-a` OK (mainline decodes stock's pages),
+  `write-b` OK, flips worst 0; `writes 12 erases 4 refused 0 scrub_refused
+  0`, `mtd_gate allowed 16 refused 0`; `/jffs` stayed `ubifs ro`; every
+  write logged with PEB and owner (mltest data/VID, free-PEB EC headers).
+- After `stop`: `allow_write` N; PEB diff 2024 compared, 8 changed: vol 0
+  (mltest) 4, free 4, **other 0**.
+- Stock: `verify-b` OK (stock decodes mainline's pages), flips worst 0;
+  metadata1/2 `51aa0cb2...`, bootfs2 `74efd23e...` unchanged, bootfs1 = the
+  G7 itb; rootfs2 `845308de...`, rootfs1 `ad345847...`, defaults
+  `6bef1ec7...`; 0 bad, 0 corrupted PEBs, `ecc_failures` 0; mltest removed,
+  volumes back to 1,2,3,4,5,6,10,11,13 with 289 + 17 = 306 LEBs available.
+- Deviation: the stock baseline report (step 0) was written to stock's
+  RAM `/tmp` and lost at the reboot; the comparison was made against the
+  known hashes (backup, G1) instead. The procedures now produce every stock
+  report over ssh straight into a file on the build host.
 
 ## Implementation (2026-10-08)
 
@@ -194,11 +223,8 @@ mainline's write path produces pages stock decodes.
 
 ## Next on the box (in order, each gated by the previous)
 
-1. G7: `nand/phase2/G7.md` (G7 itb from `nand/build-g7-image.sh`: the
-   production kernel and rootfs, DT with the `image` partition writable;
-   `FENCE_VOLUMES=mltest`, `/jffs` read-only; stock creates, writes and
-   removes `mltest`; PEB diff on mainline and stock report comparison).
-2. G8: fresh raw dump, then one supervised `FENCE_VOLUMES=jffs2 JFFS_MODE=rw` session
+1. G7: done (PASSED 2026-10-08).
+2. G8 (`nand/phase2/G8.md`, same rw-jffs itb): fresh raw dump, then one supervised `FENCE_VOLUMES=jffs2 JFFS_MODE=rw` session
    (`gt-be98-save --local`), then a stock boot and `stock-nandinfo.sh`.
 3. G9: restore rehearsal on the box only if the owner wants it (RESTORE.md).
 
