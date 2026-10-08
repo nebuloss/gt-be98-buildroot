@@ -17,7 +17,7 @@ labels: its "(a) fence" is G5's subject, its "G5 restore half" is G9, its
 | G5 fenced rehearsal: only jffs2 + free PEBs change | **PASSED in simulation** 2026-10-08 (`nand/rehearsal/results-20261008.txt`) |
 | G6 power cuts: UBI attaches, UBIFS mounts (fenced and unmodified UBI) | **PASSED in simulation** 2026-10-08 (5 emulated power cuts, same results file) |
 | G7 sacrificial volume (stock <-> mainline encode) | **PASSED on the box** 2026-10-08, see "G7 on the box" below |
-| G8 first real /jffs session | kit and procedure ready (`nand/phase2/G8.md`), rehearsed in simulation; owner approved; next on the box |
+| G8 first real /jffs session | kit and procedure ready (`nand/phase2/G8.md`), rehearsed in simulation (run 11: 52 PEBs changed, jffs2 27 + free 25, other 0); owner approved; next on the box |
 | G9 backup + restore | backup taken 2026-10-08 (`~/oe-tool/backup/nand-raw-20261008`, raw + corrected, `SHA256SUMS`); restore procedure + tool (`nand/RESTORE.md`) **PASSED in simulation** (bit-exact), never run on the box. **Deviation**: the criterion says "without mainline"; that is not achievable on this box (stock keeps UBI attached to the whole partition and has no raw-write tool or fence, no UART for U-Boot), so the restore runs from the mainline netroot OS with UBI detached. Revised criterion: restore from mainline with no NAND-resident mainline component, rehearsed bit-exact; ASUS rescue (TFTP) remains the firmware-only last resort |
 
 ## G7 on the box PASSED - 2026-10-08
@@ -94,7 +94,7 @@ kernel has a UBI wear-leveling threshold of 128 instead of 4096 so that
 wear-leveling actually runs. The fence logic and the UBI/UBIFS behaviour are
 the same; the brcmnand write path itself is exercised only on the box (G7).
 
-Results (run 9: 59/59 gates, `nand/rehearsal/results-20261008.txt`):
+Results (run 11: 69/69 gates, G8 included; `nand/rehearsal/results-20261008.txt`):
 
 - data loaded bit-identical; a 6-bit flip injected in a bootfs2 PEB (PEB 331)
   still corrects (and reads return "6 corrected");

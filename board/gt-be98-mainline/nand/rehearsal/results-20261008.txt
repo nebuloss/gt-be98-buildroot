@@ -1,4 +1,4 @@
-# NAND phase-2 rehearsal, 2026-10-08 (run 9: fenced session, 5 UBI power-cut cycles, unmodified-UBI attach, restore, G7 with the kit scripts in the box sequence), QEMU virt + nandsim, kernel 7.2.9 + board patches 0001-0004
+# NAND phase-2 rehearsal, 2026-10-08 (run 11: fenced session, 5 UBI power-cut cycles, unmodified-UBI attach, restore, G7 and G8 with the kit scripts in the box sequence), QEMU virt + nandsim, kernel 7.2.9 + board patches 0001-0004
 # backup: ~/oe-tool/backup/nand-raw-20261008 (corrected page data loaded)
 # patches sha256:
 #   55a43d2ac79900863a99a91343f118fb99363757885afa239722cb7a5996df9d  0001-mtd-rawnand-brcmnand-read-only-unless-allow_write.patch
@@ -13,41 +13,41 @@ RH: pebmap: 406 jffs2, 703 free, 1321 used
 RH: injecting 6 bitflips in bootfs2 LEB 5 = PEB 331 page 3
 GATE injected_still_correctable PASS
 RH: raw backup 273580032 bytes
-[   25.299689] mtd: write fence refused erase 0x200000+0x20000 on NAND 256MiB 3,3V 8-bit
+[   25.381561] mtd: write fence refused erase 0x200000+0x20000 on NAND 256MiB 3,3V 8-bit
 GATE mtd_erase_refused PASS
-[   25.324292] mtd: write fence refused write 0x200000+0x800 on NAND 256MiB 3,3V 8-bit
+[   25.408932] mtd: write fence refused write 0x200000+0x800 on NAND 256MiB 3,3V 8-bit
 GATE mtd_write_refused PASS
-[   25.346582] mtd: write fence refused markbad 0x200000+0x20000 on NAND 256MiB 3,3V 8-bit
+[   25.430808] mtd: write fence refused markbad 0x200000+0x20000 on NAND 256MiB 3,3V 8-bit
 GATE mtd_markbad_refused PASS
 RH: unfenced UBI attach (must not be able to write)
-[   25.411077] mtd: write fence refused write 0xa9c0800+0x200 on NAND 256MiB 3,3V 8-bit
-[   25.412821] ubi0 warning: ubi_ro_mode.part.0: switch to read-only mode
+[   25.519262] mtd: write fence refused write 0xa9c0800+0x200 on NAND 256MiB 3,3V 8-bit
+[   25.520997] ubi0 warning: ubi_ro_mode.part.0: switch to read-only mode
 RH: unfenced ubi0 ro_mode=1
 GATE unfenced_ubi_cannot_create PASS
 RH: backup static ubi0_1 metadata1 1280 B sha256 51aa0cb2f0d76748d99f08a491da7d3cf99c1f5bc7c6df3899cf4e23286bd4df
 RH: backup static ubi0_2 metadata2 1280 B sha256 51aa0cb2f0d76748d99f08a491da7d3cf99c1f5bc7c6df3899cf4e23286bd4df
 RH: backup static ubi0_3 bootfs1 16072204 B sha256 799b2fc9c9e0611c93655ed72ab2e21830ea9e9f11c682e5063ac0cf0a7504f0
-[   35.922767] ubi0: schedule PEB 331 for scrubbing
-[   36.026235] ubi0: schedule PEB 331 for scrubbing
+[   36.023911] ubi0: schedule PEB 331 for scrubbing
+[   36.126812] ubi0: schedule PEB 331 for scrubbing
 RH: backup static ubi0_5 bootfs2 13735420 B sha256 74efd23e3c466ab10f486faab8cda97c8b2054c6627ec3f17d72306a50746f53
-[   36.263749] ubi0: fence: pending for "jffs2
-[   36.263749] " (all writes refused until set up)
-[   36.295853] ubi0: fence: ACTIVE for "jffs2
-[   36.295853] ": 406 fenced, 703 free, 915 fenced-off PEBs
+[   36.361991] ubi0: fence: pending for "jffs2
+[   36.361991] " (all writes refused until set up)
+[   36.395873] ubi0: fence: ACTIVE for "jffs2
+[   36.395873] ": 406 fenced, 703 free, 915 fenced-off PEBs
 state active
 volumes jffs2:13
-pebs fenced 406 free 703 fenced_off 915
-writes 6 erases 2 refused 0 scrub_refused 0
-mtd_gate allowed 8 refused 4 restore_allowed 0
+pebs fenced 407 free 702 fenced_off 915
+writes 8 erases 2 refused 0 scrub_refused 0
+mtd_gate allowed 10 refused 4 restore_allowed 0
 GATE fence_active PASS
 GATE fenced_rw_mode PASS
 GATE vtbl_change_refused PASS
 GATE vol_remove_refused PASS
 GATE other_volume_write_refused PASS
-[   36.415851] mtd: write fence refused write 0x200000+0x800 on NAND 256MiB 3,3V 8-bit
+[   36.490202] mtd: write fence refused write 0x200000+0x800 on NAND 256MiB 3,3V 8-bit
 GATE raw_write_refused_while_fenced PASS
 GATE restore_refused_while_attached PASS
-[   36.433591] ubi fence: restore refused: ubi0 is attached to mtd1 on the same chip
+[   36.506335] ubi fence: restore refused: ubi0 is attached to mtd1 on the same chip
 GATE bootfs2_reads_stock_hash PASS
 GATE scrub_refused PASS
 RH: write loop: 300 x 1 MiB write+sync+delete
@@ -55,116 +55,123 @@ RH: loop 50: writes 28469 erases 561 refused 3 scrub_refused 2
 RH: loop 100: writes 56847 erases 1100 refused 3 scrub_refused 2 
 RH: loop 150: writes 85226 erases 1639 refused 3 scrub_refused 2 
 RH: loop 200: writes 113599 erases 2175 refused 3 scrub_refused 2 
-RH: loop 250: writes 141985 erases 2716 refused 3 scrub_refused 2 
-RH: loop 300: writes 170383 erases 3261 refused 3 scrub_refused 2 
+RH: loop 250: writes 141988 erases 2717 refused 3 scrub_refused 2 
+RH: loop 300: writes 170386 erases 3262 refused 3 scrub_refused 2 
 GATE marker_kept PASS
 state active
 volumes jffs2:13
 pebs fenced 397 free 712 fenced_off 915
-writes 170392 erases 3263 refused 3 scrub_refused 2
-mtd_gate allowed 173655 refused 5 restore_allowed 0
+writes 170395 erases 3264 refused 3 scrub_refused 2
+mtd_gate allowed 173659 refused 5 restore_allowed 0
 GATE fenced_writes_happened PASS
-[   36.295853] ubi0: fence: ACTIVE for "jffs2
-[   36.295853] ": 406 fenced, 703 free, 915 fenced-off PEBs
-[   36.415851] mtd: write fence refused write 0x200000+0x800 on NAND 256MiB 3,3V 8-bit
-[   36.433591] ubi fence: restore refused: ubi0 is attached to mtd1 on the same chip
+[   36.395873] ubi0: fence: ACTIVE for "jffs2
+[   36.395873] ": 406 fenced, 703 free, 915 fenced-off PEBs
+[   36.490202] mtd: write fence refused write 0x200000+0x800 on NAND 256MiB 3,3V 8-bit
+[   36.506335] ubi fence: restore refused: ubi0 is attached to mtd1 on the same chip
 RH: logged fence write/erase lines: 60
-[   46.921762] ubi0: fence: pending for "jffs2
-[   46.921762] " (all writes refused until set up)
-[   46.953434] ubi0: fence: ACTIVE for "jffs2
-[   46.953434] ": 397 fenced, 712 free, 915 fenced-off PEBs
-[   47.520969] ubi0 warning: ubi_io_write_vid_hdr: switch to read-only mode
-RH: power cut 1 after 24 writes (ro_mode=1)
-[   47.569480] ubi0: fence: pending for "jffs2
-[   47.569480] " (all writes refused until set up)
-[   47.599966] ubi0: fence: ACTIVE for "jffs2
-[   47.599966] ": 408 fenced, 701 free, 915 fenced-off PEBs
+[   46.985193] ubi0: fence: pending for "jffs2
+[   46.985193] " (all writes refused until set up)
+[   47.017249] ubi0: fence: ACTIVE for "jffs2
+[   47.017249] ": 397 fenced, 712 free, 915 fenced-off PEBs
+[   47.659373] ubi0 warning: ubi_io_write_ec_hdr: switch to read-only mode
+RH: power cut 1 after 26 writes (ro_mode=1)
+[   47.718588] ubi0: fence: pending for "jffs2
+[   47.718588] " (all writes refused until set up)
+[   47.749335] ubi0: fence: PEB 129 (vol -1) needs erasing, left alone
+[   47.750041] ubi0: fence: ACTIVE for "jffs2
+[   47.750041] ": 409 fenced, 699 free, 916 fenced-off PEBs
 GATE power_cut_1_reattach_fenced PASS
 GATE power_cut_1_ubifs_mounts PASS
-[   47.703112] ubi0: fence: pending for "jffs2
-[   47.703112] " (all writes refused until set up)
-[   47.733619] ubi0: fence: ACTIVE for "jffs2
-[   47.733619] ": 375 fenced, 734 free, 915 fenced-off PEBs
-[   48.125131] ubi0 warning: ubi_io_write_vid_hdr: switch to read-only mode
-RH: power cut 2 after 22 writes (ro_mode=1)
-[   48.151917] ubi0: fence: pending for "jffs2
-[   48.151917] " (all writes refused until set up)
-[   48.182231] ubi0: fence: PEB 1505 (vol -1) needs erasing, left alone
-[   48.182916] ubi0: fence: ACTIVE for "jffs2
-[   48.182916] ": 408 fenced, 700 free, 916 fenced-off PEBs
+[   47.874393] ubi0: fence: pending for "jffs2
+[   47.874393] " (all writes refused until set up)
+[   47.905312] ubi0: fence: PEB 129 (vol -1) needs erasing, left alone
+[   47.905969] ubi0: fence: ACTIVE for "jffs2
+[   47.905969] ": 373 fenced, 735 free, 916 fenced-off PEBs
+[   48.267293] ubi0 warning: ubi_io_write_ec_hdr: switch to read-only mode
+RH: power cut 2 after 21 writes (ro_mode=1)
+[   48.312956] ubi0: fence: pending for "jffs2
+[   48.312956] " (all writes refused until set up)
+[   48.344191] ubi0: fence: PEB 129 (vol -1) needs erasing, left alone
+[   48.344219] ubi0: fence: PEB 613 (vol -1) needs erasing, left alone
+[   48.345139] ubi0: fence: ACTIVE for "jffs2
+[   48.345139] ": 408 fenced, 699 free, 917 fenced-off PEBs
 GATE power_cut_2_reattach_fenced PASS
 GATE power_cut_2_ubifs_mounts PASS
-[   48.262006] ubi0: fence: pending for "jffs2
-[   48.262006] " (all writes refused until set up)
-[   48.291734] ubi0: fence: PEB 1505 (vol -1) needs erasing, left alone
-[   48.292583] ubi0: fence: ACTIVE for "jffs2
-[   48.292583] ": 375 fenced, 733 free, 916 fenced-off PEBs
-[   48.883781] ubi0 warning: ubi_io_write_ec_hdr: switch to read-only mode
-RH: power cut 3 after 29 writes (ro_mode=1)
-[   48.940982] ubi0: fence: pending for "jffs2
-[   48.940982] " (all writes refused until set up)
-[   48.970845] ubi0: fence: PEB 1505 (vol -1) needs erasing, left alone
-[   48.970869] ubi0: fence: PEB 1876 (vol -1) needs erasing, left alone
-[   48.971582] ubi0: fence: ACTIVE for "jffs2
-[   48.971582] ": 409 fenced, 698 free, 917 fenced-off PEBs
+[   48.450199] ubi0: fence: pending for "jffs2
+[   48.450199] " (all writes refused until set up)
+[   48.480714] ubi0: fence: PEB 129 (vol -1) needs erasing, left alone
+[   48.480728] ubi0: fence: PEB 613 (vol -1) needs erasing, left alone
+[   48.481383] ubi0: fence: ACTIVE for "jffs2
+[   48.481383] ": 372 fenced, 735 free, 917 fenced-off PEBs
+[   48.768956] ubi0 warning: ubi_io_write_vid_hdr: switch to read-only mode
+RH: power cut 3 after 16 writes (ro_mode=1)
+[   48.797429] ubi0: fence: pending for "jffs2
+[   48.797429] " (all writes refused until set up)
+[   48.828188] ubi0: fence: PEB 129 (vol -1) needs erasing, left alone
+[   48.828201] ubi0: fence: PEB 613 (vol -1) needs erasing, left alone
+[   48.829040] ubi0: fence: ACTIVE for "jffs2
+[   48.829040] ": 406 fenced, 701 free, 917 fenced-off PEBs
 GATE power_cut_3_reattach_fenced PASS
 GATE power_cut_3_ubifs_mounts PASS
-[   49.080873] ubi0: fence: pending for "jffs2
-[   49.080873] " (all writes refused until set up)
-[   49.110133] ubi0: fence: PEB 1505 (vol -1) needs erasing, left alone
-[   49.110142] ubi0: fence: PEB 1876 (vol -1) needs erasing, left alone
-[   49.110804] ubi0: fence: ACTIVE for "jffs2
-[   49.110804] ": 368 fenced, 739 free, 917 fenced-off PEBs
-[   49.528272] ubi0 warning: ubi_io_write_vid_hdr: switch to read-only mode
-RH: power cut 4 after 23 writes (ro_mode=1)
-[   49.564155] ubi0: fence: pending for "jffs2
-[   49.564155] " (all writes refused until set up)
-[   49.593936] ubi0: fence: PEB 1505 (vol -1) needs erasing, left alone
-[   49.593945] ubi0: fence: PEB 1876 (vol -1) needs erasing, left alone
-[   49.594606] ubi0: fence: ACTIVE for "jffs2
-[   49.594606] ": 408 fenced, 699 free, 917 fenced-off PEBs
+[   48.894329] ubi0: fence: pending for "jffs2
+[   48.894329] " (all writes refused until set up)
+[   48.924687] ubi0: fence: PEB 129 (vol -1) needs erasing, left alone
+[   48.924699] ubi0: fence: PEB 613 (vol -1) needs erasing, left alone
+[   48.925366] ubi0: fence: ACTIVE for "jffs2
+[   48.925366] ": 373 fenced, 734 free, 917 fenced-off PEBs
+[   49.494565] ubi0 warning: ubi_io_write_ec_hdr: switch to read-only mode
+RH: power cut 4 after 29 writes (ro_mode=1)
+[   49.571258] ubi0: fence: pending for "jffs2
+[   49.571258] " (all writes refused until set up)
+[   49.602615] ubi0: fence: PEB 129 (vol -1) needs erasing, left alone
+[   49.602623] ubi0: fence: PEB 613 (vol -1) needs erasing, left alone
+[   49.602628] ubi0: fence: PEB 1180 (vol -1) needs erasing, left alone
+[   49.603306] ubi0: fence: ACTIVE for "jffs2
+[   49.603306] ": 408 fenced, 698 free, 918 fenced-off PEBs
 GATE power_cut_4_reattach_fenced PASS
 GATE power_cut_4_ubifs_mounts PASS
-[   49.693511] ubi0: fence: pending for "jffs2
-[   49.693511] " (all writes refused until set up)
-[   49.723456] ubi0: fence: PEB 1505 (vol -1) needs erasing, left alone
-[   49.723468] ubi0: fence: PEB 1876 (vol -1) needs erasing, left alone
-[   49.724114] ubi0: fence: ACTIVE for "jffs2
-[   49.724114] ": 371 fenced, 736 free, 917 fenced-off PEBs
-[   50.212323] ubi0 warning: ubi_io_write_vid_hdr: switch to read-only mode
-RH: power cut 5 after 29 writes (ro_mode=1)
-[   50.247695] ubi0: fence: pending for "jffs2
-[   50.247695] " (all writes refused until set up)
-[   50.278227] ubi0: fence: PEB 1505 (vol -1) needs erasing, left alone
-[   50.278320] ubi0: fence: PEB 1876 (vol -1) needs erasing, left alone
-[   50.278996] ubi0: fence: ACTIVE for "jffs2
-[   50.278996] ": 410 fenced, 697 free, 917 fenced-off PEBs
+[   49.710441] ubi0: fence: pending for "jffs2
+[   49.710441] " (all writes refused until set up)
+[   49.741301] ubi0: fence: PEB 129 (vol -1) needs erasing, left alone
+[   49.741314] ubi0: fence: PEB 613 (vol -1) needs erasing, left alone
+[   49.741319] ubi0: fence: PEB 1180 (vol -1) needs erasing, left alone
+[   49.741981] ubi0: fence: ACTIVE for "jffs2
+[   49.741981] ": 368 fenced, 738 free, 918 fenced-off PEBs
+[   49.898674] ubi0 warning: ubi_io_write_vid_hdr: switch to read-only mode
+RH: power cut 5 after 8 writes (ro_mode=1)
+[   49.939734] ubi0: fence: pending for "jffs2
+[   49.939734] " (all writes refused until set up)
+[   49.970841] ubi0: fence: PEB 129 (vol -1) needs erasing, left alone
+[   49.970849] ubi0: fence: PEB 613 (vol -1) needs erasing, left alone
+[   49.970854] ubi0: fence: PEB 1180 (vol -1) needs erasing, left alone
+[   49.971549] ubi0: fence: ACTIVE for "jffs2
+[   49.971549] ": 380 fenced, 726 free, 918 fenced-off PEBs
 GATE power_cut_5_reattach_fenced PASS
 GATE power_cut_5_ubifs_mounts PASS
-pebdiff summary: 2024 PEBs compared, 210 changed: free 113 other 0 vol13 97
+pebdiff summary: 2024 PEBs compared, 202 changed: free 109 other 0 vol13 93
 GATE only_jffs2_and_free_changed PASS
 GATE loader_unchanged PASS
 GATE injected_peb_untouched PASS
 RH: re-attach without a fence (writes impossible), stock-style reads
-[   54.318686] mtd: write fence refused erase 0xbe20000+0x20000 on NAND 256MiB 3,3V 8-bit
-[   54.318852] mtd: write fence refused erase 0xbe20000+0x20000 on NAND 256MiB 3,3V 8-bit
-[   54.318867] mtd: write fence refused erase 0xbe20000+0x20000 on NAND 256MiB 3,3V 8-bit
-[   54.318879] mtd: write fence refused erase 0xbe20000+0x20000 on NAND 256MiB 3,3V 8-bit
-[   54.319044] ubi0 warning: ubi_ro_mode.part.0: switch to read-only mode
+[   53.915881] mtd: write fence refused erase 0x1220000+0x20000 on NAND 256MiB 3,3V 8-bit
+[   53.916100] mtd: write fence refused erase 0x1220000+0x20000 on NAND 256MiB 3,3V 8-bit
+[   53.916154] mtd: write fence refused erase 0x1220000+0x20000 on NAND 256MiB 3,3V 8-bit
+[   53.916173] mtd: write fence refused erase 0x1220000+0x20000 on NAND 256MiB 3,3V 8-bit
+[   53.916360] ubi0 warning: ubi_ro_mode.part.0: switch to read-only mode
 GATE volume_table_unchanged PASS
-[   54.351036] ubi0: schedule PEB 331 for scrubbing
-[   54.455432] ubi0: schedule PEB 331 for scrubbing
+[   53.944714] ubi0: schedule PEB 331 for scrubbing
+[   54.047201] ubi0: schedule PEB 331 for scrubbing
 GATE bootfs2_still_verifies PASS
 GATE metadata_unchanged PASS
 GATE jffs2_mounts_with_marker PASS
 RH: unmodified UBI (no gate, no fence) on the post-session image
 GATE unmodified_ubi_attaches PASS
-RH: [   54.794541] ubi0: good PEBs: 2024, bad PEBs: 0, corrupted PEBs: 0
+RH: [   54.383847] ubi0: good PEBs: 2024, bad PEBs: 0, corrupted PEBs: 0
 GATE unmodified_ubi_0_corrupted PASS
 GATE unmodified_ubifs_mounts_rw PASS
 GATE unmodified_ubifs_no_errors PASS
-restore summary: 210 differing, 0 rewritten and verified, 0 failed, 0 bad skipped (dry run)
-restore summary: 210 differing, 210 rewritten and verified, 0 failed, 0 bad skipped
+restore summary: 202 differing, 0 rewritten and verified, 0 failed, 0 bad skipped (dry run)
+restore summary: 202 differing, 202 rewritten and verified, 0 failed, 0 bad skipped
 GATE restore_ran PASS
 GATE restore_bit_exact PASS
 GATE restore_entries_cleared PASS
@@ -175,10 +182,10 @@ GATE g7_s1_write_a PASS
 GATE g7_s1_verify_a PASS
 GATE g7_s1_flips PASS
 GATE g7_s3_before PASS
-[   78.339457] ubi0: fence: pending for "mltest
-[   78.339457] " (all writes refused until set up)
-[   78.371096] ubi0: fence: ACTIVE for "mltest
-[   78.371096] ": 4 fenced, 699 free, 1321 fenced-off PEBs
+[   77.858262] ubi0: fence: pending for "mltest
+[   77.858262] " (all writes refused until set up)
+[   77.891459] ubi0: fence: ACTIVE for "mltest
+[   77.891459] ": 4 fenced, 699 free, 1321 fenced-off PEBs
 GATE g7_s3_fence_mltest_only PASS
 GATE g7_s3_jffs_ro PASS
 GATE g7_s3_verify_a PASS
@@ -188,27 +195,44 @@ RH: state active
 RH: volumes mltest:0
 RH: pebs fenced 4 free 699 fenced_off 1321
 RH: writes 12 erases 4 refused 0 scrub_refused 0
-RH: mtd_gate allowed 196082 refused 9 restore_allowed 6045
+RH: mtd_gate allowed 191295 refused 9 restore_allowed 5816
+[   78.316056] ubi0 warning: ubi_fence_check_vol: fence: refused atomic LEB change of volume 13
 GATE g7_s3_jffs2_refused PASS
-[   78.821360] ubi0 warning: ubi_fence_check_vol: fence: refused atomic LEB change of volume 13
-[   78.835456] ubi0 warning: ubi_fence_check_vol: fence: refused LEB unmap of volume 13
+/init: line 247: [   78.331055] ubi0 warning: ubi_fence_check_vol: fence: refused LEB unmap of volume 13
 RH: jffs2 rw remount under fence=mltest: remount accepted; then: 2 UBIFS errors/refusals, mount now: ro
-RH:   [   78.835456] ubi0 warning: ubi_fence_check_vol: fence: refused LEB unmap of volume 13
-RH:   [   78.835492] UBIFS error (ubi0:13 pid 2184): ubifs_leb_unmap: unmap LEB 8 failed, error -30
-RH:   [   78.835508] UBIFS warning (ubi0:13 pid 2184): ubifs_ro_mode.part.0: switched to read-only mode, error -30
+RH:   [   78.331055] ubi0 warning: ubi_fence_check_vol: fence: refused LEB unmap of volume 13
+RH:   [   78.331110] UBIFS error (ubi0:13 pid 2094): ubifs_leb_unmap: unmap LEB 8 failed, error -30
+RH:   [   78.331128] UBIFS warning (ubi0:13 pid 2094): ubifs_ro_mode.part.0: switched to read-only mode, error -30
 GATE g7_s3_pebdiff PASS
 RH: pebdiff summary: 2024 PEBs compared, 5 changed: free 1 other 0 vol0 4
 GATE g7_s4_verify_b PASS
 GATE g7_s4_flips PASS
 GATE g7_s4_jffs2_mounts_no_mainline_write PASS
 GATE g7_s4_remove PASS
-RH-SUMMARY pass 59 fail 0
+RH: G8: the kit scripts in the box sequence
+GATE g8_before PASS
+[   95.474247] ubi0: fence: pending for "jffs2
+[   95.474247] " (all writes refused until set up)
+[   95.507496] ubi0: fence: ACTIVE for "jffs2
+[   95.507496] ": 406 fenced, 703 free, 915 fenced-off PEBs
+GATE g8_check PASS
+GATE g8_test PASS
+GATE g8_loop PASS
+GATE g8_verify PASS
+RH: state active
+RH: volumes jffs2:13
+RH: pebs fenced 397 free 712 fenced_off 915
+RH: writes 11711 erases 235 refused 0 scrub_refused 0
+RH: mtd_gate allowed 203241 refused 9 restore_allowed 5816
+GATE g8_rootfs2_refused PASS
+GATE g8_pebdiff PASS
+RH: pebdiff summary: 2024 PEBs compared, 52 changed: free 25 other 0 vol13 27
+GATE g8_stock_read PASS
+GATE g8_stock_write PASS
+GATE g8_stock_clean PASS
+RH-SUMMARY pass 69 fail 0
 RH-DONE
 # changed PEBs (first 20, fenced session incl. power cuts):
-changed PEB 0 (free)
-changed PEB 1 (free)
-changed PEB 2 (free)
-changed PEB 3 (free)
 changed PEB 4 (free)
 changed PEB 5 (free)
 changed PEB 6 (free)
@@ -225,3 +249,7 @@ changed PEB 16 (free)
 changed PEB 17 (free)
 changed PEB 18 (free)
 changed PEB 19 (free)
+changed PEB 20 (free)
+changed PEB 21 (free)
+changed PEB 22 (free)
+changed PEB 23 (free)
