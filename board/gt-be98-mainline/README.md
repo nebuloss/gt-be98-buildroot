@@ -24,7 +24,7 @@ trial-booted once from the stock slot.
 | Wi-Fi | `bca_pcie_ipc.ko` (open-wifi `driver/`, bench parameters, `bca_barpeek.ko` never installed) | package `gt-be98-open-wifi` |
 | firmware | Runner/SerDes, XPHY, BCM84891L, 2x `rtecdc.bin`, `GT-BE98.nvm` (sha256-checked) | package `gt-be98-vendor-firmware`, local dirs |
 | rescue | static BusyBox 1.38.0 (rescue initramfs only) | package `gt-be98-rescue-busybox` |
-| userland | bash, coreutils, findutils, grep, sed, gawk, util-linux, procps-ng, psmisc, kmod, iproute2, iputils, ethtool, nftables, conntrack-tools, tcpdump, iperf3, socat, netcat, rsync, curl, OpenSSH 10.5, OpenSSL 3.6, dhcpcd 10.2, chrony 4.8, sysklogd 2.7, dnsmasq, iw 6.17, hostapd 2.12, wpa_supplicant 2.12, wireless-regdb, strace, gdbserver, perf, trace-cmd, memtool, pciutils, htop, lsof, tmux, nano, less, jq, pv | Buildroot |
+| userland | bash, coreutils, findutils, grep, sed, gawk, util-linux, procps-ng, psmisc, kmod, iproute2, iputils, ethtool, nftables, conntrack-tools, tcpdump, iperf3, socat, netcat, rsync, curl, OpenSSH 10.5, OpenSSL 3.6 (libraries), dhcpcd 10.2, chrony 4.8, sysklogd 2.7, dnsmasq, iw 6.17, hostapd 2.12, wpa_supplicant 2.12, wireless-regdb, strace, gdbserver, perf, trace-cmd, memtool, pciutils, htop, lsof, nano, less | Buildroot |
 | web UI | prebuilt `webui` (gt-be98-webui-go `mainline-os`), only if a path is given | package `gt-be98-webui` |
 
 No BusyBox in the rootfs: BusyBox is only the rescue shell (and the optional
@@ -75,45 +75,72 @@ survived, and saves the result with `savedefconfig`. To change the kernel
 config: edit a fragment, `make linux-patch`, rerun the script (its header has
 the command), commit `linux.config`. `--check` verifies the committed file.
 
-## Image layout (decision: the rootfs inside the FIT)
+## Image layout (decision: everything in the bootfs FIT, nothing on the NAND)
 
 ```
-ml-bootfs.itb (UBI vol 3, slot 1)       stock FIT structure, rebuilt by mkbootfs.py
+ml-bootfs.itb (UBI vol 3 = bootfs1)      stock FIT structure, rebuilt by mkbootfs.py
  ├─ atf, uboot, fdt_uboot, vendor dtbs  unchanged from the stock bootfs
- ├─ kernel = Image.lzo                  ← Linux 7.2.9 Image
- │    └─ built-in initramfs (xz)
- │         ├─ /init                     rescue-aware init (BusyBox ash)
- │         ├─ /bin/busybox              static rescue BusyBox
- │         └─ /rootfs.squashfs          the whole OS (xz, 1 MiB blocks)
- └─ fdt_mainline                        board DT (USB, watchdog, 4x PCIe, 256 MB MPM)
+ ├─ kernel = Image.lzo                  Linux 7.2.9 (~19 MB) + built-in initramfs:
+ │                                        /init (rescue-aware) + static rescue BusyBox
+ ├─ fdt_mainline                        board DT (USB, watchdog, 4x PCIe, 256 MB MPM)
+ │                                        /chosen/linux,initrd-start/-end -> "rootfs"
+ └─ rootfs (unreferenced image)         newc cpio: /rootfs.squashfs (the OS, xz)
 ```
 
-At boot `/init` loop-mounts `/rootfs.squashfs` read-only, lays an overlayfs
-over it with a tmpfs upper layer, and `switch_root`s into OpenRC. In the
-running OS the layers are `/rom` (squashfs) and `/overlay` (tmpfs): every
-change is in RAM and lost at reboot. If any step fails, `/init` stays in the
-initramfs and runs the stage-2 rescue lifeline instead (USB DHCP, passwordless
-telnet on the USB address, bounded watchdog petting).
+Boot: U-Boot reads the **whole** bootfs volume to 0x2000000, decompresses
+the kernel to 0x200000 and boots it with our DT. U-Boot never handles the
+"rootfs" image; the kernel finds it through `/chosen/linux,initrd-start/-end`,
+which `post-image.sh` sets to `0x2000000 + <its offset in the FIT>` (the FIT
+is built twice: placeholders, then the real addresses, and the build checks
+that the layout did not move and that a newc cpio starts there). The kernel
+unpacks it on top of the built-in initramfs, so `/rootfs.squashfs` appears
+next to `/init`. `/init` loop-mounts it read-only at `/rom`, puts an overlayfs
+with a tmpfs upper layer (`/overlay`) over it, and `switch_root`s into
+OpenRC. Every change is in RAM and lost at reboot.
 
-Why not a UBI rootfs (option b): it needs the mainline brcmnand + UBI stack on
-this NAND, which has not been proven, and writes from mainline are forbidden;
-the DT has no NAND node at all. Why not a separate FIT ramdisk: the vendor
-U-Boot boots with `bootm start <addr>#conf_lx_<board>; bootm loados; bootm
-prep` then `bootm go` (`board/broadcom/bcmbca/sdk_test_commands.c`,
-`load_linux_img`; the same string is in the shipped U-Boot): there is no
-`bootm ramdisk` step, so a FIT ramdisk would never reach the kernel.
+If the rootfs does not arrive or does not mount (post-codes e0..e3), `/init`
+stays in the initramfs and runs the stage-2 rescue lifeline: USB DHCP,
+passwordless telnet bound to the USB address, bounded watchdog petting, then
+a reset back to stock.
+
+Why not the whole rootfs in the kernel's built-in initramfs: the kernel and
+its initramfs must fit in 30 MiB (below), and the rootfs alone is ~30 MB of
+xz squashfs. Why not a FIT ramdisk: the vendor U-Boot boots with
+`bootm start <addr>#conf_lx_<board>; bootm loados; bootm prep` then
+`bootm go` (`load_linux_img` in `board/broadcom/bcmbca/sdk_test_commands.c`;
+the same string is in the shipped binary): no `bootm ramdisk` step, so a
+configuration's ramdisk would never reach the kernel; and `fdt_initrd()`
+returns early for an empty initrd, so our own `/chosen` properties survive.
+Why not a UBI rootfs: it needs mainline brcmnand + UBI on this NAND, unproven,
+and writes from mainline are forbidden (PERSISTENCE.md); the DT has no NAND
+node at all.
 
 ### Size limits (evidence)
 
 | Limit | Value | Evidence |
 |---|---|---|
-| kernel `image_size` (with BSS) | < 0x2000000 − 0x200000 = **30 MiB** | U-Boot reads the bootfs volume to `load_addr + 16 MiB` = 0x2000000 (`load_linux_img`, `CONFIG_SYS_LOAD_ADDR` = `TEXT_BASE` = 0x1000000) and decompresses the kernel to 0x200000; the kernel must end below the FIT it is decompressed from. `post-image.sh` fails above it and warns within 1 MiB of it |
-| decompressed kernel | < 64 MiB | `CONFIG_SYS_BOOTM_LEN` of the **shipped** U-Boot is 0x4000000: `mov w7, #0x4000000` at 0x102d030, the `unc_len` argument of the `bootm_decomp_image` call (disassembly of the stock bootfs `uboot` image; the axhnd source tree says 32 MiB, the shipped behnd binary differs) |
-| the old "0x1000000 − 0x200000" guideline | not a limit | U-Boot is linked at 0x1000000 (`_TEXT_BASE` in the image header) but relocates itself to the top of DRAM before running commands: `board_f.c` relocation, no `GD_FLG_SKIP_RELOC`, no `board_get_usable_ram_top` override in `mach-bcmbca`. It is not at 0x1000000 when the kernel is decompressed |
-| bootfs volume | the FIT size | the trial flash recreates vol 3 with the FIT's size (`ubirmvol`/`ubimkvol`/`ubiupdatevol`); it needs that many free LEBs in `ubi0` (`TESTPLAN.md`, T0) |
+| kernel `image_size` (with BSS, built-in initramfs included) | < 0x2000000 − 0x200000 = **30 MiB** | U-Boot reads the bootfs volume to `load_addr + CONFIG_LOAD_FIT_OFFSET (16 MiB)` = 0x2000000 (`CONFIG_SYS_LOAD_ADDR` = `CONFIG_SYS_TEXT_BASE` = 0x1000000; no `loadaddr` in the shipped default environment) and decompresses the kernel to its FIT load address 0x200000. `post-image.sh` fails above the limit, warns within 1 MiB |
+| decompressed kernel | < 64 MiB | `CONFIG_SYS_BOOTM_LEN` of the **shipped** U-Boot is 0x4000000: `mov w7, #0x4000000` at 0x102d030, the `unc_len` argument of the `bootm_decomp_image` call (disassembly of the stock bootfs `uboot` image; the axhnd source tree says 32 MiB) |
+| whole FIT in RAM | ends ≤ 0x5000000 (**48 MiB** FIT), warning above 40 MiB | U-Boot proper's own DT (`fdt_uboot` in the stock bootfs, and `arch/arm/dts/bcm96813.dts`) declares `memory = <0 0 0 0x8000000>` (128 MiB), so U-Boot relocates itself, its 32 MiB heap (`CONFIG_SYS_MALLOC_LEN`) and its stack just below 0x8000000, i.e. from about 0x5c00000 up. The FIT must end below that; 0x5000000 keeps ~12 MiB of margin. (U-Boot's `dram_init` is in `board.o`, which the GPL tree lacks; if it used the real 2 GiB instead, U-Boot would sit near 0x80000000 and this limit would only be conservative.) |
+| bootfs volume | the FIT size | the flash recreates vol 3 with the FIT's size; it needs that many free LEBs in `ubi0` (below) |
+| the old "0x1000000 − 0x200000" guideline | not a limit | U-Boot is linked at 0x1000000 but relocates before running any command (no `GD_FLG_SKIP_RELOC`); at `bootm` time it is near 0x8000000 |
 
-Measured on the current build: see `ml-bootfs.info` next to the image (it
-prints the margin to the 30 MiB limit).
+The actual numbers of a build are in `ml-bootfs.info` next to the image
+(margins to both limits, the initrd addresses, the sha256).
+
+### Flash space
+
+The FIT is ~3x the stock bootfs (~45 MB vs 13.7 MB). Vol 3 is recreated with
+the FIT's size, so `ubi0` needs `ceil(itb / LEB size)` free LEBs counting the
+ones the current vol 3 releases. If it does not have them, the space can come
+from **slot 1's rootfs volume (vol 4)**, which this OS never uses: U-Boot only
+reads its first 4 bytes and requires a squashfs (or UBIFS) magic before
+booting slot 1 (`nand_load_bootfs`: "Invalid rootfs detected in volume
+rootfs1! Boot aborted!"). The build provides `rootfs1-stub.squashfs` (4 KiB,
+a valid squashfs) for that. Replacing vol 4 removes the image slot 1 holds
+today (the open-enet 4.19 rootfs): **a decision for the operator**, see
+`TESTPLAN.md` T0/T1. Slot 2, the metadata and the other volumes are never
+touched.
 
 ## Boot, services, post-codes
 

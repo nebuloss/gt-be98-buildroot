@@ -16,10 +16,11 @@ GT_BE98_OPEN_WIFI_MODULE_MAKE_OPTS = BCA_BENCH_CFLAGS=-DBCA_BENCH_PARAMS
 endif
 
 # bca_barpeek.ko (bench builds only) is a reverse-engineering tool: never ship
+# (removed after the kernel-module install, in a target-finalize hook)
 define GT_BE98_OPEN_WIFI_REMOVE_BARPEEK
 	find $(TARGET_DIR)/lib/modules -name bca_barpeek.ko -delete
 endef
-GT_BE98_OPEN_WIFI_POST_INSTALL_TARGET_HOOKS += GT_BE98_OPEN_WIFI_REMOVE_BARPEEK
+GT_BE98_OPEN_WIFI_TARGET_FINALIZE_HOOKS += GT_BE98_OPEN_WIFI_REMOVE_BARPEEK
 
 $(eval $(kernel-module))
 $(eval $(generic-package))

@@ -24,10 +24,23 @@ ubinfo -d 0 | grep -E 'available logical|eraseblock size'
 ubinfo -d 0 -n 3 | grep -E 'Size|Name|Type'
 ```
 
-The new FIT is larger than the stock bootfs (see `ml-bootfs.info`). Recreating
-vol 3 needs `ceil(itb size / LEB size)` LEBs; check that
-`available LEBs + vol 3's current LEBs` covers it. If it does not, stop
-(do not shrink other volumes without a decision).
+The new FIT is ~3x the stock bootfs (`ml-bootfs.info`). Space check, on the
+box:
+
+```sh
+L=$(ubinfo -d 0 | sed -n 's/.*logical eraseblock size: *\([0-9]*\).*/\1/p')   # LEB bytes
+A=$(ubinfo -d 0 | sed -n 's/.*available logical eraseblocks: *\([0-9]*\).*/\1/p')
+V3=$(ubinfo -d 0 -n 3 | sed -n 's/^Size: *\([0-9]*\) LEBs.*/\1/p')
+S=<size of ml-bootfs.itb>
+echo need $(( (S + L - 1) / L )) LEBs, have $((A + V3))
+```
+
+If `have >= need`: T1 as usual. If not, the space can come from slot 1's
+rootfs (vol 4), which this OS does not use (README.md, "Flash space"):
+replacing it with `rootfs1-stub.squashfs` (4 KiB, the U-Boot squashfs-magic
+check passes) frees its LEBs, but it **deletes the open-enet 4.19 rootfs
+slot 1 holds today**: operator decision. Back it up first
+(`dd if=/dev/ubi0_4 of=... ` and copy it off the box) if it may be needed.
 
 Keep the current vol 3 for restore: `dd if=/dev/ubi0_3 of=/tmp/vol3.bak`
 (and copy it off the box).
@@ -35,17 +48,23 @@ Keep the current vol 3 for restore: `dd if=/dev/ubi0_3 of=/tmp/vol3.bak`
 ## T1. Flash vol 3 (slot 1 bootfs) - the usual procedure
 
 ```sh
-scp ml-bootfs.itb <stock box>:/tmp/ml-bootfs.itb
+scp ml-bootfs.itb rootfs1-stub.squashfs <stock box>:/tmp/
 # on the box, slot 2 booted (guard: ubi.block=0,6)
+grep -q 'ubi.block=0,6' /proc/cmdline || exit 1
 S=$(stat -c %s /tmp/ml-bootfs.itb)
+# only if T0 said so (decision): slot 1 rootfs -> stub
+#   ubirmvol /dev/ubi0 -n 4
+#   ubimkvol /dev/ubi0 -n 4 -N rootfs1 -s 4096 -t dynamic
+#   ubiupdatevol /dev/ubi0_4 /tmp/rootfs1-stub.squashfs
 ubirmvol /dev/ubi0 -n 3
 ubimkvol /dev/ubi0 -n 3 -N bootfs1 -s $S -t static
 ubiupdatevol /dev/ubi0_3 /tmp/ml-bootfs.itb
 dd if=/dev/ubi0_3 bs=$S count=1 2>/dev/null | sha256sum   # == sha256 of the itb
 ```
 
-(If the existing internal procedure differs, e.g. in the volume type, use it:
-the image is a plain bootfs FIT like the previous mainline images.)
+(Volume names/types as the existing internal procedure creates them; if it
+differs, use it: the image is a plain bootfs FIT like the previous mainline
+images, only larger.)
 
 ## T2. Trial boot
 
@@ -53,13 +72,13 @@ the image is a plain bootfs FIT like the previous mainline images.)
 bcm_bootstate 3; reboot
 ```
 
-Expected timeline (from power-on of slot 1; U-Boot reads a ~25 MB volume, a
+Expected timeline (from power-on of slot 1; U-Boot reads a ~45 MB volume, a
 few seconds longer than before):
 
 | Step | Expected | Post-code if it stops there |
 |---|---|---|
 | kernel + initramfs unpack | | below c0 (kernel), c0..c5 |
-| rootfs mounted, OpenRC | < 15 s | f0..f3 |
+| rootfs found / mounted / OpenRC | < 15 s | f0..f3 (e0: the rootfs initrd did not arrive -> rescue, telnet on the USB address) |
 | watchdog petting | | f4 |
 | USB lifeline address (dhcpcd) | < 40 s | f5 |
 | sshd | | f6 |

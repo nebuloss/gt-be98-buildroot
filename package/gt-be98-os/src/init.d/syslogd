@@ -5,7 +5,7 @@
 # and the optional remote target (SYSLOG_REMOTE at build time).
 description="System logger (sysklogd)"
 
-command="/usr/sbin/syslogd"
+command="/sbin/syslogd"
 command_args="-F ${SYSLOGD_OPTS}"
 supervisor="supervise-daemon"
 respawn_delay=2

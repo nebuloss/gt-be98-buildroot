@@ -32,9 +32,6 @@ define GT_BE98_OS_INSTALL_TARGET_CMDS
 	for c in $(@D)/conf.d/*; do \
 		$(INSTALL) -D -m 0644 $$c $(TARGET_DIR)/etc/conf.d/`basename $$c` || exit 1; \
 	done
-	cd $(@D)/etc && find . -type f | while read f; do \
-		$(INSTALL) -D -m 0644 $$f $(TARGET_DIR)/etc/$$f || exit 1; \
-	done
 	mkdir -p $(TARGET_DIR)/rom $(TARGET_DIR)/overlay $(TARGET_DIR)/data \
 		$(TARGET_DIR)/etc/ssh/authorized_keys $(TARGET_DIR)/etc/syslog.d
 endef
@@ -48,6 +45,15 @@ endef
 # packages install with the OpenRC services above, set the runlevels, and
 # apply the lab-specific values of the local configuration file.
 define GT_BE98_OS_FINALIZE
+	# our /etc files win over the package defaults (sshd_config, dhcpcd.conf,
+	# chrony.conf, syslog.conf, dnsmasq.conf, fstab, ...)
+	cd $(GT_BE98_OS_DIR)/etc && find . -type f | while read f; do \
+		$(INSTALL) -D -m 0644 $$f $(TARGET_DIR)/etc/$$f || exit 1; \
+	done
+	# the bench-only Wi-Fi RE module is never shipped
+	find $(TARGET_DIR)/lib/modules -name bca_barpeek.ko -delete
+	# no RTC on the board: hwclock would only fail at every boot
+	rm -f $(TARGET_DIR)/etc/runlevels/boot/hwclock
 	rm -f $(TARGET_DIR)/etc/init.d/S[0-9][0-9]* $(TARGET_DIR)/etc/init.d/rcS \
 		$(TARGET_DIR)/etc/init.d/rcK
 	rm -f $(TARGET_DIR)/etc/runlevels/*/sysv-rcs
