@@ -1,0 +1,28 @@
+#!/sbin/openrc-run
+# SPDX-License-Identifier: GPL-2.0
+# Pets the SoC watchdog while the box is healthy (gt-be98-wdtd).
+# STOPPING THIS SERVICE RESETS THE BOX within the watchdog timeout (~30 s)
+# unless it is started again (NOWAYOUT). Settings: /etc/conf.d/gt-be98-watchdog.
+description="SoC watchdog petting, gated on health (address + login service)"
+
+command="/usr/sbin/gt-be98-wdtd"
+command_background="yes"
+pidfile="/run/gt-be98-wdtd.pid"
+# no respawn on purpose: a dead petter must end in a hardware reset
+
+depend() {
+	after devfs sysfs
+	before net dhcpcd sshd
+	# kept running through shutdown: killprocs ends it last; a reboot
+	# that hangs is then reset by the hardware
+	keyword -shutdown
+}
+
+start_pre() {
+	[ -c /dev/watchdog ] || { eerror "/dev/watchdog missing (bcm7038_wdt, DT watchdog@480)"; return 1; }
+	export WDT_DEV PET_INTERVAL CHECK_EVERY PROBATION GRACE MODE HEALTH_EXTRA
+}
+
+stop_pre() {
+	ewarn "watchdog no longer petted: the box resets in ~30 s unless started again"
+}

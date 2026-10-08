@@ -1,0 +1,15 @@
+config BR2_PACKAGE_GT_BE98_VENDOR_FIRMWARE
+	bool "gt-be98-vendor-firmware (proprietary blobs from local dirs)"
+	select BR2_PACKAGE_GT_BE98_OS
+	help
+	  Copies the proprietary firmware the open drivers load from the
+	  stock firmware, from local directories on the build host named in
+	  the local configuration file (BR2_PACKAGE_GT_BE98_OS_LOCAL_CONF):
+	    FW_RUNNER_DIR  bcm4916-runner-microcode.bin, merlin16-shortfin.bin
+	    FW_PHY_DIR     stock /rom/etc/fw (xphy_firmware.bin,
+	                   blackfin_b0_firmware.bin)
+	    FW_WIFI_DIR    stock /rom/etc/wlan (dhd/*/release/rtecdc.bin,
+	                   nvram/GT-BE98.nvm)
+	  Every file is checked against the sha256 recorded in
+	  gt-be98-vendor-firmware.mk. A directory left empty is skipped
+	  with a warning. The blobs are never part of any repository.

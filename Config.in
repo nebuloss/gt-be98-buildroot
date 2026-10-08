@@ -14,4 +14,13 @@ source "$BR2_EXTERNAL_GT_BE98_PATH/package/gt-be98-libshared/Config.in"
 source "$BR2_EXTERNAL_GT_BE98_PATH/package/gt-be98-hostapd/Config.in"
 source "$BR2_EXTERNAL_GT_BE98_PATH/package/gt-be98-rc/Config.in"
 
+
+comment "GT-BE98 mainline OS (aarch64, mainline kernel)"
+source "$BR2_EXTERNAL_GT_BE98_PATH/package/gt-be98-os/Config.in"
+source "$BR2_EXTERNAL_GT_BE98_PATH/package/gt-be98-open-ethernet/Config.in"
+source "$BR2_EXTERNAL_GT_BE98_PATH/package/gt-be98-open-wifi/Config.in"
+source "$BR2_EXTERNAL_GT_BE98_PATH/package/gt-be98-vendor-firmware/Config.in"
+source "$BR2_EXTERNAL_GT_BE98_PATH/package/gt-be98-rescue-busybox/Config.in"
+source "$BR2_EXTERNAL_GT_BE98_PATH/package/gt-be98-webui/Config.in"
+
 endmenu

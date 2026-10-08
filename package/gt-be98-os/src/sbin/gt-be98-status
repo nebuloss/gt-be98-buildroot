@@ -1,0 +1,14 @@
+#!/bin/sh
+# SPDX-License-Identifier: GPL-2.0
+# gt-be98-status: one-screen summary for a developer logging in.
+echo "== $(cat /etc/gt-be98-release 2>/dev/null | head -1)"
+echo "kernel: $(uname -r)  up: $(cut -d' ' -f1 /proc/uptime)s"
+pc=$(( ($(devmem 0xff802628 32 2>/dev/null || echo 0) >> 24) & 0xff ))
+printf 'post-code byte: 0x%02x\n' "$pc"
+echo "== health"; gt-be98-health
+echo "== watchdog"; rc-service gt-be98-watchdog status 2>/dev/null
+echo "== modules"; grep -E '^(bcm4916_runner|bca_pcie_ipc) ' /proc/modules || echo "(none of ours loaded)"
+echo "== links"; ip -br link
+echo "== addresses"; ip -br -4 addr
+echo "== services"; rc-status -s 2>/dev/null | grep -vE '^ *$' | head -40
+echo "== persistence"; mountpoint -q /data && df -h /data || echo "/data: not mounted (volatile only)"

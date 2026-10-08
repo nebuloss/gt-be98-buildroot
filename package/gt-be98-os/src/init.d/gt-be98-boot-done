@@ -1,0 +1,25 @@
+#!/sbin/openrc-run
+# SPDX-License-Identifier: GPL-2.0
+# Last service of the default runlevel: post-code fa (boot complete) and a
+# boot summary in the log. At shutdown/reboot: post-code fe.
+description="GT-BE98 boot milestone (fa) and shutdown milestone (fe)"
+
+depend() {
+	after *
+}
+
+start() {
+	local t
+	t=$(cut -d' ' -f1 /proc/uptime)
+	gt-be98-postcode fa "default runlevel reached at ${t}s"
+	logger -t gt-be98 "boot complete at ${t}s: $(gt-be98-health | tr '\n' ' ')"
+	echo "$t" > /run/gt-be98-boot-done
+	return 0
+}
+
+stop() {
+	case "${RC_RUNLEVEL:-}" in
+	shutdown|reboot) gt-be98-postcode fe "shutdown/reboot" ;;
+	esac
+	return 0
+}

@@ -1,0 +1,27 @@
+#!/sbin/openrc-run
+# SPDX-License-Identifier: GPL-2.0
+# OpenSSH server, public-key authentication only (/etc/ssh/sshd_config).
+description="OpenSSH server"
+
+command="/usr/sbin/sshd"
+command_args="-D -e ${SSHD_OPTS}"
+supervisor="supervise-daemon"
+respawn_delay=2
+respawn_max=0
+output_log="/var/log/sshd.log"
+error_log="/var/log/sshd.log"
+
+depend() {
+	use logger dhcpcd
+	after gt-be98-watchdog dhcpcd
+}
+
+start_pre() {
+	checkpath -d -m 0755 /run/sshd /var/empty
+	/usr/bin/ssh-keygen -A >/dev/null || return 1
+	/usr/sbin/sshd -t || return 1
+}
+
+start_post() {
+	gt-be98-postcode f6 "sshd started"
+}

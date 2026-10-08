@@ -1,0 +1,37 @@
+config BR2_PACKAGE_GT_BE98_OPEN_ETHERNET
+	bool "gt-be98-open-ethernet (mainline kernel series + Runner driver)"
+	depends on BR2_LINUX_KERNEL
+	help
+	  The gt-be98-open-ethernet repository at a pinned commit:
+	   - kernel-patches/mainline: the GT-BE98 patch series, applied to
+	     the Buildroot kernel in the order of its README (series.pmb,
+	     series, series.phy, ... series.pcie);
+	   - driver/runner: the out-of-tree BCM4916 XRDP Runner Ethernet
+	     driver, built as bcm4916-runner.ko against the same kernel;
+	   - tools/mainline-boot: mkbootfs.py, the board dts and the kernel
+	     config fragments, installed to $(HOST_DIR)/share/gt-be98-mainline
+	     for post-image.sh.
+
+	  The repository is private: the download uses git over SSH. For
+	  driver work, point GT_BE98_OPEN_ETHERNET_OVERRIDE_SRCDIR at a
+	  checkout in a local.mk (Buildroot manual, "Using Buildroot during
+	  development").
+
+if BR2_PACKAGE_GT_BE98_OPEN_ETHERNET
+
+config BR2_PACKAGE_GT_BE98_OPEN_ETHERNET_KERNEL_PATCHES
+	bool "apply the kernel patch series to the Buildroot kernel"
+	default y
+	help
+	  Apply kernel-patches/mainline (all series files, README order)
+	  to the kernel after its own patches.
+
+config BR2_PACKAGE_GT_BE98_OPEN_ETHERNET_RUNNER
+	bool "bcm4916-runner.ko"
+	default y
+	help
+	  Build and install the Runner Ethernet driver module
+	  (/lib/modules/<kver>/updates/bcm4916-runner.ko). The gt-be98-drivers
+	  service loads it. Its firmware comes from gt-be98-vendor-firmware.
+
+endif

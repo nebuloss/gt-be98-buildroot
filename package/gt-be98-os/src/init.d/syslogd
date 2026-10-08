@@ -1,0 +1,21 @@
+#!/sbin/openrc-run
+# SPDX-License-Identifier: GPL-2.0
+# sysklogd: /var/log/messages (RAM, rotated), the kernel log included, plus
+# /etc/syslog.d/*.conf: the persistent copy on a USB stick (gt-be98-persist)
+# and the optional remote target (SYSLOG_REMOTE at build time).
+description="System logger (sysklogd)"
+
+command="/usr/sbin/syslogd"
+command_args="-F ${SYSLOGD_OPTS}"
+supervisor="supervise-daemon"
+respawn_delay=2
+
+depend() {
+	provide logger
+	after gt-be98-persist
+	before net
+}
+
+start_pre() {
+	checkpath -d -m 0755 /var/log
+}

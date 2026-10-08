@@ -1,0 +1,4 @@
+# /etc/conf.d/gt-be98-persist
+PERSIST=yes
+PERSIST_LABEL=GTBE98-DATA
+PERSIST_WAIT=8

@@ -1,0 +1,28 @@
+#!/sbin/openrc-run
+# SPDX-License-Identifier: GPL-2.0
+# gt-be98-webui-go (mainline-os port). Installed but NOT enabled by default:
+#   rc-update add webui default && rc-service webui start
+# The webui-go delivery may replace this script (BR2_PACKAGE_GT_BE98_WEBUI_EXTRA_DIR).
+description="GT-BE98 web UI (webui-go)"
+
+: "${WEBUI_BIN:=/usr/sbin/webui}"
+: "${WEBUI_ARGS:=-conf /etc/webui}"
+
+command="$WEBUI_BIN"
+command_args="$WEBUI_ARGS"
+supervisor="supervise-daemon"
+respawn_delay=5
+respawn_max=10
+output_log="/var/log/webui.log"
+error_log="/var/log/webui.log"
+
+depend() {
+	need net
+	after sshd gt-be98-drivers
+	use logger
+}
+
+start_pre() {
+	[ -x "$WEBUI_BIN" ] || { eerror "$WEBUI_BIN missing (BR2_PACKAGE_GT_BE98_WEBUI_BINARY)"; return 1; }
+	checkpath -d -m 0755 /etc/webui /var/log
+}

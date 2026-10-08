@@ -1,0 +1,29 @@
+#!/bin/sh
+# SPDX-License-Identifier: GPL-2.0
+# gt-be98-postcode XX [message]: leave a boot milestone for the next boot.
+#
+# Writes "BE98PC XX" to /dev/kmsg. The be98pc earlycon (kernel patch 0500,
+# keep_bootcon) turns it into bits [31:24] of 0xff802628, which survive a
+# reset; the stock slot reads them after a trial (bits [23:0] are never
+# touched). XX: two hex digits, c0..fe. A later code overwrites an earlier one.
+#
+# Codes of this OS (the initramfs /init uses c0..c5, f0..f3, e0..e4 and the
+# rescue c6..ca, ee; see board/gt-be98-mainline/TESTPLAN.md):
+#   f4 watchdog petting started (boot runlevel)
+#   f5 dhcpcd (network) started        f6 sshd started
+#   f7 Runner module loaded            e7 Runner module failed to load
+#   fa default runlevel reached        fb health confirmed (address + sshd)
+#   fd health lost: petting stopped, the hardware watchdog resets the box
+#   fe clean shutdown / reboot
+set -u
+code=${1:?usage: gt-be98-postcode XX [message]}
+case "$code" in
+[cdefCDEF][0-9a-fA-F]) ;;
+*) echo "gt-be98-postcode: $code: not a milestone code (c0..fe)" >&2; exit 1 ;;
+esac
+[ "$code" = ff ] && { echo "gt-be98-postcode: ff is reserved" >&2; exit 1; }
+shift
+msg=${*:-}
+echo "BE98PC $code" > /dev/kmsg 2>/dev/null
+[ -n "$msg" ] && echo "gt-be98: $msg" > /dev/kmsg 2>/dev/null
+exit 0

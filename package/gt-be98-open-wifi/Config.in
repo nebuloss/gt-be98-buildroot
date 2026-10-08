@@ -1,0 +1,23 @@
+config BR2_PACKAGE_GT_BE98_OPEN_WIFI
+	bool "gt-be98-open-wifi (bca_pcie_ipc.ko)"
+	depends on BR2_LINUX_KERNEL
+	help
+	  The open Wi-Fi driver for the four BCM67xx PCIe radios
+	  (bca_pcie_ipc.ko, cfg80211), from gt-be98-open-wifi at a pinned
+	  commit (git over SSH, private repository). Needs the kernel built
+	  with the PCIe series and CONFIG_CFG80211=y (the default kernel
+	  config of gt-be98_mainline_defconfig). The radio firmware comes
+	  from gt-be98-vendor-firmware. Not loaded at boot: the gt-be98-wifi
+	  service (disabled by default) loads it and starts hostapd.
+
+if BR2_PACKAGE_GT_BE98_OPEN_WIFI
+
+config BR2_PACKAGE_GT_BE98_OPEN_WIFI_BENCH
+	bool "bench module parameters"
+	default y
+	help
+	  Build with -DBCA_BENCH_PARAMS (the build that was tested on the
+	  box, tools/mainline-boot/build.sh WIFI_BENCH=1). The bench-only
+	  bca_barpeek.ko is never installed.
+
+endif

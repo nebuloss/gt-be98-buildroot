@@ -1,0 +1,42 @@
+#!/sbin/openrc-run
+# SPDX-License-Identifier: GPL-2.0
+# Fallback lifeline: BusyBox telnetd with a root shell and NO PASSWORD,
+# bound to the USB-Ethernet address only (as the stage-2 diagnostic image).
+# Enabled at build time only when the image has no SSH authorized key; enable
+# by hand with rc-update add gt-be98-telnet default. Lab LAN only.
+description="Passwordless telnet lifeline on the USB NIC (fallback)"
+
+BB=/usr/libexec/gt-be98/busybox
+pidfile="/run/gt-be98-telnet.pid"
+
+depend() {
+	after dhcpcd
+	before gt-be98-drivers
+}
+
+usb_addr() {
+	local n i
+	for n in /sys/class/net/*; do
+		readlink -f "$n/device" 2>/dev/null | grep -q /usb || continue
+		i=${n##*/}
+		ip -4 -o addr show dev "$i" scope global | sed -n 's/.* inet \([0-9.]*\)\/.*/\1/p' | head -n1
+		return 0
+	done
+}
+
+start() {
+	local a n=0
+	a=$(usb_addr)
+	while [ -z "$a" ] && [ $n -lt ${ADDR_WAIT:-60} ]; do sleep 1; n=$((n + 1)); a=$(usb_addr); done
+	[ -n "$a" ] || { eerror "no address on a USB NIC"; return 1; }
+	ebegin "Starting telnetd on $a:23 (root shell, no password)"
+	start-stop-daemon --start --background --make-pidfile --pidfile "$pidfile" \
+		--exec "$BB" -- telnetd -F -b "$a" -l /bin/bash
+	eend $?
+}
+
+stop() {
+	ebegin "Stopping telnetd"
+	start-stop-daemon --stop --pidfile "$pidfile"
+	eend $?
+}

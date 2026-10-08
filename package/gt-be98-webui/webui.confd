@@ -1,0 +1,3 @@
+# /etc/conf.d/webui - arguments for the webui-go binary
+#WEBUI_BIN=/usr/sbin/webui
+#WEBUI_ARGS="-conf /etc/webui"

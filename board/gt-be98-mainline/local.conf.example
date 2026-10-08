@@ -1,0 +1,53 @@
+# GT-BE98 mainline OS - local configuration (build host only, NEVER commit
+# the filled-in copy). board/gt-be98-mainline/build.sh reads it from
+# $GT_BE98_LOCAL_CONF (default ~/.config/gt-be98-os/local.conf) and records
+# its path in the Buildroot .config (BR2_PACKAGE_GT_BE98_OS_LOCAL_CONF).
+# Shell syntax: KEY=VALUE, absolute paths.
+
+# --- build.sh ------------------------------------------------------------------
+# Buildroot source tree (release tarball, signature checked)
+BR2_SRC=$HOME/os-build/buildroot-2026.08
+# Buildroot output directory (about 15 GB)
+OUT=$HOME/os-build/out-mainline
+# shared download directory
+BR2_DL_DIR=$HOME/be98/buildroot/dl
+
+# --- FIT -----------------------------------------------------------------------
+# the stock bootfs FIT (dumpimage -p 0 of a stock .pkgtb): ATF, U-Boot and
+# the vendor DTBs are reused unchanged
+STOCK_BOOTFS=
+
+# --- vendor firmware (gt-be98-vendor-firmware; sha256-checked) -------------------
+# bcm4916-runner-microcode.bin, merlin16-shortfin.bin
+FW_RUNNER_DIR=
+# stock /rom/etc/fw (xphy_firmware.bin, blackfin_b0_firmware.bin)
+FW_PHY_DIR=
+# stock /rom/etc/wlan (dhd/6726b0, dhd/6717a0, nvram/GT-BE98.nvm)
+FW_WIFI_DIR=
+
+# --- access ----------------------------------------------------------------------
+# public keys allowed to log in as root over ssh
+SSH_AUTHORIZED_KEYS=
+# stable ssh host keys (build.sh generates them here if missing)
+SSH_HOSTKEY_DIR=$HOME/.config/gt-be98-os/ssh-host-keys
+# auto (enabled only when there is no SSH key) | yes | no
+TELNET_LIFELINE=auto
+
+# --- network (optional) -------------------------------------------------------------
+# static address dhcpcd falls back to when no DHCP server answers (A.B.C.D/NN)
+RNR0_FALLBACK=
+USB_FALLBACK=
+# remote syslog target host[:port] (UDP)
+SYSLOG_REMOTE=
+
+# --- boot ----------------------------------------------------------------------------
+# 1: always boot the rescue lifeline (the rootfs is still in the image)
+RESCUE=0
+# rescue: seconds of watchdog petting (extendable to 3600)
+WDT_MAX=600
+
+# --- web UI (gt-be98-webui; optional) -------------------------------------------------
+# WEBUI_BINARY=/path/to/webui      (prebuilt static arm64)
+# WEBUI_EXTRA_DIR=/path/to/overlay (init script, conf, www, as delivered)
+WEBUI_BINARY=
+WEBUI_EXTRA_DIR=

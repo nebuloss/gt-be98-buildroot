@@ -1,0 +1,8 @@
+# /etc/conf.d/gt-be98-drivers
+RUNNER_LOAD=yes
+# module parameters (k=v words)
+RUNNER_ARGS="flow_offload=1"
+# load this file instead of the installed module (driver iteration)
+RUNNER_KO=
+# interfaces to bring up after the load (dhcpcd brings up the ones it manages)
+RUNNER_UP_IFACES=

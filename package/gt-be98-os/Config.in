@@ -1,0 +1,33 @@
+config BR2_PACKAGE_GT_BE98_OS
+	bool "gt-be98-os (mainline OS integration)"
+	depends on BR2_INIT_OPENRC
+	depends on BR2_LINUX_KERNEL
+	select BR2_PACKAGE_HOST_UBOOT_TOOLS
+	select BR2_PACKAGE_HOST_UBOOT_TOOLS_FIT_SUPPORT
+	select BR2_PACKAGE_HOST_DTC
+	help
+	  GT-BE98 mainline development OS integration:
+	   - OpenRC services: gt-be98-watchdog (health-gated petting),
+	     dhcpcd (USB lifeline + rnr0), sshd (keys only), chronyd,
+	     syslogd, gt-be98-persist (USB stick), gt-be98-drivers (Runner),
+	     gt-be98-boot-done; optional gt-be98-wifi, gt-be98-telnet,
+	     dnsmasq;
+	   - gt-be98-postcode / -health / -wdtd / -status, a guarded devmem;
+	   - the rescue initramfs /init (installed to $(BINARIES_DIR)/rescue/),
+	     used by board/gt-be98-mainline/post-image.sh;
+	   - lab-specific values (SSH keys, host keys, static fallback
+	     address, remote syslog) from the local configuration file.
+
+if BR2_PACKAGE_GT_BE98_OS
+
+config BR2_PACKAGE_GT_BE98_OS_LOCAL_CONF
+	string "local configuration file (build host, not in git)"
+	default ""
+	help
+	  Absolute path of a shell KEY=VALUE file with the lab-specific
+	  settings (template: board/gt-be98-mainline/local.conf.example).
+	  board/gt-be98-mainline/build.sh sets it. Empty: no SSH key (the
+	  passwordless USB telnet lifeline is then enabled), no firmware,
+	  and post-image.sh cannot build the FIT (it needs STOCK_BOOTFS).
+
+endif

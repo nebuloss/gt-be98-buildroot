@@ -1,0 +1,22 @@
+# /etc/ssh/sshd_config - GT-BE98 mainline OS: public-key authentication only.
+# Keys: /etc/ssh/authorized_keys/<user> (baked in at build time from the
+# local configuration) and ~/.ssh/authorized_keys.
+Port 22
+AddressFamily any
+HostKey /etc/ssh/ssh_host_ed25519_key
+HostKey /etc/ssh/ssh_host_ecdsa_key
+HostKey /etc/ssh/ssh_host_rsa_key
+
+PermitRootLogin prohibit-password
+PubkeyAuthentication yes
+AuthorizedKeysFile /etc/ssh/authorized_keys/%u .ssh/authorized_keys
+PasswordAuthentication no
+KbdInteractiveAuthentication no
+PermitEmptyPasswords no
+UsePAM no
+UseDNS no
+X11Forwarding no
+AllowTcpForwarding yes
+ClientAliveInterval 30
+ClientAliveCountMax 4
+Subsystem sftp internal-sftp

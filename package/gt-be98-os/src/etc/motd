@@ -1,0 +1,10 @@
+
+  GT-BE98 mainline development OS (OpenRC, RAM rootfs - changes are lost
+  at reboot; a reboot or an unhealthy box returns to the committed slot).
+
+  gt-be98-status                     summary (health, modules, links)
+  rc-service gt-be98-drivers restart reload the Runner driver
+  rc-service gt-be98-wifi start      Wi-Fi driver + hostapd (optional)
+  sysctl -w kernel.panic_on_oops=0   survive an oops while debugging
+  DO NOT stop gt-be98-watchdog unless you want a reset in ~30 s.
+

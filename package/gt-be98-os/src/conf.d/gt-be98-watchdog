@@ -1,0 +1,14 @@
+# /etc/conf.d/gt-be98-watchdog
+# health: pet unconditionally until uptime PROBATION, then only while
+#         gt-be98-health passes (an IPv4 address + sshd/telnet); after GRACE
+#         seconds of failed checks stop petting -> reset into the committed slot.
+# always: pet as long as the daemon runs (bench with physical access only).
+MODE=health
+PROBATION=180
+GRACE=300
+PET_INTERVAL=5
+CHECK_EVERY=15
+WDT_DEV=/dev/watchdog
+# optional extra health command (exit 0 = healthy), e.g.
+#HEALTH_EXTRA="ip link show rnr0 | grep -q LOWER_UP"
+HEALTH_EXTRA=

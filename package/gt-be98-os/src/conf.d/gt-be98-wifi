@@ -1,0 +1,11 @@
+# /etc/conf.d/gt-be98-wifi (service disabled by default)
+# module parameters, e.g. the M1 single-radio set:
+#WIFI_ARGS="bind_domain=2 max_eps=1 hybrid_msi=0 rx_nullbuf=0"
+WIFI_ARGS=
+WIFI_KO=
+# hostapd configurations (space separated); see /etc/hostapd/*.example.
+# Shipped defaults, four radios: the 2.4 GHz netdev is bcawl3 (PCI domain 2).
+HOSTAPD_CONFS=
+HOSTAPD_ARGS=
+IFACE_WAIT=20
+WIFI_UNLOAD_ON_STOP=yes

@@ -1,0 +1,226 @@
+#!/bin/sh
+# SPDX-License-Identifier: GPL-2.0
+# GT-BE98 mainline OS - initramfs /init (static BusyBox ash, PID 1).
+#
+# The kernel Image carries a small initramfs: a static BusyBox, this script,
+# and the whole OS as one squashfs image (/rootfs.squashfs). /init
+#   1. mounts /proc, /sys, /dev, /tmp and routes the USB power pins;
+#   2. OS path: loop-mounts the squashfs read-only at /rom, puts an overlayfs
+#      over it with a tmpfs upper layer, and switch_roots into OpenRC
+#      (/sbin/init). The squashfs and the tmpfs stay visible in the OS as
+#      /rom and /overlay;
+#   3. RESCUE path, if any step of 2 fails (or the image was built with
+#      RESCUE=1): the stage-2 diagnostic lifeline of tools/mainline-boot
+#      (open-ethernet): USB-Ethernet DHCP, busybox telnetd (root shell, no
+#      password, bound to the USB address only), and BOUNDED watchdog
+#      petting (ml.wdt_max, default 600 s; echo 1 > /tmp/extend adds 600 s,
+#      at most 3600 s), after which the hardware watchdog resets the box
+#      back to the committed (stock) slot.
+#
+# Post-codes ("BE98PC xx" in /dev/kmsg; the be98pc earlycon puts xx into
+# 0xff802628[31:24]; a later code overwrites an earlier one):
+#   c0 /init runs   c1 /proc   c2 /sys   c3 /dev, /tmp, applet links
+#   c4 command line parsed   c5 USB power pins routed
+#   OS path:  f0 rootfs image found   f1 squashfs mounted
+#             f2 overlay mounted      f3 switch_root to /sbin/init (OpenRC)
+#             (OpenRC services post f4..fe, see gt-be98-postcode)
+#   Rescue:   e0 no /rootfs.squashfs  e1 squashfs mount failed
+#             e2 overlay mount failed e3 no /sbin/init in the new root
+#             e4 rescue requested at build time (RESCUE=1)
+#             then as stage 2: c6 USB NIC  c7 address  c8 telnetd
+#             c9 petting  ca petting deadline reached (reset follows)
+#             ee no USB bus
+#
+# Build-time defaults: /etc/ml-defaults (written by post-image.sh).
+# The kernel command line is forced (CONFIG_CMDLINE_FORCE); ml.* options on
+# it override the defaults: ml.wdt_max=N, ml.ip=A.B.C.D/NN, ml.usbmux=0|1,
+# ml.rescue=1.
+
+PATH=/bin:/sbin:/usr/bin:/usr/sbin
+export PATH
+
+pc() { echo "BE98PC $1" > /dev/kmsg; }
+log() { echo "INIT: $*" > /dev/kmsg; }
+
+pc c0
+/bin/busybox mkdir -p /usr/bin /usr/sbin /sbin
+/bin/busybox --install -s
+mount -t proc proc /proc && pc c1
+mount -t sysfs sysfs /sys && pc c2
+mount -t devtmpfs devtmpfs /dev 2>/dev/null
+mkdir -p /dev/pts /tmp
+mount -t devpts devpts /dev/pts
+mount -t tmpfs tmpfs /tmp && pc c3
+
+upi() { cut -d. -f1 /proc/uptime; }
+T0=$(upi)
+
+ROOTFS=/rootfs.squashfs
+OVERLAY_SIZE=50%
+RESCUE=0
+STATIC_IP=
+USBMUX=1
+WDT_MAX=600
+[ -f /etc/ml-defaults ] && . /etc/ml-defaults
+
+CMDLINE=$(cat /proc/cmdline 2>/dev/null)
+log "cmdline: ${CMDLINE:-<unreadable>}"
+for w in $CMDLINE; do
+	case "$w" in
+	ml.ip=*)	STATIC_IP=${w#*=} ;;
+	ml.usbmux=*)	USBMUX=${w#*=} ;;
+	ml.wdt_max=*)	WDT_MAX=${w#*=} ;;
+	ml.rescue=*)	RESCUE=${w#*=} ;;
+	esac
+done
+case "$WDT_MAX" in ''|*[!0-9]*) WDT_MAX=600 ;; esac
+[ "$WDT_MAX" -gt 3600 ] && WDT_MAX=3600
+log "$(uname -a)"
+log "params: rescue=$RESCUE wdt_max=$WDT_MAX usbmux=$USBMUX rootfs=$ROOTFS"
+pc c4
+
+# USB port power / overcurrent pins (58,59 USB0; 60,61 USB1) to function 0,
+# as the vendor DT does, through the TEST_PORT pinmux block at 0xff800554
+# (no mainline pinctrl driver for this SoC yet). Both paths need it: the OS
+# brings the lifeline up with dhcpcd, the rescue with udhcpc.
+if [ "$USBMUX" = 1 ]; then
+	for pin in 58 59 60 61; do
+		devmem 0xff800554 32 0
+		devmem 0xff800558 32 $pin
+		devmem 0xff80055c 32 0x21
+	done
+fi
+pc c5
+log "usb: pinmux 58-61 -> function 0 (usbmux=$USBMUX)"
+
+# ---- OS path ------------------------------------------------------------------
+REASON=
+os_boot() {
+	if [ "$RESCUE" = 1 ]; then
+		REASON=e4; log "rescue requested (RESCUE=1 / ml.rescue=1)"; return 1
+	fi
+	if [ ! -f "$ROOTFS" ]; then
+		REASON=e0; log "os: $ROOTFS missing"; return 1
+	fi
+	pc f0
+	log "os: $ROOTFS $(wc -c < "$ROOTFS") bytes"
+	mkdir -p /mnt/ro /mnt/rw /newroot
+	if ! mount -t squashfs -o ro,loop "$ROOTFS" /mnt/ro; then
+		REASON=e1; log "os: squashfs mount failed"; return 1
+	fi
+	pc f1
+	if ! mount -t tmpfs -o mode=0755,size=$OVERLAY_SIZE tmpfs /mnt/rw ||
+	   ! mkdir -p /mnt/rw/upper /mnt/rw/work ||
+	   ! mount -t overlay -o lowerdir=/mnt/ro,upperdir=/mnt/rw/upper,workdir=/mnt/rw/work \
+		overlay /newroot; then
+		REASON=e2; log "os: overlay mount failed"
+		umount /mnt/rw 2>/dev/null; umount /mnt/ro 2>/dev/null
+		return 1
+	fi
+	pc f2
+	if [ ! -x /newroot/sbin/init ]; then
+		REASON=e3; log "os: /sbin/init missing in the rootfs"
+		umount /newroot; umount /mnt/rw; umount /mnt/ro
+		return 1
+	fi
+	# keep the layers visible in the OS (the dirs exist in the image)
+	mkdir -p /newroot/rom /newroot/overlay 2>/dev/null
+	mount --move /mnt/ro /newroot/rom
+	mount --move /mnt/rw /newroot/overlay
+	# what the OS can read about this boot
+	{
+		echo "BOOT_T0=$T0"
+		echo "BOOT_ROOTFS_BYTES=$(wc -c < "$ROOTFS")"
+		echo "BOOT_USBMUX=$USBMUX"
+	} > /newroot/overlay/boot-info 2>/dev/null
+	umount /dev/pts 2>/dev/null
+	umount /tmp
+	umount /sys
+	umount /dev 2>/dev/null
+	pc f3
+	log "os: switch_root to OpenRC at $(cut -d' ' -f1 /proc/uptime)s"
+	umount /proc
+	exec switch_root /newroot /sbin/init
+	# not reached unless exec failed; the mounts are gone, so reboot and
+	# let the watchdog reset path take over if even that fails
+	echo "BE98PC e3" > /dev/kmsg
+	reboot -f
+	while :; do sleep 3600; done
+}
+os_boot
+pc "$REASON"
+log "RESCUE MODE ($REASON)"
+
+# ---- rescue: stage-2 USB lifeline --------------------------------------------
+NET_DEADLINE=$((T0 + 45))
+idle() { while :; do sleep 3600; done; }
+
+if [ ! -e /sys/bus/usb/devices/usb1 ]; then
+	sleep 2
+fi
+if [ ! -e /sys/bus/usb/devices/usb1 ]; then
+	pc ee
+	log "usb: no USB bus - power-up or xhci probe failed"
+	dmesg | grep -iE 'xhci|usb|phy|pmb|power' | tail -n 20 | while read -r l; do log "dmesg: $l"; done
+	idle
+fi
+
+usb_nic() {
+	ls -l /sys/class/net 2>/dev/null | grep /usb | sed 's/.* \([^ ]*\) -> .*/\1/' | head -n 1
+}
+
+IF=
+ADDR=
+while [ "$(upi)" -lt "$NET_DEADLINE" ]; do
+	if [ -z "$IF" ]; then
+		IF=$(usb_nic)
+		if [ -z "$IF" ]; then
+			sleep 1
+			continue
+		fi
+		pc c6
+		log "net: USB NIC $IF at $(upi)s"
+		ip link set lo up
+		ip link set "$IF" up
+	fi
+	udhcpc -i "$IF" -n -q -t 2 -T 2 -s /etc/udhcpc.script >>/tmp/udhcpc.log 2>&1
+	ADDR=$(ip -4 -o addr show dev "$IF" 2>/dev/null | sed -n 's/.* inet \([0-9.]*\)\/.*/\1/p' | head -n 1)
+	[ -n "$ADDR" ] && break
+	if [ -n "$STATIC_IP" ]; then
+		ip addr add "$STATIC_IP" dev "$IF" && ADDR=${STATIC_IP%/*}
+		break
+	fi
+	[ -e "/sys/class/net/$IF" ] || IF=
+done
+if [ -z "$ADDR" ]; then
+	log "net: no address within 45 s; NOT petting the watchdog (U-Boot watchdog resets the box)"
+	idle
+fi
+pc c7
+log "net: address $ADDR on $IF at $(upi)s"
+
+telnetd -b "$ADDR" -l /bin/sh && { pc c8; log "net: telnetd on $ADDR:23 ($IF)"; }
+
+exec 3>/dev/watchdog || { log "watchdog: cannot open /dev/watchdog, not petting"; idle; }
+start=$(upi)
+end=$((start + WDT_MAX))
+total=$WDT_MAX
+pc c9
+log "watchdog: petting until uptime ${end}s (echo 1 > /tmp/extend adds 600 s, max 3600 s total)"
+while [ "$(upi)" -lt "$end" ]; do
+	echo -n . >&3
+	if [ -e /tmp/extend ]; then
+		rm -f /tmp/extend
+		if [ $((total + 600)) -le 3600 ]; then
+			total=$((total + 600))
+			end=$((end + 600))
+			log "watchdog: extended, petting until uptime ${end}s (total ${total}s)"
+		else
+			log "watchdog: extend refused, total already ${total}s"
+		fi
+	fi
+	sleep 5
+done
+pc ca
+log "watchdog: deadline reached at $(upi)s, petting stopped; hardware reset follows"
+idle

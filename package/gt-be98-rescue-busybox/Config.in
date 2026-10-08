@@ -1,0 +1,16 @@
+config BR2_PACKAGE_GT_BE98_RESCUE_BUSYBOX
+	bool "gt-be98-rescue-busybox (static, rescue initramfs only)"
+	depends on BR2_TOOLCHAIN_USES_GLIBC
+	depends on BR2_STATIC_LIBS || BR2_SHARED_STATIC_LIBS
+	help
+	  A statically linked BusyBox (upstream defconfig, all applets
+	  except tc) for the rescue initramfs built into the kernel Image:
+	  /init, the USB-Ethernet lifeline (udhcpc), telnetd and devmem when
+	  the rootfs cannot be mounted. Installed to
+	  $(BINARIES_DIR)/rescue/busybox, and to
+	  /usr/libexec/gt-be98/busybox in the rootfs for the optional
+	  gt-be98-telnet lifeline service. The rootfs itself uses the full
+	  upstream tools, not BusyBox.
+
+comment "gt-be98-rescue-busybox needs a glibc toolchain with static libraries"
+	depends on !BR2_TOOLCHAIN_USES_GLIBC || !(BR2_STATIC_LIBS || BR2_SHARED_STATIC_LIBS)

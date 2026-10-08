@@ -1,0 +1,63 @@
+#!/bin/sh
+# SPDX-License-Identifier: GPL-2.0
+# gt-be98-wdtd: pet the SoC watchdog while the box is healthy.
+#
+# U-Boot arms the hardware watchdog (bcm6345-wdt at 0xff800480, ~60-80 s)
+# before it starts the kernel; a box that nobody pets resets into the
+# committed (stock) slot. This daemon keeps a healthy OS alive:
+#   - it opens /dev/watchdog (bcm7038_wdt, NOWAYOUT: once open, nothing
+#     can stop the counter) and writes to it every PET_INTERVAL seconds;
+#   - MODE=health (default): until uptime PROBATION it pets unconditionally
+#     (boot, DHCP); after that it needs gt-be98-health to pass. When the
+#     check has failed for GRACE seconds in a row it stops petting (post-code
+#     fd) and the hardware resets the box ~30 s later;
+#   - MODE=always: pets as long as it runs (the box never goes back to stock
+#     by itself: only for a bench with physical access);
+#   - SIGTERM (rc-service gt-be98-watchdog stop, shutdown): exits WITHOUT the
+#     magic close, so the counter keeps running: a reboot that hangs is
+#     still reset, and a stop outside a shutdown resets the box within the
+#     watchdog timeout unless the service is started again.
+# Settings: /etc/conf.d/gt-be98-watchdog.
+set -u
+WDT_DEV=${WDT_DEV:-/dev/watchdog}
+PET_INTERVAL=${PET_INTERVAL:-5}
+CHECK_EVERY=${CHECK_EVERY:-15}
+PROBATION=${PROBATION:-180}
+GRACE=${GRACE:-300}
+MODE=${MODE:-health}
+
+log() { logger -t gt-be98-wdtd -- "$*" 2>/dev/null; echo "gt-be98-wdtd: $*" > /dev/kmsg 2>/dev/null; }
+up() { cut -d. -f1 /proc/uptime; }
+
+exec 3>"$WDT_DEV" || { log "cannot open $WDT_DEV"; exit 1; }
+trap 'log "stopping (SIGTERM): no magic close, the watchdog keeps counting"; exit 0' TERM INT
+gt-be98-postcode f4 "watchdog petting started (mode=$MODE probation=${PROBATION}s grace=${GRACE}s)"
+
+healthy_once=0
+bad_since=
+next_check=0
+while :; do
+	printf . >&3
+	now=$(up)
+	if [ "$MODE" != always ] && [ "$now" -ge "$next_check" ]; then
+		next_check=$((now + CHECK_EVERY))
+		if gt-be98-health -q; then
+			[ -n "$bad_since" ] && log "health back after $((now - bad_since))s"
+			bad_since=
+			if [ $healthy_once = 0 ]; then
+				healthy_once=1
+				gt-be98-postcode fb "health confirmed at ${now}s: $(gt-be98-health | tr '\n' ' ')"
+			fi
+		elif [ "$now" -ge "$PROBATION" ]; then
+			if [ -z "$bad_since" ]; then
+				bad_since=$now
+				log "UNHEALTHY at ${now}s: $(gt-be98-health | tr '\n' ' '); reset in ${GRACE}s unless it recovers"
+			elif [ $((now - bad_since)) -ge "$GRACE" ]; then
+				gt-be98-postcode fd "unhealthy for ${GRACE}s: petting stopped, hardware watchdog reset follows"
+				# keep fd 3 open (no magic close) and never write again
+				while :; do sleep 3600; done
+			fi
+		fi
+	fi
+	sleep "$PET_INTERVAL"
+done

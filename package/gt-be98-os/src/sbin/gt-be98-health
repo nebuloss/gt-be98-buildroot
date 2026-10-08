@@ -1,0 +1,31 @@
+#!/bin/sh
+# SPDX-License-Identifier: GPL-2.0
+# gt-be98-health [-q]: is this box reachable for a developer?
+#
+# Healthy = an IPv4 address with global scope on some interface (the USB
+# lifeline or rnr0, from dhcpcd) AND a login service running (sshd, or the
+# optional gt-be98-telnet lifeline). The watchdog daemon (gt-be98-wdtd) uses
+# this: a box that stays unhealthy is reset back to the committed slot
+# instead of being petted forever while nobody can reach it.
+# Extra check: HEALTH_EXTRA in /etc/conf.d/gt-be98-watchdog (a command; its
+# exit status must be 0).
+quiet=0
+[ "${1:-}" = -q ] && quiet=1
+[ -f /etc/conf.d/gt-be98-watchdog ] && . /etc/conf.d/gt-be98-watchdog
+say() { [ $quiet = 1 ] || echo "$*"; }
+ok=0
+
+addrs=$(ip -4 -o addr show scope global 2>/dev/null | awk '{print $2 "=" $4}' | tr '\n' ' ')
+if [ -n "$addrs" ]; then say "address: $addrs"; else say "address: NONE"; ok=1; fi
+
+alive() { [ -f "$1" ] && kill -0 "$(cat "$1" 2>/dev/null)" 2>/dev/null; }
+login=
+pidof sshd >/dev/null 2>&1 && login=sshd
+alive /run/gt-be98-telnet.pid && login="$login telnet"
+if [ -n "$login" ]; then say "login: $login"; else say "login: NONE"; ok=1; fi
+
+if [ -n "${HEALTH_EXTRA:-}" ]; then
+	if sh -c "$HEALTH_EXTRA" >/dev/null 2>&1; then say "extra: ok"; else say "extra: FAIL ($HEALTH_EXTRA)"; ok=1; fi
+fi
+[ $ok = 0 ] && say "healthy" || say "UNHEALTHY"
+exit $ok

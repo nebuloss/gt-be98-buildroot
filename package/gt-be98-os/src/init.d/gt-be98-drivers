@@ -1,0 +1,57 @@
+#!/sbin/openrc-run
+# SPDX-License-Identifier: GPL-2.0
+# Loads the open Runner Ethernet driver (bcm4916-runner.ko, flow offload).
+#   rc-service gt-be98-drivers restart     rmmod + insmod (driver iteration)
+# To try a new build without reflashing: copy it over the installed module
+# (/lib/modules/$(uname -r)/updates/...; the rootfs is a RAM overlay) or set
+# RUNNER_KO=/path/to/bcm4916-runner.ko in /etc/conf.d/gt-be98-drivers.
+description="Open GT-BE98 drivers: Runner Ethernet (bcm4916-runner)"
+
+depend() {
+	need gt-be98-watchdog
+	after dhcpcd sshd gt-be98-telnet
+	use logger
+}
+
+runner_loaded() { grep -q '^bcm4916_runner ' /proc/modules; }
+
+start() {
+	if [ "${RUNNER_LOAD:-yes}" != yes ]; then
+		einfo "Runner: RUNNER_LOAD=${RUNNER_LOAD} (not loaded)"
+		return 0
+	fi
+	if runner_loaded; then
+		einfo "Runner already loaded"
+		return 0
+	fi
+	ebegin "Loading the Runner driver (${RUNNER_KO:-bcm4916-runner} ${RUNNER_ARGS})"
+	if [ -n "${RUNNER_KO:-}" ]; then
+		insmod "$RUNNER_KO" $RUNNER_ARGS
+	else
+		modprobe bcm4916-runner $RUNNER_ARGS
+	fi
+	if [ $? -eq 0 ]; then
+		gt-be98-postcode f7 "Runner loaded"
+		eend 0
+	else
+		gt-be98-postcode e7 "Runner insmod failed"
+		eend 1 "insmod failed, see dmesg"
+		# the OS stays up (USB lifeline): report, do not fail the runlevel
+		return 0
+	fi
+	for i in $RUNNER_UP_IFACES; do
+		ip link set "$i" up 2>/dev/null || ewarn "$i: no such interface"
+	done
+}
+
+stop() {
+	runner_loaded || return 0
+	ebegin "Unloading the Runner driver"
+	for i in $(ls /sys/class/net); do
+		case "$(readlink -f /sys/class/net/$i/device/driver 2>/dev/null)" in
+		*bcm4916*) ip link set "$i" down ;;
+		esac
+	done
+	rmmod bcm4916_runner
+	eend $?
+}

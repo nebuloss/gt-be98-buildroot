@@ -1,0 +1,26 @@
+#!/sbin/openrc-run
+# SPDX-License-Identifier: GPL-2.0
+# dhcpcd in manager mode on the interfaces /etc/dhcpcd.conf allows (the USB
+# lifeline and rnr0 by default). It picks up interfaces that appear later
+# (USB re-enumeration, rnr0 after the Runner module loads).
+description="DHCP client (USB lifeline, rnr0)"
+
+command="/sbin/dhcpcd"
+command_args="-q -B ${DHCPCD_OPTS}"
+supervisor="supervise-daemon"
+respawn_delay=2
+
+depend() {
+	provide net
+	need localmount
+	after gt-be98-watchdog
+	use logger
+}
+
+start_pre() {
+	checkpath -d -m 0755 /run/dhcpcd /var/lib/dhcpcd
+}
+
+start_post() {
+	gt-be98-postcode f5 "dhcpcd started"
+}

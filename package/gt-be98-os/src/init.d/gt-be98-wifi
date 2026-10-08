@@ -1,0 +1,51 @@
+#!/sbin/openrc-run
+# SPDX-License-Identifier: GPL-2.0
+# Optional Wi-Fi: loads bca_pcie_ipc.ko (the four PCIe radios) and runs
+# hostapd on the configured interfaces. NOT enabled by default:
+#   rc-update add gt-be98-wifi default ; rc-service gt-be98-wifi start
+# Firmware: /lib/firmware/brcm/bca (gt-be98-vendor-firmware).
+description="Open Wi-Fi driver + hostapd (optional)"
+
+depend() {
+	need gt-be98-watchdog
+	after gt-be98-drivers dhcpcd sshd
+	use logger
+}
+
+wifi_loaded() { grep -q '^bca_pcie_ipc ' /proc/modules; }
+
+start() {
+	if ! wifi_loaded; then
+		ebegin "Loading bca_pcie_ipc ${WIFI_ARGS}"
+		if [ -n "${WIFI_KO:-}" ]; then insmod "$WIFI_KO" $WIFI_ARGS
+		else modprobe bca_pcie_ipc $WIFI_ARGS; fi
+		eend $? || return 1
+	fi
+	[ -n "${HOSTAPD_CONFS:-}" ] || { einfo "no HOSTAPD_CONFS: driver only"; return 0; }
+	local c i n
+	for c in $HOSTAPD_CONFS; do
+		[ -f "$c" ] || { eerror "$c missing"; return 1; }
+		i=$(sed -n 's/^interface=//p' "$c" | head -n1)
+		n=0
+		while [ -n "$i" ] && [ ! -e "/sys/class/net/$i" ] && [ $n -lt ${IFACE_WAIT:-20} ]; do
+			sleep 1; n=$((n + 1))
+		done
+	done
+	ebegin "Starting hostapd ($HOSTAPD_CONFS)"
+	start-stop-daemon --start --exec /usr/sbin/hostapd --pidfile /run/hostapd.pid \
+		-- -B -P /run/hostapd.pid ${HOSTAPD_ARGS} $HOSTAPD_CONFS
+	eend $?
+}
+
+stop() {
+	if [ -f /run/hostapd.pid ]; then
+		ebegin "Stopping hostapd"
+		start-stop-daemon --stop --exec /usr/sbin/hostapd --pidfile /run/hostapd.pid
+		eend $?
+	fi
+	if [ "${WIFI_UNLOAD_ON_STOP:-yes}" = yes ] && wifi_loaded; then
+		ebegin "Unloading bca_pcie_ipc"
+		rmmod bca_pcie_ipc
+		eend $?
+	fi
+}

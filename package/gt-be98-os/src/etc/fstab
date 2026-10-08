@@ -1,0 +1,8 @@
+# /etc/fstab - GT-BE98 mainline OS
+# / is an overlayfs (squashfs /rom + tmpfs /overlay) set up by the initramfs.
+# Nothing here touches the NAND.
+overlay		/			overlay	rw,noauto	0 0
+tmpfs		/tmp			tmpfs	mode=1777,nosuid,nodev	0 0
+tmpfs		/run			tmpfs	mode=0755,nosuid,nodev	0 0
+debugfs		/sys/kernel/debug	debugfs	nofail	0 0
+tracefs		/sys/kernel/tracing	tracefs	nofail	0 0

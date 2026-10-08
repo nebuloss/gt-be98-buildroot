@@ -1,0 +1,17 @@
+#!/sbin/openrc-run
+# SPDX-License-Identifier: GPL-2.0
+# dnsmasq (DHCP/DNS server). Installed for the web UI port, NOT enabled.
+description="dnsmasq DHCP/DNS server"
+
+command="/usr/sbin/dnsmasq"
+command_args="-k --conf-file=/etc/dnsmasq.conf ${DNSMASQ_OPTS}"
+supervisor="supervise-daemon"
+
+depend() {
+	need net
+	use logger
+}
+
+start_pre() {
+	/usr/sbin/dnsmasq --test --conf-file=/etc/dnsmasq.conf >/dev/null || return 1
+}

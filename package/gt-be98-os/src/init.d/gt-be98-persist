@@ -1,0 +1,60 @@
+#!/sbin/openrc-run
+# SPDX-License-Identifier: GPL-2.0
+# Optional persistence WITHOUT the NAND: a USB storage device whose
+# filesystem label is $PERSIST_LABEL (default GTBE98-DATA, ext4 or vfat) is
+# mounted on /data. Then:
+#   - every boot gets /data/log/boot-NNNN/ (syslog copy, dmesg at shutdown);
+#   - /data/etc-overlay/ (if present) is copied over /etc before the
+#     services start (persistent configuration, e.g. ssh keys, conf.d).
+# The NAND is never written by this OS (board/gt-be98-mainline/README.md).
+description="Persistent logs/config on a USB storage device (optional)"
+
+depend() {
+	need localmount
+	before syslogd sshd dhcpcd gt-be98-drivers
+	after gt-be98-watchdog
+}
+
+start() {
+	local dev n=0 last boot
+	[ "${PERSIST:-yes}" = yes ] || return 0
+	modprobe -q usb-storage 2>/dev/null
+	modprobe -q sd_mod 2>/dev/null
+	modprobe -q ext4 2>/dev/null
+	modprobe -q vfat 2>/dev/null
+	dev=$(blkid -L "$PERSIST_LABEL" 2>/dev/null)
+	while [ -z "$dev" ] && [ $n -lt ${PERSIST_WAIT:-8} ]; do
+		sleep 1; n=$((n + 1)); dev=$(blkid -L "$PERSIST_LABEL" 2>/dev/null)
+	done
+	if [ -z "$dev" ]; then
+		einfo "no device labelled $PERSIST_LABEL: logs stay in RAM"
+		return 0
+	fi
+	ebegin "Mounting $dev ($PERSIST_LABEL) on /data"
+	mkdir -p /data
+	mount -o noatime,nodev,nosuid "$dev" /data
+	eend $? || return 0
+	mkdir -p /data/log
+	last=$(ls /data/log 2>/dev/null | sed -n 's/^boot-\([0-9]*\)$/\1/p' | sort -n | tail -n1)
+	boot=$(printf 'boot-%04d' $(( ${last:-0} + 1 )))
+	mkdir -p "/data/log/$boot"
+	ln -sfn "/data/log/$boot" /var/log/persist
+	mkdir -p /etc/syslog.d
+	echo "*.*	-/var/log/persist/messages" > /etc/syslog.d/50-persist.conf
+	dmesg > "/data/log/$boot/dmesg-boot.txt" 2>/dev/null
+	if [ -d /data/etc-overlay ]; then
+		einfo "Applying /data/etc-overlay over /etc"
+		cp -a /data/etc-overlay/. /etc/
+	fi
+	return 0
+}
+
+stop() {
+	mountpoint -q /data || return 0
+	[ -L /var/log/persist ] && dmesg > /var/log/persist/dmesg-shutdown.txt 2>/dev/null
+	rm -f /etc/syslog.d/50-persist.conf
+	sync
+	ebegin "Unmounting /data"
+	umount /data
+	eend $?
+}

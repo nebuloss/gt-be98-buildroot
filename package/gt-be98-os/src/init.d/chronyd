@@ -1,0 +1,20 @@
+#!/sbin/openrc-run
+# SPDX-License-Identifier: GPL-2.0
+# NTP: the board has no RTC, so the clock starts at the epoch until chrony
+# steps it (makestep 1 -1 in /etc/chrony.conf).
+description="chrony NTP client"
+
+command="/usr/sbin/chronyd"
+command_args="-n -f /etc/chrony.conf ${CHRONYD_OPTS}"
+supervisor="supervise-daemon"
+respawn_delay=5
+
+depend() {
+	use net logger
+	after dhcpcd
+}
+
+start_pre() {
+	checkpath -d -o chrony:chrony -m 0750 /var/lib/chrony /run/chrony 2>/dev/null ||
+		checkpath -d -m 0750 /var/lib/chrony /run/chrony
+}

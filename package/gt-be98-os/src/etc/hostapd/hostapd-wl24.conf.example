@@ -1,0 +1,16 @@
+# Example 2.4 GHz AP for the open Wi-Fi driver (shipped defaults, four radios:
+# the 2.4 GHz radio is PCI domain 2, netdev bcawl3). Copy to
+# /etc/hostapd/hostapd-wl24.conf, set ssid/passphrase, then
+# HOSTAPD_CONFS=/etc/hostapd/hostapd-wl24.conf in /etc/conf.d/gt-be98-wifi.
+interface=bcawl3
+driver=nl80211
+ctrl_interface=/run/hostapd
+ssid=gt-be98-test
+hw_mode=g
+channel=1
+wmm_enabled=1
+ieee80211n=1
+wpa=2
+wpa_key_mgmt=WPA-PSK
+rsn_pairwise=CCMP
+wpa_passphrase=CHANGE-ME-NOW
