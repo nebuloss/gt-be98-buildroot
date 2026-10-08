@@ -10,6 +10,8 @@
 #   mltest-mainline.sh verify-b     check patternB.bin
 #   mltest-mainline.sh write-a      write patternA.bin (other direction, if needed)
 #   mltest-mainline.sh status       fence state and counters, NAND counters
+#   mltest-mainline.sh flips        raw vs corrected read of every mltest PEB:
+#                                   PASS = at most 1 bitflip per 512-B sector
 #   mltest-mainline.sh before       BEFORE the fenced attach (phase-1 state):
 #                                   PEB owner map + corrected dump of "image" to $W
 #   mltest-mainline.sh after        AFTER "rc-service gt-be98-jffs stop" (UBI
@@ -33,9 +35,26 @@ check() {
 	fi
 }
 W=${W:-/tmp/g7}
+flips() {	# $1 nanddump, $2 nandtool, $3 /dev/mtdN, $4 mltest volume id
+	fw=${W:-/tmp/g7}/flips; mkdir -p "$fw"; : > "$fw/raw"; : > "$fw/ecc"
+	"$2" pebmap "$3" > "$fw/pebmap"
+	pebs=$(awk -v v="$4" '$3 == "vol" && $4 == v { print $2 }' "$fw/pebmap")
+	[ -n "$pebs" ] || { echo "no mltest PEBs"; exit 1; }
+	for p in $pebs; do
+		"$1" -q -n --oob -s $((p * 131072)) -l 131072 -f "$fw/r" "$3"; cat "$fw/r" >> "$fw/raw"
+		"$1" -q --oob -s $((p * 131072)) -l 131072 -f "$fw/e" "$3"; cat "$fw/e" >> "$fw/ecc"
+	done
+	"$2" flips "$fw/raw" "$fw/ecc" 2048 "$(cat /sys/class/mtd/${3#/dev/}/oobsize)" > "$fw/flips.txt"
+	worst=$(sed -n 's/.*worst_sector \([0-9]*\).*/\1/p' "$fw/flips.txt")
+	echo "mltest PEBs: $(echo $pebs)"; tail -n 1 "$fw/flips.txt"
+	if [ "${worst:-99}" -le 1 ]; then echo "G7-FLIPS PASS: worst sector $worst bit(s)"; else echo "G7-FLIPS FAIL: worst sector ${worst:-?} bits (> 1)"; exit 2; fi
+}
 mtd_of() { sed -n "s/^mtd\([0-9]*\): [0-9a-f]* [0-9a-f]* \"$1\"\$/\1/p" /proc/mtd | head -n1; }
 M=${G7_MTD:-/dev/mtd$(mtd_of image)}	# G7_MTD: the nandsim rehearsal
 case "${1:-status}" in
+flips)
+	v=$(vol_id); [ -n "$v" ] || { echo "no mltest volume"; exit 1; }
+	flips nanddump "$K/gt-be98-nandtool" "$M" "$v"; exit 0 ;;
 before)
 	[ "$(cat /sys/module/brcmnand/parameters/allow_write 2>/dev/null || echo N)" = N ] || { echo "allow_write is on: run this before enabling the fence"; exit 1; }
 	[ -e /sys/class/ubi/ubi0 ] || { echo "UBI not attached (phase-1 read-only attach expected)"; exit 1; }
@@ -78,5 +97,5 @@ status)
 		echo "${m##*/} $(cat $m/name) flags $(cat $m/flags) corrected_bits $(cat $m/corrected_bits 2>/dev/null) ecc_failures $(cat $m/ecc_failures 2>/dev/null) bad_blocks $(cat $m/bad_blocks 2>/dev/null)"
 	done
 	grep ' /jffs ' /proc/mounts ;;
-*) echo "usage: $0 before|verify-a|write-b|verify-b|write-a|status|after"; exit 1 ;;
+*) echo "usage: $0 before|verify-a|write-b|verify-b|write-a|flips|status|after"; exit 1 ;;
 esac

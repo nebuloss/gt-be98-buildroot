@@ -220,6 +220,7 @@ ubiattach -m 1 -d 0 -O 2048 >/dev/null
 gate g7_s1_create "$K/stock-mltest.sh create"
 gate g7_s1_write_a "$K/stock-mltest.sh write-a"
 gate g7_s1_verify_a "$K/stock-mltest.sh verify-a"
+gate g7_s1_flips "$K/stock-mltest.sh flips"
 ubidetach -d 0
 # step 3, mainline: phase-1 attach (gate on, no fence), snapshot, fence on mltest
 echo 1 > $FW
@@ -234,6 +235,7 @@ gate g7_s3_jffs_ro "grep -q ' /mnt ubifs ro' /proc/mounts"
 umount /mnt 2>/dev/null || umount -l /mnt
 gate g7_s3_verify_a "$K/mltest-mainline.sh verify-a"
 gate g7_s3_write_b "$K/mltest-mainline.sh write-b"
+gate g7_s3_flips "$K/mltest-mainline.sh flips"
 $K/mltest-mainline.sh status | grep -E '^(state|volumes|pebs|writes|mtd_gate)' | sed 's/^/RH: /'
 gate g7_s3_jffs2_refused "! gt-be98-ubileb write /dev/ubi0_13 /tmp/small"
 mount -t ubifs -o ro ubi0:jffs2 /mnt
@@ -257,6 +259,7 @@ rm -f /tmp/g7/*.data
 echo 0 > $FW
 ubiattach -m 1 -d 0 -O 2048 >/dev/null
 gate g7_s4_verify_b "$K/stock-mltest.sh verify-b"
+gate g7_s4_flips "$K/stock-mltest.sh flips"
 gate g7_s4_jffs2_mounts_no_mainline_write "mount -t ubifs ubi0:jffs2 /mnt && ! [ -e /mnt/g7-must-fail ] && umount /mnt"
 gate g7_s4_remove "$K/stock-mltest.sh remove && ! ubinfo -d 0 -N mltest >/dev/null 2>&1"
 ubidetach -d 0

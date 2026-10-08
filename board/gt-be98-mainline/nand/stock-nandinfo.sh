@@ -34,6 +34,13 @@ for v in /sys/class/ubi/ubi0_*; do
 	n=${v##*/}
 	echo "$n $(cat $v/name) $(sha256sum /dev/$n | cut -d' ' -f1)"
 done
+echo "-- sha256 of the other dynamic volumes (all but jffs2, data, mltest; whole volume)"
+for v in /sys/class/ubi/ubi0_*; do
+	[ "$(cat $v/type 2>/dev/null)" = dynamic ] || continue
+	case "$(cat $v/name)" in jffs2|data|mltest) continue ;; esac
+	n=${v##*/}
+	echo "$n $(cat $v/name) $(sha256sum /dev/$n | cut -d' ' -f1)"
+done
 echo "== mounts"
 grep -E 'ubi|jffs|/data' /proc/mounts
 echo "== NAND controller config registers (read-only)"

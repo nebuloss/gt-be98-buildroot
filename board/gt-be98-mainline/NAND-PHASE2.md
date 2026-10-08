@@ -36,13 +36,16 @@ So a NAND write needs, all at once: an image built with `NAND=rw-jffs`
 `brcmnand.allow_write=1`, and either fenced UBI I/O on a fenced volume or an
 explicit restore entry with UBI detached.
 
-OS (`gt-be98-os`): `/etc/conf.d/gt-be98-jffs` `JFFS_MODE=ro` (default) |
-`rw` with `FENCE_VOLUMES` (default `jffs2`; `mltest` for G7). In `rw` mode
-the service sets the fence, attaches, checks `debugfs` (state active, the
-volumes covered, not read-only), only then sets `allow_write=1`, mounts `/jffs`
-read-only, applies the saved state and remounts read-write; any failure falls
-back to the phase-1 read-only state (`lock_down`). `gt-be98-save --local`
-writes `/jffs/mainline-os/state.tgz` directly (previous kept as `.prev`).
+OS (`gt-be98-os`), `/etc/conf.d/gt-be98-jffs`, two switches, both off by
+default: `FENCE_VOLUMES` (empty = phase 1) - when set, the service sets the
+fence, attaches, checks `debugfs` (state active, exactly those volumes, not
+read-only), only then sets `allow_write=1`, mounts `/jffs` read-only and
+applies the saved state; `JFFS_MODE=rw` additionally remounts `/jffs`
+read-write, only if `jffs2` is in `FENCE_VOLUMES`. Any failure falls back to
+the phase-1 read-only state (`lock_down`). G7 = `FENCE_VOLUMES=mltest`,
+`JFFS_MODE=ro`; G8 = `FENCE_VOLUMES=jffs2`, `JFFS_MODE=rw`.
+`gt-be98-save --local` writes `/jffs/mainline-os/state.tgz` directly
+(previous kept as `.prev`).
 
 Tools (`nand/build-phase2-kit.sh` -> `$OUT/images/nand-phase2-kit/`, static,
 not in the rootfs): `gt-be98-nandrestore`, `gt-be98-ubileb` (LEB writes with
@@ -186,13 +189,11 @@ mainline's write path produces pages stock decodes.
 
 ## Next on the box (in order, each gated by the previous)
 
-1. G7: a `NAND=rw-jffs` image; on stock `stock-mltest.sh create`; on
-   mainline `JFFS_MODE=rw FENCE_VOLUMES=mltest`, `mltest-mainline.sh write-a`;
-   on stock `stock-mltest.sh verify-a` and `write-b`; on mainline
-   `mltest-mainline.sh verify-b`; on stock `stock-mltest.sh remove`;
-   `stock-nandinfo.sh` before/after (only mltest and free PEBs, static
-   volume sha256s unchanged).
-2. G8: fresh raw dump, then one supervised `FENCE_VOLUMES=jffs2` session
+1. G7: `nand/phase2/G7.md` (G7 itb from `nand/build-g7-image.sh`: the
+   production kernel and rootfs, DT with the `image` partition writable;
+   `FENCE_VOLUMES=mltest`, `/jffs` read-only; stock creates, writes and
+   removes `mltest`; PEB diff on mainline and stock report comparison).
+2. G8: fresh raw dump, then one supervised `FENCE_VOLUMES=jffs2 JFFS_MODE=rw` session
    (`gt-be98-save --local`), then a stock boot and `stock-nandinfo.sh`.
 3. G9: restore rehearsal on the box only if the owner wants it (RESTORE.md).
 

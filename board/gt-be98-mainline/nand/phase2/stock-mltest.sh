@@ -8,6 +8,8 @@
 #   stock-mltest.sh verify-a    check patternA.bin
 #   stock-mltest.sh write-b     write patternB.bin (stock driver), read back
 #   stock-mltest.sh verify-b    check patternB.bin (written by mainline)
+#   stock-mltest.sh flips       raw vs corrected read of every mltest PEB:
+#                               PASS = at most 1 bitflip per 512-B sector
 #   stock-mltest.sh remove      ubirmvol mltest
 # Run from the kit directory (static ubinfo/ubimkvol/ubirmvol/gt-be98-ubileb,
 # patternA.bin, patternB.bin, SHA256SUMS). Writes use the atomic LEB change
@@ -28,6 +30,20 @@ check() {	# $1 pattern file: sha256 of the first LEBs of mltest
 		echo "G7 MISMATCH on $1: got $got want $(want "$1")"; exit 2
 	fi
 }
+flips() {	# $1 nanddump, $2 nandtool, $3 /dev/mtdN, $4 mltest volume id
+	fw=${W:-/tmp/g7}/flips; mkdir -p "$fw"; : > "$fw/raw"; : > "$fw/ecc"
+	"$2" pebmap "$3" > "$fw/pebmap"
+	pebs=$(awk -v v="$4" '$3 == "vol" && $4 == v { print $2 }' "$fw/pebmap")
+	[ -n "$pebs" ] || { echo "no mltest PEBs"; exit 1; }
+	for p in $pebs; do
+		"$1" -q -n --oob -s $((p * 131072)) -l 131072 -f "$fw/r" "$3"; cat "$fw/r" >> "$fw/raw"
+		"$1" -q --oob -s $((p * 131072)) -l 131072 -f "$fw/e" "$3"; cat "$fw/e" >> "$fw/ecc"
+	done
+	"$2" flips "$fw/raw" "$fw/ecc" 2048 "$(cat /sys/class/mtd/${3#/dev/}/oobsize)" > "$fw/flips.txt"
+	worst=$(sed -n 's/.*worst_sector \([0-9]*\).*/\1/p' "$fw/flips.txt")
+	echo "mltest PEBs: $(echo $pebs)"; tail -n 1 "$fw/flips.txt"
+	if [ "${worst:-99}" -le 1 ]; then echo "G7-FLIPS PASS: worst sector $worst bit(s)"; else echo "G7-FLIPS FAIL: worst sector ${worst:-?} bits (> 1)"; exit 2; fi
+}
 # G7_REHEARSAL=1: the nandsim rehearsal (an unfenced attach stands for stock)
 [ -n "${G7_REHEARSAL:-}" ] || grep -q 'ubi.block=' /proc/cmdline || { echo "not the stock firmware"; exit 1; }
 case "${1:-}" in
@@ -42,8 +58,12 @@ write-a|write-b)
 	sync; check "$p" ;;
 verify-a) check patternA.bin ;;
 verify-b) check patternB.bin ;;
+flips)
+	v=$(vol_id); [ -n "$v" ] || { echo "no mltest volume"; exit 1; }
+	m=${G7_MTD:-/dev/mtd$(sed -n 's/^mtd\([0-9]*\): .* "image"$/\1/p' /proc/mtd | head -n1)}
+	flips "$K/nanddump" "$K/gt-be98-nandtool" "$m" "$v" ;;
 remove)
 	v=$(vol_id); [ -n "$v" ] || { echo "no mltest"; exit 0; }
 	$(t ubirmvol) /dev/ubi0 -n "$v" && echo "mltest removed" ;;
-*) echo "usage: $0 create|write-a|verify-a|write-b|verify-b|remove"; exit 1 ;;
+*) echo "usage: $0 create|write-a|verify-a|write-b|verify-b|flips|remove"; exit 1 ;;
 esac
