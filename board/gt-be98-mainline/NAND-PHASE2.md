@@ -4,6 +4,47 @@ Status: design only. Nothing here is built. Phase 1 (read-only, NAND.md)
 stays the default and the fallback; phase 2 is opt-in per image and only
 after every GO criterion below is met.
 
+## Gate status
+
+| Gate | Status |
+|---|---|
+| Validation step 1, layout (criteria **G1-G4**) | **PASSED** 2026-10-08, see below |
+| G5-G9 (rehearsal, sacrificial volume, real session, backup/restore) | not started; phase 2 implementation **on hold until the owner approves** |
+
+### G1 (layout) PASSED - 2026-10-08
+
+`nand-ecc-compare.sh` run read-only on the stock firmware and on the
+mainline OS (itb 799b2fc9, NAND=ro), same static tools
+(`nanddump` eb8195dd..., `gt-be98-nandtool` cbf422df...,
+`nand-ecc-compare.sh` b0bba3cf...).
+
+Archives (orchestrator, `jobs/ab703faf/tmp/`):
+
+| Archive | sha256 |
+|---|---|
+| `ecccmp-stock.tgz` | `d463d6730b5fa4745faedf7b1aad458c0015d1ffb6a2b9a3da4fb1f39aad41b7` |
+| `ecccmp-mainline.tgz` | `5edae76fac772e8f645d329f93ebab45525a5d742e58cc1ffbc59a6ff4966698` |
+
+Results (identical on both systems unless noted):
+
+- **G1 geometry**: writesize 2048, OOB 108, erasesize 131072, 64 pages per
+  block, ECC strength 8, step 512.
+- **G2 decode**: the 7 blocks (bootfs2 LEB 0 = PEB 1658, bootfs2 LEB 57 =
+  PEB 1513, rootfs2 LEB 0 = PEB 909, jffs2 LEB 0 = PEB 869, free PEB 0,
+  loader blocks 0 and 1) have identical `data_ecc` sha256 on stock and
+  mainline (the PEB map was the same on both).
+- **G3 OOB layout**: identical `data_raw` and `oob_raw` sha256 for all 7
+  blocks; `oob_bits_differing` 0 everywhere.
+- **G4 errors**: no uncorrectable read, `ecc_failures` 0 before and after on
+  both; the only bitflip in the sample is 1 bit in loader block 1 (worst
+  sector 1), seen identically by both drivers.
+- **Counters**: stock `corrected_bits` stayed 0 (image and loader) through
+  the run; mainline went 64 -> 134 on `image` (bits corrected silently in
+  the PEB-header reads of the whole partition, none in the dumped blocks)
+  and 0 -> 2 on `loader` (the 1-bit flip, counted per read). This confirms
+  the counting-semantics explanation of NAND.md: the drivers decode the same
+  data; only mainline's counter reports sub-threshold corrections.
+
 ## The problem
 
 `/jffs` is the UBIFS volume `jffs2` (vol 13) of the **one** UBI device on
