@@ -47,7 +47,7 @@ dtc -q -I dtb -O dts "$I/gt-be98-os.dtb" > "$G/dt/gt-be98-os-prod.dtb.dts"
 
 # the only difference to the production DT: no read-only on "image"
 diff "$G/dt/gt-be98-os-prod.dtb.dts" "$G/dt/gt-be98-os-g7.dtb.dts" > "$G/dt/dtb.diff" || true
-[ "$(grep -c '^[<>]' "$G/dt/dtb.diff")" = 1 ] && grep -q '^< *read-only;' "$G/dt/dtb.diff" ||
+[ "$(grep -c '^[<>]' "$G/dt/dtb.diff")" = 1 ] && grep -q '^<[[:space:]]*read-only;' "$G/dt/dtb.diff" ||
 	{ cat "$G/dt/dtb.diff"; die "the G7 DT differs from production by more than one read-only"; }
 awk '/partition@/{p=1; ro=0; lab=""} p&&/label/{lab=$3} p&&/read-only/{ro=1} p&&/^\t*};/{if(!ro) print lab; p=0}' \
 	"$G/dt/gt-be98-os-g7.dtb.dts" > "$G/dt/rw-partitions"
