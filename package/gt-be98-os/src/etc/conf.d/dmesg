@@ -1,0 +1,5 @@
+# OpenRC dmesg service: the console loglevel it sets at boot. OpenRC's
+# default (1) would hide the "<2>BE98PC xx" post-code lines from the be98pc
+# earlycon (they must be below the console loglevel). 4 = the command line's
+# loglevel=4 and sysctl kernel.printk: warnings and worse on the UART.
+dmesg_level="4"

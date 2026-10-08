@@ -14,9 +14,15 @@
 # The result is the base MAC made locally administered (first octet |0x02,
 # never multicast) with N added to the last octet for rnrN: unique to the
 # box, stable, and different from the addresses the stock firmware uses.
+# A port whose MAC came from the DT (local-mac-address filled in by U-Boot
+# through the ethernetN aliases: addr_assign_type 0) keeps it: its current
+# address is printed, so the callers leave it alone.
 # Prints nothing and exits 1 if no source exists.
 set -u
 IF=${1:?usage: gt-be98-macaddr IFACE}
+if [ "$(cat "/sys/class/net/$IF/addr_assign_type" 2>/dev/null)" = 0 ]; then
+	cat "/sys/class/net/$IF/address" && exit 0
+fi
 RNR_MAC_BASE=
 [ -f /etc/conf.d/gt-be98-drivers ] && . /etc/conf.d/gt-be98-drivers
 ENV=/sys/firmware/devicetree/base/uboot_env
