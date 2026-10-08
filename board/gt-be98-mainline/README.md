@@ -8,7 +8,8 @@ the same place and in the same way as the mainline diagnostic image
 trial-booted once from the stock slot.
 
 - defconfig: `configs/gt-be98_mainline_defconfig`
-- build: `board/gt-be98-mainline/build.sh` (build host only)
+- build: `board/gt-be98-mainline/build.sh` (build host only); `qemu-smoke.sh`
+  boots the rootfs in QEMU (userspace check, no board hardware)
 - output: `$OUT/images/ml-bootfs.itb` (+ `ml-bootfs.info`, `ml-bootfs.layout`)
 - tests: `TESTPLAN.md`
 
@@ -24,7 +25,7 @@ trial-booted once from the stock slot.
 | Wi-Fi | `bca_pcie_ipc.ko` (open-wifi `driver/`, bench parameters, `bca_barpeek.ko` never installed) | package `gt-be98-open-wifi` |
 | firmware | Runner/SerDes, XPHY, BCM84891L, 2x `rtecdc.bin`, `GT-BE98.nvm` (sha256-checked) | package `gt-be98-vendor-firmware`, local dirs |
 | rescue | static BusyBox 1.38.0 (rescue initramfs only) | package `gt-be98-rescue-busybox` |
-| userland | bash, coreutils, findutils, grep, sed, gawk, util-linux, procps-ng, psmisc, kmod, iproute2, iputils, ethtool, nftables, conntrack-tools, tcpdump, iperf3, socat, netcat, rsync, curl, OpenSSH 10.5, OpenSSL 3.6 (libraries), dhcpcd 10.2, chrony 4.8, sysklogd 2.7, dnsmasq, iw 6.17, hostapd 2.12, wpa_supplicant 2.12, wireless-regdb, strace, gdbserver, perf, trace-cmd, memtool, pciutils, htop, lsof, nano, less | Buildroot |
+| userland | bash, coreutils, net-tools, findutils, grep, sed, gawk, util-linux, procps-ng, psmisc, kmod, iproute2, iputils, ethtool, nftables, conntrack-tools, tcpdump, iperf3, socat, netcat, rsync, curl, OpenSSH 10.5, OpenSSL 3.6 (libraries), dhcpcd 10.2, chrony 4.8, sysklogd 2.7, dnsmasq, iw 6.17, hostapd 2.12, wpa_supplicant 2.12, wireless-regdb, strace, gdbserver, perf, trace-cmd, memtool, pciutils, htop, lsof, nano, less | Buildroot |
 | web UI | prebuilt `webui` (gt-be98-webui-go `mainline-os`), only if a path is given | package `gt-be98-webui` |
 
 No BusyBox in the rootfs: BusyBox is only the rescue shell (and the optional

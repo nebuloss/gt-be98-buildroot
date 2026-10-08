@@ -175,6 +175,15 @@ image but `/init` does not mount it): expected post-codes e4, then c6..c9,
 telnet on `<box-usb>:23` (root shell, no password), reset at the petting
 deadline (ca) unless extended with `echo 1 > /tmp/extend`.
 
+## T10. Web UI (optional, service disabled by default)
+
+```sh
+ls -l /usr/sbin/webui /etc/webui/platform.conf      # installed from the webui-go delivery
+rc-service webui start; rc-service webui status; curl -sI http://127.0.0.1/ | head -1
+bridge link                                         # rnr0 must NOT be a bridge member
+rc-service webui stop
+```
+
 ## Post-code summary (read on stock after the box returned)
 
 | Final code | Meaning |
