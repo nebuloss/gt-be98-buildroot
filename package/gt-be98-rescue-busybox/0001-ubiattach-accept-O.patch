@@ -1,0 +1,24 @@
+From: GT-BE98 mainline OS <noreply@example.invalid>
+Subject: [PATCH] ubiattach: accept -O VID_HDR_OFF as documented
+
+The usage text of ubiattach documents -O, but the option string that
+ubiattach parses lacks it (it was put into ubimkvol's), so "ubiattach -O N"
+fails with a usage error. The rescue /init attaches the NAND UBI device
+with the box's VID header offset explicitly.
+
+
+--- a/miscutils/ubi_tools.c
++++ b/miscutils/ubi_tools.c
+@@ -149,9 +149,10 @@
+ 		opts = getopt32(argv, "^" "s:at" "\0" "-1", &size_bytes_str);
+ 		opts *= OPTION_s;
+ 	} else {
+-		opts = getopt32(argv, "^" "m:+d:+n:+N:s:a:+t:" "\0" "-1",
++		opts = getopt32(argv, "^" "m:+d:+n:+N:s:a:+t:O:+" "\0" "-1",
+ 				&mtd_num, &dev_num, &vol_id,
+-				&vol_name, &size_bytes_str, &alignment, &type
++				&vol_name, &size_bytes_str, &alignment, &type,
++				&vid_hdr_offset
+ 		);
+ 	}
+ 

@@ -37,6 +37,8 @@ endef
 define GT_BE98_RESCUE_BUSYBOX_BUILD_CMDS
 	$(TARGET_MAKE_ENV) $(MAKE) -C $(@D) $(GT_BE98_RESCUE_BUSYBOX_MAKE_OPTS) busybox
 	$(TARGET_STRIP) $(@D)/busybox
+	# 0001: ubiattach -O (the rescue /init attaches with the box's VID offset)
+	grep -q '"m:+d:+n:+N:s:a:+t:O:+"' $(@D)/miscutils/ubi_tools.c
 	# applets the rescue /init and the lifeline use
 	set -e; for c in ASH MOUNT MKDIR SLEEP CUT CAT IP UDHCPC TELNETD DEVMEM \
 		LOSETUP SWITCH_ROOT LS SED GREP DMESG INSMOD REBOOT WGET TAR \
