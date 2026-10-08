@@ -88,6 +88,11 @@ sleep 10
 ubinfo -a > /tmp/ubinfo.before
 say "unfenced ubi0 ro_mode=$(cat /sys/class/ubi/ubi0/ro_mode)"
 gate unfenced_ubi_cannot_create "! ubimkvol /dev/ubi0 -N evil -s 1MiB"
+# the backup's static volumes (reference for the stock-side comparisons)
+for v in /sys/class/ubi/ubi0_*; do
+	[ "$(cat $v/type)" = static ] || continue
+	say "backup static ${v##*/} $(cat $v/name) $(cat $v/data_bytes) B sha256 $(sha256sum /dev/${v##*/} | cut -d' ' -f1)"
+done
 ubidetach -d 0
 
 # ---- F: fenced session on jffs2 ---------------------------------------------------
