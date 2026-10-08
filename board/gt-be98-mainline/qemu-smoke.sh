@@ -82,8 +82,8 @@ for i in /sys/class/net/usb* /sys/class/net/eth*; do [ -e "$i" ] && ip link set 
 sleep 3; echo "bridge ports now: $(ls /sys/class/net/br-smoke/brif 2>/dev/null | tr '\n' ' ')(expect none)"
 ip link del br-smoke
 if [ -f /etc/webui/auth.conf ]; then
-echo "=== webui (password provisioned: must run and serve):"
-rc-service webui start >/dev/null 2>&1; sleep 3; rc-service webui status 2>&1 | tail -1
+echo "=== webui (password provisioned, enabled like the image: must run and serve):"
+sleep 3; rc-service webui status 2>&1 | tail -1
 curl -s -o /dev/null -w "http :80 -> %{http_code}\n" http://127.0.0.1/
 curl -s -X POST -d "action=auth_status" http://127.0.0.1/api 2>/dev/null | head -c 200; echo
 else
@@ -105,6 +105,8 @@ EOF
 		salt=\$(head -c 16 /dev/urandom | od -An -tx1 | tr -d ' \\n');
 		printf 'SALT=%s\\nHASH=%s\\n' \$salt \$(printf '%s%s' \$salt '${SMOKE_WEBUI_PASSWORD:-}' | sha256sum | cut -d' ' -f1) > '$R/etc/webui/auth.conf';
 		chmod 600 '$R/etc/webui/auth.conf';
+		ln -sf /etc/init.d/gt-be98-webui-guard '$R/etc/runlevels/default/gt-be98-webui-guard';
+		ln -sf /etc/init.d/webui '$R/etc/runlevels/default/webui';
 	fi &&
 	ln -sf /etc/init.d/local '$R/etc/runlevels/default/local' &&
 	mksquashfs '$R' '$SCRATCH/root.sq' -comp xz -noappend -no-progress >/dev/null"

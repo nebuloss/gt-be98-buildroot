@@ -109,7 +109,7 @@ if [ -n "$SYSLOG_REMOTE" ]; then
 fi
 # --- web UI password -> /etc/webui/auth.conf, enable the service -------------------
 AUTH=$TARGET_DIR/etc/webui/auth.conf
-rm -f "$AUTH" "$RL/webui"
+rm -f "$AUTH" "$RL/webui" "$RL/gt-be98-webui-guard"
 webui=no
 if [ -x "$TARGET_DIR/usr/sbin/webui" ]; then
 	salt= hash=
@@ -125,6 +125,7 @@ if [ -x "$TARGET_DIR/usr/sbin/webui" ]; then
 	if [ -n "$hash" ]; then
 		mkdir -p "$TARGET_DIR/etc/webui"
 		( umask 077; printf 'SALT=%s\nHASH=%s\n' "$salt" "$hash" > "$AUTH" )
+		ln -s /etc/init.d/gt-be98-webui-guard "$RL/gt-be98-webui-guard"
 		ln -s /etc/init.d/webui "$RL/webui"
 		webui=enabled
 	else
