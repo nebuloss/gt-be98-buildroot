@@ -8,7 +8,7 @@
 # The image partition is loaded with the page data of the box's corrected
 # backup. Every check prints "GATE <name> PASS|FAIL"; the run ends with
 # "RH-DONE".
-export PATH=/bin:/sbin:/tools
+export PATH=/tools:/bin:/sbin
 /bin/busybox --install -s /bin
 mount -t proc proc /proc
 mount -t sysfs sysfs /sys
