@@ -18,6 +18,8 @@ BR2_ENABLE_LOCALE_PURGE=y
 BR2_ENABLE_LOCALE_WHITELIST="C en_US"
 BR2_OPTIMIZE_2=y
 BR2_STRIP_strip=y
+# keep the prebuilt web UI byte-identical to its delivery (webui.sha256)
+BR2_STRIP_EXCLUDE_FILES="webui"
 
 # --- system ---------------------------------------------------------------------
 BR2_TARGET_GENERIC_HOSTNAME="gt-be98"
