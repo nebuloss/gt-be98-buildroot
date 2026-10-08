@@ -3,7 +3,9 @@
 # GT-BE98 NAND phase-2 rehearsal (G5 restore + G6 fence), runs as /init in
 # QEMU on the patched kernel with nandsim shaped like the box's NAND
 # (Macronix MX30LF2G28AD: 256 MiB, 128 KiB blocks, 2 KiB pages; nandsim OOB
-# 64 B with software BCH-8 instead of the box's 108-B controller layout),
+# 64 B with software BCH-8 instead of the box's 108-B controller layout;
+# nandsim allows sub-page writes, so UBI is attached with the box's VID
+# header offset, -O 2048),
 # partitions loader (16 blocks) / image (2024) / rest (8, the BBT area).
 # The image partition is loaded with the page data of the box's corrected
 # backup. Every check prints "GATE <name> PASS|FAIL"; the run ends with
@@ -70,11 +72,18 @@ say "raw backup $(wc -c < /tmp/backup.raw) bytes"
 echo 1 > $FW
 FREEPEB=$(sed -n 's/^PEB \([0-9]*\) free$/\1/p' /tmp/pebmap.txt | head -n1)
 dd if=/dev/zero of=/tmp/zero.page bs=$WS count=1 2>/dev/null
-gate mtd_erase_refused "! flash_erase -q /dev/mtd1 $((FREEPEB * EB)) 1"
-gate mtd_write_refused "! nandwrite -q -s $((FREEPEB * EB)) /dev/mtd1 /tmp/zero.page"
+# (flash_erase exits 0 even when an erase fails: check the flash itself)
+peb_unchanged() {	# $1 PEB of mtd1: corrected data == the loaded image
+	nanddump -q -s $(($1 * EB)) -l $EB -f /tmp/peb.now /dev/mtd1 2>/dev/null
+	dd if=$D/image.data of=/tmp/peb.orig bs=$EB skip=$1 count=1 2>/dev/null
+	cmp -s /tmp/peb.now /tmp/peb.orig
+}
+flash_erase -q /dev/mtd1 $((FREEPEB * EB)) 1
+gate mtd_erase_refused "peb_unchanged $FREEPEB && dmesg | grep -q 'write fence refused erase'"
+gate mtd_write_refused "! nandwrite -q -s $((FREEPEB * EB)) /dev/mtd1 /tmp/zero.page && peb_unchanged $FREEPEB"
 gate mtd_markbad_refused "! gt-be98-ubileb markbad /dev/mtd1 $((FREEPEB * EB))"
 say "unfenced UBI attach (must not be able to write)"
-ubiattach -m 1 -d 0
+ubiattach -m 1 -d 0 -O 2048
 sleep 10
 ubinfo -a > /tmp/ubinfo.before
 say "unfenced ubi0 ro_mode=$(cat /sys/class/ubi/ubi0/ro_mode)"
@@ -83,7 +92,7 @@ ubidetach -d 0
 
 # ---- F: fenced session on jffs2 ---------------------------------------------------
 echo jffs2 > $UF
-ubiattach -m 1 -d 0
+ubiattach -m 1 -d 0 -O 2048
 cat $DBG/ubi0/fence
 gate fence_active "grep -q 'state active' $DBG/ubi0/fence && grep -q 'jffs2:13' $DBG/ubi0/fence"
 gate fenced_rw_mode "[ \$(cat /sys/class/ubi/ubi0/ro_mode) = 0 ]"
@@ -91,7 +100,7 @@ gate vtbl_change_refused "! ubimkvol /dev/ubi0 -N evil -s 1MiB"
 gate vol_remove_refused "! ubirmvol /dev/ubi0 -n 4"
 echo hello > /tmp/small
 gate other_volume_write_refused "! gt-be98-ubileb write /dev/ubi0_6 /tmp/small"
-gate raw_write_refused_while_fenced "! nandwrite -q -s $((FREEPEB * EB)) /dev/mtd1 /tmp/zero.page"
+gate raw_write_refused_while_fenced "! nandwrite -q -s $((FREEPEB * EB)) /dev/mtd1 /tmp/zero.page && peb_unchanged $FREEPEB"
 gate restore_refused_while_attached "! sh -c 'echo add 1 $FREEPEB 1 > $DBG/fence_restore'"
 gate bootfs2_reads_stock_hash "[ \$(sha256sum /dev/ubi0_5 | cut -d' ' -f1) = $STOCK_BOOTFS2 ]"
 gate scrub_refused "grep -qE 'scrub_refused [1-9]' $DBG/ubi0/fence"
@@ -131,7 +140,7 @@ nanddump -q --bb=dumpbad -f /tmp/loader.final /dev/mtd0
 gate loader_unchanged "cmp -s /tmp/loader.final $D/loader.data"
 gate injected_peb_untouched "nanddump -q -n --oob -s $OFF -l $WS -f /tmp/pg.now /dev/mtd1 && cmp -s /tmp/pg.now /tmp/pg.inj"
 say "re-attach without a fence (writes impossible), stock-style reads"
-ubiattach -m 1 -d 0
+ubiattach -m 1 -d 0 -O 2048
 ubinfo -a > /tmp/ubinfo.after
 gate volume_table_unchanged "diff /tmp/ubinfo.before /tmp/ubinfo.after"
 gate bootfs2_still_verifies "[ \$(sha256sum /dev/ubi0_5 | cut -d' ' -f1) = $STOCK_BOOTFS2 ]"
@@ -152,7 +161,7 @@ gate restore_entries_cleared "[ -z \"\$(cat $DBG/fence_restore)\" ]"
 # ---- G7 rehearsal: a stock-created test volume, fence on it --------------------------
 say "G7: stock-style ubimkvol mltest (fence off), then fence=mltest"
 echo 0 > $FW
-ubiattach -m 1 -d 0
+ubiattach -m 1 -d 0 -O 2048
 ubimkvol /dev/ubi0 -N mltest -s 2MiB
 MLID=$(ubinfo -d 0 -N mltest | sed -n 's/^Volume ID: *\([0-9]*\).*/\1/p')
 ubidetach -d 0
@@ -160,7 +169,7 @@ echo 1 > $FW
 nanddump -q --bb=dumpbad -f /tmp/g7.before /dev/mtd1
 gt-be98-nandtool pebmap /dev/mtd1 > /tmp/pebmap.g7
 echo mltest > $UF
-ubiattach -m 1 -d 0
+ubiattach -m 1 -d 0 -O 2048
 dd if=/dev/urandom of=/tmp/pattern bs=126976 count=4 2>/dev/null
 gate g7_write_mltest "gt-be98-ubileb write /dev/ubi0_$MLID /tmp/pattern"
 gate g7_readback "dd if=/dev/ubi0_$MLID bs=126976 count=4 2>/dev/null | cmp -s - /tmp/pattern"
