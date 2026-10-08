@@ -87,3 +87,9 @@ define GT_BE98_OS_LINUX_PREPARE_INITRAMFS
 endef
 LINUX_PRE_BUILD_HOOKS += GT_BE98_OS_LINUX_PREPARE_INITRAMFS
 endif
+
+# perf: the build host has a host rustc, so perf's feature check enables the
+# Rust test workload and tries to cross-build it without a target std.
+ifeq ($(BR2_PACKAGE_GT_BE98_OS)$(BR2_PACKAGE_LINUX_TOOLS_PERF),yy)
+PERF_MAKE_FLAGS += NO_RUST=1
+endif
