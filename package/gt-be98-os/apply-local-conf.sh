@@ -15,6 +15,12 @@
 #                        rnr0 when no DHCP server answers
 #   USB_FALLBACK         the same for the USB lifeline
 #   SYSLOG_REMOTE        host[:port]: forward all logs (UDP)
+#   WEBUI_PASSWORD       web UI admin password (>= 6 characters), or
+#   WEBUI_PASSWORD_HASH  SALT:HASH as the webui stores it (HASH =
+#                        sha256(SALT || password), hex). Either one writes
+#                        /etc/webui/auth.conf and ENABLES the webui service;
+#                        neither: the webui stays disabled (never first-run
+#                        open setup on the LAN).
 set -eu
 : "${TARGET_DIR:?}"
 CONF=${GT_BE98_LOCAL_CONF:-}
@@ -24,6 +30,8 @@ TELNET_LIFELINE=auto
 RNR0_FALLBACK=
 USB_FALLBACK=
 SYSLOG_REMOTE=
+WEBUI_PASSWORD=
+WEBUI_PASSWORD_HASH=
 if [ -n "$CONF" ]; then
 	[ -f "$CONF" ] || { echo "gt-be98-os: local configuration $CONF missing" >&2; exit 1; }
 	. "$CONF"
@@ -99,4 +107,28 @@ rm -f "$TARGET_DIR/etc/syslog.d/60-remote.conf"
 if [ -n "$SYSLOG_REMOTE" ]; then
 	echo "*.*	@$SYSLOG_REMOTE" > "$TARGET_DIR/etc/syslog.d/60-remote.conf"
 fi
-echo "gt-be98-os: local configuration applied (keys: $nkeys, telnet: $en)"
+# --- web UI password -> /etc/webui/auth.conf, enable the service -------------------
+AUTH=$TARGET_DIR/etc/webui/auth.conf
+rm -f "$AUTH" "$RL/webui"
+webui=no
+if [ -x "$TARGET_DIR/usr/sbin/webui" ]; then
+	salt= hash=
+	if [ -n "$WEBUI_PASSWORD_HASH" ]; then
+		salt=${WEBUI_PASSWORD_HASH%%:*}; hash=${WEBUI_PASSWORD_HASH#*:}
+		echo "$hash" | grep -qE '^[0-9a-f]{64}$' && [ -n "$salt" ] && [ "$salt" != "$WEBUI_PASSWORD_HASH" ] ||
+			{ echo "WEBUI_PASSWORD_HASH: SALT:HASH (HASH = 64 hex)" >&2; exit 1; }
+	elif [ -n "$WEBUI_PASSWORD" ]; then
+		[ ${#WEBUI_PASSWORD} -ge 6 ] || { echo "WEBUI_PASSWORD: at least 6 characters" >&2; exit 1; }
+		salt=$(head -c 16 /dev/urandom | od -An -tx1 | tr -d ' \n')
+		hash=$(printf '%s%s' "$salt" "$WEBUI_PASSWORD" | sha256sum | cut -d' ' -f1)
+	fi
+	if [ -n "$hash" ]; then
+		mkdir -p "$TARGET_DIR/etc/webui"
+		( umask 077; printf 'SALT=%s\nHASH=%s\n' "$salt" "$hash" > "$AUTH" )
+		ln -s /etc/init.d/webui "$RL/webui"
+		webui=enabled
+	else
+		webui="installed, disabled (no WEBUI_PASSWORD)"
+	fi
+fi
+echo "gt-be98-os: local configuration applied (keys: $nkeys, telnet: $en, webui: $webui)"

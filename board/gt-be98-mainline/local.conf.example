@@ -60,3 +60,10 @@ WDT_MAX=600
 # webui-go mainline-os build output (webui, www/, openrc/, platform.conf.example);
 # the service is installed disabled. Empty: not installed.
 WEBUI_DIR=
+# Web UI admin password. Set either of these to ENABLE the webui service at
+# boot; with neither, the webui stays disabled (it never runs its first-run
+# open setup on the LAN). WEBUI_PASSWORD: >= 6 characters, stored in the image
+# only as /etc/webui/auth.conf (SALT + sha256(SALT || password)).
+# WEBUI_PASSWORD_HASH: "SALT:HASH" in that same format.
+WEBUI_PASSWORD=
+WEBUI_PASSWORD_HASH=

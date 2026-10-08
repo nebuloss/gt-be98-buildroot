@@ -1,0 +1,31 @@
+#!/sbin/openrc-run
+# SPDX-License-Identifier: GPL-2.0
+# The web UI must never run unprovisioned: without a password it serves its
+# first-run "set password" page to anyone on the LAN. webui needs this
+# service (rc_need in /etc/conf.d/webui); it fails, and so webui does not
+# start, unless a password is provisioned:
+#   - /etc/webui/auth.conf with SALT= and HASH= (written at build time from
+#     WEBUI_PASSWORD / WEBUI_PASSWORD_HASH of the local configuration; the
+#     webui imports it into webui.db on its first start), or
+#   - WEBUI_ALLOW_UNPROVISIONED=yes in /etc/conf.d/gt-be98-webui-guard
+#     (an operator who knows what he does, e.g. on an isolated bench).
+description="Refuse to start the web UI without a provisioned password"
+
+depend() {
+	before webui
+}
+
+start() {
+	if grep -qE '^HASH=[0-9a-f]{64}$' /etc/webui/auth.conf 2>/dev/null &&
+	   grep -qE '^SALT=.+' /etc/webui/auth.conf 2>/dev/null; then
+		einfo "web UI password provisioned"
+		return 0
+	fi
+	if [ "${WEBUI_ALLOW_UNPROVISIONED:-no}" = yes ]; then
+		ewarn "web UI starts WITHOUT a provisioned password (first-run setup open)"
+		return 0
+	fi
+	eerror "no provisioned web UI password (/etc/webui/auth.conf): not starting the web UI"
+	eerror "set WEBUI_PASSWORD in the build's local configuration"
+	return 1
+}

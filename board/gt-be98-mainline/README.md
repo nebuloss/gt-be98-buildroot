@@ -208,6 +208,27 @@ fallbacks for a bench without a DHCP server: `RNR0_FALLBACK`/`USB_FALLBACK`
 in the local configuration. No udev: devtmpfs only; modules not built in are
 loaded by the services (`modprobe`).
 
+### Web UI
+
+The webui-go delivery (`WEBUI_DIR`) is installed with `/etc/webui/platform.conf`
+set to `WAN_IF=rnr0` (the LAN port: a plain DHCP client, never bridged),
+`MGMT_IF=eth0` (the USB lifeline), `DNSMASQ_DNS=0`, and no
+`ALLOW_MULTI_PORT_BRIDGE`. The service is **enabled only when a password is
+provisioned** in the local configuration (`WEBUI_PASSWORD`, or
+`WEBUI_PASSWORD_HASH`): the build writes `/etc/webui/auth.conf` (`SALT=`,
+`HASH=sha256(SALT || password)`, the webui's own format, imported into its
+`webui.db` on the first start). Without one the service stays disabled, and
+`gt-be98-webui-guard` (required by `webui`) refuses a manual start, so the
+webui never serves its first-run "set password" page on the LAN.
+`gt-be98-netguard` keeps `rnr*`/`eth*` out of any bridge whatever the web UI
+does. The package version is a digest of the delivery, so a new webui build
+is picked up by a plain `build.sh`.
+
+`/etc/webui` (including `webui.db`) is in the RAM overlay: changes made in
+the UI are lost at reboot. Persistence will come with the USB stick
+(`GTBE98-DATA`, `PERSISTENCE.md` levels 1/4: `/data/etc-overlay/` is already
+copied over `/etc` at boot, so a `webui` directory there survives).
+
 ## Driver development
 
 - Kernel tree with the series and the exact config: `$OUT/build/linux-7.2.9`.
