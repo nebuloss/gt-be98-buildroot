@@ -266,9 +266,20 @@ Logs persist only off the NAND:
 The P2 design (read-only stock `/data`, promotion of the image to a
 committed slot) is in `PERSISTENCE.md`.
 
+### NAND (opt-in, read-only)
+
+`NAND=ro` in the local configuration adds the NAND controller to the DT
+with read-only partitions, attaches UBI read-only, mounts the stock `/jffs`
+read-only and applies `/jffs/mainline-os/` (saved state). Four independent
+layers keep the NAND unwritten (DT `read-only`, a brcmnand patch refusing
+program/erase without `brcmnand.allow_write=1`, UBI read-only mode, UBIFS
+`ro` and no writing tools). Saving goes through stock. Details, stock
+commands and tools: `NAND.md`.
+
 ## Safety rules this OS keeps
 
-- No NAND node in the DT, no flash writes, no UBI attach.
+- No flash writes: by default no NAND node in the DT; with `NAND=ro`, a
+  read-only NAND (NAND.md).
 - `0xff802628`: only bits [31:24] (post-codes); the rootfs `devmem` refuses
   any write that would change bits [23:0].
 - The watchdog is never stopped: NOWAYOUT, `watchdog.stop_on_reboot=0`, and

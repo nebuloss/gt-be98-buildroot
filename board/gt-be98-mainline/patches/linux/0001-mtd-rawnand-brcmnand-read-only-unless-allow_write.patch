@@ -1,0 +1,134 @@
+From: GT-BE98 mainline OS <noreply@example.invalid>
+Subject: [PATCH] DEBUG: mtd: rawnand: brcmnand: read-only unless allow_write
+
+GT-BE98 mainline development OS, not for upstream: the NAND holds the
+stock firmware (the fallback slot of every trial) and the mainline driver
+is not yet proven on this board, so the controller must not program or
+erase anything. Without brcmnand.allow_write=1 (default off; the image's
+command line is forced, so in practice never):
+
+ - brcmnand_write() (page, raw page and OOB writes, mtdoops panic writes)
+   returns -EROFS;
+ - the native exec_op path refuses PROGRAM_PAGE, PROGRAM_SPARE_AREA,
+   COPY_BACK and BLOCK_ERASE with -EROFS;
+ - the low-level op path refuses the raw program/erase opcodes (0x80,
+   0x81, 0x85, 0x10, 0x11, 0x15, 0x60, 0xd0, 0xd1) with -EROFS;
+ - brcmnand_send_cmd() never starts such a command (last line of defence,
+   with a one-time warning).
+
+This also keeps the on-flash bad block table code from (re)writing a BBT:
+the write fails, so does the scan, and the NAND simply does not probe.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+--- a/drivers/mtd/nand/raw/brcmnand/brcmnand.c	2026-10-08 12:26:23.067710680 +0000
++++ b/drivers/mtd/nand/raw/brcmnand/brcmnand.c	2026-10-08 12:26:23.083710610 +0000
+@@ -43,6 +43,19 @@
+ static int wp_on = 1;
+ module_param(wp_on, int, 0444);
+ 
++/*
++ * Read-only safety switch (GT-BE98 mainline development OS): unless
++ * allow_write is set (brcmnand.allow_write=1 on the command line, or the
++ * module parameter), the controller never issues a program, copy-back or
++ * erase command. Writes and erases fail with -EROFS at every entry point
++ * (page/OOB writes, the native command path, low-level ops) and, as a last
++ * line of defence, brcmnand_send_cmd() refuses to start such a command.
++ * This also stops the on-flash BBT code from (re)writing a bad block table.
++ */
++static bool allow_write;
++module_param(allow_write, bool, 0444);
++MODULE_PARM_DESC(allow_write, "allow NAND program/erase (default: off, read-only)");
++
+ /***********************************************************************
+  * Definitions
+  ***********************************************************************/
+@@ -68,6 +81,30 @@
+ #define CMD_LOW_LEVEL_OP		0x10
+ #define CMD_NOT_SUPPORTED		0xff
+ 
++static bool brcmnand_cmd_writes(int cmd)
++{
++	return cmd == CMD_PROGRAM_PAGE || cmd == CMD_PROGRAM_SPARE_AREA ||
++	       cmd == CMD_COPY_BACK || cmd == CMD_BLOCK_ERASE;
++}
++
++/* raw NAND opcodes that program or erase (low-level op path) */
++static bool brcmnand_opcode_writes(u8 op)
++{
++	switch (op) {
++	case NAND_CMD_SEQIN:		/* 0x80 */
++	case 0x81:			/* multi-plane SEQIN */
++	case NAND_CMD_RNDIN:		/* 0x85 */
++	case NAND_CMD_PAGEPROG:		/* 0x10 */
++	case 0x11:			/* multi-plane program */
++	case NAND_CMD_CACHEDPROG:	/* 0x15 */
++	case NAND_CMD_ERASE1:		/* 0x60 */
++	case NAND_CMD_ERASE2:		/* 0xd0 */
++	case 0xd1:			/* multi-plane erase */
++		return true;
++	}
++	return false;
++}
++
+ struct brcm_nand_dma_desc {
+ 	u32 next_desc;
+ 	u32 next_desc_ext;
+@@ -1720,6 +1757,14 @@
+ 
+ 	cmd_addr = brcmnand_read_reg(ctrl, BRCMNAND_CMD_ADDRESS);
+ 
++	if (!allow_write && brcmnand_cmd_writes(cmd)) {
++		dev_err_ratelimited(ctrl->dev,
++			"refused native cmd %d at 0x%llx: read-only (brcmnand.allow_write=0)\n",
++			cmd, cmd_addr);
++		WARN_ON_ONCE(1);
++		return;
++	}
++
+ 	dev_dbg(ctrl->dev, "send native cmd %d addr 0x%llx\n", cmd, cmd_addr);
+ 
+ 	/*
+@@ -1831,6 +1876,14 @@
+ 	struct brcmnand_controller *ctrl = host->ctrl;
+ 	u32 tmp;
+ 
++	if (!allow_write && type == LL_OP_CMD &&
++	    brcmnand_opcode_writes(data & 0xff)) {
++		dev_err_ratelimited(ctrl->dev,
++			"refused low-level opcode %#x: read-only (brcmnand.allow_write=0)\n",
++			data & 0xff);
++		return -EROFS;
++	}
++
+ 	tmp = data & LLOP_DATA_MASK;
+ 	switch (type) {
+ 	case LL_OP_CMD:
+@@ -2338,6 +2391,13 @@
+ 	unsigned int i, j, trans = mtd->writesize >> FC_SHIFT;
+ 	int status, ret = 0;
+ 
++	if (!allow_write) {
++		dev_err_ratelimited(ctrl->dev,
++			"refused write at %#llx: read-only (brcmnand.allow_write=0)\n",
++			(unsigned long long)addr);
++		return -EROFS;
++	}
++
+ 	dev_dbg(ctrl->dev, "write %llx <- %p\n", (unsigned long long)addr, buf);
+ 
+ 	if (unlikely((unsigned long)buf & 0x03)) {
+@@ -2598,6 +2658,13 @@
+ 
+ 		if (instr->type == NAND_OP_CMD_INSTR) {
+ 			cmd = native_cmd_conv[instr->ctx.cmd.opcode];
++			if (!allow_write && brcmnand_cmd_writes(cmd)) {
++				dev_err_ratelimited(ctrl->dev,
++					"refused cmd opcode %#x: read-only (brcmnand.allow_write=0)\n",
++					instr->ctx.cmd.opcode);
++				ret = -EROFS;
++				break;
++			}
+ 			if (cmd == CMD_NOT_SUPPORTED) {
+ 				dev_err(ctrl->dev, "unsupported cmd=%d\n",
+ 					instr->ctx.cmd.opcode);

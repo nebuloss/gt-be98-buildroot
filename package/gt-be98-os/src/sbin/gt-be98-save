@@ -1,0 +1,29 @@
+#!/bin/sh
+# SPDX-License-Identifier: GPL-2.0
+# gt-be98-save: package the mainline OS state for the stock /jffs.
+#
+#   ssh root@<box> gt-be98-save > state.tgz          (tar.gz on stdout)
+#   gt-be98-save -o /tmp/state.tgz                    (and state.tgz.sha256)
+#
+# The archive holds exactly the paths gt-be98-jffs restores (ALLOW_PATHS of
+# /etc/conf.d/gt-be98-jffs): the web UI state (/etc/webui: webui.db,
+# platform.conf, auth.conf, ssh/), the SSH host keys, authorized_keys,
+# dhcpcd and chrony state. The mainline OS never writes the NAND: the
+# orchestrator stores the archive in /jffs/mainline-os/ on the next STOCK
+# boot (board/gt-be98-mainline/NAND.md, stock-apply-state.sh).
+set -eu
+ALLOW_PATHS=
+. /etc/conf.d/gt-be98-jffs
+out=
+[ "${1:-}" = -o ] && out=${2:?gt-be98-save -o FILE}
+list=
+for p in $ALLOW_PATHS; do [ -e "/$p" ] && list="$list $p"; done
+[ -n "$list" ] || { echo "gt-be98-save: nothing to save" >&2; exit 1; }
+if [ -n "$out" ]; then
+	tar -czf "$out" -C / $list
+	(cd "$(dirname "$out")" && sha256sum "$(basename "$out")" > "$(basename "$out").sha256")
+	echo "gt-be98-save: $out ($(wc -c < "$out") B), $out.sha256" >&2
+else
+	[ -t 1 ] && { echo "gt-be98-save: stdout is a terminal; redirect it or use -o FILE" >&2; exit 1; }
+	tar -czf - -C / $list
+fi

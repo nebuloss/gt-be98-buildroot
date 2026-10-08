@@ -1,0 +1,27 @@
+#!/bin/sh
+# SPDX-License-Identifier: GPL-2.0
+# gt-be98-nandpage: dump NAND pages with their OOB, READ-ONLY (nanddump), for
+# the PHASE 2 comparison of the ECC/OOB layout with stock's nanddump.
+#
+#   gt-be98-nandpage MTD PAGE [COUNT [raw|ecc]] > out.bin
+#     MTD   mtd device number or label (e.g. image)
+#     PAGE  first page index within that partition
+#     raw   (default) no ECC correction: data + spare exactly as stored
+#     ecc   ECC-corrected data + OOB
+# Output: COUNT x (writesize + oobsize) bytes, the format of
+# "nanddump --oob [-n]" on stock. Run the same on stock with
+# stock-nandinfo.sh's nanddump line and cmp the files.
+set -eu
+mtd=${1:?usage: gt-be98-nandpage MTD PAGE [COUNT [raw|ecc]]}
+page=${2:?page}
+count=${3:-1}
+mode=${4:-raw}
+case "$mtd" in
+''|*[!0-9]*) n=$(sed -n "s/^mtd\([0-9]*\): [0-9a-f]* [0-9a-f]* \"$mtd\"$/\1/p" /proc/mtd | head -n1)
+	[ -n "$n" ] || { echo "no mtd labelled $mtd" >&2; exit 1; }; mtd=$n ;;
+esac
+ws=$(cat /sys/class/mtd/mtd$mtd/writesize)
+[ -t 1 ] && { echo "redirect stdout to a file" >&2; exit 1; }
+noecc=-n
+[ "$mode" = ecc ] && noecc=
+exec nanddump -q $noecc --oob --bb=dumpbad -s $((page * ws)) -l $((count * ws)) /dev/mtd$mtd

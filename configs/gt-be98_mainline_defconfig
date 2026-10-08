@@ -120,6 +120,31 @@ BR2_PACKAGE_WPA_SUPPLICANT_WPA3=y
 # --- logging ----------------------------------------------------------------------
 BR2_PACKAGE_SYSKLOGD=y
 
+# --- NAND, read-only tools only (NAND.md): no erase/write/format tools ------------
+BR2_PACKAGE_MTD=y
+BR2_PACKAGE_MTD_MTDINFO=y
+BR2_PACKAGE_MTD_NANDDUMP=y
+BR2_PACKAGE_MTD_UBIATTACH=y
+BR2_PACKAGE_MTD_UBIDETACH=y
+BR2_PACKAGE_MTD_UBINFO=y
+# BR2_PACKAGE_MTD_FLASHCP is not set
+# BR2_PACKAGE_MTD_FLASH_ERASE is not set
+# BR2_PACKAGE_MTD_FLASH_LOCK is not set
+# BR2_PACKAGE_MTD_FLASH_UNLOCK is not set
+# BR2_PACKAGE_MTD_MTD_DEBUG is not set
+# BR2_PACKAGE_MTD_NANDTEST is not set
+# BR2_PACKAGE_MTD_NANDWRITE is not set
+# BR2_PACKAGE_MTD_UBICRC32 is not set
+# BR2_PACKAGE_MTD_UBIFORMAT is not set
+# BR2_PACKAGE_MTD_UBIHEALTHD is not set
+# BR2_PACKAGE_MTD_UBIMKVOL is not set
+# BR2_PACKAGE_MTD_UBINIZE is not set
+# BR2_PACKAGE_MTD_UBIRENAME is not set
+# BR2_PACKAGE_MTD_UBIRMVOL is not set
+# BR2_PACKAGE_MTD_UBIRSVOL is not set
+# BR2_PACKAGE_MTD_UBIUPDATEVOL is not set
+# BR2_PACKAGE_MTD_UBIBLOCK is not set
+
 # --- debugging / driver development -------------------------------------------------
 BR2_PACKAGE_STRACE=y
 BR2_PACKAGE_GDB=y

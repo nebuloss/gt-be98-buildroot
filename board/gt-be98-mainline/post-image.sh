@@ -35,6 +35,7 @@ WDT_MAX=600
 IMAGE=netroot
 ROOTFS_URL=
 PAD_TOTAL_MB=30
+NAND=off
 [ -n "$LOCAL_CONF" ] && . "$LOCAL_CONF"
 SHARE=$HOST_DIR/share/gt-be98-mainline/mainline-boot
 HERE=$(cd "$(dirname "$0")" && pwd)
@@ -50,6 +51,7 @@ die() { echo "post-image: $*" >&2; exit 1; }
 [ -f "$STOCK_BOOTFS" ] || die "STOCK_BOOTFS $STOCK_BOOTFS missing"
 case "$RESCUE" in 0|1) ;; *) die "RESCUE must be 0 or 1" ;; esac
 case "$IMAGE" in netroot|initrd) ;; *) die "IMAGE must be netroot or initrd" ;; esac
+case "$NAND" in off|ro) ;; *) die "NAND must be off or ro (there is no write mode)" ;; esac
 case "$ROOTFS_URL" in ''|http://*) ;; *) die "ROOTFS_URL: http:// only (BusyBox wget)" ;; esac
 case "$ROOTFS_URL" in *[!A-Za-z0-9:/._~%+@-]*) die "ROOTFS_URL: unexpected characters" ;; esac
 [ "$IMAGE" = netroot ] && [ -z "$ROOTFS_URL" ] &&
@@ -107,6 +109,46 @@ cat > "$D/gt-be98-os.dts" <<'EOF'
 /* GT-BE98 mainline OS: the diagnostic board dts (+ the rootfs initrd) */
 #include "gt-be98-mlboot.dts"
 
+/*
+ * NAND=ro (PHASE 1, read-only): the BCM4916 NAND controller (mainline
+ * bcm6813.dtsi nand-controller@1800, bcmbca glue). ECC strength, step size
+ * and spare area come from the boot straps, as the stock driver does
+ * (brcm,nand-ecc-use-strap: read back from ACC_CONTROL, programmed by the
+ * boot ROM / loader). On-flash BBT as stock. Partitions as stock's
+ * mtdparts=brcmnand.0:2097152(loader),265289728@2097152(image), both
+ * read-only: no MTD_WRITEABLE, UBI attaches in read-only mode; the kernel
+ * patch 0001 (board/gt-be98-mainline/patches/linux) makes brcmnand refuse
+ * program/erase without brcmnand.allow_write=1 on top of that.
+ */
+#ifdef ML_NAND_RO
+&nand_controller {
+	status = "okay";
+};
+
+&nandcs {
+	nand-on-flash-bbt;
+	brcm,nand-ecc-use-strap;
+
+	partitions {
+		compatible = "fixed-partitions";
+		#address-cells = <1>;
+		#size-cells = <1>;
+
+		partition@0 {
+			label = "loader";
+			reg = <0x0 0x200000>;
+			read-only;
+		};
+
+		partition@200000 {
+			label = "image";
+			reg = <0x200000 0xfd00000>;
+			read-only;
+		};
+	};
+};
+#endif
+
 #ifdef ML_INITRD_START
 / {
 	chosen {
@@ -118,6 +160,7 @@ cat > "$D/gt-be98-os.dts" <<'EOF'
 EOF
 mkdtb() {	# [initrd start, initrd end]
 	set -- ${1:+-DML_INITRD_START=$1 -DML_INITRD_END=$2}
+	[ "$NAND" = ro ] && set -- "$@" -DML_NAND_RO
 	cpp -nostdinc -undef -D__DTS__ -DML_USB -DML_PCIE -DML_PCIE_ALL \
 		-DML_MPM_SIZE=0x10000000 "$@" -x assembler-with-cpp \
 		-I "$D" -I "$SHARE" -I "$LINUX_DIR/arch/arm64/boot/dts/broadcom/bcmbca" \
@@ -177,6 +220,12 @@ fi
 dumpimage -l "$B/ml-bootfs.itb" > "$B/ml-bootfs.layout"
 dtc -q -I dtb -O dts "$B/gt-be98-os.dtb" > "$D/gt-be98-os.dtb.dts"
 grep -q 'brcm,bcm6345-wdt' "$D/gt-be98-os.dtb.dts" || die "DTB has no watchdog node"
+if [ "$NAND" = ro ]; then
+	# every NAND partition must be read-only
+	awk '/partition@/{p=1; ro=0} p&&/read-only/{ro=1} p&&/^\t*};/{if(!ro){print "rw"; exit} p=0}' \
+		"$D/gt-be98-os.dtb.dts" | grep -q rw && die "a NAND partition is not read-only"
+	grep -q 'brcm,nand-ecc-use-strap' "$D/gt-be98-os.dtb.dts" || die "NAND node missing"
+fi
 
 # minimal squashfs for slot 1's rootfs volume (vol 4): U-Boot only checks
 # its squashfs magic before booting slot 1 (README.md, "Flash space")
@@ -211,7 +260,7 @@ sha() { sha256sum "$1" | cut -d' ' -f1; }
 	[ "$IMAGE" = netroot ] || echo "rootfs initrd in RAM: $START..$END"
 	echo "rootfs1-stub.squashfs: $(stat -c %s "$B/rootfs1-stub.squashfs") B sha256 $(sha "$B/rootfs1-stub.squashfs")"
 	echo "stock bootfs sha256: $(sha "$STOCK_BOOTFS")"
-	echo "boot: RESCUE=$RESCUE WDT_MAX=$WDT_MAX ROOTFS_URL=${ROOTFS_URL:-<none>}"
+	echo "boot: RESCUE=$RESCUE WDT_MAX=$WDT_MAX ROOTFS_URL=${ROOTFS_URL:-<none>} NAND=$NAND"
 	echo "cmdline: $CMDLINE"
 } > "$B/ml-bootfs.info"
 cat "$B/ml-bootfs.info"

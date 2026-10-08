@@ -1,0 +1,47 @@
+#!/bin/sh
+# SPDX-License-Identifier: GPL-2.0
+# gt-be98-nandcheck: read-only NAND/UBI report, to compare with stock
+# (board/gt-be98-mainline/nand/stock-nandinfo.sh prints the same sections on
+# the stock firmware). Never writes anything.
+#
+#   gt-be98-nandcheck            report
+#   gt-be98-nandcheck --sha      also sha256 of every static UBI volume
+#                                (bootfs1/bootfs2: compare with stock)
+echo "== kernel"
+uname -r
+grep -o 'brcmnand[^ ]*' /proc/cmdline || echo "(no brcmnand.* on the command line: allow_write=0)"
+echo "brcmnand allow_write: $(cat /sys/module/brcmnand/parameters/allow_write 2>/dev/null || echo '?')"
+echo "== /proc/mtd"
+cat /proc/mtd
+echo "== mtd sysfs (name type size erasesize writesize oobsize ecc_strength ecc_step_size flags writeable corrected_bits ecc_failures bad_blocks bbt_blocks)"
+for m in /sys/class/mtd/mtd[0-9]*; do
+	case "$m" in *ro) continue ;; esac
+	[ -f "$m/name" ] || continue
+	f=$(cat "$m/flags")
+	w=$([ $(( f & 0x400 )) -ne 0 ] && echo WRITEABLE || echo read-only)
+	echo "${m##*/} $(cat $m/name) $(cat $m/type) $(cat $m/size) $(cat $m/erasesize) $(cat $m/writesize) $(cat $m/oobsize) $(cat $m/ecc_strength 2>/dev/null) $(cat $m/ecc_step_size 2>/dev/null) $f $w $(cat $m/corrected_bits 2>/dev/null) $(cat $m/ecc_failures 2>/dev/null) $(cat $m/bad_blocks 2>/dev/null) $(cat $m/bbt_blocks 2>/dev/null)"
+done
+echo "== nand kernel log"
+dmesg | grep -iE 'brcmnand|nand:|nand_bbt|bad block|ubi[0-9]?:|ubifs' | tail -n 60
+echo "== ubi"
+if [ -e /sys/class/ubi/ubi0 ]; then
+	echo "ubi0 ro_mode=$(cat /sys/class/ubi/ubi0/ro_mode) mtd=$(cat /sys/class/ubi/ubi0/mtd_num) bad_peb_count=$(cat /sys/class/ubi/ubi0/bad_peb_count) max_ec=$(cat /sys/class/ubi/ubi0/max_ec) avail_eraseblocks=$(cat /sys/class/ubi/ubi0/avail_eraseblocks)"
+	echo "-- volumes (id name type reserved_ebs data_bytes corrupted upd_marker)"
+	for v in /sys/class/ubi/ubi0_*; do
+		[ -f "$v/name" ] || continue
+		echo "${v##*_} $(cat $v/name) $(cat $v/type) $(cat $v/reserved_ebs) $(cat $v/data_bytes) $(cat $v/corrupted) $(cat $v/upd_marker)"
+	done
+	if [ "${1:-}" = --sha ]; then
+		echo "-- sha256 of the static volumes"
+		for v in /sys/class/ubi/ubi0_*; do
+			[ "$(cat $v/type 2>/dev/null)" = static ] || continue
+			n=${v##*/}
+			echo "$n $(cat $v/name) $(sha256sum /dev/$n | cut -d' ' -f1)"
+		done
+	fi
+else
+	echo "ubi0 not attached"
+fi
+echo "== /jffs"
+mount | grep -E ' /jffs ' || echo "/jffs not mounted"
+ls -la /jffs/mainline-os 2>/dev/null

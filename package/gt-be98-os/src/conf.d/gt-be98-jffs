@@ -1,0 +1,10 @@
+# /etc/conf.d/gt-be98-jffs - stock /jffs, read-only (PHASE 1)
+JFFS=yes
+# NAND MTD partition holding the UBI device (DT label)
+IMAGE_MTD=image
+# stock UBIFS volume mounted on /jffs
+JFFS_VOLUME=jffs2
+# directory on /jffs with the mainline state (state.tgz[.sha256], overlay/)
+STATE_DIR=mainline-os
+# paths (relative to /) restored from it; anything else is ignored
+ALLOW_PATHS="etc/webui etc/ssh/ssh_host_ed25519_key etc/ssh/ssh_host_ed25519_key.pub etc/ssh/ssh_host_ecdsa_key etc/ssh/ssh_host_ecdsa_key.pub etc/ssh/ssh_host_rsa_key etc/ssh/ssh_host_rsa_key.pub etc/ssh/authorized_keys root/.ssh var/lib/dhcpcd var/lib/chrony"

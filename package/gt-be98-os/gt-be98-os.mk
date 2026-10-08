@@ -12,7 +12,7 @@ GT_BE98_OS_INSTALL_IMAGES = YES
 GT_BE98_OS_DEPENDENCIES = host-lzop host-dtc host-uboot-tools
 GT_BE98_OS_LOCAL_CONF = $(call qstrip,$(BR2_PACKAGE_GT_BE98_OS_LOCAL_CONF))
 
-GT_BE98_OS_SERVICES = gt-be98-watchdog gt-be98-netguard gt-be98-drivers gt-be98-wifi \
+GT_BE98_OS_SERVICES = gt-be98-watchdog gt-be98-netguard gt-be98-jffs gt-be98-drivers gt-be98-wifi \
 	gt-be98-telnet gt-be98-boot-done gt-be98-persist sshd dhcpcd chronyd \
 	syslogd dnsmasq
 
@@ -24,7 +24,8 @@ endef
 define GT_BE98_OS_INSTALL_TARGET_CMDS
 	$(INSTALL) -D -m 0755 $(@D)/devmem $(TARGET_DIR)/usr/sbin/devmem
 	for f in gt-be98-postcode gt-be98-health gt-be98-wdtd gt-be98-status \
-		gt-be98-macaddr gt-be98-netguard; do \
+		gt-be98-macaddr gt-be98-netguard gt-be98-save gt-be98-nandcheck \
+		gt-be98-nandpage; do \
 		$(INSTALL) -D -m 0755 $(@D)/sbin/$$f $(TARGET_DIR)/usr/sbin/$$f || exit 1; \
 	done
 	for s in $(GT_BE98_OS_SERVICES); do \
@@ -55,6 +56,10 @@ define GT_BE98_OS_FINALIZE
 	done
 	# the bench-only Wi-Fi RE module is never shipped
 	find $(TARGET_DIR)/lib/modules -name bca_barpeek.ko -delete
+	# no NAND writing tools in the image, whatever pulled them in
+	rm -f $(addprefix $(TARGET_DIR)/usr/sbin/,flash_erase flash_eraseall nandwrite \
+		nandtest ubiformat ubimkvol ubirmvol ubirsvol ubiupdatevol ubirename \
+		flashcp flash_lock flash_unlock mtd_debug ubiblock)
 	# no RTC on the board: hwclock would only fail at every boot
 	rm -f $(TARGET_DIR)/etc/runlevels/boot/hwclock
 	# no block filesystems to check (the root is squashfs + overlay): fsck
@@ -69,7 +74,7 @@ define GT_BE98_OS_FINALIZE
 	if [ -L $(TARGET_DIR)/var/log ]; then rm -f $(TARGET_DIR)/var/log; fi
 	mkdir -p $(TARGET_DIR)/var/log
 	mkdir -p $(TARGET_DIR)/etc/runlevels/boot $(TARGET_DIR)/etc/runlevels/default
-	for s in gt-be98-watchdog gt-be98-netguard gt-be98-persist syslogd; do \
+	for s in gt-be98-watchdog gt-be98-netguard gt-be98-persist gt-be98-jffs syslogd; do \
 		ln -sfn /etc/init.d/$$s $(TARGET_DIR)/etc/runlevels/boot/$$s; done
 	for s in dhcpcd sshd chronyd gt-be98-drivers gt-be98-boot-done; do \
 		ln -sfn /etc/init.d/$$s $(TARGET_DIR)/etc/runlevels/default/$$s; done

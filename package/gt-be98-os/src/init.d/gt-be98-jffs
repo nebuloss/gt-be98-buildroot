@@ -1,0 +1,107 @@
+#!/sbin/openrc-run
+# SPDX-License-Identifier: GPL-2.0
+# Read-only access to the stock /jffs (PHASE 1) and the persistent state the
+# mainline OS keeps there.
+#   1. the NAND "image" MTD partition must be read-only (DT read-only, and
+#      the brcmnand driver refuses program/erase without
+#      brcmnand.allow_write=1); otherwise stop;
+#   2. ubiattach on it -> UBI attaches in read-only mode (checked: ro_mode=1);
+#   3. mount the stock UBIFS volume "jffs2" read-only on /jffs;
+#   4. apply /jffs/mainline-os/: state.tgz (from gt-be98-save, sha256-checked
+#      against state.tgz.sha256 when present), then the overlay/ tree, both
+#      restricted to the allowed paths (ALLOW_PATHS). Missing = image defaults.
+# The mainline OS never writes the NAND; saving goes through stock
+# (board/gt-be98-mainline/NAND.md).
+description="Stock /jffs (UBIFS on NAND), read-only, and the saved mainline state"
+
+depend() {
+	need localmount
+	after gt-be98-watchdog gt-be98-persist
+	before sshd dhcpcd chronyd webui gt-be98-webui-guard gt-be98-drivers syslogd
+	use logger
+}
+
+nand_mtd() {	# the mtd number of the partition labelled $1
+	sed -n "s/^mtd\([0-9]*\): [0-9a-f]* [0-9a-f]* \"$1\"$/\1/p" /proc/mtd | head -n1
+}
+
+start() {
+	[ "${JFFS:-yes}" = yes ] || { einfo "JFFS=no"; return 0; }
+	local m flags vol
+	m=$(nand_mtd "$IMAGE_MTD")
+	if [ -z "$m" ]; then
+		einfo "no NAND \"$IMAGE_MTD\" partition (image built without NAND=ro): image defaults"
+		return 0
+	fi
+	# MTD_WRITEABLE = 0x400 must be clear
+	flags=$(cat /sys/class/mtd/mtd$m/flags)
+	if [ $(( flags & 0x400 )) -ne 0 ]; then
+		eerror "mtd$m ($IMAGE_MTD) is WRITEABLE (flags $flags): refusing to attach UBI"
+		return 0
+	fi
+	if [ ! -e /sys/class/ubi/ubi0 ]; then
+		ebegin "Attaching UBI read-only on mtd$m ($IMAGE_MTD)"
+		ubiattach -m "$m" -d 0 >/dev/null 2>&1
+		eend $? || return 0
+	fi
+	if [ "$(cat /sys/class/ubi/ubi0/ro_mode 2>/dev/null)" != 1 ]; then
+		eerror "ubi0 is NOT in read-only mode: detaching"
+		ubidetach -d 0 >/dev/null 2>&1
+		return 0
+	fi
+	mkdir -p /jffs
+	if ! mountpoint -q /jffs; then
+		ebegin "Mounting ubi0:$JFFS_VOLUME read-only on /jffs"
+		mount -t ubifs -o ro ubi0:"$JFFS_VOLUME" /jffs
+		eend $? || return 0
+	fi
+	apply_state
+	return 0
+}
+
+allowed() {	# copy the allowed paths of tree $1 over /
+	local src=$1 p
+	for p in $ALLOW_PATHS; do
+		[ -e "$src/$p" ] || continue
+		mkdir -p "/$(dirname "$p")"
+		cp -a "$src/$p" "/$(dirname "$p")/" && einfo "  restored /$p"
+	done
+}
+
+apply_state() {
+	local d=/jffs/$STATE_DIR t want got
+	[ -d "$d" ] || { einfo "no /jffs/$STATE_DIR: image defaults"; return 0; }
+	if [ -f "$d/state.tgz" ]; then
+		if [ -f "$d/state.tgz.sha256" ]; then
+			want=$(cut -d' ' -f1 "$d/state.tgz.sha256")
+			got=$(sha256sum "$d/state.tgz" | cut -d' ' -f1)
+			[ "$want" = "$got" ] || { eerror "state.tgz sha256 mismatch: not applied"; want=; }
+		else
+			want=nocheck
+		fi
+		if [ -n "$want" ]; then
+			t=$(mktemp -d)
+			if tar -xzf "$d/state.tgz" -C "$t" 2>/dev/null; then
+				einfo "Applying /jffs/$STATE_DIR/state.tgz"
+				allowed "$t"
+			else
+				eerror "state.tgz unreadable: not applied"
+			fi
+			rm -rf "$t"
+		fi
+	fi
+	if [ -d "$d/overlay" ]; then
+		einfo "Applying /jffs/$STATE_DIR/overlay"
+		allowed "$d/overlay"
+	fi
+	# keep secrets private whatever the source
+	chmod 0600 /etc/ssh/ssh_host_*_key /etc/webui/auth.conf /etc/webui/webui.db 2>/dev/null
+	chmod 0700 /etc/webui /root/.ssh 2>/dev/null
+	logger -t gt-be98-jffs "state from /jffs/$STATE_DIR applied"
+}
+
+stop() {
+	mountpoint -q /jffs && umount /jffs
+	[ -e /sys/class/ubi/ubi0 ] && ubidetach -d 0 >/dev/null 2>&1
+	return 0
+}

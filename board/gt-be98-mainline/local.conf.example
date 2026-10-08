@@ -49,6 +49,10 @@ IMAGE=netroot
 # it). @DHCP_SERVER@ / @DHCP_ROUTER@ are replaced at boot by the lifeline's
 # DHCP lease values. Changing it only needs build.sh (post-image).
 ROOTFS_URL=
+# NAND access (PHASE 1): off (default: no NAND node in the DT) or ro
+# (read-only: UBI attached read-only, the stock /jffs mounted read-only and
+# /jffs/mainline-os applied; NAND.md). There is no write mode.
+NAND=off
 # the size probe ml-bootfs-pad<N>.itb is padded to this many MiB
 PAD_TOTAL_MB=30
 # 1: always boot the rescue lifeline (the rootfs is still in the image)
