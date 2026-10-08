@@ -10,7 +10,8 @@
 #      gt-be98-mlboot-s2.config, gt-be98-mlboot-pcie.config,
 #      gt-be98-mlboot-pcie-all.config: stage 2 + all four PCIe cores);
 #   2. linux/gt-be98-os.config (what the full userland needs);
-#   3. CONFIG_CMDLINE (cmdline-s2 + the PCIe options, as build.sh makes it) and
+#   3. CONFIG_CMDLINE (cmdline-s2 without ignore_loglevel, + loglevel=4 and
+#      the PCIe options) and
 #      CONFIG_INITRAMFS_SOURCE = ${BR_BINARIES_DIR}/gt-be98-initramfs.list
 #      (post-image.sh writes the real list and relinks the Image).
 # Every fragment line must survive olddefconfig (same rule as build.sh).
@@ -42,7 +43,18 @@ $HERE/gt-be98-os.config"
 for f in $FRAGS; do [ -f "$f" ] || { echo "missing fragment $f"; exit 1; }; done
 
 CMDLINE=$(tr -s ' \n' '  ' < "$OET/cmdline-s2" | sed 's/ *$//')
-CMDLINE="$CMDLINE pci=pcie_bus_safe pcie_aspm=off"
+# The OS console is quiet: cmdline-s2's ignore_loglevel (a bring-up aid)
+# wrote every printk synchronously to the UART (~87 us/char at 115200),
+# stalling whatever thread printed (the WiFi rx poll lost ~65 ms/s).
+# loglevel=4 keeps warnings and worse on the UART for post-mortems; the
+# post-codes still reach the be98pc earlycon because /init and
+# gt-be98-postcode write them at KERN_CRIT ("<2>BE98PC xx").
+case " $CMDLINE " in
+*" ignore_loglevel "*) ;;
+*) echo "cmdline-s2 has no ignore_loglevel any more: revisit this script"; exit 1 ;;
+esac
+CMDLINE=$(echo " $CMDLINE " | sed 's/ ignore_loglevel / /; s/^ //; s/ $//')
+CMDLINE="$CMDLINE loglevel=4 pci=pcie_bus_safe pcie_aspm=off"
 
 $MK allnoconfig >/dev/null
 "$KSRC/scripts/kconfig/merge_config.sh" -m -O "$T" "$T/.config" $FRAGS >/dev/null

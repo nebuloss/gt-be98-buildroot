@@ -59,7 +59,8 @@
 PATH=/bin:/sbin:/usr/bin:/usr/sbin
 export PATH
 
-pc() { echo "BE98PC $1" > /dev/kmsg; }
+# "<2>": KERN_CRIT, above the console loglevel (4), so the earlycon sees it
+pc() { echo "<2>BE98PC $1" > /dev/kmsg; }
 log() { echo "INIT: $*" > /dev/kmsg; }
 
 pc c0
@@ -131,7 +132,7 @@ pet_start() {
 		# children must not inherit fd 3: /dev/watchdog is single-open and
 		# the OS opens it right after switch_root
 		while [ "$(upi 3>&-)" -lt "$end" ]; do echo -n . >&3; sleep 5 3>&-; done
-		echo "BE98PC ca" > /dev/kmsg
+		echo "<2>BE98PC ca" > /dev/kmsg
 		echo "INIT: watchdog: boot petting window over, reset follows" > /dev/kmsg
 		while :; do sleep 3600 3>&-; done
 	) &
@@ -236,7 +237,7 @@ switch_os() {
 	log "os: root from $src, switch_root to OpenRC at $(cut -d' ' -f1 /proc/uptime)s"
 	umount /proc
 	exec switch_root /newroot /sbin/init
-	echo "BE98PC e3" > /dev/kmsg
+	echo "<2>BE98PC e3" > /dev/kmsg
 	reboot -f
 	idle
 }

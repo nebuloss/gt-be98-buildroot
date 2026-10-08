@@ -28,7 +28,9 @@ esac
 [ "$code" = ff ] && { echo "gt-be98-postcode: ff is reserved" >&2; exit 1; }
 shift
 msg=${*:-}
-echo "BE98PC $code" > /dev/kmsg 2>/dev/null
+# KERN_CRIT: an unprefixed write gets the default level 4, which the console
+# loglevel (4) filters, and the earlycon never sees it
+echo "<2>BE98PC $code" > /dev/kmsg 2>/dev/null
 echo "$code" > /run/gt-be98-postcode.last 2>/dev/null
 [ -n "$msg" ] && echo "gt-be98: $msg" > /dev/kmsg 2>/dev/null
 exit 0

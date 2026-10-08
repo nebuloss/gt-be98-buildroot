@@ -71,8 +71,10 @@ runs `make allnoconfig`, merges the open-ethernet fragments the tested images
 use (`gt-be98-mlboot.config`, `-s2`, `-pcie`, `-pcie-all`), then
 `linux/gt-be98-os.config` (squashfs/loop/overlay, seccomp, cgroups,
 namespaces, perf/ftrace/kprobes, netfilter and tc modules, USB storage), sets
-the forced command line (stage-2 `cmdline-s2` + `pci=pcie_bus_safe
-pcie_aspm=off`) and `CONFIG_INITRAMFS_SOURCE`, checks that every fragment line
+the forced command line (stage-2 `cmdline-s2` without `ignore_loglevel`,
++ `loglevel=4 pci=pcie_bus_safe pcie_aspm=off`: a quiet UART console, since
+every console line is written synchronously at ~87 us/char; post-codes are
+written at KERN_CRIT so the be98pc earlycon still sees them) and `CONFIG_INITRAMFS_SOURCE`, checks that every fragment line
 survived, and saves the result with `savedefconfig`. To change the kernel
 config: edit a fragment, `make linux-patch`, rerun the script (its header has
 the command), commit `linux.config`. `--check` verifies the committed file.

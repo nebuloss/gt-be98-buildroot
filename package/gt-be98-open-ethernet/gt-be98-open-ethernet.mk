@@ -4,8 +4,8 @@
 #
 ################################################################################
 
-# branch kernel-stable-7.2 (v7.2.9 stable image work)
-GT_BE98_OPEN_ETHERNET_VERSION = 31dc63ee371f26a2d6742cfff0826f63aa2ffef7
+# branch reflash-1 (main + pcie-msi + eth-dt-mac)
+GT_BE98_OPEN_ETHERNET_VERSION = 1efec89815adb4d3e04f12759e2612cb89eb01bd
 GT_BE98_OPEN_ETHERNET_SITE = git@github.com:nebuloss/gt-be98-open-ethernet.git
 GT_BE98_OPEN_ETHERNET_SITE_METHOD = git
 GT_BE98_OPEN_ETHERNET_LICENSE = GPL-2.0
