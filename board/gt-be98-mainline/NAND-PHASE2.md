@@ -1,19 +1,23 @@
 # GT-BE98 mainline OS - NAND PHASE 2: mainline read-write on /jffs only
 
 Status: **approved and implemented** (2026-10-08), every switch default-OFF;
-validated in simulation (G5 restore, G6). Nothing has been enabled on the
+validated in simulation (G5, G6, restore). Nothing has been enabled on the
 box. Phase 1 (read-only, NAND.md) stays the default and the fallback.
 
 ## Gate status
 
+Numbering of the GO / NO-GO table below (the approval message used other
+labels: its "(a) fence" is G5's subject, its "G5 restore half" is G9, its
+"G6 rehearsal" covers G5 + G6 here).
+
 | Gate | Status |
 |---|---|
-| Validation step 1, layout (criteria **G1-G4**) | **PASSED** 2026-10-08, see below |
-| G5 backup | taken 2026-10-08 by the orchestrator (`~/oe-tool/backup/nand-raw-20261008`, raw + corrected, `SHA256SUMS`) |
-| G5 restore | procedure + tool done (`nand/RESTORE.md`), **PASSED in simulation** (bit-exact); never run on the box |
-| G6 rehearsal | **PASSED in simulation** 2026-10-08: 32/32 gates (`nand/rehearsal/results-20261008.txt`) |
-| G7 sacrificial volume | scripts ready (`nand/phase2/`), rehearsed in simulation; to run on the box next |
-| G8, G9 | not started |
+| G1-G4 layout / ECC | **PASSED** 2026-10-08 (validation step 1, see below) |
+| G5 fenced rehearsal: only jffs2 + free PEBs change | **PASSED in simulation** 2026-10-08 (`nand/rehearsal/results-20261008.txt`) |
+| G6 power cuts: UBI attaches, UBIFS mounts (fenced and unmodified UBI) | **PASSED in simulation** 2026-10-08 (5 emulated power cuts, same results file) |
+| G7 sacrificial volume (stock <-> mainline encode) | scripts ready (`nand/phase2/`), rehearsed in simulation; **the next step on the box, when the owner says so** |
+| G8 first real /jffs session | not started (after G7) |
+| G9 backup + restore | backup taken 2026-10-08 (`~/oe-tool/backup/nand-raw-20261008`, raw + corrected, `SHA256SUMS`); restore procedure + tool (`nand/RESTORE.md`) **PASSED in simulation** (bit-exact), never run on the box. **Deviation**: the criterion says "without mainline"; that is not achievable on this box (stock keeps UBI attached to the whole partition and has no raw-write tool or fence, no UART for U-Boot), so the restore runs from the mainline netroot OS with UBI detached. Revised criterion: restore from mainline with no NAND-resident mainline component, rehearsed bit-exact; ASUS rescue (TFTP) remains the firmware-only last resort |
 
 ## Implementation (2026-10-08)
 
@@ -45,7 +49,7 @@ not in the rootfs): `gt-be98-nandrestore`, `gt-be98-ubileb` (LEB writes with
 the atomic-change ioctl: no volume-table update), `gt-be98-nandtool`,
 `nanddump`, the G7 scripts and patterns.
 
-### G6 / G5-restore rehearsal (simulation) PASSED - 2026-10-08
+### G5 / G6 / restore rehearsal (simulation) PASSED - 2026-10-08
 
 `nand/rehearsal/run.sh`: QEMU virt, the patched kernel with nandsim shaped
 like the box's NAND (Macronix ID c2 da 90 95: 256 MiB, 128 KiB blocks, 2 KiB
@@ -58,25 +62,37 @@ kernel has a UBI wear-leveling threshold of 128 instead of 4096 so that
 wear-leveling actually runs. The fence logic and the UBI/UBIFS behaviour are
 the same; the brcmnand write path itself is exercised only on the box (G7).
 
-Results (32/32 gates, `nand/rehearsal/results-20261008.txt`):
+Results (run 7: 46/46 gates, `nand/rehearsal/results-20261008.txt`):
 
-- data loaded bit-identical; a 6-bit flip injected in a bootfs2 PEB still
-  corrects (and reads return "6 corrected");
+- data loaded bit-identical; a 6-bit flip injected in a bootfs2 PEB (PEB 331)
+  still corrects (and reads return "6 corrected");
 - chip fenced, nothing registered: raw erase, raw write and bad-block marking
   refused, the PEB unchanged; an unfenced UBI attach cannot write (its
   wear-leveling write is refused at the gate, UBI goes read-only) and cannot
   create a volume;
-- fence on jffs2: active, 407 fenced / 702 free / 915 fenced-off PEBs; volume
+- fence on jffs2: active, 406 fenced / 703 free / 915 fenced-off PEBs; volume
   create and remove refused, writes to rootfs2 refused, raw writes refused,
-  restore refused while attached; bootfs2 reads the stock sha256 and its
+  restore refused while attached; bootfs2 reads the stock sha256 and the
   6-bit-flip PEB's scrub request is refused (data readable, PEB untouched);
-- 300 x 1 MiB write+sync+delete on UBIFS jffs2: 170,392 fenced writes and
-  3,263 erases (wear-leveling moves included), 60 rate-limited log lines, the
+- G5: 300 x 1 MiB write+sync+delete on UBIFS jffs2: 170,401 fenced writes and
+  3,266 erases (wear-leveling moves included), 60 rate-limited log lines, the
   marker file kept;
-- after detach: 108 PEBs changed: 37 jffs2 + 71 free, **0 other**; loader
-  unchanged; volume table unchanged; bootfs2 still the stock sha256;
-  metadata1/2 unchanged; jffs2 mounts with the marker;
-- restore: the 108 differing PEBs rewritten and verified, the whole partition
+- G6: 5 power cuts during fenced writes (UBI's power-cut emulation, after
+  23-30 writes): each time the fenced UBI re-attaches (fence active) and
+  UBIFS mounts with the marker (journal replay). PEBs whose erase/write was
+  cut and that UBI wants to erase at attach are *not* erased by the fence
+  ("needs erasing, left alone", 4 after 5 cuts): they stay out of use until
+  a stock (or unfenced) attach erases them; a capacity leak of a few PEBs,
+  never a write outside the fence;
+- after all sessions: 215 PEBs changed: 101 jffs2 + 114 free, **0 other**;
+  loader unchanged; volume table unchanged; bootfs2 still the stock sha256;
+  metadata1/2 unchanged; the injected PEB untouched; jffs2 mounts with the
+  marker;
+- G6 second half: the same image attached by an unmodified UBI (gate off, no
+  fence, writes allowed, as stock does): 0 corrupted PEBs, not read-only,
+  UBIFS mounts read-write with the marker and accepts a write, no UBI/UBIFS
+  error;
+- restore: the 215 differing PEBs rewritten and verified, the whole partition
   bit-exact to the pre-session raw dump, restore entries cleared;
 - G7 rehearsal: after a stock-style `ubimkvol mltest`, fence=mltest writes and
   reads back 4 LEBs, a jffs2 write is refused, only 4 free PEBs changed.
