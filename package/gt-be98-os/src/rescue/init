@@ -2,44 +2,46 @@
 # SPDX-License-Identifier: GPL-2.0
 # GT-BE98 mainline OS - initramfs /init (static BusyBox ash, PID 1).
 #
-# The kernel Image carries a small built-in initramfs: a static BusyBox and
-# this script. The whole OS is one squashfs image, /rootfs.squashfs, in a
-# second cpio that the kernel unpacks on top: the "rootfs" image of the FIT,
-# which U-Boot loads into RAM with the rest of the bootfs volume and which
-# our DTB names in /chosen/linux,initrd-start/-end. If that does not arrive
-# (wrong address, corrupt data), /rootfs.squashfs is missing: rescue (e0).
-# /init
-#   1. mounts /proc, /sys, /dev, /tmp and routes the USB power pins;
-#   2. OS path: loop-mounts the squashfs read-only at /rom, puts an overlayfs
-#      over it with a tmpfs upper layer, and switch_roots into OpenRC
-#      (/sbin/init). The squashfs and the tmpfs stay visible in the OS as
-#      /rom and /overlay;
-#   3. RESCUE path, if any step of 2 fails (or the image was built with
-#      RESCUE=1): the stage-2 diagnostic lifeline of tools/mainline-boot
-#      (open-ethernet): USB-Ethernet DHCP, busybox telnetd (root shell, no
-#      password, bound to the USB address only), and BOUNDED watchdog
-#      petting (ml.wdt_max, default 600 s; echo 1 > /tmp/extend adds 600 s,
-#      at most 3600 s), after which the hardware watchdog resets the box
-#      back to the committed (stock) slot.
+# The kernel Image carries only this script and a static BusyBox. The OS
+# (rootfs.squashfs) comes from, in this order:
+#   0. /rootfs.squashfs already in the initramfs (IMAGE=initrd builds: a
+#      second cpio named by the DT; not used by the default netroot image);
+#   1. a USB storage partition labelled GTBE98-ROOT, holding either
+#      /rootfs.squashfs (vfat or ext4) or a complete root (/sbin/init, ext4:
+#      booted read-write as is, the persistent option);
+#   2. HTTP: ROOTFS_URL (build time, local configuration) and
+#      ROOTFS_URL.sha256, fetched over the USB-Ethernet lifeline into RAM and
+#      checked against the sha256. "@DHCP_SERVER@" / "@DHCP_ROUTER@" in the
+#      URL are replaced by the addresses the lifeline's DHCP lease named.
+# A squashfs is loop-mounted read-only at /rom with a tmpfs overlay
+# (/overlay) and the box switch_roots into OpenRC (/sbin/init).
+# Any failure ends in the RESCUE lifeline of the stage-2 image: busybox
+# telnetd (root shell, NO password) bound to the USB NIC address, and
+# bounded watchdog petting (WDT_MAX s, echo 1 > /tmp/extend adds 600 s, at
+# most 3600 s), then the hardware watchdog resets the box into stock.
 #
-# Post-codes ("BE98PC xx" in /dev/kmsg; the be98pc earlycon puts xx into
-# 0xff802628[31:24]; a later code overwrites an earlier one):
-#   c0 /init runs   c1 /proc   c2 /sys   c3 /dev, /tmp, applet links
-#   c4 command line parsed   c5 USB power pins routed
-#   OS path:  f0 rootfs image found   f1 squashfs mounted
-#             f2 overlay mounted      f3 switch_root to /sbin/init (OpenRC)
-#             (OpenRC services post f4..fe, see gt-be98-postcode)
-#   Rescue:   e0 no /rootfs.squashfs  e1 squashfs mount failed
-#             e2 overlay mount failed e3 no /sbin/init in the new root
-#             e4 rescue requested at build time (RESCUE=1)
-#             then as stage 2: c6 USB NIC  c7 address  c8 telnetd
-#             c9 petting  ca petting deadline reached (reset follows)
-#             ee no USB bus
+# Watchdog: U-Boot arms it before the kernel. /init pets it in the
+# background only once the lifeline has an address, for at most
+# NET_WDT_MAX s (fetching and mounting the rootfs); it stops petting right
+# before switch_root (the OS gt-be98-watchdog service takes over within the
+# watchdog timeout), or hands over to the bounded rescue loop.
 #
-# Build-time defaults: /etc/ml-defaults (written by post-image.sh).
-# The kernel command line is forced (CONFIG_CMDLINE_FORCE); ml.* options on
-# it override the defaults: ml.wdt_max=N, ml.ip=A.B.C.D/NN, ml.usbmux=0|1,
-# ml.rescue=1.
+# Post-codes ("BE98PC xx" -> 0xff802628[31:24] via the be98pc earlycon):
+#   c0 /init  c1 /proc  c2 /sys  c3 /dev,/tmp  c4 command line  c5 USB pins
+#   c6 USB NIC found      c7 address (DHCP or ml.ip=)   c9 /init petting
+#   d7 looking for a GTBE98-ROOT USB partition          d8 found and mounted
+#   d9 fetching the rootfs over HTTP                    da fetched, sha256 ok
+#   f1 squashfs mounted   f2 overlay mounted   f3 switch_root to OpenRC
+#   rescue reasons (then c8 telnetd up, ca petting deadline reached):
+#   e0 no rootfs source at all (no USB root, no ROOTFS_URL)
+#   e1 squashfs mount failed   e2 overlay failed   e3 no /sbin/init
+#   e4 RESCUE=1 / ml.rescue=1  e5 HTTP fetch failed e6 sha256 mismatch
+#   e8 no address within NET_WAIT s (no lifeline: nothing pets, U-Boot's
+#      watchdog resets the box)                     ee no USB bus at all
+#
+# Build-time settings: /etc/ml-defaults (post-image.sh, from the local
+# configuration). The kernel command line is forced; ml.* options on it
+# still override: ml.ip=A.B.C.D/NN, ml.usbmux=0|1, ml.wdt_max=N, ml.rescue=1.
 
 PATH=/bin:/sbin:/usr/bin:/usr/sbin
 export PATH
@@ -60,12 +62,16 @@ mount -t tmpfs tmpfs /tmp && pc c3
 upi() { cut -d. -f1 /proc/uptime; }
 T0=$(upi)
 
-ROOTFS=/rootfs.squashfs
-OVERLAY_SIZE=50%
 RESCUE=0
 STATIC_IP=
 USBMUX=1
 WDT_MAX=600
+NET_WAIT=45
+NET_WDT_MAX=300
+OVERLAY_SIZE=75%
+ROOT_LABEL=GTBE98-ROOT
+ROOTFS_URL=
+USB_ROOT_WAIT=8
 [ -f /etc/ml-defaults ] && . /etc/ml-defaults
 
 CMDLINE=$(cat /proc/cmdline 2>/dev/null)
@@ -81,13 +87,11 @@ done
 case "$WDT_MAX" in ''|*[!0-9]*) WDT_MAX=600 ;; esac
 [ "$WDT_MAX" -gt 3600 ] && WDT_MAX=3600
 log "$(uname -a)"
-log "params: rescue=$RESCUE wdt_max=$WDT_MAX usbmux=$USBMUX rootfs=$ROOTFS"
+log "params: rescue=$RESCUE wdt_max=$WDT_MAX usbmux=$USBMUX root_label=$ROOT_LABEL url=${ROOTFS_URL:-<none>}"
 pc c4
 
-# USB port power / overcurrent pins (58,59 USB0; 60,61 USB1) to function 0,
-# as the vendor DT does, through the TEST_PORT pinmux block at 0xff800554
-# (no mainline pinctrl driver for this SoC yet). Both paths need it: the OS
-# brings the lifeline up with dhcpcd, the rescue with udhcpc.
+# USB port power / overcurrent pins (58,59 USB0; 60,61 USB1) to function 0
+# through the TEST_PORT pinmux block (no mainline pinctrl driver yet).
 if [ "$USBMUX" = 1 ]; then
 	for pin in 58 59 60 61; do
 		devmem 0xff800554 32 0
@@ -96,126 +100,224 @@ if [ "$USBMUX" = 1 ]; then
 	done
 fi
 pc c5
-log "usb: pinmux 58-61 -> function 0 (usbmux=$USBMUX)"
 
-# ---- OS path ------------------------------------------------------------------
-REASON=
-os_boot() {
-	if [ "$RESCUE" = 1 ]; then
-		REASON=e4; log "rescue requested (RESCUE=1 / ml.rescue=1)"; return 1
-	fi
-	if [ ! -f "$ROOTFS" ]; then
-		REASON=e0
-		log "os: $ROOTFS missing (rootfs initrd not unpacked)"
-		log "os: DT initrd $(od -An -tx1 /sys/firmware/devicetree/base/chosen/linux,initrd-start 2>/dev/null | tr -d ' \n')..$(od -An -tx1 /sys/firmware/devicetree/base/chosen/linux,initrd-end 2>/dev/null | tr -d ' \n')"
-		dmesg | grep -iE 'initrd|initramfs|ramdisk' | while read -r l; do log "dmesg: $l"; done
+idle() { while :; do sleep 3600; done; }
+
+# ---- background watchdog petting while the rootfs is fetched/mounted ---------
+PETPID=
+pet_start() {
+	[ -c /dev/watchdog ] || { log "watchdog: no /dev/watchdog"; return 1; }
+	(
+		exec 3>/dev/watchdog || exit 1
+		end=$(( $(upi) + NET_WDT_MAX ))
+		# children must not inherit fd 3: /dev/watchdog is single-open and
+		# the OS opens it right after switch_root
+		while [ "$(upi 3>&-)" -lt "$end" ]; do echo -n . >&3; sleep 5 3>&-; done
+		echo "BE98PC ca" > /dev/kmsg
+		echo "INIT: watchdog: boot petting window over, reset follows" > /dev/kmsg
+		while :; do sleep 3600 3>&-; done
+	) &
+	PETPID=$!
+	pc c9
+	log "watchdog: petting for at most ${NET_WDT_MAX}s while the rootfs is loaded"
+}
+pet_stop() {
+	[ -n "$PETPID" ] || return 0
+	kill "$PETPID" 2>/dev/null
+	wait "$PETPID" 2>/dev/null
+	PETPID=
+}
+
+# ---- USB-Ethernet lifeline ---------------------------------------------------
+IF=
+ADDR=
+usb_nic() {
+	ls -l /sys/class/net 2>/dev/null | grep /usb | sed 's/.* \([^ ]*\) -> .*/\1/' | head -n 1
+}
+net_up() {
+	local deadline=$((T0 + NET_WAIT))
+	[ -e /sys/bus/usb/devices/usb1 ] || sleep 2
+	if [ ! -e /sys/bus/usb/devices/usb1 ]; then
+		pc ee; log "usb: no USB bus (power-up or xhci probe failed)"
+		dmesg | grep -iE 'xhci|usb|phy|pmb' | tail -n 20 | while read -r l; do log "dmesg: $l"; done
 		return 1
 	fi
-	pc f0
-	log "os: $ROOTFS $(wc -c < "$ROOTFS") bytes"
-	mkdir -p /mnt/ro /mnt/rw /newroot
-	if ! mount -t squashfs -o ro,loop "$ROOTFS" /mnt/ro; then
-		REASON=e1; log "os: squashfs mount failed"; return 1
+	while [ "$(upi)" -lt "$deadline" ]; do
+		if [ -z "$IF" ]; then
+			IF=$(usb_nic)
+			[ -n "$IF" ] || { sleep 1; continue; }
+			pc c6; log "net: USB NIC $IF at $(upi)s"
+			ip link set lo up
+			ip link set "$IF" up
+		fi
+		udhcpc -i "$IF" -n -q -t 2 -T 2 -s /etc/udhcpc.script >>/tmp/udhcpc.log 2>&1
+		ADDR=$(ip -4 -o addr show dev "$IF" 2>/dev/null | sed -n 's/.* inet \([0-9.]*\)\/.*/\1/p' | head -n 1)
+		[ -n "$ADDR" ] && break
+		if [ -n "$STATIC_IP" ]; then
+			ip addr add "$STATIC_IP" dev "$IF" && ADDR=${STATIC_IP%/*}
+			break
+		fi
+		[ -e "/sys/class/net/$IF" ] || IF=
+	done
+	[ -n "$ADDR" ] || { log "net: no address within ${NET_WAIT}s"; return 1; }
+	pc c7; log "net: address $ADDR on $IF at $(upi)s"
+	return 0
+}
+
+# ---- mounting ------------------------------------------------------------------
+mkdir -p /mnt/rw /mnt/ro /mnt/usb /newroot
+REASON=
+rw_tmpfs() {
+	mountpoint -q /mnt/rw && return 0
+	mount -t tmpfs -o mode=0755,size=$OVERLAY_SIZE tmpfs /mnt/rw
+}
+
+# $1 = squashfs file. Mounts it at /mnt/ro and the overlay at /newroot.
+mount_squashfs() {
+	if ! mount -t squashfs -o ro,loop "$1" /mnt/ro; then
+		REASON=e1; log "os: squashfs mount of $1 failed"; return 1
 	fi
 	pc f1
-	if ! mount -t tmpfs -o mode=0755,size=$OVERLAY_SIZE tmpfs /mnt/rw ||
-	   ! mkdir -p /mnt/rw/upper /mnt/rw/work ||
+	rw_tmpfs || { REASON=e2; umount /mnt/ro; return 1; }
+	if ! mkdir -p /mnt/rw/upper /mnt/rw/work ||
 	   ! mount -t overlay -o lowerdir=/mnt/ro,upperdir=/mnt/rw/upper,workdir=/mnt/rw/work \
 		overlay /newroot; then
-		REASON=e2; log "os: overlay mount failed"
-		umount /mnt/rw 2>/dev/null; umount /mnt/ro 2>/dev/null
-		return 1
+		REASON=e2; log "os: overlay mount failed"; umount /mnt/ro; return 1
 	fi
 	pc f2
 	if [ ! -x /newroot/sbin/init ]; then
 		REASON=e3; log "os: /sbin/init missing in the rootfs"
-		umount /newroot; umount /mnt/rw; umount /mnt/ro
-		return 1
+		umount /newroot; umount /mnt/ro; return 1
 	fi
-	# keep the layers visible in the OS (the dirs exist in the image)
+	return 0
+}
+
+# switch_root into /newroot. $1: what to move into it (layers to keep visible)
+switch_os() {
+	local src=$1
 	mkdir -p /newroot/rom /newroot/overlay 2>/dev/null
-	mount --move /mnt/ro /newroot/rom
-	mount --move /mnt/rw /newroot/overlay
-	# what the OS can read about this boot
+	mountpoint -q /mnt/ro && mount --move /mnt/ro /newroot/rom
+	mountpoint -q /mnt/rw && mount --move /mnt/rw /newroot/overlay
+	if mountpoint -q /mnt/usb; then
+		mkdir -p /newroot/media/gtbe98-root 2>/dev/null
+		mount --move /mnt/usb /newroot/media/gtbe98-root
+	fi
 	{
 		echo "BOOT_T0=$T0"
-		echo "BOOT_ROOTFS_BYTES=$(wc -c < "$ROOTFS")"
-		echo "BOOT_USBMUX=$USBMUX"
-	} > /newroot/overlay/boot-info 2>/dev/null
+		echo "BOOT_ROOT_SOURCE=$src"
+		echo "BOOT_USB_IF=$IF"
+		echo "BOOT_USB_ADDR=$ADDR"
+	} > /run-boot-info 2>/dev/null
+	cp /run-boot-info /newroot/etc/gt-be98-boot-info 2>/dev/null
+	pet_stop
 	umount /dev/pts 2>/dev/null
-	umount /tmp
+	umount /tmp 2>/dev/null
 	umount /sys
 	umount /dev 2>/dev/null
 	pc f3
-	log "os: switch_root to OpenRC at $(cut -d' ' -f1 /proc/uptime)s"
+	log "os: root from $src, switch_root to OpenRC at $(cut -d' ' -f1 /proc/uptime)s"
 	umount /proc
 	exec switch_root /newroot /sbin/init
-	# not reached unless exec failed; the mounts are gone, so reboot and
-	# let the watchdog reset path take over if even that fails
 	echo "BE98PC e3" > /dev/kmsg
 	reboot -f
-	while :; do sleep 3600; done
+	idle
 }
-os_boot
+
+# 0. rootfs already in the initramfs (IMAGE=initrd)
+try_initramfs_root() {
+	[ -f /rootfs.squashfs ] || return 1
+	log "os: /rootfs.squashfs in the initramfs ($(wc -c < /rootfs.squashfs) bytes)"
+	mount_squashfs /rootfs.squashfs && switch_os initramfs
+	return 1
+}
+
+# 1. USB storage partition labelled $ROOT_LABEL
+try_usb_root() {
+	local dev n=0
+	pc d7
+	dev=$(findfs "LABEL=$ROOT_LABEL" 2>/dev/null)
+	while [ -z "$dev" ] && [ $n -lt "$USB_ROOT_WAIT" ]; do
+		sleep 1; n=$((n + 1)); dev=$(findfs "LABEL=$ROOT_LABEL" 2>/dev/null)
+	done
+	[ -n "$dev" ] || { log "usbroot: no partition labelled $ROOT_LABEL"; return 1; }
+	log "usbroot: $dev ($ROOT_LABEL)"
+	# a complete ext4 root: boot it read-write (persistent)
+	if mount -t ext4 -o rw,noatime "$dev" /newroot 2>/dev/null; then
+		if [ -x /newroot/sbin/init ]; then
+			pc d8; log "usbroot: ext4 root on $dev (read-write, persistent)"
+			switch_os "usb-ext4:$dev"
+		fi
+		umount /newroot
+	fi
+	# a partition holding rootfs.squashfs
+	if mount -o ro "$dev" /mnt/usb 2>/dev/null; then
+		if [ -f /mnt/usb/rootfs.squashfs ]; then
+			pc d8; log "usbroot: $dev/rootfs.squashfs"
+			mount_squashfs /mnt/usb/rootfs.squashfs && switch_os "usb-squashfs:$dev"
+		else
+			log "usbroot: $dev has neither /sbin/init nor /rootfs.squashfs"
+		fi
+		umount /mnt/usb 2>/dev/null
+	fi
+	return 1
+}
+
+# 2. HTTP
+try_http_root() {
+	local want got
+	[ -n "$ROOTFS_URL" ] || { log "http: no ROOTFS_URL configured"; return 1; }
+	[ -n "$ADDR" ] || return 1
+	DHCP_SERVER= DHCP_ROUTER=
+	[ -f /tmp/dhcp.env ] && . /tmp/dhcp.env
+	ROOTFS_URL=$(echo "$ROOTFS_URL" | sed -e "s/@DHCP_SERVER@/$DHCP_SERVER/g" -e "s/@DHCP_ROUTER@/$DHCP_ROUTER/g")
+	rw_tmpfs || { REASON=e2; return 1; }
+	pc d9; log "http: fetching $ROOTFS_URL at $(upi)s"
+	rm -f /mnt/rw/rootfs.squashfs /tmp/rootfs.sha256
+	if ! wget -q -T 30 -O /tmp/rootfs.sha256 "$ROOTFS_URL.sha256" ||
+	   ! wget -q -T 30 -O /mnt/rw/rootfs.squashfs "$ROOTFS_URL"; then
+		REASON=e5; log "http: fetch failed"; return 1
+	fi
+	want=$(cut -d' ' -f1 /tmp/rootfs.sha256)
+	got=$(sha256sum /mnt/rw/rootfs.squashfs | cut -d' ' -f1)
+	if [ -z "$want" ] || [ "$want" != "$got" ]; then
+		REASON=e6; log "http: sha256 mismatch (want ${want:-?}, got $got)"
+		rm -f /mnt/rw/rootfs.squashfs
+		return 1
+	fi
+	pc da; log "http: $(wc -c < /mnt/rw/rootfs.squashfs) bytes, sha256 ok at $(upi)s"
+	# the image stays in the overlay tmpfs (/overlay/rootfs.squashfs in the OS)
+	mount_squashfs /mnt/rw/rootfs.squashfs && switch_os "http:$ROOTFS_URL"
+	return 1
+}
+
+# ---- boot ------------------------------------------------------------------------
+if [ "$RESCUE" = 1 ]; then
+	REASON=e4; log "rescue requested (RESCUE=1 / ml.rescue=1)"
+else
+	try_initramfs_root
+	if net_up; then
+		pet_start
+	else
+		pc e8
+	fi
+	try_usb_root
+	try_http_root
+	[ -n "$REASON" ] || REASON=e0
+fi
 pc "$REASON"
 log "RESCUE MODE ($REASON)"
 
-# ---- rescue: stage-2 USB lifeline --------------------------------------------
-NET_DEADLINE=$((T0 + 45))
-idle() { while :; do sleep 3600; done; }
-
-if [ ! -e /sys/bus/usb/devices/usb1 ]; then
-	sleep 2
-fi
-if [ ! -e /sys/bus/usb/devices/usb1 ]; then
-	pc ee
-	log "usb: no USB bus - power-up or xhci probe failed"
-	dmesg | grep -iE 'xhci|usb|phy|pmb|power' | tail -n 20 | while read -r l; do log "dmesg: $l"; done
-	idle
-fi
-
-usb_nic() {
-	ls -l /sys/class/net 2>/dev/null | grep /usb | sed 's/.* \([^ ]*\) -> .*/\1/' | head -n 1
-}
-
-IF=
-ADDR=
-while [ "$(upi)" -lt "$NET_DEADLINE" ]; do
-	if [ -z "$IF" ]; then
-		IF=$(usb_nic)
-		if [ -z "$IF" ]; then
-			sleep 1
-			continue
-		fi
-		pc c6
-		log "net: USB NIC $IF at $(upi)s"
-		ip link set lo up
-		ip link set "$IF" up
-	fi
-	udhcpc -i "$IF" -n -q -t 2 -T 2 -s /etc/udhcpc.script >>/tmp/udhcpc.log 2>&1
-	ADDR=$(ip -4 -o addr show dev "$IF" 2>/dev/null | sed -n 's/.* inet \([0-9.]*\)\/.*/\1/p' | head -n 1)
-	[ -n "$ADDR" ] && break
-	if [ -n "$STATIC_IP" ]; then
-		ip addr add "$STATIC_IP" dev "$IF" && ADDR=${STATIC_IP%/*}
-		break
-	fi
-	[ -e "/sys/class/net/$IF" ] || IF=
-done
+# ---- rescue: telnet + bounded petting ---------------------------------------------
+pet_stop
 if [ -z "$ADDR" ]; then
-	log "net: no address within 45 s; NOT petting the watchdog (U-Boot watchdog resets the box)"
-	idle
+	net_up || { log "net: no address; NOT petting the watchdog (U-Boot watchdog resets the box)"; idle; }
 fi
-pc c7
-log "net: address $ADDR on $IF at $(upi)s"
-
 telnetd -b "$ADDR" -l /bin/sh && { pc c8; log "net: telnetd on $ADDR:23 ($IF)"; }
-
 exec 3>/dev/watchdog || { log "watchdog: cannot open /dev/watchdog, not petting"; idle; }
 start=$(upi)
 end=$((start + WDT_MAX))
 total=$WDT_MAX
-pc c9
-log "watchdog: petting until uptime ${end}s (echo 1 > /tmp/extend adds 600 s, max 3600 s total)"
+log "watchdog: rescue petting until uptime ${end}s (echo 1 > /tmp/extend adds 600 s, max 3600 s total)"
 while [ "$(upi)" -lt "$end" ]; do
 	echo -n . >&3
 	if [ -e /tmp/extend ]; then

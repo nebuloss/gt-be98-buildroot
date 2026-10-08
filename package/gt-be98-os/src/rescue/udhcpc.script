@@ -12,6 +12,7 @@ bound|renew)
 		ip route replace default via "$r" dev "$interface"
 		break
 	done
+	printf 'DHCP_SERVER=%s\nDHCP_ROUTER=%s\n' "$serverid" "${router%% *}" > /tmp/dhcp.env
 	: > /etc/resolv.conf
 	for d in $dns; do echo "nameserver $d" >> /etc/resolv.conf; done
 	;;

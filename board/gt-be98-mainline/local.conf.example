@@ -41,6 +41,16 @@ USB_FALLBACK=
 SYSLOG_REMOTE=
 
 # --- boot ----------------------------------------------------------------------------
+# netroot (default): small FIT (kernel + DTB + rescue initramfs); /init
+#   boots a GTBE98-ROOT USB partition, else fetches ROOTFS_URL.
+# initrd: the rootfs inside the FIT (only for a boot chain that loads ~46 MB)
+IMAGE=netroot
+# http:// URL of rootfs.squashfs (rootfs.squashfs.sha256 must sit next to
+# it). @DHCP_SERVER@ / @DHCP_ROUTER@ are replaced at boot by the lifeline's
+# DHCP lease values. Changing it only needs build.sh (post-image).
+ROOTFS_URL=
+# the size probe ml-bootfs-pad<N>.itb is padded to this many MiB
+PAD_TOTAL_MB=30
 # 1: always boot the rescue lifeline (the rootfs is still in the image)
 RESCUE=0
 # rescue: seconds of watchdog petting (extendable to 3600)
