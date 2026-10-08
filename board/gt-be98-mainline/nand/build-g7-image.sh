@@ -1,7 +1,8 @@
 #!/bin/sh
 # SPDX-License-Identifier: GPL-2.0
 # The G7 boot image (NAND-PHASE2.md, phase2/G7.md), made from an existing
-# production build WITHOUT touching it: same kernel (the same Image.lzo, rescue
+# NAND=ro production build WITHOUT touching it (since G8 the dev OS builds
+# NAND=rw-jffs directly; this stays for a NAND=ro build): same kernel (the same Image.lzo, rescue
 # initramfs and ROOTFS_URL inside), same rootfs.squashfs to serve; only the
 # device tree differs: NAND=rw-jffs, i.e. the "image" partition is not marked
 # read-only ("loader" stays read-only). Output: $OUT/images-g7/
@@ -36,8 +37,10 @@ prod_k=$(sed -n '/(kernel)/,/Hash value/s/^ *Hash value: *//p' "$I/ml-bootfs.lay
 
 rm -rf "$G"; mkdir -p "$G/dt"
 cp "$I/dt/gt-be98-os.dts" "$I/dt/mlboot-bootargs.h" "$G/dt/"
+# the production build id + "-g7" (empty if the production DT has none)
+BID=$(dtc -q -I dtb -O dts "$I/gt-be98-os.dtb" | sed -n 's/^\t*gt-be98,build-id = "\(.*\)";/\1/p')
 cpp -nostdinc -undef -D__DTS__ -DML_USB -DML_PCIE -DML_PCIE_ALL \
-	-DML_MPM_SIZE=0x10000000 -DML_NAND_RO -DML_NAND_RW_JFFS -x assembler-with-cpp \
+	-DML_MPM_SIZE=0x10000000 -DML_NAND_RO -DML_NAND_RW_JFFS ${BID:+"-DML_BUILD_ID=\"$BID-g7\""} -x assembler-with-cpp \
 	-I "$G/dt" -I "$SHARE" -I "$LINUX_DIR/arch/arm64/boot/dts/broadcom/bcmbca" \
 	-I "$LINUX_DIR/scripts/dtc/include-prefixes" -I "$LINUX_DIR/include" \
 	"$G/dt/gt-be98-os.dts" > "$G/dt/gt-be98-os.dts.pre"
@@ -45,9 +48,10 @@ dtc -q -I dts -O dtb -o "$G/gt-be98-os-g7.dtb" "$G/dt/gt-be98-os.dts.pre"
 dtc -q -I dtb -O dts "$G/gt-be98-os-g7.dtb" > "$G/dt/gt-be98-os-g7.dtb.dts"
 dtc -q -I dtb -O dts "$I/gt-be98-os.dtb" > "$G/dt/gt-be98-os-prod.dtb.dts"
 
-# the only difference to the production DT: no read-only on "image"
+# the only differences to the production DT: no read-only on "image" (and
+# the build id's "-g7" suffix)
 diff "$G/dt/gt-be98-os-prod.dtb.dts" "$G/dt/gt-be98-os-g7.dtb.dts" > "$G/dt/dtb.diff" || true
-[ "$(grep -c '^[<>]' "$G/dt/dtb.diff")" = 1 ] && grep -q '^<[[:space:]]*read-only;' "$G/dt/dtb.diff" ||
+[ "$(grep '^[<>]' "$G/dt/dtb.diff" | grep -vc 'gt-be98,build-id = ')" = 1 ] && grep -q '^<[[:space:]]*read-only;' "$G/dt/dtb.diff" ||
 	{ cat "$G/dt/dtb.diff"; die "the G7 DT differs from production by more than one read-only"; }
 awk '/partition@/{p=1; ro=0; lab=""} p&&/label/{lab=$3} p&&/read-only/{ro=1} p&&/^\t*};/{if(!ro) print lab; p=0}' \
 	"$G/dt/gt-be98-os-g7.dtb.dts" > "$G/dt/rw-partitions"

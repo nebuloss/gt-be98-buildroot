@@ -1,9 +1,10 @@
 # GT-BE98 mainline OS - NAND PHASE 2: mainline read-write on /jffs only
 
 Status: **approved and implemented** (2026-10-08), every switch default-OFF;
-validated in simulation (G5, G6, restore); G7 passed on the box (writes to
-the sacrificial `mltest` volume only). Phase 1 behaviour is still what every
-image does unless `FENCE_VOLUMES` is set on the box. Phase 1 (read-only, NAND.md) stays the default and the fallback.
+validated in simulation (G5, G6, restore); G7 and G8 passed on the box.
+Since 2026-10-08 (owner approval) the dev OS default is `NAND=rw-jffs`,
+`FENCE_VOLUMES=jffs2`, `JFFS_MODE=rw` ("Production" below); phase 1 is the
+automatic fallback. Phase 1 (read-only, NAND.md) stays the default and the fallback.
 
 ## Gate status
 
@@ -17,8 +18,69 @@ labels: its "(a) fence" is G5's subject, its "G5 restore half" is G9, its
 | G5 fenced rehearsal: only jffs2 + free PEBs change | **PASSED in simulation** 2026-10-08 (`nand/rehearsal/results-20261008.txt`) |
 | G6 power cuts: UBI attaches, UBIFS mounts (fenced and unmodified UBI) | **PASSED in simulation** 2026-10-08 (5 emulated power cuts, same results file) |
 | G7 sacrificial volume (stock <-> mainline encode) | **PASSED on the box** 2026-10-08, see "G7 on the box" below |
-| G8 first real /jffs session | kit and procedure ready (`nand/phase2/G8.md`), rehearsed in simulation (run 11: 52 PEBs changed, jffs2 27 + free 25, other 0); owner approved; next on the box |
+| G8 first real /jffs session | **PASSED on the box** 2026-10-08, see "G8 on the box" below; persistence on /jffs is now the dev OS default ("Production") |
 | G9 backup + restore | backup taken 2026-10-08 (`~/oe-tool/backup/nand-raw-20261008`, raw + corrected, `SHA256SUMS`); restore procedure + tool (`nand/RESTORE.md`) **PASSED in simulation** (bit-exact), never run on the box. **Deviation**: the criterion says "without mainline"; that is not achievable on this box (stock keeps UBI attached to the whole partition and has no raw-write tool or fence, no UART for U-Boot), so the restore runs from the mainline netroot OS with UBI detached. Revised criterion: restore from mainline with no NAND-resident mainline component, rehearsed bit-exact; ASUS rescue (TFTP) remains the firmware-only last resort |
+
+## Production (dev OS default since 2026-10-08)
+
+- Build: `NAND=rw-jffs` (local configuration; `local.conf.example`).
+  Rootfs: `/etc/conf.d/gt-be98-jffs` `FENCE_VOLUMES=jffs2`, `JFFS_MODE=rw`.
+- Boot (`gt-be98-jffs`): fence set on jffs2, fenced attach, debugfs checks
+  (state active, exactly jffs2, not read-only), then `allow_write=1`, mount,
+  apply `state.tgz`, remount read-write, remove `CLEANUP_PATHS`
+  (`mainline-os/g8-test`). Any failure: lock down to phase 1, attach
+  read-only, apply the state, and say so loudly (`daemon.crit`
+  "PERSISTENCE OFF: <reason>", `/run/gt-be98-jffs.status`, `/etc/motd`).
+  An image whose DT has `image` read-only (`NAND=ro`) stays phase 1.
+- Saving: `gt-be98-save --local` on every clean stop of the service
+  (shutdown/reboot, `SAVE_ON_STOP=yes`) and by `gt-be98-autosave` (default
+  runlevel): every `AUTOSAVE_INTERVAL` (300 s) it computes a content digest
+  of `AUTOSAVE_WATCH` (`/etc/webui`, `/etc/ssh`, `/root/.ssh`); when the
+  digest is unchanged since the previous check (settled, not mid-write) and
+  differs from the last saved one (`state.digest`), it saves. The web UI
+  has no save hook, so this is the mechanism for its settings: they reach
+  the NAND within 5-10 minutes, or at once with `gt-be98-save --local`;
+  nothing is written while nothing changes. An unclean reset (watchdog)
+  loses at most the last unsaved interval.
+- Integrity: in the background at boot `gt-be98-nandcheck --sha-list`
+  (sha256 of the static volumes metadata1/2, bootfs1/2, plus the image's
+  build id from the DT, `/gt-be98,build-id`) is compared with
+  `/jffs/mainline-os/nandcheck.last` (written only when it changes):
+  bootfs1 changed with a new build id = a new mainline image was flashed
+  (info); bootfs1 changed with the same build id, or any other static
+  volume changed or disappeared = `daemon.crit` (expected only after a stock
+  firmware upgrade). Result in `/run/gt-be98-nandcheck.result`,
+  `gt-be98-status`.
+- Space: the stock jffs2 is small and nearly full on this box (45 MB,
+  ~2 MB free for non-root during G8); `state.tgz` is ~9 KB (+ `.prev`).
+- Stock-side checks of a session: `g7-compare.sh` now matches MTD devices by
+  name (stock's gluebi `mtdN` numbers move when volumes are created or
+  removed) and leaves `defaults`, `data` and `jffs2` out of the hashes:
+  stock mounts them read-write (`defaults` at `/tmp/mnt/defaults`) and they
+  change on every stock boot (proven: a plain stock reboot changed the
+  `defaults` sha256 `9cd25af4...` -> `163f7f06...`).
+
+## G8 on the box PASSED - 2026-10-08
+
+Procedure `nand/phase2/G8.md`; rw-jffs itb `6a8170c5...` (the G7 itb),
+rootfs `03903496...`.
+
+- Stock baseline straight to the build host; pre-G8 raw dump of the
+  partition on the build host (`sha256 ad63b6a4...`).
+- Mainline pre-checks OK. Fenced session: `volumes jffs2:13`, `pebs fenced
+  407 free 702 fenced_off 915` at start; `check`, `gt-be98-save --local`
+  (9059 B), `test`, `loop 20`, `verify` (jffs2 superblock and every stock
+  file unchanged) all PASS; `writes 11705 erases 231 refused 0
+  scrub_refused 0`, `mtd_gate allowed 11936 refused 0`; no UBI/UBIFS errors
+  in `dmesg`; after `stop` `allow_write` N.
+- PEB diff: 2024 compared, 74 changed: jffs2 (vol 13) 25, free 49, **other
+  0**.
+- Stock: `read` PASS (`/jffs` rw, the mainline files intact, `state.tgz`
+  matches its sha256), `write` PASS; metadata1/2 `51aa0cb2...`, bootfs2
+  `74efd23e...` unchanged, bootfs1 `6a8170c5...`; 0 corrupted, 0 bad,
+  `ecc_failures` 0. `g7-compare.sh` first reported two false positives
+  (gluebi numbering, `defaults` rewritten by stock at every boot), both
+  fixed in the script (above); re-run on the G8 reports: PASS.
 
 ## G7 on the box PASSED - 2026-10-08
 
@@ -224,9 +286,13 @@ mainline's write path produces pages stock decodes.
 ## Next on the box (in order, each gated by the previous)
 
 1. G7: done (PASSED 2026-10-08).
-2. G8 (`nand/phase2/G8.md`, same rw-jffs itb): fresh raw dump, then one supervised `FENCE_VOLUMES=jffs2 JFFS_MODE=rw` session
-   (`gt-be98-save --local`), then a stock boot and `stock-nandinfo.sh`.
-3. G9: restore rehearsal on the box only if the owner wants it (RESTORE.md).
+2. G8: done (PASSED 2026-10-08); then the production default (above).
+3. First production boot: `gt-be98-status` shows `mode=rw`; `g8-test`
+   removed; `nandcheck.last` recorded; a reboot (state saved) and a stock
+   boot with `stock-nandinfo.sh` + `g7-compare.sh` against the G8 report.
+4. Soak (validation step 5): repeated save/reboot cycles alternating stock
+   and mainline, with induced watchdog resets during writes.
+5. G9: restore rehearsal on the box only if the owner wants it (RESTORE.md).
 
 ## Validation plan (in order; each step gates the next)
 

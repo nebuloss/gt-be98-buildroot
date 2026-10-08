@@ -39,7 +39,8 @@ define GT_BE98_RESCUE_BUSYBOX_BUILD_CMDS
 	$(TARGET_STRIP) $(@D)/busybox
 	# applets the rescue /init and the lifeline use
 	set -e; for c in ASH MOUNT MKDIR SLEEP CUT CAT IP UDHCPC TELNETD DEVMEM \
-		LOSETUP SWITCH_ROOT LS SED GREP DMESG INSMOD REBOOT WGET TAR; do \
+		LOSETUP SWITCH_ROOT LS SED GREP DMESG INSMOD REBOOT WGET TAR \
+		UBIATTACH UBIDETACH HEAD FEATURE_FANCY_HEAD SHA256SUM FINDFS; do \
 		grep -qx "CONFIG_$$c=y" $(@D)/.config || \
 			{ echo "rescue busybox: CONFIG_$$c missing"; exit 1; }; \
 	done

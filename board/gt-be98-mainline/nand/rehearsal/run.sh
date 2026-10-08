@@ -104,6 +104,14 @@ L=$S/initramfs.list
 	echo "file /init $HERE/init 0755 0 0"
 	for f in "$T"/*; do echo "file /tools/$(basename "$f") $f 0755 0 0"; done
 	for f in "$KIT"/*; do echo "file /kit/$(basename "$f") $f 0755 0 0"; done
+	# the production service and tools, exercised as on the box
+	P=$EXT/package/gt-be98-os/src
+	for d in /etc /etc/init.d /etc/conf.d /usr /usr/sbin /run; do echo "dir $d 0755 0 0"; done
+	echo "file /etc/init.d/gt-be98-jffs $P/init.d/gt-be98-jffs 0755 0 0"
+	echo "file /etc/conf.d/gt-be98-jffs $P/conf.d/gt-be98-jffs 0644 0 0"
+	for f in gt-be98-save gt-be98-nandcheck gt-be98-autosave; do
+		echo "file /usr/sbin/$f $P/sbin/$f 0755 0 0"
+	done
 	echo "file /data/image.data $Dd/image.data 0644 0 0"
 	echo "file /data/loader.data $Dd/loader.data 0644 0 0"
 } > "$L"

@@ -4,7 +4,8 @@
 # built with the Debian cross toolchain (they run on stock 4.19 and on
 # mainline): $OUT/images/nand-phase2-kit/
 #   gt-be98-ubileb, gt-be98-nandrestore, gt-be98-nandtool, nanddump,
-#   ubinfo, ubimkvol, ubirmvol (mtd-utils, for stock: G7 create/remove)
+#   ubinfo, ubimkvol, ubirmvol, ubirsvol, ubiupdatevol (mtd-utils, for stock:
+#   G7 create/remove, slot-1 flashing: stock-slot1-flash.sh)
 #   stock-mltest.sh, mltest-mainline.sh, g7-compare.sh, stock-nandinfo.sh,
 #   jffs-mainline.sh, stock-jffs-check.sh (G8),
 #   patternA.bin, patternB.bin (G7)
@@ -25,13 +26,14 @@ $CC -static -O2 -Wall -o "$D/gt-be98-nandrestore" "$HERE/src/nandrestore.c"
 $CC -static -O2 -Wall -o "$D/gt-be98-nandtool" "$EXT/package/gt-be98-os/src/nandtool.c"
 (cd "$M" && $CC -static -O2 -Iinclude -I. -include include/config.h -o "$D/nanddump" \
 	nand-utils/nanddump.c lib/libmtd.c lib/libmtd_legacy.c lib/common.c lib/libcrc32.c)
-for u in ubinfo ubimkvol ubirmvol; do
+for u in ubinfo ubimkvol ubirmvol ubirsvol ubiupdatevol; do
 	(cd "$M" && $CC -static -O2 -Iinclude -I. -include include/config.h -o "$D/$u" \
 		ubi-utils/$u.c lib/libubi.c lib/libmtd.c lib/libmtd_legacy.c lib/common.c lib/libcrc32.c)
 done
-$STRIP "$D"/gt-be98-* "$D/nanddump" "$D/ubinfo" "$D/ubimkvol" "$D/ubirmvol"
+$STRIP "$D"/gt-be98-* "$D/nanddump" "$D/ubinfo" "$D/ubimkvol" "$D/ubirmvol" "$D/ubirsvol" "$D/ubiupdatevol"
 cp "$HERE/phase2/stock-mltest.sh" "$HERE/phase2/mltest-mainline.sh" "$HERE/phase2/g7-compare.sh" \
-	"$HERE/phase2/jffs-mainline.sh" "$HERE/phase2/stock-jffs-check.sh" "$HERE/stock-nandinfo.sh" "$D/"
+	"$HERE/phase2/jffs-mainline.sh" "$HERE/phase2/stock-jffs-check.sh" "$HERE/stock-nandinfo.sh" \
+	"$HERE/stock-slot1-flash.sh" "$D/"
 chmod 0755 "$D"/*.sh
 # deterministic G7 patterns, 4 LEBs each (126976 B)
 python3 - "$D" <<'PY'
@@ -45,6 +47,6 @@ for name, seed in (("patternA.bin", b"gt-be98 G7 A"), ("patternB.bin", b"gt-be98
     open(f"{d}/{name}", "wb").write(out[:4 * 126976])
 PY
 (cd "$D" && sha256sum gt-be98-ubileb gt-be98-nandrestore gt-be98-nandtool nanddump \
-	ubinfo ubimkvol ubirmvol stock-mltest.sh mltest-mainline.sh g7-compare.sh \
+	ubinfo ubimkvol ubirmvol ubirsvol ubiupdatevol stock-slot1-flash.sh stock-mltest.sh mltest-mainline.sh g7-compare.sh \
 	jffs-mainline.sh stock-jffs-check.sh stock-nandinfo.sh patternA.bin patternB.bin > SHA256SUMS)
 cat "$D/SHA256SUMS"

@@ -12,4 +12,7 @@ echo "== links"; ip -br link
 for n in /sys/class/net/rnr*; do [ -e "$n" ] && echo "${n##*/} stable MAC: $(gt-be98-macaddr ${n##*/} || echo none)"; done
 echo "== addresses"; ip -br -4 addr
 echo "== services"; rc-status -s 2>/dev/null | grep -vE '^ *$' | head -40
-echo "== persistence"; mountpoint -q /data && df -h /data || echo "/data: not mounted (volatile only)"
+echo "== /jffs persistence"; cat /run/gt-be98-jffs.status 2>/dev/null || echo "(gt-be98-jffs has not run)"
+grep ' /jffs ' /proc/mounts; ls -la /jffs/mainline-os/state.tgz 2>/dev/null
+[ -f /run/gt-be98-nandcheck.result ] && echo "nandcheck: $(head -n1 /run/gt-be98-nandcheck.result) (0 = static volumes as expected)"
+echo "== /data"; mountpoint -q /data && df -h /data || echo "/data: not mounted (volatile only)"

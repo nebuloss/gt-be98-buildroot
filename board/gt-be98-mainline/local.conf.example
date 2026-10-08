@@ -49,15 +49,14 @@ IMAGE=netroot
 # it). @DHCP_SERVER@ / @DHCP_ROUTER@ are replaced at boot by the lifeline's
 # DHCP lease values. Changing it only needs build.sh (post-image).
 ROOTFS_URL=
-# NAND access: off (default: no NAND node in the DT), ro (PHASE 1:
-# read-only; UBI attached read-only, the stock /jffs mounted read-only and
-# /jffs/mainline-os applied; NAND.md), or rw-jffs (PHASE 2: the "image"
-# partition writable in the DT, writes possible ONLY through the UBI write
-# fence, and only when /etc/conf.d/gt-be98-jffs sets FENCE_VOLUMES;
-# NAND-PHASE2.md). The loader partition is always read-only.
-# For one step (G7) without touching the production build, keep NAND=ro
-# here and make the separate G7 itb with nand/build-g7-image.sh.
-NAND=off
+# NAND access: rw-jffs (default for the dev OS since 2026-10-08, G8 passed:
+# the "image" partition writable in the DT, writes possible ONLY through the
+# UBI write fence on the volumes in FENCE_VOLUMES of /etc/conf.d/gt-be98-jffs,
+# default jffs2: /jffs read-write, state saved there; any failed check ->
+# read-only; NAND-PHASE2.md), ro (PHASE 1: nothing writable; UBI attached
+# read-only, /jffs read-only, /jffs/mainline-os applied; NAND.md) or off (no
+# NAND node in the DT). The loader partition is always read-only.
+NAND=rw-jffs
 # the size probe ml-bootfs-pad<N>.itb is padded to this many MiB
 PAD_TOTAL_MB=30
 # 1: always boot the rescue lifeline (the rootfs is still in the image)

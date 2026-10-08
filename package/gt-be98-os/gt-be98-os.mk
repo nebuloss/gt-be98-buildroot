@@ -13,7 +13,7 @@ GT_BE98_OS_DEPENDENCIES = host-lzop host-dtc host-uboot-tools
 GT_BE98_OS_LOCAL_CONF = $(call qstrip,$(BR2_PACKAGE_GT_BE98_OS_LOCAL_CONF))
 
 GT_BE98_OS_SERVICES = gt-be98-watchdog gt-be98-netguard gt-be98-jffs gt-be98-drivers gt-be98-wifi \
-	gt-be98-telnet gt-be98-boot-done gt-be98-persist sshd dhcpcd chronyd \
+	gt-be98-telnet gt-be98-boot-done gt-be98-persist gt-be98-autosave sshd dhcpcd chronyd \
 	syslogd dnsmasq
 
 define GT_BE98_OS_BUILD_CMDS
@@ -26,7 +26,7 @@ define GT_BE98_OS_INSTALL_TARGET_CMDS
 	$(INSTALL) -D -m 0755 $(@D)/nandtool $(TARGET_DIR)/usr/sbin/gt-be98-nandtool
 	for f in gt-be98-postcode gt-be98-health gt-be98-wdtd gt-be98-status \
 		gt-be98-macaddr gt-be98-netguard gt-be98-save gt-be98-nandcheck \
-		gt-be98-nandpage; do \
+		gt-be98-nandpage gt-be98-autosave; do \
 		$(INSTALL) -D -m 0755 $(@D)/sbin/$$f $(TARGET_DIR)/usr/sbin/$$f || exit 1; \
 	done
 	for s in $(GT_BE98_OS_SERVICES); do \
@@ -77,7 +77,7 @@ define GT_BE98_OS_FINALIZE
 	mkdir -p $(TARGET_DIR)/etc/runlevels/boot $(TARGET_DIR)/etc/runlevels/default
 	for s in gt-be98-watchdog gt-be98-netguard gt-be98-persist gt-be98-jffs syslogd; do \
 		ln -sfn /etc/init.d/$$s $(TARGET_DIR)/etc/runlevels/boot/$$s; done
-	for s in dhcpcd sshd chronyd gt-be98-drivers gt-be98-boot-done; do \
+	for s in dhcpcd sshd chronyd gt-be98-drivers gt-be98-autosave gt-be98-boot-done; do \
 		ln -sfn /etc/init.d/$$s $(TARGET_DIR)/etc/runlevels/default/$$s; done
 	GT_BE98_LOCAL_CONF="$(GT_BE98_OS_LOCAL_CONF)" TARGET_DIR="$(TARGET_DIR)" \
 		HOST_DIR="$(HOST_DIR)" \

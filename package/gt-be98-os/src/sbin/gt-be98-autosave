@@ -1,0 +1,17 @@
+#!/bin/sh
+# SPDX-License-Identifier: GPL-2.0
+# gt-be98-autosave: run by the gt-be98-autosave service. Every
+# AUTOSAVE_INTERVAL seconds (default 300), when /jffs is read-write and the
+# watched state (AUTOSAVE_WATCH, /etc/conf.d/gt-be98-jffs) is unchanged since
+# the previous check (i.e. settled, not mid-write), "gt-be98-save --local
+# --if-changed" writes it to /jffs/mainline-os if it differs from the last
+# save. A web UI settings change thus reaches the NAND within about two
+# intervals; nothing is written while nothing changes.
+. /etc/conf.d/gt-be98-jffs
+prev=
+while sleep "${AUTOSAVE_INTERVAL:-300}"; do
+	grep -q ' /jffs ubifs rw' /proc/mounts || { prev=; continue; }
+	d=$(gt-be98-save --digest)
+	[ -n "$prev" ] && [ "$d" = "$prev" ] && gt-be98-save --local --if-changed >/dev/null 2>&1
+	prev=$d
+done

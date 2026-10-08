@@ -1,24 +1,26 @@
 #!/sbin/openrc-run
 # SPDX-License-Identifier: GPL-2.0
-# Access to the stock /jffs and the persistent state the mainline OS keeps
-# there (NAND.md, NAND-PHASE2.md). Two switches in /etc/conf.d/gt-be98-jffs,
-# both OFF by default:
-#   FENCE_VOLUMES empty (PHASE 1): read-only.
-#     1. the NAND "image" MTD partition must be read-only (DT), or writable
-#        (NAND=rw-jffs image) with brcmnand.allow_write=0 and no UBI fence;
-#        otherwise stop;
-#     2. ubiattach on it -> UBI cannot write (ro_mode=1, or every write
-#        refused by the MTD write fence);
-#     3. mount the stock UBIFS volume "jffs2" read-only on /jffs;
-#     4. apply /jffs/mainline-os/: state.tgz (from gt-be98-save, sha256-checked
-#        against state.tgz.sha256 when present), then the overlay/ tree, both
-#        restricted to the allowed paths (ALLOW_PATHS). Missing = defaults.
-#   FENCE_VOLUMES set (PHASE 2, NAND=rw-jffs image only): UBI attached with
-#     the write fence on those volumes, checked in debugfs, then
-#     brcmnand.allow_write=1; /jffs mounted read-only, and remounted
-#     read-write only with JFFS_MODE=rw and jffs2 in FENCE_VOLUMES. Any
-#     failure: back to the phase-1 state.
-description="Stock /jffs (UBIFS on NAND), read-only, and the saved mainline state"
+# The stock /jffs (UBIFS volume jffs2 on the NAND "image" partition) and the
+# persistent state the mainline OS keeps in /jffs/mainline-os (NAND.md,
+# NAND-PHASE2.md). /etc/conf.d/gt-be98-jffs:
+#   FENCE_VOLUMES=jffs2 JFFS_MODE=rw (default since 2026-10-08, G8 passed):
+#     on an image built with NAND=rw-jffs, UBI is attached with the write
+#     fence on jffs2 only, the fence is checked in debugfs, then
+#     brcmnand.allow_write=1, /jffs is mounted, the saved state applied, and
+#     /jffs remounted read-write. The state is saved back (gt-be98-save
+#     --local) when the service stops (clean shutdown/reboot) and by
+#     gt-be98-autosave when it changes.
+#   FENCE_VOLUMES empty, or an image whose "image" partition is read-only
+#     (NAND=ro), or ANY failed pre-check: PHASE 1, read-only: UBI attached
+#     with nothing writable, /jffs read-only, state applied; a failed
+#     pre-check is logged at crit level, written to /run/gt-be98-jffs.status
+#     and to /etc/motd ("PERSISTENCE OFF").
+# Four independent layers stay in place: the DT (only "image" writable,
+# "loader" never), brcmnand.allow_write, the MTD write gate, the UBI fence.
+# Also: CLEANUP_PATHS removed from /jffs once read-write; the static
+# volumes' sha256 compared with the previous boot (NANDCHECK, in the
+# background; /jffs/mainline-os/nandcheck.last).
+description="Stock /jffs (UBIFS on NAND) through the UBI write fence, and the saved mainline state"
 
 depend() {
 	need localmount
@@ -34,6 +36,21 @@ nand_mtd() {	# the mtd number of the partition labelled $1
 AW=/sys/module/brcmnand/parameters/allow_write
 UF=/sys/module/ubi/parameters/fence
 FD=/sys/kernel/debug/ubi/ubi0/fence
+ST=/run/gt-be98-jffs.status
+NC_PID=/run/gt-be98-jffs.nandcheck.pid
+
+status_set() {	# mode, text
+	printf 'mode=%s\nsince=%s\ninfo=%s\n' "$1" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$2" > $ST
+}
+
+# a read-write setup that was asked for and failed: as loud as possible
+fallback() {	# reason
+	eerror "PERSISTENCE OFF: $1; /jffs read-only (phase 1)"
+	logger -p daemon.crit -t gt-be98-jffs "PERSISTENCE OFF: $1; NAND read-only (phase 1 fallback)"
+	status_set ro-fallback "$1"
+	sed -i '/^WARNING: \/jffs persistence/d' /etc/motd 2>/dev/null
+	echo "WARNING: /jffs persistence is OFF (read-only fallback): $1 - see /run/gt-be98-jffs.status, logread" >> /etc/motd
+}
 
 # back to the phase-1 state: no writes possible
 lock_down() {
@@ -59,29 +76,50 @@ start() {
 	m=$(nand_mtd "$IMAGE_MTD")
 	if [ -z "$m" ]; then
 		einfo "no NAND \"$IMAGE_MTD\" partition (image built without NAND=ro/rw-jffs): image defaults"
+		status_set none "no NAND partition in the DT (NAND=off image)"
 		return 0
 	fi
 	# MTD_WRITEABLE = 0x400
 	flags=$(cat /sys/class/mtd/mtd$m/flags)
 	writable=$(( (flags & 0x400) != 0 ))
 	if [ -n "$FENCE_VOLUMES" ] && [ $writable = 0 ]; then
-		ewarn "FENCE_VOLUMES=$FENCE_VOLUMES but mtd$m is read-only (image not built with NAND=rw-jffs): read-only"
+		ewarn "FENCE_VOLUMES=$FENCE_VOLUMES but mtd$m is read-only (image built with NAND=ro): read-only"
+		status_set ro "image partition read-only in the DT (NAND=ro image)"
 	elif [ -n "$FENCE_VOLUMES" ]; then
-		start_rw "$m" && { apply_state; [ "$mode" = rw ] && remount_rw; return 0; }
-		eerror "fenced attach failed: falling back to read-only"
+		if start_rw "$m"; then
+			apply_state
+			if [ "$mode" = rw ]; then
+				if remount_rw; then
+					cleanup
+					status_set rw "fence on $FENCE_VOLUMES, /jffs read-write"
+				else
+					fallback "read-write remount of /jffs failed"
+					start_ro "$m" $writable && apply_state
+				fi
+			else
+				status_set fenced-ro "fence on $FENCE_VOLUMES, /jffs read-only (JFFS_MODE=ro)"
+			fi
+			nandcheck_bg
+			return 0
+		fi
+		fallback "${RW_FAIL:-fenced attach failed}"
 		lock_down
 	elif [ "$mode" = rw ]; then
 		ewarn "JFFS_MODE=rw needs FENCE_VOLUMES (with $JFFS_VOLUME): read-only"
+		status_set ro "JFFS_MODE=rw without FENCE_VOLUMES"
+	else
+		status_set ro "FENCE_VOLUMES empty (phase 1)"
 	fi
 	start_ro "$m" $writable || return 0
 	apply_state
+	nandcheck_bg
 	return 0
 }
 
 start_ro() {	# $1 mtd, $2 writable
 	lock_down
 	ebegin "Attaching UBI read-only on mtd$1 ($IMAGE_MTD)"
-	ubiattach -m "$1" -d 0 >/dev/null 2>&1
+	ubiattach -m "$1" -d 0 -O "${UBI_VID_OFFSET:-2048}" >/dev/null 2>&1
 	eend $? || return 1
 	if [ "$(cat /sys/class/ubi/ubi0/ro_mode 2>/dev/null)" != 1 ]; then
 		if [ "$2" = 1 ] && [ "$(cat $AW 2>/dev/null)" = N ]; then
@@ -101,25 +139,25 @@ start_ro() {	# $1 mtd, $2 writable
 start_rw() {	# $1 mtd: fenced attach, checked, then allow_write
 	local v
 	lock_down
-	[ -w "$UF" ] && [ -w "$AW" ] || { eerror "kernel without the write fence"; return 1; }
+	[ -w "$UF" ] && [ -w "$AW" ] || { RW_FAIL="kernel without the write fence"; return 1; }
 	echo "$FENCE_VOLUMES" > "$UF"
 	ebegin "Attaching UBI on mtd$1 with the write fence ($FENCE_VOLUMES)"
-	ubiattach -m "$1" -d 0 >/dev/null 2>&1
-	eend $? || return 1
+	ubiattach -m "$1" -d 0 -O "${UBI_VID_OFFSET:-2048}" >/dev/null 2>&1
+	eend $? || { RW_FAIL="fenced UBI attach failed"; return 1; }
 	if ! grep -q '^state active' "$FD" 2>/dev/null; then
-		eerror "UBI fence not active ($FD)"; return 1
+		RW_FAIL="UBI fence not active ($FD)"; return 1
 	fi
 	for v in $(echo "$FENCE_VOLUMES" | tr ',' ' '); do
-		grep -q "^volumes.* $v:" "$FD" || { eerror "fence does not cover $v"; return 1; }
+		grep -q "^volumes.* $v:" "$FD" || { RW_FAIL="fence does not cover $v"; return 1; }
 	done
-	[ "$(cat /sys/class/ubi/ubi0/ro_mode)" = 0 ] || { eerror "ubi0 in read-only mode"; return 1; }
+	[ "$(cat /sys/class/ubi/ubi0/ro_mode)" = 0 ] || { RW_FAIL="ubi0 in read-only mode"; return 1; }
 	einfo "fence: $(grep -E '^(volumes|pebs)' "$FD" | tr '\n' ' ')"
 	echo 1 > "$AW"
 	logger -t gt-be98-jffs "write fence active ($FENCE_VOLUMES), brcmnand.allow_write=1"
 	mkdir -p /jffs
 	ebegin "Mounting ubi0:$JFFS_VOLUME read-only on /jffs"
 	mount -t ubifs -o ro ubi0:"$JFFS_VOLUME" /jffs
-	eend $?
+	eend $? || { RW_FAIL="mount of ubi0:$JFFS_VOLUME failed"; return 1; }
 }
 
 remount_rw() {
@@ -173,8 +211,77 @@ apply_state() {
 	logger -t gt-be98-jffs "state from /jffs/$STATE_DIR applied"
 }
 
+cleanup() {	# CLEANUP_PATHS (relative to /jffs), once read-write
+	local p
+	for p in $CLEANUP_PATHS; do
+		case "$p" in ''|/*|*..*) continue ;; esac
+		[ -e "/jffs/$p" ] || continue
+		rm -rf "/jffs/$p" && einfo "removed /jffs/$p" &&
+			logger -t gt-be98-jffs "removed leftover /jffs/$p"
+	done
+	sync
+}
+
+# static volumes' sha256 vs the previous boot, in the background (~30 MB read)
+nandcheck_bg() {
+	[ "${NANDCHECK:-yes}" = yes ] || return 0
+	( nandcheck_run ) > /dev/null 2>&1 &
+	echo $! > $NC_PID
+}
+
+nandcheck_run() {
+	local last=/jffs/$STATE_DIR/nandcheck.last cur=/run/gt-be98-nandcheck.cur
+	local build_now build_last name sha old warn=0
+	gt-be98-nandcheck --sha-list > $cur || { logger -p daemon.warn -t gt-be98-nandcheck "sha list failed"; return; }
+	if [ ! -f "$last" ]; then
+		logger -t gt-be98-nandcheck "no previous record: $(grep -c '^vol ' $cur) static volumes recorded"
+	else
+		build_now=$(sed -n 's/^build //p' $cur)
+		build_last=$(sed -n 's/^build //p' "$last")
+		while read -r tag name sha; do
+			[ "$tag" = vol ] || continue
+			old=$(awk -v n="$name" '$1 == "vol" && $2 == n { print $3 }' "$last")
+			[ "$old" = "$sha" ] && continue
+			if [ -z "$old" ]; then
+				logger -p daemon.warn -t gt-be98-nandcheck "static volume $name is new (sha256 $sha)"; warn=1
+			elif [ "$name" = bootfs1 ] && [ "$build_now" != "$build_last" ]; then
+				logger -t gt-be98-nandcheck "bootfs1 changed: a new mainline image was flashed (build $build_last -> $build_now)"
+			elif [ "$name" = bootfs1 ]; then
+				logger -p daemon.crit -t gt-be98-nandcheck "bootfs1 CHANGED but the running image is the same build ($build_now): changed without a flash of a new mainline image"; warn=1
+			else
+				logger -p daemon.crit -t gt-be98-nandcheck "static volume $name CHANGED ($old -> $sha): expected only after a stock firmware upgrade"; warn=1
+			fi
+		done < $cur
+		awk '$1 == "vol" { print $2 }' "$last" | while read -r name; do
+			grep -q "^vol $name " $cur || logger -p daemon.crit -t gt-be98-nandcheck "static volume $name disappeared"
+		done
+		[ $warn = 0 ] && logger -t gt-be98-nandcheck "static volumes as at the previous boot (or after a new mainline image)"
+	fi
+	{ echo "warn=$warn"; cat $cur; } > /run/gt-be98-nandcheck.result
+	# record only on change, only when /jffs is writable
+	if ! cmp -s $cur "$last" 2>/dev/null && grep -q ' /jffs ubifs rw' /proc/mounts; then
+		mkdir -p "/jffs/$STATE_DIR" && cp $cur "$last.new" && mv "$last.new" "$last" && sync
+	fi
+}
+
 stop() {
+	local p
+	# finish the integrity check before /jffs goes away
+	p=$(cat $NC_PID 2>/dev/null)
+	if [ -n "$p" ] && kill -0 "$p" 2>/dev/null; then
+		ebegin "Waiting for the NAND integrity check"
+		i=0; while kill -0 "$p" 2>/dev/null && [ $i -lt 60 ]; do sleep 1; i=$((i + 1)); done
+		kill "$p" 2>/dev/null
+		eend 0
+	fi
+	rm -f $NC_PID
+	if [ "${SAVE_ON_STOP:-yes}" = yes ] && grep -q ' /jffs ubifs rw' /proc/mounts; then
+		ebegin "Saving the mainline state to /jffs (gt-be98-save --local)"
+		gt-be98-save --local
+		eend $? "state not saved"
+	fi
 	sync
 	lock_down
+	status_set stopped "service stopped"
 	return 0
 }

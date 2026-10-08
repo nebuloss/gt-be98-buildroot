@@ -7,10 +7,13 @@
 #
 # PASS needs: the same UBI volumes (ignoring mltest) with the same type,
 # reserved_ebs and data size (bootfs1: size not compared), none corrupted, no update marker; the static
-# volume sha256s (and those of the dynamic volumes other than jffs2, data
-# and mltest: rootfs1/2, defaults, if present in both reports) unchanged except bootfs1 (vol 3), which must equal
+# volume sha256s (and those of the dynamic rootfs1/rootfs2) unchanged except
+# bootfs1; defaults, data and jffs2 are left out: stock mounts them read-write
+# and their content changes on every stock boot (defaults: proven 2026-10-08,
+# a plain stock reboot changed its sha256) (vol 3), which must equal
 # BOOTFS1_SHA256 when given (the G7 itb that was flashed); ecc_failures and
-# bad_blocks unchanged on every MTD device; "corrupted PEBs: 0" in AFTER if
+# bad_blocks unchanged on every MTD device (matched by name: stock's gluebi
+# numbering moves); "corrupted PEBs: 0" in AFTER if
 # the attach line is in its log. corrected_bits deltas are printed (reads
 # that needed correction: expected, not a failure).
 set -u
@@ -20,8 +23,11 @@ sec() {	# $1 file, $2 section header regexp: the section's lines
 	awk -v h="$2" '$0 ~ "^== " || $0 ~ "^-- " { on = ($0 ~ h) ; next } on' "$1"
 }
 vols() { sec "$1" '^== ubi' | awk 'NF == 7 && $1 ~ /^[0-9]+$/ && $2 != "mltest" { if ($1 == 3) $5 = "(bootfs1)"; print }'; }
-shas() { sec "$1" 'sha256 of the' | awk 'NF == 3'; }
-mtds() { sec "$1" '^== mtd sysfs' | awk '$1 ~ /^mtd[0-9]+$/'; }
+# volumes stock itself mounts read-write (contents change on every stock
+# boot: defaults at /tmp/mnt/defaults, data, jffs2) and mltest: not hashed
+shas() { sec "$1" 'sha256 of the' | awk 'NF == 3 && $2 !~ /^(defaults|data|jffs2|mltest)$/'; }
+# by NAME: stock's gluebi mtdN numbers move when volumes are created/removed
+mtds() { sec "$1" '^== mtd sysfs' | awk '$1 ~ /^mtd[0-9]+$/ { $1 = $2; print }'; }
 
 echo "== UBI volumes (id name type reserved_ebs data_bytes corrupted upd_marker)"
 vols "$B" > /tmp/g7c.b.$$; vols "$A" > /tmp/g7c.a.$$
@@ -31,7 +37,7 @@ fi
 rm -f /tmp/g7c.b.$$ /tmp/g7c.a.$$
 vols "$A" | awk '$6 != 0 || $7 != 0 { print "corrupted or update marker: " $0; bad = 1 } END { exit bad }' || fail=1
 
-echo "== volume sha256 (static volumes; dynamic ones except jffs2, data, mltest)"
+echo "== volume sha256 (static volumes; dynamic rootfs1/rootfs2; not the stock-rw defaults, data, jffs2)"
 shas "$B" > /tmp/g7c.b.$$; shas "$A" > /tmp/g7c.a.$$
 while read -r n name sha; do
 	now=$(awk -v n="$n" '$1 == n { print $3 }' /tmp/g7c.a.$$)

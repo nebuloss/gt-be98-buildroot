@@ -266,20 +266,31 @@ Logs persist only off the NAND:
 The P2 design (read-only stock `/data`, promotion of the image to a
 committed slot) is in `PERSISTENCE.md`.
 
-### NAND (opt-in, read-only)
+### NAND and /jffs persistence (default `NAND=rw-jffs`)
 
-`NAND=ro` in the local configuration adds the NAND controller to the DT
-with read-only partitions, attaches UBI read-only, mounts the stock `/jffs`
-read-only and applies `/jffs/mainline-os/` (saved state). Four independent
-layers keep the NAND unwritten (DT `read-only`, a brcmnand patch refusing
-program/erase without `brcmnand.allow_write=1`, UBI read-only mode, UBIFS
-`ro` and no writing tools). Saving goes through stock. Details, stock
-commands and tools: `NAND.md`.
+Since 2026-10-08 (G7 and G8 passed on the box, NAND-PHASE2.md) the dev OS
+mounts the stock `/jffs` read-write and keeps its state in
+`/jffs/mainline-os/`: `state.tgz` (the web UI settings, SSH host keys,
+authorized_keys, dhcpcd/chrony state) is applied at boot, saved at every
+clean shutdown/reboot and by `gt-be98-autosave` within ~10 minutes of a
+change (web UI settings, SSH keys); `gt-be98-save --local` saves at once.
+Writes are possible ONLY through the UBI write fence on `jffs2`; four
+independent layers stay in place (DT: only `image` writable, never `loader`;
+`brcmnand.allow_write`; the MTD write gate; the UBI fence). Any failed
+pre-check leaves the box read-only (phase 1) with "PERSISTENCE OFF" in the
+log at crit level, `/run/gt-be98-jffs.status` and `/etc/motd`. At every
+boot the static volumes' sha256 (bootfs1/2, metadata1/2) are compared with
+the previous boot (`/jffs/mainline-os/nandcheck.last`); a change of bootfs1
+with a new image build id is logged as a flash, anything else at crit level.
+`gt-be98-status` shows the state. `NAND=ro` (phase 1, nothing writable,
+NAND.md) and `NAND=off` remain available.
 
 ## Safety rules this OS keeps
 
-- No flash writes: by default no NAND node in the DT; with `NAND=ro`, a
-  read-only NAND (NAND.md).
+- Flash writes only to the stock `/jffs` (UBI volume jffs2) and free PEBs,
+  through the UBI write fence (NAND-PHASE2.md); `loader` and every other
+  volume (both slots, metadata, data, defaults) are never written; with
+  `NAND=ro`, nothing at all (NAND.md).
 - `0xff802628`: only bits [31:24] (post-codes); the rootfs `devmem` refuses
   any write that would change bits [23:0].
 - The watchdog is never stopped: NOWAYOUT, `watchdog.stop_on_reboot=0`, and

@@ -7,6 +7,18 @@
 #   gt-be98-nandcheck            report
 #   gt-be98-nandcheck --sha      also sha256 of every static UBI volume
 #                                (bootfs1/bootfs2: compare with stock)
+#   gt-be98-nandcheck --sha-list only "build <id>" (the running image's build
+#                                id, from the DT) and "vol <name> <sha256>" per
+#                                static volume (gt-be98-jffs: nandcheck.last)
+if [ "${1:-}" = --sha-list ]; then
+	[ -e /sys/class/ubi/ubi0 ] || { echo "no ubi0" >&2; exit 1; }
+	echo "build $(tr -d '\000' < /proc/device-tree/gt-be98,build-id 2>/dev/null || echo unknown)"
+	for v in /sys/class/ubi/ubi0_*; do
+		[ "$(cat $v/type 2>/dev/null)" = static ] || continue
+		echo "vol $(cat $v/name) $(sha256sum /dev/${v##*/} | cut -d' ' -f1)"
+	done | sort
+	exit 0
+fi
 echo "== kernel"
 uname -r
 grep -o 'brcmnand[^ ]*' /proc/cmdline || echo "(no brcmnand.* on the command line: allow_write=0)"

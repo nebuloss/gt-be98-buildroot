@@ -1,8 +1,12 @@
 # GT-BE98 mainline OS - persistence and promotion (P2 design)
 
-Status: design. Level 0 and 1 are implemented in P1; levels 2-4 are not and
-must not be enabled without the reviews listed. Promotion to a committed slot
-is documented only.
+Status: design (2026-10-07). **Superseded for persistence by NAND phase 2**
+(NAND-PHASE2.md): since 2026-10-08 the dev OS keeps its state read-write on
+the stock `/jffs` through the UBI write fence, which answers the
+whole-device concern below (wear-leveling/scrubbing restricted to jffs2 and
+free PEBs, proven in simulation and on the box, G5-G8). The levels below
+stay as the record of the design; promotion to a committed slot is still
+documented only.
 
 ## Constraints
 

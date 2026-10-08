@@ -1,0 +1,14 @@
+#!/sbin/openrc-run
+# SPDX-License-Identifier: GPL-2.0
+# Saves the mainline state to /jffs when it changes (gt-be98-autosave; see
+# there). Clean shutdown/reboot saves anyway (gt-be98-jffs stop). Writes
+# nothing unless /jffs is mounted read-write.
+description="Save the mainline state to /jffs when it changes"
+command=/usr/sbin/gt-be98-autosave
+command_background=yes
+pidfile=/run/gt-be98-autosave.pid
+
+depend() {
+	need gt-be98-jffs
+	after webui
+}

@@ -308,6 +308,46 @@ gate g8_stock_clean "$K/stock-jffs-check.sh clean"
 umount /jffs; ubidetach -d 0
 echo 1 > $FW
 
+# ---- PROD: the production gt-be98-jffs service + gt-be98-save, as on the box
+# (OpenRC helpers stubbed) --------------------------------------------------------
+say "PROD: gt-be98-jffs service (FENCE_VOLUMES=jffs2 JFFS_MODE=rw) on the box image"
+export PATH=/usr/sbin:/tools:/bin:/sbin
+echo 1 > $FW; echo "" > $UF
+prod() {	# action [conf overrides...]: run the service like openrc-run does
+	( ebegin() { echo " * $*"; }; eend() { [ "${1:-0}" = 0 ] || echo " * failed: ${2:-}"; return ${1:-0}; }
+	  einfo() { echo " * $*"; }; ewarn() { echo " * WARN $*"; }; eerror() { echo " * ERROR $*"; }
+	  . /etc/conf.d/gt-be98-jffs; IMAGE_MTD="NAND simulator partition 1"; act=$1; shift
+	  for kv in "$@"; do eval "$kv"; done
+	  . /etc/init.d/gt-be98-jffs; $act )
+}
+mkdir -p /etc/webui /etc/ssh /root/.ssh; echo "s1" > /etc/webui/setting
+prod start
+gate prod_rw "grep -q '^mode=rw' /run/gt-be98-jffs.status && grep -q ' /jffs ubifs rw' /proc/mounts && grep -qx 'volumes jffs2:[0-9]*' $DBG/ubi0/fence && [ \$(cat /sys/module/brcmnand/parameters/allow_write) = Y ]"
+p=$(cat /run/gt-be98-jffs.nandcheck.pid 2>/dev/null); while [ -n "$p" ] && kill -0 $p 2>/dev/null; do sleep 1; done
+gate prod_nandcheck_recorded "grep -q '^vol bootfs2 $STOCK_BOOTFS2' /jffs/mainline-os/nandcheck.last && grep -q '^warn=0' /run/gt-be98-nandcheck.result"
+mkdir -p /jffs/mainline-os/g8-test; echo x > /jffs/mainline-os/g8-test/marker.bin; sync
+gate prod_save_if_changed "gt-be98-save --local --if-changed && [ -s /jffs/mainline-os/state.tgz ] && [ -s /jffs/mainline-os/state.digest ]"
+w1=$(grep '^writes' $DBG/ubi0/fence)
+gt-be98-save --local --if-changed; sync
+w2=$(grep '^writes' $DBG/ubi0/fence)
+gate prod_no_write_when_unchanged "[ \"$w1\" = \"$w2\" ]"
+echo "s2" > /etc/webui/setting
+prod stop
+gate prod_stop_saved_and_locked "tar -xzOf /dev/null 2>/dev/null; [ \$(cat /sys/module/brcmnand/parameters/allow_write) = N ] && [ ! -e /sys/class/ubi/ubi0 ] && grep -q '^mode=stopped' /run/gt-be98-jffs.status"
+echo "s0" > /etc/webui/setting
+prod start
+gate prod_state_applied "[ \$(cat /etc/webui/setting) = s2 ]"
+gate prod_cleanup_g8_test "! [ -e /jffs/mainline-os/g8-test ]"
+p=$(cat /run/gt-be98-jffs.nandcheck.pid 2>/dev/null); while [ -n "$p" ] && kill -0 $p 2>/dev/null; do sleep 1; done
+gate prod_nandcheck_second_boot "grep -q '^warn=0' /run/gt-be98-nandcheck.result"
+prod stop
+# a failed pre-check: the fence cannot cover a volume that does not exist
+prod start 'FENCE_VOLUMES=nosuch'
+gate prod_fallback_loud "grep -q '^mode=ro-fallback' /run/gt-be98-jffs.status && grep -q 'PERSISTENCE is OFF\|persistence is OFF' /etc/motd && grep -q ' /jffs ubifs ro' /proc/mounts && [ \$(cat /sys/module/brcmnand/parameters/allow_write) = N ]"
+gate prod_fallback_state_applied "[ \$(cat /etc/webui/setting) = s2 ]"
+prod stop
+export PATH=/tools:/bin:/sbin
+
 echo "RH-SUMMARY pass $pass fail $fail"
 echo "RH-DONE"
 sync

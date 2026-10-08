@@ -1,19 +1,31 @@
 # /etc/conf.d/gt-be98-jffs - stock /jffs (NAND.md, NAND-PHASE2.md)
 JFFS=yes
-# Two independent switches, both OFF by default (NAND-PHASE2.md); they only
-# take effect on an image built with NAND=rw-jffs (otherwise: read-only).
-# FENCE_VOLUMES: empty (default) = phase 1, UBI attached read-only, nothing
-#   writable. Non-empty = UBI attached with the write fence on exactly these
-#   volumes (comma-separated) and brcmnand.allow_write=1: only they (and free
-#   PEBs) can be written. "mltest" for the sacrificial-volume step (G7),
-#   "jffs2" for the real /jffs (G8).
-FENCE_VOLUMES=
-# JFFS_MODE: /jffs itself. ro (default) = mounted read-only (with any
-#   FENCE_VOLUMES). rw = remounted read-write; needs JFFS_VOLUME in
-#   FENCE_VOLUMES, otherwise it stays read-only.
-JFFS_MODE=ro
+# Two switches; they only take effect on an image built with NAND=rw-jffs
+# (otherwise: read-only). Default since 2026-10-08 (G8 passed on the box):
+# /jffs read-write through the UBI write fence on jffs2 only.
+# FENCE_VOLUMES: empty = phase 1, UBI attached read-only, nothing writable.
+#   Non-empty = UBI attached with the write fence on exactly these volumes
+#   (comma-separated) and brcmnand.allow_write=1: only they (and free PEBs)
+#   can be written. Any failed check: read-only, logged loudly.
+FENCE_VOLUMES=jffs2
+# JFFS_MODE: /jffs itself. rw = remounted read-write (needs JFFS_VOLUME in
+#   FENCE_VOLUMES); ro = mounted read-only.
+JFFS_MODE=rw
+# save the state (gt-be98-save --local) when the service stops (clean
+# shutdown / reboot)
+SAVE_ON_STOP=yes
+# gt-be98-autosave: check every AUTOSAVE_INTERVAL s; save when a file under
+# AUTOSAVE_WATCH (relative to /) changed and has settled
+AUTOSAVE_INTERVAL=300
+AUTOSAVE_WATCH="etc/webui etc/ssh root/.ssh"
+# removed from /jffs (relative paths) once it is read-write
+CLEANUP_PATHS="mainline-os/g8-test"
+# compare the static volumes' sha256 with the previous boot (background)
+NANDCHECK=yes
 # NAND MTD partition holding the UBI device (DT label)
 IMAGE_MTD=image
+# UBI VID header offset of the box's UBI device (2 KiB pages, no sub-pages)
+UBI_VID_OFFSET=2048
 # stock UBIFS volume mounted on /jffs
 JFFS_VOLUME=jffs2
 # directory on /jffs with the mainline state (state.tgz[.sha256], overlay/)

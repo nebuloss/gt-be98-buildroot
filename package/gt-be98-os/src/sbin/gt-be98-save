@@ -4,9 +4,13 @@
 #
 #   ssh root@<box> gt-be98-save > state.tgz          (tar.gz on stdout)
 #   gt-be98-save -o /tmp/state.tgz                    (and state.tgz.sha256)
-#   gt-be98-save --local                              (PHASE 2, JFFS_MODE=rw + FENCE_VOLUMES=jffs2:
-#                         write /jffs/mainline-os/state.tgz directly, through
-#                         the UBI write fence; the previous one is kept .prev)
+#   gt-be98-save --local                              (JFFS_MODE=rw + FENCE_VOLUMES=jffs2,
+#                         the default: write /jffs/mainline-os/state.tgz
+#                         directly, through the UBI write fence; the previous
+#                         one is kept .prev; also run by gt-be98-jffs on stop)
+#   gt-be98-save --digest   content digest of AUTOSAVE_WATCH (for gt-be98-autosave)
+#   gt-be98-save --local --if-changed                 (gt-be98-autosave: only when a
+#                         file under AUTOSAVE_WATCH changed since the last save)
 #
 # The archive holds exactly the paths gt-be98-jffs restores (ALLOW_PATHS of
 # /etc/conf.d/gt-be98-jffs): the web UI state (/etc/webui: webui.db,
@@ -17,14 +21,29 @@
 set -eu
 ALLOW_PATHS=
 . /etc/conf.d/gt-be98-jffs
+AUTOSAVE_WATCH=${AUTOSAVE_WATCH:-"etc/webui etc/ssh root/.ssh"}
 out=
 loc=0
+ifch=0
+[ "${2:-}" = --if-changed ] && ifch=1
+# content digest of the watched paths (names + sha256, not times)
+digest() {
+	for p in $AUTOSAVE_WATCH; do
+		[ -e "/$p" ] || continue
+		find "/$p" -type f 2>/dev/null
+	done | sort | while read -r f; do sha256sum "$f"; done | sha256sum | cut -d' ' -f1
+}
+[ "${1:-}" = --digest ] && { digest; exit 0; }
 [ "${1:-}" = -o ] && out=${2:?gt-be98-save -o FILE}
 if [ "${1:-}" = --local ]; then
 	grep -qE '^ubi0:[^ ]+ /jffs ubifs rw' /proc/mounts ||
 		{ echo "gt-be98-save: /jffs is not mounted read-write (JFFS_MODE=rw with FENCE_VOLUMES=jffs2, NAND-PHASE2.md)" >&2; exit 1; }
 	loc=1
 	umask 077
+	now=$(digest)
+	if [ $ifch = 1 ] && [ "$now" = "$(cat /jffs/mainline-os/state.digest 2>/dev/null)" ]; then
+		exit 0
+	fi
 	mkdir -p /jffs/mainline-os
 	chmod 0700 /jffs/mainline-os
 	out=/jffs/mainline-os/state.tgz.new
@@ -40,9 +59,11 @@ if [ -n "$out" ]; then
 		sum=$(sha256sum $d/state.tgz.new | cut -d' ' -f1)
 		mv $d/state.tgz.new $d/state.tgz
 		echo "$sum  state.tgz" > $d/state.tgz.sha256
+		echo "$now" > $d/state.digest
 		chmod 0600 $d/*
 		sync
 		echo "gt-be98-save: $d/state.tgz ($(wc -c < $d/state.tgz) B) written to the NAND through the fence" >&2
+		logger -t gt-be98-save "state saved to $d/state.tgz ($(wc -c < $d/state.tgz) B)" 2>/dev/null || true
 		exit 0
 	fi
 	(cd "$(dirname "$out")" && sha256sum "$(basename "$out")" > "$(basename "$out").sha256")
