@@ -4,8 +4,11 @@
 #
 #   board/gt-be98-mainline/qemu-smoke.sh [seconds]
 #
-# Boots the built rootfs (images/rootfs.squashfs) with the real rescue
-# /init on a QEMU "virt" machine and reports what OpenRC did. The image
+# Boots the built rootfs (images/rootfs.squashfs) with the real /init on a
+# QEMU "virt" machine, the netroot way: a USB network adapter (qemu-xhci +
+# usb-net), DHCP from QEMU, rootfs.squashfs + .sha256 fetched over HTTP from
+# a server this script runs on the build host (10.0.2.2 inside QEMU), and
+# reports what OpenRC did. The image
 # kernel cannot be used as is: its forced command line has the be98pc
 # earlycon at 0xff802628, which does not exist in QEMU. So this builds, in a
 # scratch directory, the same kernel (same tarball, same patch series, same
@@ -45,7 +48,14 @@ mkdir -p "$O"
 cp "$LINUX_DIR/.config" "$O/.config"
 "$S/scripts/config" --file "$O/.config" \
 	--set-str CMDLINE "console=ttyAMA0 earlycon=pl011,0x9000000 rdinit=/init ignore_loglevel panic=10 ml.usbmux=0" \
-	--set-str INITRAMFS_SOURCE "$OUT/images/gt-be98-initramfs.list"
+	--set-str INITRAMFS_SOURCE "$SCRATCH/initramfs.list" \
+	-e PCI_HOST_GENERIC -e USB_XHCI_PCI
+# the image's initramfs, with a ROOTFS_URL pointing at this script's server
+PORT=${PORT:-18098}
+sed "s|^file /etc/ml-defaults .*|file /etc/ml-defaults $SCRATCH/ml-defaults 0644 0 0|" \
+	"$OUT/images/gt-be98-initramfs.list" > "$SCRATCH/initramfs.list"
+printf 'WDT_MAX=600\nRESCUE=0\nROOTFS_URL=http://10.0.2.2:%s/root.sq\n' "$PORT" \
+	> "$SCRATCH/ml-defaults"
 make -s -C "$S" O="$O" ARCH=arm64 CROSS_COMPILE="$CROSS" olddefconfig
 make -s -C "$S" O="$O" ARCH=arm64 CROSS_COMPILE="$CROSS" -j"$(nproc)" Image
 
@@ -74,13 +84,17 @@ EOF
 	install -D -m 0755 '$SCRATCH/smoke.start' '$R/etc/local.d/zz-smoke.start' &&
 	ln -sf /etc/init.d/local '$R/etc/runlevels/default/local' &&
 	mksquashfs '$R' '$SCRATCH/root.sq' -comp xz -noappend -no-progress >/dev/null"
-printf 'file /rootfs.squashfs %s 0644 0 0\n' "$SCRATCH/root.sq" > "$SCRATCH/root.list"
-"$LINUX_DIR/usr/gen_init_cpio" "$SCRATCH/root.list" > "$SCRATCH/root.cpio"
+(cd "$SCRATCH" && sha256sum root.sq > root.sq.sha256)
+(cd "$SCRATCH" && exec python3 -m http.server -b 127.0.0.1 "$PORT" >/dev/null 2>&1) &
+HTTPD=$!
+trap 'kill $HTTPD 2>/dev/null' EXIT
+sleep 1
 
 # ---- boot ------------------------------------------------------------------------------
 timeout "$WAIT" qemu-system-aarch64 -M virt -cpu cortex-a53 -smp 4 -m 2048 \
 	-nographic -no-reboot -kernel "$O/arch/arm64/boot/Image" \
-	-initrd "$SCRATCH/root.cpio" < /dev/null > "$SCRATCH/console.log" 2>&1 || true
+	-device qemu-xhci -netdev user,id=n0 -device usb-net,netdev=n0 \
+	< /dev/null > "$SCRATCH/console.log" 2>&1 || true
 sed 's/\x1b\[[0-9;]*[mK]//g' "$SCRATCH/console.log" > "$SCRATCH/console.txt"
 grep -aE 'BE98PC|INIT:|ERROR|failed|not found' "$SCRATCH/console.txt" | grep -v '^\[.*\] *$' || true
 sed -n '/=== SMOKE BEGIN/,/=== SMOKE END/p' "$SCRATCH/console.txt"
