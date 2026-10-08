@@ -6,3 +6,6 @@ RUNNER_ARGS="flow_offload=1"
 RUNNER_KO=
 # interfaces to bring up after the load (dhcpcd brings up the ones it manages)
 RUNNER_UP_IFACES=
+# stable port MACs: derived from the board's base MAC (U-Boot ethaddr) by
+# gt-be98-macaddr; set a base here to override it (aa:bb:cc:dd:ee:ff)
+RNR_MAC_BASE=

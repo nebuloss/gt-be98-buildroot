@@ -44,9 +44,13 @@ while :; do
 		if gt-be98-health -q; then
 			[ -n "$bad_since" ] && log "health back after $((now - bad_since))s"
 			bad_since=
-			if [ $healthy_once = 0 ]; then
+			# fb whenever healthy and another code replaced it (a service
+			# restart posts its own milestone; the stock reader must see
+			# the box was healthy)
+			if [ $healthy_once = 0 ] ||
+			   [ "$(cat /run/gt-be98-postcode.last 2>/dev/null)" != fb ]; then
 				healthy_once=1
-				gt-be98-postcode fb "health confirmed at ${now}s: $(gt-be98-health | tr '\n' ' ')"
+				gt-be98-postcode fb "healthy at ${now}s: $(gt-be98-health | tr '\n' ' ')"
 			fi
 		elif [ "$now" -ge "$PROBATION" ]; then
 			if [ -z "$bad_since" ]; then

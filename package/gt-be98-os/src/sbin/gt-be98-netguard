@@ -1,0 +1,49 @@
+#!/bin/sh
+# SPDX-License-Identifier: GPL-2.0
+# gt-be98-netguard: the OS owns the base network config. Two invariants hold
+# whatever else runs (the web UI, a script, a typo):
+#   1. no protected interface (NETGUARD_PROTECT: rnr*, eth*, usb*, enx*: the
+#      LAN ports and the USB lifeline) is ever a bridge port: one is
+#      detached the moment it is enslaved (a bridged/looped LAN port caused a
+#      broadcast storm on the owner's LAN);
+#   2. no bridge port ever has hairpin mode on.
+# Reacts to every link event (ip monitor) and sweeps every NETGUARD_SWEEP s.
+# Settings: /etc/conf.d/gt-be98-netguard.
+set -u
+NETGUARD_PROTECT=${NETGUARD_PROTECT:-"rnr* eth* usb* enx*"}
+NETGUARD_SWEEP=${NETGUARD_SWEEP:-5}
+
+log() { logger -t gt-be98-netguard -- "$*" 2>/dev/null; echo "gt-be98-netguard: $*" > /dev/kmsg 2>/dev/null; }
+protected() {
+	local p
+	for p in $NETGUARD_PROTECT; do
+		case "$1" in $p) return 0 ;; esac
+	done
+	return 1
+}
+sweep() {
+	local n i m
+	for n in /sys/class/net/*; do
+		i=${n##*/}
+		if [ -e "$n/brport" ]; then
+			m=$(readlink "$n/master" 2>/dev/null); m=${m##*/}
+			if protected "$i"; then
+				ip link set "$i" nomaster &&
+					log "detached $i from bridge $m (protected port: never bridged)"
+				continue
+			fi
+			if [ "$(cat "$n/brport/hairpin_mode" 2>/dev/null)" = 1 ]; then
+				echo 0 > "$n/brport/hairpin_mode" &&
+					log "hairpin turned off on $i (bridge $m)"
+			fi
+		fi
+	done
+}
+
+sweep
+log "guarding: never bridged: $NETGUARD_PROTECT; hairpin never on"
+# one event stream: every link change from the kernel, plus a periodic tick
+{
+	ip -o monitor link &
+	while :; do sleep "$NETGUARD_SWEEP"; echo tick; done
+} | while read -r _; do sweep; done

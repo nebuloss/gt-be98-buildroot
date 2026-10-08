@@ -12,7 +12,7 @@ GT_BE98_OS_INSTALL_IMAGES = YES
 GT_BE98_OS_DEPENDENCIES = host-lzop host-dtc host-uboot-tools
 GT_BE98_OS_LOCAL_CONF = $(call qstrip,$(BR2_PACKAGE_GT_BE98_OS_LOCAL_CONF))
 
-GT_BE98_OS_SERVICES = gt-be98-watchdog gt-be98-drivers gt-be98-wifi \
+GT_BE98_OS_SERVICES = gt-be98-watchdog gt-be98-netguard gt-be98-drivers gt-be98-wifi \
 	gt-be98-telnet gt-be98-boot-done gt-be98-persist sshd dhcpcd chronyd \
 	syslogd dnsmasq
 
@@ -23,7 +23,8 @@ endef
 
 define GT_BE98_OS_INSTALL_TARGET_CMDS
 	$(INSTALL) -D -m 0755 $(@D)/devmem $(TARGET_DIR)/usr/sbin/devmem
-	for f in gt-be98-postcode gt-be98-health gt-be98-wdtd gt-be98-status; do \
+	for f in gt-be98-postcode gt-be98-health gt-be98-wdtd gt-be98-status \
+		gt-be98-macaddr gt-be98-netguard; do \
 		$(INSTALL) -D -m 0755 $(@D)/sbin/$$f $(TARGET_DIR)/usr/sbin/$$f || exit 1; \
 	done
 	for s in $(GT_BE98_OS_SERVICES); do \
@@ -32,6 +33,8 @@ define GT_BE98_OS_INSTALL_TARGET_CMDS
 	for c in $(@D)/conf.d/*; do \
 		$(INSTALL) -D -m 0644 $$c $(TARGET_DIR)/etc/conf.d/`basename $$c` || exit 1; \
 	done
+	$(INSTALL) -D -m 0644 $(@D)/dhcpcd-hooks/05-gt-be98-mac \
+		$(TARGET_DIR)/lib/dhcpcd/dhcpcd-hooks/05-gt-be98-mac
 	mkdir -p $(TARGET_DIR)/rom $(TARGET_DIR)/overlay $(TARGET_DIR)/data \
 		$(TARGET_DIR)/etc/ssh/authorized_keys $(TARGET_DIR)/etc/syslog.d
 endef
@@ -66,7 +69,7 @@ define GT_BE98_OS_FINALIZE
 	if [ -L $(TARGET_DIR)/var/log ]; then rm -f $(TARGET_DIR)/var/log; fi
 	mkdir -p $(TARGET_DIR)/var/log
 	mkdir -p $(TARGET_DIR)/etc/runlevels/boot $(TARGET_DIR)/etc/runlevels/default
-	for s in gt-be98-watchdog gt-be98-persist syslogd; do \
+	for s in gt-be98-watchdog gt-be98-netguard gt-be98-persist syslogd; do \
 		ln -sfn /etc/init.d/$$s $(TARGET_DIR)/etc/runlevels/boot/$$s; done
 	for s in dhcpcd sshd chronyd gt-be98-drivers gt-be98-boot-done; do \
 		ln -sfn /etc/init.d/$$s $(TARGET_DIR)/etc/runlevels/default/$$s; done

@@ -15,6 +15,24 @@ depend() {
 
 runner_loaded() { grep -q '^bcm4916_runner ' /proc/modules; }
 
+# Stable MACs (gt-be98-macaddr): the driver picks a random one per load.
+# Set while the port is still down; the dhcpcd hook 05-gt-be98-mac covers a
+# port dhcpcd grabbed first.
+set_macs() {
+	local n i m
+	for n in /sys/class/net/rnr*; do
+		[ -e "$n" ] || continue
+		i=${n##*/}
+		m=$(gt-be98-macaddr "$i") || { ewarn "$i: no board MAC source, keeping the random MAC"; continue; }
+		[ "$(cat "$n/address")" = "$m" ] && continue
+		if ip -o link show "$i" | grep -q '[<,]UP[,>]'; then
+			ip link set "$i" down; ip link set "$i" address "$m"; ip link set "$i" up
+		else
+			ip link set "$i" address "$m"
+		fi && einfo "$i: MAC $m"
+	done
+}
+
 start() {
 	if [ "${RUNNER_LOAD:-yes}" != yes ]; then
 		einfo "Runner: RUNNER_LOAD=${RUNNER_LOAD} (not loaded)"
@@ -33,6 +51,7 @@ start() {
 	if [ $? -eq 0 ]; then
 		gt-be98-postcode f7 "Runner loaded"
 		eend 0
+		set_macs
 	else
 		gt-be98-postcode e7 "Runner insmod failed"
 		eend 1 "insmod failed, see dmesg"

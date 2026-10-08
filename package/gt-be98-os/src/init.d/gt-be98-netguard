@@ -1,0 +1,20 @@
+#!/sbin/openrc-run
+# SPDX-License-Identifier: GPL-2.0
+# Keeps the LAN ports and the USB lifeline out of any bridge and hairpin off
+# (gt-be98-netguard). Settings: /etc/conf.d/gt-be98-netguard.
+description="Network guard: protected ports never bridged, no hairpin"
+
+command="/usr/sbin/gt-be98-netguard"
+supervisor="supervise-daemon"
+respawn_delay=1
+respawn_max=0
+
+depend() {
+	after gt-be98-watchdog
+	before net dhcpcd gt-be98-drivers gt-be98-wifi webui
+	use logger
+}
+
+start_pre() {
+	export NETGUARD_PROTECT NETGUARD_SWEEP
+}

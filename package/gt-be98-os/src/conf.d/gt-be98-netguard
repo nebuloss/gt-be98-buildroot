@@ -1,0 +1,5 @@
+# /etc/conf.d/gt-be98-netguard
+# interfaces that must never be bridge ports (shell patterns)
+NETGUARD_PROTECT="rnr* eth* usb* enx*"
+# periodic sweep in seconds (on top of reacting to every link event)
+NETGUARD_SWEEP=5

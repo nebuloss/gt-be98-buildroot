@@ -122,7 +122,7 @@ node at all.
 
 | Limit | Value | Evidence |
 |---|---|---|
-| bootfs FIT | ≤ 16 MiB enforced for netroot (built: ~16.1 MB) | boots at 14.7 MB, failed at 46 MB; the pad30 probe narrows it |
+| bootfs FIT | ≤ 16 MiB enforced for netroot (built: ~16.1 MB) | on the box: the ~16 MB netroot FIT boots, the 46 MB one did not reach the kernel; the pad30 probe (30 MiB) is not tested yet |
 | kernel `image_size` (with BSS, built-in initramfs included) | < 0x2000000 − 0x200000 = 30 MiB | U-Boot reads the bootfs to `load_addr + 16 MiB` = 0x2000000 (`CONFIG_SYS_LOAD_ADDR` = 0x1000000, no `loadaddr` in the shipped default environment) and decompresses the kernel to 0x200000 |
 | decompressed kernel | < 64 MiB | `CONFIG_SYS_BOOTM_LEN` of the shipped U-Boot = 0x4000000 (`mov w7, #0x4000000` at 0x102d030, the `unc_len` of the `bootm_decomp_image` call) |
 
@@ -158,12 +158,12 @@ the rootfs refuses such a write).
 | f5 / f6 | OpenRC | dhcpcd / sshd started |
 | f7 / e7 | OpenRC | Runner module loaded / failed to load |
 | fa | OpenRC | default runlevel reached (`gt-be98-boot-done`) |
-| fb | watchdog daemon | health confirmed: an IPv4 address and sshd (or telnet) running |
+| fb | watchdog daemon | healthy: an IPv4 address and sshd (or telnet) running; re-posted whenever a later code (a service restart) replaced it while healthy |
 | fc | watchdog service | petting stopped by request: reset follows unless started again |
 | fd | watchdog daemon | unhealthy for `GRACE` s: petting stopped, hardware reset follows |
 | fe | OpenRC shutdown | clean reboot / poweroff |
 
-Runlevels: **boot** `gt-be98-watchdog`, `gt-be98-persist`, `syslogd` (plus
+Runlevels: **boot** `gt-be98-watchdog`, `gt-be98-netguard`, `gt-be98-persist`, `syslogd` (plus
 OpenRC's own); **default** `dhcpcd`, `sshd`, `chronyd`, `gt-be98-drivers`,
 `gt-be98-boot-done`. Installed, not enabled: `gt-be98-wifi`,
 `gt-be98-telnet` (enabled automatically only when the image has no SSH key),
@@ -187,6 +187,17 @@ the committed (stock) slot. `gt-be98-wdtd` opens `/dev/watchdog`
   access only).
 
 ### Network
+
+`gt-be98-netguard` (boot runlevel) owns the base network policy: an
+interface matching `rnr* eth* usb* enx*` is detached the moment anything
+makes it a bridge port, and hairpin mode is turned off on every bridge port
+(link events + a 5 s sweep). A bridge with only Wi-Fi interfaces (bcawl*) is
+allowed. Runner ports get a **stable MAC** (`gt-be98-macaddr`): the board's
+base MAC (`ethaddr` of the U-Boot environment, which the vendor U-Boot
+exports into the Linux DT as `/uboot_env`), made locally administered, +N
+for rnrN; set by `gt-be98-drivers` after each load and by the dhcpcd hook
+`05-gt-be98-mac` if dhcpcd sees the port first. `RNR_MAC_BASE` in
+`/etc/conf.d/gt-be98-drivers` overrides the base.
 
 dhcpcd (manager mode) on the USB lifeline (`eth*`, `usb*`, `enx*`) and on
 `rnr0` only; it picks up `rnr0` when the Runner module loads and a USB NIC

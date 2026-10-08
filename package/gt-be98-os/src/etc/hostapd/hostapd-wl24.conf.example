@@ -8,9 +8,16 @@ ctrl_interface=/run/hostapd
 ssid=gt-be98-test
 hw_mode=g
 channel=1
+# REQUIRED: without WMM the firmware's beacon RSN capabilities (0x000c) do
+# not match hostapd's 3/4 RSN IE (0x0000) and clients drop (reason 17)
 wmm_enabled=1
 ieee80211n=1
 wpa=2
 wpa_key_mgmt=WPA-PSK
 rsn_pairwise=CCMP
 wpa_passphrase=CHANGE-ME-NOW
+# country_code: only once the regulatory database is loaded (the
+# gt-be98-wifi service runs "iw reg reload" before hostapd; check with
+# "iw reg get"). Without it hostapd hangs in COUNTRY_UPDATE: leave it out.
+#country_code=XX
+#ieee80211d=1

@@ -1,0 +1,14 @@
+# dhcpcd hook (sourced): give a Runner port its stable MAC before dhcpcd
+# uses it. dhcpcd can see rnrN right after the module registers it, before
+# gt-be98-drivers sets the address; PREINIT runs before the first lease.
+case "$interface" in rnr[0-9]*) ;; *) return 0 2>/dev/null || exit 0 ;; esac
+[ "$reason" = PREINIT ] || return 0 2>/dev/null || exit 0
+want=$(/usr/sbin/gt-be98-macaddr "$interface") || return 0 2>/dev/null || exit 0
+have=$(cat "/sys/class/net/$interface/address" 2>/dev/null)
+if [ -n "$want" ] && [ "$want" != "$have" ]; then
+	up=$(ip -o link show "$interface" | grep -c '[<,]UP[,>]')
+	ip link set "$interface" down
+	ip link set "$interface" address "$want" &&
+		logger -t gt-be98 "$interface: stable MAC $want (was $have)"
+	[ "$up" = 1 ] && ip link set "$interface" up
+fi

@@ -15,6 +15,12 @@ depend() {
 wifi_loaded() { grep -q '^bca_pcie_ipc ' /proc/modules; }
 
 start() {
+	# cfg80211 is built in and asks for regulatory.db before the rootfs is
+	# mounted: that first load fails and is not retried, so country_code in
+	# hostapd would hang in COUNTRY_UPDATE. Reload it from /lib/firmware
+	# (wireless-regdb, signed; the kernel carries the regdb keys).
+	iw reg reload 2>/dev/null && einfo "regulatory database loaded" ||
+		ewarn "iw reg reload failed: leave country_code out of hostapd.conf"
 	if ! wifi_loaded; then
 		ebegin "Loading bca_pcie_ipc ${WIFI_ARGS}"
 		if [ -n "${WIFI_KO:-}" ]; then insmod "$WIFI_KO" $WIFI_ARGS

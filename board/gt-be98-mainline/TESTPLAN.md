@@ -43,23 +43,39 @@ grep -o 'ubi.block=0,[0-9]' /proc/cmdline             # ubi.block=0,6
 ubinfo -d 0 | grep -E 'available logical|eraseblock size'
 ```
 
-## T1. Flash vol 3 (slot 1 bootfs)
+## T1. Flash vol 3 (slot 1 bootfs) - the procedure used on 2026-10-08
+
+Done once (operator decision): slot 1's rootfs volume (vol 4, the open-enet
+4.19 rootfs, unused by this OS) was backed up to the build host
+(`~/oe-tool/backup/slot1-rootfs1-vol4-20261008.bin`) and replaced by
+`rootfs1-stub.squashfs` (4 KiB, sha256 in `ml-bootfs.info`) in a 1 MiB
+volume, which frees the space; vol 3 was recreated at 48 MiB. U-Boot only
+checks the squashfs magic of vol 4 before booting slot 1.
 
 ```sh
-scp ml-bootfs.itb <stock box>:/tmp/ml-bootfs.itb
-# on the box, slot 2 booted
+# on the box, slot 2 (stock) booted
 grep -q 'ubi.block=0,6' /proc/cmdline || exit 1
-S=$(stat -c %s /tmp/ml-bootfs.itb)
+# once: vol 4 -> stub (back up first: dd if=/dev/ubi0_4 of=... and copy it off)
+ubirmvol /dev/ubi0 -n 4
+ubimkvol /dev/ubi0 -n 4 -N rootfs1 -s 1MiB -t dynamic
+ubiupdatevol /dev/ubi0_4 /tmp/rootfs1-stub.squashfs
+# every new image: vol 3 at 48 MiB, then the FIT
 ubirmvol /dev/ubi0 -n 3
-ubimkvol /dev/ubi0 -n 3 -N bootfs1 -s $S -t static
+ubimkvol /dev/ubi0 -n 3 -N bootfs1 -s 48MiB -t static
 ubiupdatevol /dev/ubi0_3 /tmp/ml-bootfs.itb
+S=$(stat -c %s /tmp/ml-bootfs.itb)
 dd if=/dev/ubi0_3 bs=$S count=1 2>/dev/null | sha256sum   # == ml-bootfs.info
+bcm_bootstate 3; reboot
 ```
 
-(Same procedure as the 14.7 MB images; slot 1's rootfs vol 4 already holds
-`rootfs1-stub.squashfs`.)
+Results on the box (2026-10-08): the ~16 MB netroot FIT boots (ssh on the
+lifeline at ~50 s, post-code fa); the 46 MB FIT with the rootfs inside
+(IMAGE=initrd) never reached the kernel (post-code byte untouched, back to
+stock after ~9-10 min) although the same procedure wrote and verified it.
+Restoring vol 4: `ubirmvol` it, `ubimkvol` it at the backup's size,
+`ubiupdatevol` the backup.
 
-### T1b. Size probe (optional, one boot)
+### T1b. Size probe (optional, one boot) - NOT TESTED YET
 
 Flash `ml-bootfs-pad30.itb` instead (same kernel/DT, padded to 30 MiB with an
 unreferenced image) and trial-boot it. Any post-code ≥ c0 (or a lifeline
@@ -150,11 +166,22 @@ forwarding with `sysctl -w net.ipv4.ip_forward=1`, nftables flowtable with
 cp /etc/hostapd/hostapd-wl24.conf.example /etc/hostapd/hostapd-wl24.conf
 vi /etc/hostapd/hostapd-wl24.conf        # ssid, passphrase (test values)
 echo 'HOSTAPD_CONFS=/etc/hostapd/hostapd-wl24.conf' >> /etc/conf.d/gt-be98-wifi
-rc-service gt-be98-wifi start
-iw dev; hostapd_cli -p /run/hostapd status   # state=ENABLED
-# a client joins; then
-rc-service gt-be98-wifi stop                 # hostapd stops, module unloads
+rc-service gt-be98-wifi start            # iw reg reload, bca_pcie_ipc, hostapd
+iw reg get; iw dev; hostapd_cli -p /run/hostapd status   # state=ENABLED
+rc-service gt-be98-wifi stop             # hostapd stops, module unloads
 ```
+
+- `wmm_enabled=1` is required: without it the firmware's beacon RSN
+  capabilities (0x000c) do not match hostapd's 3/4 RSN IE (0x0000) and
+  clients drop with reason 17.
+- `country_code`: the image ships wireless-regdb (`/lib/firmware/regulatory.db`
+  + `.p7s`), but cfg80211 is built in and its boot-time load fails (no rootfs
+  yet) without retrying; the service runs `iw reg reload` before hostapd.
+  Use `country_code` only if `iw reg get` then shows the database
+  (otherwise hostapd hangs in COUNTRY_UPDATE).
+
+Result 2026-10-08 (2.4 GHz, WPA2): AP up, a client got 18 Mbit/s up,
+11 Mbit/s down.
 
 ## T8. Watchdog
 

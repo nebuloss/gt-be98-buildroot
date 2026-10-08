@@ -1,0 +1,41 @@
+#!/bin/sh
+# SPDX-License-Identifier: GPL-2.0
+# gt-be98-macaddr IFACE: the stable MAC address of a Runner port (rnrN).
+#
+# The open Runner driver gives its netdevs a random MAC on every load (no
+# local-mac-address in the DT), so every reload took a new DHCP lease. The
+# address here is deterministic across boots and reloads, read-only:
+#   1. RNR_MAC_BASE in /etc/conf.d/gt-be98-drivers, if set (lab override);
+#   2. the board's base MAC: "ethaddr" of the U-Boot environment, which the
+#      vendor U-Boot exports into the Linux DT as /uboot_env
+#      (bcmbca-dtsetup.c set_uboot_env);
+#   3. a hash of the other U-Boot environment identity values (serial#,
+#      boardid, *addr), if there is no ethaddr.
+# The result is the base MAC made locally administered (first octet |0x02,
+# never multicast) with N added to the last octet for rnrN: unique to the
+# box, stable, and different from the addresses the stock firmware uses.
+# Prints nothing and exits 1 if no source exists.
+set -u
+IF=${1:?usage: gt-be98-macaddr IFACE}
+RNR_MAC_BASE=
+[ -f /etc/conf.d/gt-be98-drivers ] && . /etc/conf.d/gt-be98-drivers
+ENV=/sys/firmware/devicetree/base/uboot_env
+
+valid() { echo "$1" | grep -qiE '^[0-9a-f]{2}(:[0-9a-f]{2}){5}$'; }
+base=$RNR_MAC_BASE
+if [ -z "$base" ] && [ -r "$ENV" ]; then
+	base=$(tr '\000' '\n' < "$ENV" | sed -n 's/^ethaddr=//p' | head -n1)
+fi
+if ! valid "$base" && [ -r "$ENV" ]; then
+	h=$(tr '\000' '\n' < "$ENV" | grep -aE '^(serial#|boardid|[a-z0-9_]*addr)=' | sort |
+		sha256sum | cut -c1-12)
+	[ -n "$h" ] && [ "$h" != "$(printf '' | sha256sum | cut -c1-12)" ] &&
+		base=$(echo "$h" | sed 's/\(..\)/\1:/g; s/:$//')
+fi
+valid "$base" || exit 1
+n=$(echo "$IF" | sed -n 's/^rnr\([0-9]*\)$/\1/p')
+n=${n:-0}
+set -- $(echo "$base" | tr ':' ' ')
+o1=$(( (0x$1 | 0x02) & 0xfe ))
+o6=$(( (0x$6 + n) & 0xff ))
+printf '%02x:%s:%s:%s:%s:%02x\n' "$o1" "$2" "$3" "$4" "$5" "$o6"

@@ -74,6 +74,13 @@ echo "=== mounts:"; cat /proc/mounts
 echo "=== modules dir:"; ls /lib/modules/$(uname -r)/updates
 echo "=== modinfo runner:"; modinfo -F vermagic bcm4916-runner
 echo "=== sshd -t:"; /usr/sbin/sshd -t && echo ok
+echo "=== netguard: enslave the lifeline into a bridge, expect it detached:"
+ip link add br-smoke type bridge; ip link set br-smoke up
+for i in /sys/class/net/usb* /sys/class/net/eth*; do [ -e "$i" ] && ip link set "${i##*/}" master br-smoke; done
+sleep 3; echo "bridge ports now: $(ls /sys/class/net/br-smoke/brif 2>/dev/null | tr '\n' ' ')(expect none)"
+ip link del br-smoke
+echo "=== regdb:"; iw reg reload && sleep 1; iw reg get | head -3
+echo "=== postcode last:"; cat /run/gt-be98-postcode.last
 echo "=== messages:"; tail -n 30 /var/log/messages
 echo "=== SMOKE END"
 } > /dev/console 2>&1

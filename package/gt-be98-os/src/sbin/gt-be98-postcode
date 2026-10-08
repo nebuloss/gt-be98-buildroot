@@ -12,7 +12,10 @@
 #   f4 watchdog petting started (boot runlevel)
 #   f5 dhcpcd (network) started        f6 sshd started
 #   f7 Runner module loaded            e7 Runner module failed to load
-#   fa default runlevel reached        fb health confirmed (address + sshd)
+#   fa default runlevel reached        fb healthy (address + sshd); the
+#                                      watchdog daemon re-posts it whenever
+#                                      a later code (a service restart)
+#                                      replaced it and the box is healthy
 #   fc petting stopped by request (rc-service gt-be98-watchdog stop)
 #   fd health lost: petting stopped, the hardware watchdog resets the box
 #   fe clean shutdown / reboot
@@ -26,5 +29,6 @@ esac
 shift
 msg=${*:-}
 echo "BE98PC $code" > /dev/kmsg 2>/dev/null
+echo "$code" > /run/gt-be98-postcode.last 2>/dev/null
 [ -n "$msg" ] && echo "gt-be98: $msg" > /dev/kmsg 2>/dev/null
 exit 0
