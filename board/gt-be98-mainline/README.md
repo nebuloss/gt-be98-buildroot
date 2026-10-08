@@ -10,7 +10,8 @@ trial-booted once from the stock slot.
 - defconfig: `configs/gt-be98_mainline_defconfig`
 - build: `board/gt-be98-mainline/build.sh` (build host only); `qemu-smoke.sh`
   boots the rootfs in QEMU (userspace check, no board hardware)
-- output: `$OUT/images/ml-bootfs.itb` (+ `ml-bootfs.info`, `ml-bootfs.layout`)
+- output: `$OUT/images/ml-bootfs.itb`, `rootfs.squashfs` + `.sha256`,
+  `ml-bootfs-pad30.itb` (size probe), `ml-bootfs.info`, `rootfs1-stub.squashfs`
 - tests: `TESTPLAN.md`
 
 ## Contents
@@ -76,72 +77,66 @@ survived, and saves the result with `savedefconfig`. To change the kernel
 config: edit a fragment, `make linux-patch`, rerun the script (its header has
 the command), commit `linux.config`. `--check` verifies the committed file.
 
-## Image layout (decision: everything in the bootfs FIT, nothing on the NAND)
+## Image layout (decision: small FIT, rootfs from USB or HTTP; nothing on the NAND)
 
 ```
-ml-bootfs.itb (UBI vol 3 = bootfs1)      stock FIT structure, rebuilt by mkbootfs.py
- ├─ atf, uboot, fdt_uboot, vendor dtbs  unchanged from the stock bootfs
- ├─ kernel = Image.lzo                  Linux 7.2.9 (~19 MB) + built-in initramfs:
- │                                        /init (rescue-aware) + static rescue BusyBox
- ├─ fdt_mainline                        board DT (USB, watchdog, 4x PCIe, 256 MB MPM)
- │                                        /chosen/linux,initrd-start/-end -> "rootfs"
- └─ rootfs (unreferenced image)         newc cpio: /rootfs.squashfs (the OS, xz)
+ml-bootfs.itb (UBI vol 3 = bootfs1, ~16 MB)   stock FIT structure, rebuilt by mkbootfs.py
+ ├─ atf, uboot, fdt_uboot, vendor dtbs        unchanged from the stock bootfs
+ ├─ kernel = Image.lzo                        Linux 7.2.9 + built-in initramfs:
+ │                                              /init + static rescue BusyBox
+ └─ fdt_mainline                              board DT (USB, watchdog, 4x PCIe, 256 MB MPM)
+rootfs.squashfs (+ .sha256)                   the OS, served over HTTP or on a USB stick
 ```
 
-Boot: U-Boot reads the **whole** bootfs volume to 0x2000000, decompresses
-the kernel to 0x200000 and boots it with our DT. U-Boot never handles the
-"rootfs" image; the kernel finds it through `/chosen/linux,initrd-start/-end`,
-which `post-image.sh` sets to `0x2000000 + <its offset in the FIT>` (the FIT
-is built twice: placeholders, then the real addresses, and the build checks
-that the layout did not move and that a newc cpio starts there). The kernel
-unpacks it on top of the built-in initramfs, so `/rootfs.squashfs` appears
-next to `/init`. `/init` loop-mounts it read-only at `/rom`, puts an overlayfs
-with a tmpfs upper layer (`/overlay`) over it, and `switch_root`s into
-OpenRC. Every change is in RAM and lost at reboot.
+`/init` (package/gt-be98-os/src/rescue/init):
 
-If the rootfs does not arrive or does not mount (post-codes e0..e3), `/init`
-stays in the initramfs and runs the stage-2 rescue lifeline: USB DHCP,
-passwordless telnet bound to the USB address, bounded watchdog petting, then
-a reset back to stock.
+1. USB power pins, USB-Ethernet lifeline (udhcpc, 45 s window), then
+   bounded watchdog petting (`NET_WDT_MAX`, 300 s) while the rootfs loads;
+2. a USB storage partition labelled `GTBE98-ROOT`: `/rootfs.squashfs` on it
+   (vfat or ext4), or a complete ext4 root with `/sbin/init`, booted
+   read-write (the persistent option);
+3. otherwise `ROOTFS_URL` (+ `ROOTFS_URL.sha256`) over HTTP into RAM, sha256
+   checked; `@DHCP_SERVER@` / `@DHCP_ROUTER@` in the URL are replaced by the
+   lease values;
+4. the squashfs is loop-mounted read-only at `/rom` with an overlayfs on a
+   tmpfs (`/overlay`, which also holds the downloaded image), petting stops,
+   `switch_root` into OpenRC, whose `gt-be98-watchdog` reopens the watchdog;
+5. any failure: the stage-2 rescue (telnet on the USB address, no password,
+   bounded petting, then a reset into stock).
 
-Why not the whole rootfs in the kernel's built-in initramfs: the kernel and
-its initramfs must fit in 30 MiB (below), and the rootfs alone is ~30 MB of
-xz squashfs. Why not a FIT ramdisk: the vendor U-Boot boots with
-`bootm start <addr>#conf_lx_<board>; bootm loados; bootm prep` then
-`bootm go` (`load_linux_img` in `board/broadcom/bcmbca/sdk_test_commands.c`;
-the same string is in the shipped binary): no `bootm ramdisk` step, so a
-configuration's ramdisk would never reach the kernel; and `fdt_initrd()`
-returns early for an empty initrd, so our own `/chosen` properties survive.
+History: the first image (IMAGE=initrd: the rootfs as a 29 MB "rootfs" image
+inside the FIT, named to the kernel by `/chosen/linux,initrd-*`, 46 MB FIT)
+never reached the kernel on the box on 2026-10-08 (post-code byte untouched),
+while the 14.7 MB diagnostic FITs boot. A likely cause is the first-stage
+loader: the TPL also reads the bootfs volume to start ATF + U-Boot
+(`CONFIG_SPL_LOAD_FIT_ADDRESS` = `CONFIG_TPL_TEXT_BASE` + 0x2000000 =
+0x7000000), with limits of its own. `ml-bootfs-pad30.itb` (the netroot FIT
+padded to 30 MiB with an unreferenced image) probes that limit in one boot.
+`IMAGE=initrd` stays available for a boot chain that accepts it.
+
 Why not a UBI rootfs: it needs mainline brcmnand + UBI on this NAND, unproven,
 and writes from mainline are forbidden (PERSISTENCE.md); the DT has no NAND
 node at all.
 
-### Size limits (evidence)
+### Size limits
 
 | Limit | Value | Evidence |
 |---|---|---|
-| kernel `image_size` (with BSS, built-in initramfs included) | < 0x2000000 − 0x200000 = **30 MiB** | U-Boot reads the bootfs volume to `load_addr + CONFIG_LOAD_FIT_OFFSET (16 MiB)` = 0x2000000 (`CONFIG_SYS_LOAD_ADDR` = `CONFIG_SYS_TEXT_BASE` = 0x1000000; no `loadaddr` in the shipped default environment) and decompresses the kernel to its FIT load address 0x200000. `post-image.sh` fails above the limit, warns within 1 MiB |
-| decompressed kernel | < 64 MiB | `CONFIG_SYS_BOOTM_LEN` of the **shipped** U-Boot is 0x4000000: `mov w7, #0x4000000` at 0x102d030, the `unc_len` argument of the `bootm_decomp_image` call (disassembly of the stock bootfs `uboot` image; the axhnd source tree says 32 MiB) |
-| whole FIT in RAM | ends ≤ 0x5000000 (**48 MiB** FIT), warning above 40 MiB | U-Boot proper's own DT (`fdt_uboot` in the stock bootfs, and `arch/arm/dts/bcm96813.dts`) declares `memory = <0 0 0 0x8000000>` (128 MiB), so U-Boot relocates itself, its 32 MiB heap (`CONFIG_SYS_MALLOC_LEN`) and its stack just below 0x8000000, i.e. from about 0x5c00000 up. The FIT must end below that; 0x5000000 keeps ~12 MiB of margin. (U-Boot's `dram_init` is in `board.o`, which the GPL tree lacks; if it used the real 2 GiB instead, U-Boot would sit near 0x80000000 and this limit would only be conservative.) |
-| bootfs volume | the FIT size | the flash recreates vol 3 with the FIT's size; it needs that many free LEBs in `ubi0` (below) |
-| the old "0x1000000 − 0x200000" guideline | not a limit | U-Boot is linked at 0x1000000 but relocates before running any command (no `GD_FLG_SKIP_RELOC`); at `bootm` time it is near 0x8000000 |
+| bootfs FIT | ≤ 16 MiB enforced for netroot (built: ~16.1 MB) | boots at 14.7 MB, failed at 46 MB; the pad30 probe narrows it |
+| kernel `image_size` (with BSS, built-in initramfs included) | < 0x2000000 − 0x200000 = 30 MiB | U-Boot reads the bootfs to `load_addr + 16 MiB` = 0x2000000 (`CONFIG_SYS_LOAD_ADDR` = 0x1000000, no `loadaddr` in the shipped default environment) and decompresses the kernel to 0x200000 |
+| decompressed kernel | < 64 MiB | `CONFIG_SYS_BOOTM_LEN` of the shipped U-Boot = 0x4000000 (`mov w7, #0x4000000` at 0x102d030, the `unc_len` of the `bootm_decomp_image` call) |
 
-The actual numbers of a build are in `ml-bootfs.info` next to the image
-(margins to both limits, the initrd addresses, the sha256).
+To keep the kernel small: `CONFIG_RELR` (packed relocations, −2 MB), and the
+tracing set is tracepoints + kprobe events + perf counters (no function
+tracer, BPF or KALLSYMS_ALL).
 
 ### Flash space
 
-The FIT is ~3x the stock bootfs (~45 MB vs 13.7 MB). Vol 3 is recreated with
-the FIT's size, so `ubi0` needs `ceil(itb / LEB size)` free LEBs counting the
-ones the current vol 3 releases. If it does not have them, the space can come
-from **slot 1's rootfs volume (vol 4)**, which this OS never uses: U-Boot only
-reads its first 4 bytes and requires a squashfs (or UBIFS) magic before
-booting slot 1 (`nand_load_bootfs`: "Invalid rootfs detected in volume
-rootfs1! Boot aborted!"). The build provides `rootfs1-stub.squashfs` (4 KiB,
-a valid squashfs) for that. Replacing vol 4 removes the image slot 1 holds
-today (the open-enet 4.19 rootfs): **a decision for the operator**, see
-`TESTPLAN.md` T0/T1. Slot 2, the metadata and the other volumes are never
-touched.
+The netroot FIT (~16 MB) is close to the stock bootfs (13.7 MB): vol 3 needs
+a few more LEBs. Slot 1's rootfs volume (vol 4) is not used by this OS; U-Boot
+only checks its squashfs magic before booting slot 1, so the build's
+`rootfs1-stub.squashfs` (4 KiB) can replace it (operator decision; done on
+2026-10-08, the old vol 4 is backed up on the build host).
 
 ## Boot, services, post-codes
 
@@ -151,18 +146,20 @@ the rootfs refuses such a write).
 
 | Code | Where | Meaning |
 |---|---|---|
-| c0..c4 | `/init` | `/init` runs, `/proc`, `/sys`, `/dev`+`/tmp`, command line |
-| c5 | `/init` | USB power pins routed (both paths) |
-| f0 / f1 / f2 / f3 | `/init` | rootfs image found / squashfs mounted / overlay mounted / `switch_root` to OpenRC |
-| e0 / e1 / e2 / e3 / e4 | `/init` | rescue because: no image / squashfs mount failed / overlay failed / no `/sbin/init` / `RESCUE=1` |
-| c6 c7 c8 c9 ca ee | rescue | as stage 2: USB NIC, address, telnetd, petting, deadline, no USB bus |
+| c0..c5 | `/init` | `/init` runs, `/proc`, `/sys`, `/dev`+`/tmp`, command line, USB pins |
+| c6 / c7 / c9 | `/init` | USB NIC found / address / boot-time watchdog petting started |
+| d7 / d8 | `/init` | looking for a `GTBE98-ROOT` USB partition / found and mounted |
+| d9 / da | `/init` | fetching the rootfs over HTTP / fetched, sha256 ok |
+| f1 / f2 / f3 | `/init` | squashfs mounted / overlay mounted / `switch_root` to OpenRC |
+| e0 e1 e2 e3 e4 e5 e6 | `/init` | rescue because: no rootfs source / squashfs mount failed / overlay failed / no `/sbin/init` / `RESCUE=1` / HTTP fetch failed / sha256 mismatch |
+| e8 | `/init` | no lifeline address within 45 s (nothing pets: U-Boot's watchdog resets) |
+| c8 / ca / ee | rescue | telnetd up / petting deadline reached / no USB bus |
 | f4 | OpenRC boot | watchdog petting started (`gt-be98-watchdog`) |
-| f5 | OpenRC | dhcpcd started |
-| f6 | OpenRC | sshd started |
+| f5 / f6 | OpenRC | dhcpcd / sshd started |
 | f7 / e7 | OpenRC | Runner module loaded / failed to load |
 | fa | OpenRC | default runlevel reached (`gt-be98-boot-done`) |
 | fb | watchdog daemon | health confirmed: an IPv4 address and sshd (or telnet) running |
-| fc | watchdog service | petting stopped by request (`rc-service gt-be98-watchdog stop`): reset follows unless started again |
+| fc | watchdog service | petting stopped by request: reset follows unless started again |
 | fd | watchdog daemon | unhealthy for `GRACE` s: petting stopped, hardware reset follows |
 | fe | OpenRC shutdown | clean reboot / poweroff |
 

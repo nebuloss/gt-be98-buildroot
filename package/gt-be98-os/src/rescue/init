@@ -317,6 +317,7 @@ exec 3>/dev/watchdog || { log "watchdog: cannot open /dev/watchdog, not petting"
 start=$(upi)
 end=$((start + WDT_MAX))
 total=$WDT_MAX
+pc c9
 log "watchdog: rescue petting until uptime ${end}s (echo 1 > /tmp/extend adds 600 s, max 3600 s total)"
 while [ "$(upi)" -lt "$end" ]; do
 	echo -n . >&3

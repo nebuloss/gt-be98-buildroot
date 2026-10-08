@@ -1,70 +1,71 @@
 # GT-BE98 mainline OS - test plan (orchestrator, on the box)
 
-The image is flashed and trial-booted exactly like the mainline diagnostic
-images: UBI volume 3 (bootfs of slot 1), one-shot boot with
+The bootfs FIT is flashed and trial-booted exactly like the mainline
+diagnostic images: UBI volume 3 (bootfs of slot 1), one-shot boot with
 `bcm_bootstate 3; reboot` from the stock slot 2, which stays committed and is
-the automatic fallback (watchdog). Nothing on slot 2 changes.
+the automatic fallback (watchdog). Nothing on slot 2 changes. The OS itself
+(`rootfs.squashfs`) is not in the FIT: `/init` takes it from a USB stick
+labelled `GTBE98-ROOT` or fetches it over HTTP (`ROOTFS_URL`).
 
 Placeholders: `<box-usb>` = the address the USB lifeline gets from the lab
 DHCP server, `<box-lan>` = the address `rnr0` gets on the LAN, `<lan-host>` =
-a LAN machine with iperf3. Keys: the image accepts the public keys listed in
-the build host's local configuration (`SSH_AUTHORIZED_KEYS`).
+a LAN machine with iperf3, `<http>` = the lab HTTP server. Keys: the image
+accepts the public keys in the build host's local configuration.
 
-## T0. Before flashing (stock, slot 2)
+## T0. Build with the URL, serve the rootfs
 
 ```sh
-# on the build host
-sha256sum ~/os-build/out-mainline/images/ml-bootfs.itb    # == ml-bootfs.info
-cat ~/os-build/out-mainline/images/ml-bootfs.info          # sizes, margin
-# on the box (stock)
+# build host: ROOTFS_URL in ~/.config/gt-be98-os/local.conf, e.g.
+#   ROOTFS_URL=http://<http>:<port>/gt-be98/rootfs.squashfs
+# (or http://@DHCP_SERVER@:<port>/... to use the DHCP server's address)
+cd ~/os-build/gt-be98-buildroot && rtk sh board/gt-be98-mainline/build.sh   # reruns post-image
+cat ~/os-build/out-mainline/images/ml-bootfs.info      # sizes, sha256, the URL baked in
+# serve BOTH files from the same directory on <http>:
+#   rootfs.squashfs  rootfs.squashfs.sha256
+curl -sI <ROOTFS_URL> | head -1; curl -s <ROOTFS_URL>.sha256       # from the lab LAN
+```
+
+The URL is baked into the FIT (`/etc/ml-defaults` of the initramfs):
+changing it means rebuilding (post-image only, ~1 min) and reflashing. A
+new rootfs alone needs only a new `rootfs.squashfs` + `.sha256` on the
+server, no reflash.
+
+Alternative without HTTP: a USB stick (second USB port) with a partition
+labelled `GTBE98-ROOT` holding `rootfs.squashfs` (vfat or ext4):
+`mkfs.vfat -n GTBE98-ROOT /dev/sdX1; cp rootfs.squashfs /mnt/`.
+
+On the box (stock), before flashing:
+
+```sh
 bcm_bootstate | grep -iE 'commit|valid|seq|booted'   # committed 2, valid 1,2, booted 2
 grep -o 'ubi.block=0,[0-9]' /proc/cmdline             # ubi.block=0,6
 /bin/busybox sh /jffs/scripts/postcode-read.sh        # log + clear the post-code byte
 ubinfo -d 0 | grep -E 'available logical|eraseblock size'
-ubinfo -d 0 -n 3 | grep -E 'Size|Name|Type'
 ```
 
-The new FIT is ~3x the stock bootfs (`ml-bootfs.info`). Space check, on the
-box:
+## T1. Flash vol 3 (slot 1 bootfs)
 
 ```sh
-L=$(ubinfo -d 0 | sed -n 's/.*logical eraseblock size: *\([0-9]*\).*/\1/p')   # LEB bytes
-A=$(ubinfo -d 0 | sed -n 's/.*available logical eraseblocks: *\([0-9]*\).*/\1/p')
-V3=$(ubinfo -d 0 -n 3 | sed -n 's/^Size: *\([0-9]*\) LEBs.*/\1/p')
-S=<size of ml-bootfs.itb>
-echo need $(( (S + L - 1) / L )) LEBs, have $((A + V3))
-```
-
-If `have >= need`: T1 as usual. If not, the space can come from slot 1's
-rootfs (vol 4), which this OS does not use (README.md, "Flash space"):
-replacing it with `rootfs1-stub.squashfs` (4 KiB, the U-Boot squashfs-magic
-check passes) frees its LEBs, but it **deletes the open-enet 4.19 rootfs
-slot 1 holds today**: operator decision. Back it up first
-(`dd if=/dev/ubi0_4 of=... ` and copy it off the box) if it may be needed.
-
-Keep the current vol 3 for restore: `dd if=/dev/ubi0_3 of=/tmp/vol3.bak`
-(and copy it off the box).
-
-## T1. Flash vol 3 (slot 1 bootfs) - the usual procedure
-
-```sh
-scp ml-bootfs.itb rootfs1-stub.squashfs <stock box>:/tmp/
-# on the box, slot 2 booted (guard: ubi.block=0,6)
+scp ml-bootfs.itb <stock box>:/tmp/ml-bootfs.itb
+# on the box, slot 2 booted
 grep -q 'ubi.block=0,6' /proc/cmdline || exit 1
 S=$(stat -c %s /tmp/ml-bootfs.itb)
-# only if T0 said so (decision): slot 1 rootfs -> stub
-#   ubirmvol /dev/ubi0 -n 4
-#   ubimkvol /dev/ubi0 -n 4 -N rootfs1 -s 4096 -t dynamic
-#   ubiupdatevol /dev/ubi0_4 /tmp/rootfs1-stub.squashfs
 ubirmvol /dev/ubi0 -n 3
 ubimkvol /dev/ubi0 -n 3 -N bootfs1 -s $S -t static
 ubiupdatevol /dev/ubi0_3 /tmp/ml-bootfs.itb
-dd if=/dev/ubi0_3 bs=$S count=1 2>/dev/null | sha256sum   # == sha256 of the itb
+dd if=/dev/ubi0_3 bs=$S count=1 2>/dev/null | sha256sum   # == ml-bootfs.info
 ```
 
-(Volume names/types as the existing internal procedure creates them; if it
-differs, use it: the image is a plain bootfs FIT like the previous mainline
-images, only larger.)
+(Same procedure as the 14.7 MB images; slot 1's rootfs vol 4 already holds
+`rootfs1-stub.squashfs`.)
+
+### T1b. Size probe (optional, one boot)
+
+Flash `ml-bootfs-pad30.itb` instead (same kernel/DT, padded to 30 MiB with an
+unreferenced image) and trial-boot it. Any post-code ≥ c0 (or a lifeline
+address) means a 30 MiB bootfs loads; an untouched byte means the boot chain
+refuses it (as the 46 MB one). With `ROOTFS_URL` set it boots the full OS
+like the normal image.
 
 ## T2. Trial boot
 
@@ -72,23 +73,23 @@ images, only larger.)
 bcm_bootstate 3; reboot
 ```
 
-Expected timeline (from power-on of slot 1; U-Boot reads a ~45 MB volume, a
-few seconds longer than before):
+Expected timeline (from the kernel start):
 
 | Step | Expected | Post-code if it stops there |
 |---|---|---|
-| kernel + initramfs unpack | | below c0 (kernel), c0..c5 |
-| rootfs found / mounted / OpenRC | < 15 s | f0..f3 (e0: the rootfs initrd did not arrive -> rescue, telnet on the USB address) |
-| watchdog petting | | f4 |
-| USB lifeline address (dhcpcd) | < 40 s | f5 |
-| sshd | | f6 |
+| kernel, `/init` | < 3 s | below c0 (kernel), c0..c5 |
+| USB NIC, address | < 45 s | c6, c7 (e8: no address -> reset by U-Boot's watchdog) |
+| `/init` petting | | c9 |
+| USB root / HTTP fetch (29 MB) | a few s | d7/d8, d9/da (e5 fetch failed, e6 bad sha256 -> rescue: telnet `<box-usb>`) |
+| rootfs mounted, OpenRC | | f1, f2, f3 |
+| watchdog petting (OS) | | f4 |
+| dhcpcd, sshd | | f5, f6 |
 | Runner loaded | | f7 (e7 = insmod failed) |
-| default runlevel | < 60 s | fa |
+| default runlevel | | fa |
 | health confirmed | | fb |
 
-A box that never becomes reachable resets itself back to stock at the latest
-~8.5 min after boot (probation 180 s + grace 300 s + watchdog); a kernel hang
-resets within the U-Boot watchdog time.
+A box that never becomes reachable resets itself back to stock (the `/init`
+window is bounded at 300 s; the OS needs health after 180 s + 300 s grace).
 
 ## T3. ssh over the USB lifeline
 
@@ -170,8 +171,8 @@ rc-service gt-be98-wifi stop                 # hostapd stops, module unloads
 
 ## T9. Rescue path (optional, separate image)
 
-Build with `RESCUE=1` in the local configuration (the rootfs is still in the
-image but `/init` does not mount it): expected post-codes e4, then c6..c9,
+Build with `RESCUE=1` in the local configuration (`/init` skips the rootfs):
+expected post-codes e4, then c6, c7,
 telnet on `<box-usb>:23` (root shell, no password), reset at the petting
 deadline (ca) unless extended with `echo 1 > /tmp/extend`.
 
@@ -193,6 +194,7 @@ rc-service webui stop
 | fc | `gt-be98-watchdog` stopped by hand |
 | fb / fa | box was healthy / fully booted when it was reset (power cut, kernel hang or oops -> panic) |
 | f7 / e7 / f6 / f5 / f4 | boot stopped after Runner load / Runner failed / sshd / dhcpcd / petting start |
-| f0..f3 | rootfs mount steps (hang during mount or OpenRC start) |
-| e0..e4, c6..ca, ee | rescue path (see `README.md`) |
-| c0..c5 or lower | kernel or early `/init` |
+| f1..f3, d7..da | rootfs source / mount steps |
+| e0..e6, e8, c8, ca, ee | rescue path (see `README.md`) |
+| c0..c9 or lower | kernel or early `/init` (c6/c7: lifeline; c9: `/init` petting) |
+| unchanged (preset value) | the kernel never ran: the boot chain did not start the bootfs |
