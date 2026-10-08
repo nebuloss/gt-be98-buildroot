@@ -227,7 +227,8 @@ is picked up by a plain `build.sh`.
 `/etc/webui` (including `webui.db`) is in the RAM overlay: changes made in
 the UI are lost at reboot. Persistence will come with the USB stick
 (`GTBE98-DATA`, `PERSISTENCE.md` levels 1/4: `/data/etc-overlay/` is already
-copied over `/etc` at boot, so a `webui` directory there survives).
+copied over `/etc` at boot, so a `webui/` saved there is restored; writing UI
+changes back to the stick automatically is part of that plan, not done yet).
 
 ## Driver development
 
