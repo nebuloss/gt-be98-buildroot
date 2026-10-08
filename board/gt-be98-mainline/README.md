@@ -167,7 +167,7 @@ the rootfs refuses such a write).
 
 Runlevels: **boot** `gt-be98-watchdog`, `gt-be98-persist`, `syslogd` (plus
 OpenRC's own); **default** `dhcpcd`, `sshd`, `chronyd`, `gt-be98-drivers`,
-`gt-be98-boot-done`, `agetty.ttyAMA0`. Installed, not enabled: `gt-be98-wifi`,
+`gt-be98-boot-done`. Installed, not enabled: `gt-be98-wifi`,
 `gt-be98-telnet` (enabled automatically only when the image has no SSH key),
 `dnsmasq`, `webui`.
 

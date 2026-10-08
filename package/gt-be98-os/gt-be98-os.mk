@@ -57,6 +57,8 @@ define GT_BE98_OS_FINALIZE
 	# no block filesystems to check (the root is squashfs + overlay): fsck
 	# -A would fail on the overlay entry and abort the boot runlevel
 	rm -f $(TARGET_DIR)/etc/runlevels/boot/fsck
+	# no console getty (no UART, no root password)
+	rm -f $(TARGET_DIR)/etc/runlevels/default/agetty.*
 	rm -f $(TARGET_DIR)/etc/init.d/S[0-9][0-9]* $(TARGET_DIR)/etc/init.d/rcS \
 		$(TARGET_DIR)/etc/init.d/rcK
 	rm -f $(TARGET_DIR)/etc/runlevels/*/sysv-rcs

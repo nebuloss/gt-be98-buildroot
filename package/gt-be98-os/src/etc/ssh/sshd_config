@@ -13,7 +13,6 @@ AuthorizedKeysFile /etc/ssh/authorized_keys/%u .ssh/authorized_keys
 PasswordAuthentication no
 KbdInteractiveAuthentication no
 PermitEmptyPasswords no
-UsePAM no
 UseDNS no
 X11Forwarding no
 AllowTcpForwarding yes
