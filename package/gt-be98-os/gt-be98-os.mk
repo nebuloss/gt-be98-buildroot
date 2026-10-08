@@ -54,6 +54,9 @@ define GT_BE98_OS_FINALIZE
 	find $(TARGET_DIR)/lib/modules -name bca_barpeek.ko -delete
 	# no RTC on the board: hwclock would only fail at every boot
 	rm -f $(TARGET_DIR)/etc/runlevels/boot/hwclock
+	# no block filesystems to check (the root is squashfs + overlay): fsck
+	# -A would fail on the overlay entry and abort the boot runlevel
+	rm -f $(TARGET_DIR)/etc/runlevels/boot/fsck
 	rm -f $(TARGET_DIR)/etc/init.d/S[0-9][0-9]* $(TARGET_DIR)/etc/init.d/rcS \
 		$(TARGET_DIR)/etc/init.d/rcK
 	rm -f $(TARGET_DIR)/etc/runlevels/*/sysv-rcs
