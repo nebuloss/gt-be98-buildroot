@@ -42,15 +42,24 @@ $(eval $(generic-package))
 ifeq ($(BR2_PACKAGE_GT_BE98_OPEN_ETHERNET_KERNEL_PATCHES),y)
 $(LINUX_TARGET_PATCH): | gt-be98-open-ethernet-extract
 
+# apply-patches.sh applies a directory's own "series" file and ignores any
+# file pattern, and kernel-patches/mainline/series is only one of the
+# lists: so build a directory with one combined series (README order) and
+# links to the patches, and let apply-patches.sh apply that (patch -F0).
+GT_BE98_KSERIES_DIR = $(BUILD_DIR)/gt-be98-kernel-series
 define GT_BE98_LINUX_APPLY_SERIES
 	@$(call MESSAGE,"Applying the GT-BE98 kernel series ($(GT_BE98_OPEN_ETHERNET_VERSION))")
+	$(Q)rm -rf $(GT_BE98_KSERIES_DIR) && mkdir -p $(GT_BE98_KSERIES_DIR)
 	$(Q)set -e; for s in $(GT_BE98_OPEN_ETHERNET_SERIES); do \
 		f=$(GT_BE98_OPEN_ETHERNET_PATCH_DIR)/$$s; \
 		test -f $$f || { echo "missing $$f"; exit 1; }; \
-		for p in `grep -v '^#' $$f`; do \
-			$(APPLY_PATCHES) $(LINUX_DIR) $(GT_BE98_OPEN_ETHERNET_PATCH_DIR) $$p; \
+		for p in `grep -Ev '^(#|$$)' $$f | cut -d' ' -f1`; do \
+			ln -s $(GT_BE98_OPEN_ETHERNET_PATCH_DIR)/$$p $(GT_BE98_KSERIES_DIR)/$$p; \
+			echo $$p >> $(GT_BE98_KSERIES_DIR)/series; \
 		done; \
 	done
+	$(Q)echo "GT-BE98 kernel series: `wc -l < $(GT_BE98_KSERIES_DIR)/series` patches"
+	$(APPLY_PATCHES) $(@D) $(GT_BE98_KSERIES_DIR)
 endef
 LINUX_POST_PATCH_HOOKS += GT_BE98_LINUX_APPLY_SERIES
 endif
