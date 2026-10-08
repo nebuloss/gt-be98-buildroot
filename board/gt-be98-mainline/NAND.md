@@ -107,6 +107,81 @@ sh board/gt-be98-mainline/nand/stock-apply-state.sh state.tgz <user@stock> [port
 (`ubi.block=`), checks the sha256 after the copy, and writes through a
 temporary file plus `mv`, then `sync`.
 
+## Verified on the box (2026-10-08, itb 799b2fc9, rootfs 26b2a94d)
+
+Macronix MX30LF2G28AD (256 MiB SLC, 128 KiB blocks, 2 KiB pages, 128 B
+physical OOB), BCH-8 / 512 B from the straps, 27 spare bytes per sector
+(108 B MTD OOB), both on-flash BBTs found, mtd0/1 read-only,
+`allow_write=N`; UBI `ro_mode=1`, 9 volumes, 0 bad, 0 corrupted; the static
+volumes metadata1/2 and bootfs2 have the same sha256 as stock reads; the
+save -> stock -> restore round trip works.
+
+## ECC counters: mainline 69 corrected bits, stock 0 (analysis)
+
+The two drivers count different things:
+
+- **stock (vendor 4.19 brcmnand)** adds to `corrected_bits` only when the
+  controller raises a *correctable error* for a page, and only then reads
+  `CORR_COUNT` (`brcmnand_count_corrected()`, `mtd_is_bitflip(err)` path,
+  which also logs `corrected error at ...`). The controller raises it only
+  when a sector needs at least the correction threshold, which both drivers
+  program to `ceil(0.75 x strength)` = **6 bits for BCH-8**. A page with 1-5
+  corrected bits per sector is corrected silently and counted nowhere.
+  Stock's log has no `corrected error` line: no sector reached 6.
+- **mainline 7.2** adds, after *every* page read, the delta of the
+  controller's `READ_ERROR_COUNT` accumulator (offset 0x104,
+  `brcmnand_corr_total()`), i.e. every corrected bit, including single-bit
+  corrections far below the threshold.
+
+So mainline's 69 bits over the UBI attach scan (two header pages of each of
+2024 PEBs, plus the volume reads) is expected background bitflip activity,
+invisible in stock's counter by construction. A wrong layout (spare size,
+sector size, ECC level or OOB position) would not produce a few corrected
+bits: every programmed sector would decode as uncorrectable
+(`ecc_failures`), UBI headers would fail their CRC, and the static-volume
+sha256s could not match. None of that happened. The comparison below makes
+this numerical and independent of the counters.
+
+### Read-only comparison procedure (orchestrator)
+
+Tools (build host): `sh board/gt-be98-mainline/nand/build-stock-tools.sh`
+-> `$OUT/images/nand-tools/`: static `nanddump` and `gt-be98-nandtool`
+(they run on stock 4.19 and on mainline: identical tooling on both sides),
+`nand-ecc-compare.sh`, `SHA256SUMS`.
+
+```sh
+# 1. stock boot
+scp -r nand-tools <stock>:/tmp/gtb
+ssh <stock> 'cd /tmp/gtb && sha256sum -c SHA256SUMS && /bin/busybox sh /tmp/gtb/nand-ecc-compare.sh /tmp/gtb'
+ssh <stock> 'cd /tmp/gtb && tar -czf - ecccmp-stock' > ecccmp-stock.tgz
+# 2. mainline boot (same files)
+scp -r nand-tools root@<box>:/tmp/gtb
+ssh root@<box> 'cd /tmp/gtb && sha256sum -c SHA256SUMS && sh /tmp/gtb/nand-ecc-compare.sh /tmp/gtb'
+ssh root@<box> 'cd /tmp/gtb && tar -czf - ecccmp-mainline' > ecccmp-mainline.tgz
+```
+
+Each run records the counters before/after, maps every PEB to its UBI
+volume/LEB from the EC/VID headers, and dumps (raw with `-n`, and
+ECC-corrected, data + OOB) the whole erase blocks of bootfs2 LEB 0 and 57,
+rootfs2 LEB 0, jffs2 LEB 0, one free PEB, and loader blocks 0 and 1. For each
+block: bitflips between raw and corrected data (programmed vs erased pages,
+worst 512-B sector), sha256 of the corrected data, the raw data and the raw
+OOB. ~2 MiB of dumps per run, in `/tmp` (RAM).
+
+Expected (= GO for the layout question):
+
+| Check | Expected |
+|---|---|
+| geometry lines | identical (2048 / 108 / 131072, strength 8, step 512) |
+| `data_ecc` sha256 of bootfs2, rootfs2, loader blocks | identical on both (same data decoded); jffs2 LEB 0 may differ only if stock rewrote it between the runs |
+| `data_raw` / `oob_raw` sha256 | identical, or differing only where `.flips` lists bitflips (unstable cells read differently) |
+| worst sector flips | small (1-2), far below 8; same pages flip on both |
+| ECC READ ERROR lines, `ecc_failures` delta | none, 0 |
+| counters delta | mainline: about the flips listed (all bits); stock: 0 unless a sector reached 6 |
+
+A difference in the raw OOB *layout* (not single bits) or any uncorrectable
+read is a NO-GO for phase 2 (NAND-PHASE2.md).
+
 ## Expected mainline log (to compare)
 
 ```

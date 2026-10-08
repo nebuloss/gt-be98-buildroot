@@ -5,6 +5,7 @@
 #
 #   scp stock-nandinfo.sh <stock>:/tmp/ && ssh <stock> '/bin/busybox sh /tmp/stock-nandinfo.sh' > stock-nand.txt
 #
+# (stock busybox has no "od" and no "command"; this uses hexdump and which.)
 # Nothing here writes: devmem only READS the NAND controller configuration
 # registers (0xff801800..0xff80187c: revision, CS select, CS0 ACC_CONTROL /
 # CONFIG / TIMING), never the FIFO, cache or command registers.
@@ -37,14 +38,15 @@ echo "== mounts"
 grep -E 'ubi|jffs|/data' /proc/mounts
 echo "== NAND controller config registers (read-only)"
 for o in 0x00 0x04 0x08 0x0c 0x14 0x18 0x1c 0x50 0x54 0x58 0x5c 0x60 0x64 0x68 0x6c 0x70 0x74 0x78 0x7c; do
-	echo "0xff8018${o#0x}: $(devmem $((0xff801800 + o)) 32 2>/dev/null)"
+	echo "0xff8018${o#0x}: $(/bin/busybox devmem $((0xff801800 + o)) 32 2>/dev/null || devmem $((0xff801800 + o)) 32 2>/dev/null)"
 done
 echo "== nand device-tree node"
 for p in /proc/device-tree/periph/nand/* /proc/device-tree/periph/nand/nandcs@0/*; do
-	[ -f "$p" ] && echo "$p: $(od -An -tx1 "$p" | tr -d '\n' | cut -c1-120)"
+	[ -f "$p" ] && echo "$p: $(hexdump -v -e '1/1 "%02x"' "$p" 2>/dev/null || /bin/busybox hexdump -v -e '1/1 "%02x"' "$p" 2>/dev/null)"
 done
 echo "== tools"
-for t in nanddump ubinfo mtdinfo; do printf '%s: %s\n' $t "$(command -v $t || echo missing)"; done
+for t in nanddump ubinfo mtdinfo devmem hexdump; do printf '%s: %s\n' $t "$(which $t 2>/dev/null || echo missing)"; done
+/bin/busybox --list 2>/dev/null | grep -qx devmem && echo "busybox devmem: yes" || echo "busybox devmem: no"
 echo "== /jffs"
 ls -la /jffs/mainline-os 2>/dev/null || echo "(no /jffs/mainline-os)"
 df -k /jffs 2>/dev/null

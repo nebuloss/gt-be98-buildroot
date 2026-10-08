@@ -18,11 +18,12 @@ GT_BE98_OS_SERVICES = gt-be98-watchdog gt-be98-netguard gt-be98-jffs gt-be98-dri
 
 define GT_BE98_OS_BUILD_CMDS
 	$(TARGET_MAKE_ENV) $(MAKE) -C $(@D) CC="$(TARGET_CC)" \
-		CFLAGS="$(TARGET_CFLAGS)" LDFLAGS="$(TARGET_LDFLAGS)" devmem
+		CFLAGS="$(TARGET_CFLAGS)" LDFLAGS="$(TARGET_LDFLAGS)" devmem nandtool
 endef
 
 define GT_BE98_OS_INSTALL_TARGET_CMDS
 	$(INSTALL) -D -m 0755 $(@D)/devmem $(TARGET_DIR)/usr/sbin/devmem
+	$(INSTALL) -D -m 0755 $(@D)/nandtool $(TARGET_DIR)/usr/sbin/gt-be98-nandtool
 	for f in gt-be98-postcode gt-be98-health gt-be98-wdtd gt-be98-status \
 		gt-be98-macaddr gt-be98-netguard gt-be98-save gt-be98-nandcheck \
 		gt-be98-nandpage; do \
