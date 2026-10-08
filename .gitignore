@@ -7,3 +7,5 @@
 dl/
 output/
 .serena/
+__pycache__/
+*.pyc
