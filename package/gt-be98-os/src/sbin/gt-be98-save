@@ -4,7 +4,7 @@
 #
 #   ssh root@<box> gt-be98-save > state.tgz          (tar.gz on stdout)
 #   gt-be98-save -o /tmp/state.tgz                    (and state.tgz.sha256)
-#   gt-be98-save --local                              (PHASE 2, JFFS_MODE=rw:
+#   gt-be98-save --local                              (PHASE 2, JFFS_MODE=rw + FENCE_VOLUMES=jffs2:
 #                         write /jffs/mainline-os/state.tgz directly, through
 #                         the UBI write fence; the previous one is kept .prev)
 #
@@ -22,7 +22,7 @@ loc=0
 [ "${1:-}" = -o ] && out=${2:?gt-be98-save -o FILE}
 if [ "${1:-}" = --local ]; then
 	grep -qE '^ubi0:[^ ]+ /jffs ubifs rw' /proc/mounts ||
-		{ echo "gt-be98-save: /jffs is not mounted read-write (JFFS_MODE=rw, NAND-PHASE2.md)" >&2; exit 1; }
+		{ echo "gt-be98-save: /jffs is not mounted read-write (JFFS_MODE=rw with FENCE_VOLUMES=jffs2, NAND-PHASE2.md)" >&2; exit 1; }
 	loc=1
 	umask 077
 	mkdir -p /jffs/mainline-os

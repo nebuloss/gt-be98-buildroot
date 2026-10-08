@@ -3,8 +3,10 @@
 # Static tools and scripts for NAND phase 2 (NAND-PHASE2.md, RESTORE.md),
 # built with the Debian cross toolchain (they run on stock 4.19 and on
 # mainline): $OUT/images/nand-phase2-kit/
-#   gt-be98-ubileb, gt-be98-nandrestore, gt-be98-nandtool, nanddump
-#   stock-mltest.sh, mltest-mainline.sh, patternA.bin, patternB.bin (G7)
+#   gt-be98-ubileb, gt-be98-nandrestore, gt-be98-nandtool, nanddump,
+#   ubinfo, ubimkvol, ubirmvol (mtd-utils, for stock: G7 create/remove)
+#   stock-mltest.sh, mltest-mainline.sh, g7-compare.sh, stock-nandinfo.sh,
+#   patternA.bin, patternB.bin (G7)
 #   SHA256SUMS
 set -eu
 HERE=$(cd "$(dirname "$0")" && pwd)
@@ -22,8 +24,14 @@ $CC -static -O2 -Wall -o "$D/gt-be98-nandrestore" "$HERE/src/nandrestore.c"
 $CC -static -O2 -Wall -o "$D/gt-be98-nandtool" "$EXT/package/gt-be98-os/src/nandtool.c"
 (cd "$M" && $CC -static -O2 -Iinclude -I. -include include/config.h -o "$D/nanddump" \
 	nand-utils/nanddump.c lib/libmtd.c lib/libmtd_legacy.c lib/common.c lib/libcrc32.c)
-$STRIP "$D"/gt-be98-* "$D/nanddump"
-cp "$HERE/phase2/stock-mltest.sh" "$HERE/phase2/mltest-mainline.sh" "$D/"
+for u in ubinfo ubimkvol ubirmvol; do
+	(cd "$M" && $CC -static -O2 -Iinclude -I. -include include/config.h -o "$D/$u" \
+		ubi-utils/$u.c lib/libubi.c lib/libmtd.c lib/libmtd_legacy.c lib/common.c lib/libcrc32.c)
+done
+$STRIP "$D"/gt-be98-* "$D/nanddump" "$D/ubinfo" "$D/ubimkvol" "$D/ubirmvol"
+cp "$HERE/phase2/stock-mltest.sh" "$HERE/phase2/mltest-mainline.sh" "$HERE/phase2/g7-compare.sh" \
+	"$HERE/stock-nandinfo.sh" "$D/"
+chmod 0755 "$D"/*.sh
 # deterministic G7 patterns, 4 LEBs each (126976 B)
 python3 - "$D" <<'PY'
 import hashlib, sys
@@ -36,5 +44,6 @@ for name, seed in (("patternA.bin", b"gt-be98 G7 A"), ("patternB.bin", b"gt-be98
     open(f"{d}/{name}", "wb").write(out[:4 * 126976])
 PY
 (cd "$D" && sha256sum gt-be98-ubileb gt-be98-nandrestore gt-be98-nandtool nanddump \
-	stock-mltest.sh mltest-mainline.sh patternA.bin patternB.bin > SHA256SUMS)
+	ubinfo ubimkvol ubirmvol stock-mltest.sh mltest-mainline.sh g7-compare.sh \
+	stock-nandinfo.sh patternA.bin patternB.bin > SHA256SUMS)
 cat "$D/SHA256SUMS"

@@ -1,19 +1,23 @@
 #!/sbin/openrc-run
 # SPDX-License-Identifier: GPL-2.0
 # Access to the stock /jffs and the persistent state the mainline OS keeps
-# there. JFFS_MODE=ro (default, PHASE 1) or rw (PHASE 2: UBI re-attached with
-# the write fence on FENCE_VOLUMES, brcmnand.allow_write=1, /jffs read-write;
-# only on an image built with NAND=rw-jffs). Read-only mode:
-#   1. the NAND "image" MTD partition must be read-only (DT read-only, and
-#      the brcmnand driver refuses program/erase without
-#      brcmnand.allow_write=1); otherwise stop;
-#   2. ubiattach on it -> UBI attaches in read-only mode (checked: ro_mode=1);
-#   3. mount the stock UBIFS volume "jffs2" read-only on /jffs;
-#   4. apply /jffs/mainline-os/: state.tgz (from gt-be98-save, sha256-checked
-#      against state.tgz.sha256 when present), then the overlay/ tree, both
-#      restricted to the allowed paths (ALLOW_PATHS). Missing = image defaults.
-# The mainline OS never writes the NAND; saving goes through stock
-# (board/gt-be98-mainline/NAND.md).
+# there (NAND.md, NAND-PHASE2.md). Two switches in /etc/conf.d/gt-be98-jffs,
+# both OFF by default:
+#   FENCE_VOLUMES empty (PHASE 1): read-only.
+#     1. the NAND "image" MTD partition must be read-only (DT), or writable
+#        (NAND=rw-jffs image) with brcmnand.allow_write=0 and no UBI fence;
+#        otherwise stop;
+#     2. ubiattach on it -> UBI cannot write (ro_mode=1, or every write
+#        refused by the MTD write fence);
+#     3. mount the stock UBIFS volume "jffs2" read-only on /jffs;
+#     4. apply /jffs/mainline-os/: state.tgz (from gt-be98-save, sha256-checked
+#        against state.tgz.sha256 when present), then the overlay/ tree, both
+#        restricted to the allowed paths (ALLOW_PATHS). Missing = defaults.
+#   FENCE_VOLUMES set (PHASE 2, NAND=rw-jffs image only): UBI attached with
+#     the write fence on those volumes, checked in debugfs, then
+#     brcmnand.allow_write=1; /jffs mounted read-only, and remounted
+#     read-write only with JFFS_MODE=rw and jffs2 in FENCE_VOLUMES. Any
+#     failure: back to the phase-1 state.
 description="Stock /jffs (UBIFS on NAND), read-only, and the saved mainline state"
 
 depend() {
@@ -42,6 +46,7 @@ lock_down() {
 start() {
 	[ "${JFFS:-yes}" = yes ] || { einfo "JFFS=no"; return 0; }
 	local m flags writable mode=${JFFS_MODE:-ro}
+	case "$mode" in ro|rw) ;; *) ewarn "JFFS_MODE=$mode: using ro"; mode=ro ;; esac
 	m=$(nand_mtd "$IMAGE_MTD")
 	if [ -z "$m" ]; then
 		einfo "no NAND \"$IMAGE_MTD\" partition (image built without NAND=ro/rw-jffs): image defaults"
@@ -50,14 +55,14 @@ start() {
 	# MTD_WRITEABLE = 0x400
 	flags=$(cat /sys/class/mtd/mtd$m/flags)
 	writable=$(( (flags & 0x400) != 0 ))
-	if [ "$mode" = rw ] && [ $writable = 0 ]; then
-		ewarn "JFFS_MODE=rw but mtd$m is read-only (image not built with NAND=rw-jffs): read-only"
-		mode=ro
-	fi
-	if [ "$mode" = rw ]; then
-		start_rw "$m" && { apply_state; remount_rw; return 0; }
-		eerror "read-write /jffs failed: falling back to read-only"
+	if [ -n "$FENCE_VOLUMES" ] && [ $writable = 0 ]; then
+		ewarn "FENCE_VOLUMES=$FENCE_VOLUMES but mtd$m is read-only (image not built with NAND=rw-jffs): read-only"
+	elif [ -n "$FENCE_VOLUMES" ]; then
+		start_rw "$m" && { apply_state; [ "$mode" = rw ] && remount_rw; return 0; }
+		eerror "fenced attach failed: falling back to read-only"
 		lock_down
+	elif [ "$mode" = rw ]; then
+		ewarn "JFFS_MODE=rw needs FENCE_VOLUMES (with $JFFS_VOLUME): read-only"
 	fi
 	start_ro "$m" $writable || return 0
 	apply_state
@@ -103,7 +108,7 @@ start_rw() {	# $1 mtd: fenced attach, checked, then allow_write
 	echo 1 > "$AW"
 	logger -t gt-be98-jffs "write fence active ($FENCE_VOLUMES), brcmnand.allow_write=1"
 	mkdir -p /jffs
-	ebegin "Mounting ubi0:$JFFS_VOLUME read-only on /jffs (then read-write)"
+	ebegin "Mounting ubi0:$JFFS_VOLUME read-only on /jffs"
 	mount -t ubifs -o ro ubi0:"$JFFS_VOLUME" /jffs
 	eend $?
 }

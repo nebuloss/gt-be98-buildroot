@@ -81,6 +81,10 @@ $CC -static -O2 -Wall -o "$T/gt-be98-nandtool" "$EXT/package/gt-be98-os/src/nand
 $CC -static -O2 -Wall -o "$T/gt-be98-nandrestore" "$HERE/../src/nandrestore.c"
 $CC -static -O2 -Wall -o "$T/gt-be98-ubileb" "$HERE/../src/ubileb.c"
 
+# the phase-2 kit (G7 scripts and tools, as shipped to the box)
+sh "$HERE/../build-phase2-kit.sh" > /dev/null
+KIT=$OUT/images/nand-phase2-kit
+
 # ---- data -------------------------------------------------------------------------
 Dd=$S/data
 mkdir -p "$Dd"
@@ -94,11 +98,12 @@ L=$S/initramfs.list
 {
 	echo "dir /dev 0755 0 0"
 	echo "nod /dev/console 0600 0 0 c 5 1"
-	for d in /bin /sbin /tools /proc /sys /tmp /mnt /data; do echo "dir $d 0755 0 0"; done
+	for d in /bin /sbin /tools /kit /proc /sys /tmp /mnt /data; do echo "dir $d 0755 0 0"; done
 	echo "file /bin/busybox $OUT/images/rescue/busybox 0755 0 0"
 	echo "slink /bin/sh busybox 0777 0 0"
 	echo "file /init $HERE/init 0755 0 0"
 	for f in "$T"/*; do echo "file /tools/$(basename "$f") $f 0755 0 0"; done
+	for f in "$KIT"/*; do echo "file /kit/$(basename "$f") $f 0755 0 0"; done
 	echo "file /data/image.data $Dd/image.data 0644 0 0"
 	echo "file /data/loader.data $Dd/loader.data 0644 0 0"
 } > "$L"

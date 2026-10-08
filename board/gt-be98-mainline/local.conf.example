@@ -53,8 +53,10 @@ ROOTFS_URL=
 # read-only; UBI attached read-only, the stock /jffs mounted read-only and
 # /jffs/mainline-os applied; NAND.md), or rw-jffs (PHASE 2: the "image"
 # partition writable in the DT, writes possible ONLY through the UBI write
-# fence, and only when /etc/conf.d/gt-be98-jffs says JFFS_MODE=rw;
+# fence, and only when /etc/conf.d/gt-be98-jffs sets FENCE_VOLUMES;
 # NAND-PHASE2.md). The loader partition is always read-only.
+# For one step (G7) without touching the production build, keep NAND=ro
+# here and make the separate G7 itb with nand/build-g7-image.sh.
 NAND=off
 # the size probe ml-bootfs-pad<N>.itb is padded to this many MiB
 PAD_TOTAL_MB=30

@@ -202,28 +202,60 @@ gate restore_bit_exact "cmp -s /tmp/after.raw /tmp/backup.raw"
 rm -f /tmp/after.raw
 gate restore_entries_cleared "[ -z \"\$(cat $DBG/fence_restore)\" ]"
 
-# ---- G7 rehearsal: a stock-created test volume, fence on it --------------------------
-say "G7: stock-style ubimkvol mltest (fence off), then fence=mltest"
+# ---- G7 rehearsal with the kit scripts, in the box sequence (phase2/G7.md):
+# "stock" = an unfenced attach with the gate off; "mainline" = phase-1 attach,
+# then the write fence on mltest only ---------------------------------------------
+say "G7: the kit scripts in the box sequence"
+K=/kit
+export G7_REHEARSAL=1 G7_MTD=/dev/mtd1
+gate g7_kit_sha256 "cd $K && sha256sum -c -s SHA256SUMS"
+# step 1, stock
+echo 0 > $FW; echo "" > $UF
+ubiattach -m 1 -d 0 -O 2048 >/dev/null
+gate g7_s1_create "$K/stock-mltest.sh create"
+gate g7_s1_write_a "$K/stock-mltest.sh write-a"
+gate g7_s1_verify_a "$K/stock-mltest.sh verify-a"
+ubidetach -d 0
+# step 3, mainline: phase-1 attach (gate on, no fence), snapshot, fence on mltest
+echo 1 > $FW
+ubiattach -m 1 -d 0 -O 2048 >/dev/null
+gate g7_s3_before "W=/tmp/g7 $K/mltest-mainline.sh before"
+ubidetach -d 0
+echo mltest > $UF
+ubiattach -m 1 -d 0 -O 2048 >/dev/null
+gate g7_s3_fence_mltest_only "grep -qx 'volumes mltest:[0-9]*' $DBG/ubi0/fence && grep -q '^state active' $DBG/ubi0/fence"
+mount -t ubifs -o ro ubi0:jffs2 /mnt
+gate g7_s3_jffs_ro "grep -q ' /mnt ubifs ro' /proc/mounts"
+umount /mnt 2>/dev/null || umount -l /mnt
+gate g7_s3_verify_a "$K/mltest-mainline.sh verify-a"
+gate g7_s3_write_b "$K/mltest-mainline.sh write-b"
+$K/mltest-mainline.sh status | grep -E '^(state|volumes|pebs|writes|mtd_gate)' | sed 's/^/RH: /'
+gate g7_s3_jffs2_refused "! gt-be98-ubileb write /dev/ubi0_13 /tmp/small"
+mount -t ubifs -o ro ubi0:jffs2 /mnt
+# what if someone remounts jffs2 read-write under fence=mltest? (the
+# service never does): UBI refuses every jffs2 write; the result is shown,
+# step 4 checks that nothing reached the flash
+dmesg -c >/dev/null
+if mount -o remount,rw /mnt 2>/dev/null; then
+	echo x > /mnt/g7-must-fail 2>/dev/null; sync 2>/dev/null
+	say "jffs2 rw remount under fence=mltest: remount accepted; then: $(dmesg | grep -cE 'UBIFS error|refused') UBIFS errors/refusals, mount now: $(grep ' /mnt ' /proc/mounts | cut -d' ' -f4 | cut -d, -f1)"
+else
+	say "jffs2 rw remount under fence=mltest: refused"
+fi
+dmesg | grep -E 'UBIFS|fence' | head -n 5 | sed 's/^/RH:   /'
+umount /mnt 2>/dev/null || umount -l /mnt
+ubidetach -d 0; echo "" > $UF
+gate g7_s3_pebdiff "W=/tmp/g7 $K/mltest-mainline.sh after"
+tail -n 1 /tmp/g7/pebdiff.txt | sed 's/^/RH: /'
+rm -f /tmp/g7/*.data
+# step 4, stock
 echo 0 > $FW
-ubiattach -m 1 -d 0 -O 2048
-ubimkvol /dev/ubi0 -N mltest -s 2MiB
-MLID=$(ubinfo -d 0 -N mltest | sed -n 's/^Volume ID: *\([0-9]*\).*/\1/p')
+ubiattach -m 1 -d 0 -O 2048 >/dev/null
+gate g7_s4_verify_b "$K/stock-mltest.sh verify-b"
+gate g7_s4_jffs2_mounts_no_mainline_write "mount -t ubifs ubi0:jffs2 /mnt && ! [ -e /mnt/g7-must-fail ] && umount /mnt"
+gate g7_s4_remove "$K/stock-mltest.sh remove && ! ubinfo -d 0 -N mltest >/dev/null 2>&1"
 ubidetach -d 0
 echo 1 > $FW
-nanddump -q --bb=dumpbad -f /tmp/g7.before /dev/mtd1
-gt-be98-nandtool pebmap /dev/mtd1 > /tmp/pebmap.g7
-echo mltest > $UF
-ubiattach -m 1 -d 0 -O 2048
-dd if=/dev/urandom of=/tmp/pattern bs=126976 count=4 2>/dev/null
-gate g7_write_mltest "gt-be98-ubileb write /dev/ubi0_$MLID /tmp/pattern"
-gate g7_readback "dd if=/dev/ubi0_$MLID bs=126976 count=4 2>/dev/null | cmp -s - /tmp/pattern"
-gate g7_jffs2_refused_under_mltest "! gt-be98-ubileb write /dev/ubi0_13 /tmp/small"
-ubidetach -d 0
-echo "" > $UF
-nanddump -q --bb=dumpbad -f /tmp/g7.after /dev/mtd1
-gt-be98-nandtool pebdiff /tmp/g7.before /tmp/g7.after $EB /tmp/pebmap.g7 > /tmp/g7.diff
-tail -n 1 /tmp/g7.diff
-gate g7_only_mltest_and_free_changed "grep -q 'other 0' /tmp/g7.diff && ! grep '^changed' /tmp/g7.diff | grep -vqE '\\((free|vol $MLID lnum [0-9]+)\\)'"
 
 echo "RH-SUMMARY pass $pass fail $fail"
 echo "RH-DONE"
