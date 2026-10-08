@@ -25,6 +25,10 @@ labels: its "(a) fence" is G5's subject, its "G5 restore half" is G9, its
 
 - Build: `NAND=rw-jffs` (local configuration; `local.conf.example`).
   Rootfs: `/etc/conf.d/gt-be98-jffs` `FENCE_VOLUMES=jffs2`, `JFFS_MODE=rw`.
+  Rehearsal (run 12, 79/79) exercises the production service itself under
+  nandsim: rw start, nandcheck record, save `--if-changed` (and no write
+  when unchanged), save on stop + lock down, state applied, g8-test
+  cleanup, loud fallback on a failed pre-check.
 - Boot (`gt-be98-jffs`): fence set on jffs2, fenced attach, debugfs checks
   (state active, exactly jffs2, not read-only), then `allow_write=1`, mount,
   apply `state.tgz`, remount read-write, remove `CLEANUP_PATHS`
@@ -51,6 +55,14 @@ labels: its "(a) fence" is G5's subject, its "G5 restore half" is G9, its
   volume changed or disappeared = `daemon.crit` (expected only after a stock
   firmware upgrade). Result in `/run/gt-be98-nandcheck.result`,
   `gt-be98-status`.
+- Rootfs in slot 1 (UBI vol 4 `rootfs1`, README "Flash space and flashing
+  slot 1"): the rescue `/init` attaches UBI with nothing writable, copies
+  and sha256-checks the rootfs into RAM and detaches; `gt-be98-jffs` then
+  attaches with the fence as before. Under the fence vol 4 (like vol 3) is
+  fenced-off: never written, moved or scrubbed. `qemu-slot1.sh` (nandsim
+  with the box's UBI device, no NIC): stock-side flash with the kit script,
+  boot from vol 4 (post-codes db, dc), fenced `/jffs` rw, autosave, save on
+  stop and a second fenced attach: PASS.
 - Space: the stock jffs2 is small and nearly full on this box (45 MB,
   ~2 MB free for non-root during G8); `state.tgz` is ~9 KB (+ `.prev`).
 - Stock-side checks of a session: `g7-compare.sh` now matches MTD devices by

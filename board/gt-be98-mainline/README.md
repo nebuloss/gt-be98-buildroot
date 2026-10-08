@@ -85,19 +85,31 @@ ml-bootfs.itb (UBI vol 3 = bootfs1, ~16 MB)   stock FIT structure, rebuilt by mk
  ├─ kernel = Image.lzo                        Linux 7.2.9 + built-in initramfs:
  │                                              /init + static rescue BusyBox
  └─ fdt_mainline                              board DT (USB, watchdog, 4x PCIe, 256 MB MPM)
-rootfs.squashfs (+ .sha256)                   the OS, served over HTTP or on a USB stick
+rootfs.squashfs (+ .sha256)                   the OS: in slot 1's UBI vol 4 "rootfs1" (NAND
+                                              images), on a USB stick, or served over HTTP
 ```
 
 `/init` (package/gt-be98-os/src/rescue/init):
 
-1. USB power pins, USB-Ethernet lifeline (udhcpc, 45 s window), then
-   bounded watchdog petting (`NET_WDT_MAX`, 300 s) while the rootfs loads;
+1. USB power pins, bounded watchdog petting (`NET_WDT_MAX`, 300 s) while
+   the rootfs loads (no network needed for 2 and 3);
 2. a USB storage partition labelled `GTBE98-ROOT`: `/rootfs.squashfs` on it
    (vfat or ext4), or a complete ext4 root with `/sbin/init`, booted
    read-write (the persistent option);
-3. otherwise `ROOTFS_URL` (+ `ROOTFS_URL.sha256`) over HTTP into RAM, sha256
-   checked; `@DHCP_SERVER@` / `@DHCP_ROUTER@` in the URL are replaced by the
-   lease values;
+3. slot 1's UBI volume `rootfs1` (vol 4; `NAND=ro`/`rw-jffs` images): UBI
+   attached with nothing writable (`brcmnand.allow_write=0`, no UBI fence:
+   the write gate refuses every write), the first `ROOTFS_SIZE` bytes copied
+   into RAM and checked against `ROOTFS_SHA256` (both built into the
+   initramfs by post-image.sh: an itb boots from vol 4 only the rootfs built
+   with it; a new itb with an old vol 4 falls through to HTTP), UBI detached
+   again, so nothing holds the NAND and `gt-be98-jffs` attaches it afresh
+   with the write fence. Copy-to-RAM rather than ubiblock: the verified bytes
+   are the mounted bytes, no volume stays open across the handover, and the
+   RAM cost (~29 MB) is that of the HTTP path;
+4. otherwise the USB-Ethernet lifeline (udhcpc, 45 s window) and
+   `ROOTFS_URL` (+ `ROOTFS_URL.sha256`) over HTTP into RAM, sha256 checked
+   (to test a new rootfs without reflashing vol 4); `@DHCP_SERVER@` /
+   `@DHCP_ROUTER@` in the URL are replaced by the lease values;
 4. the squashfs is loop-mounted read-only at `/rom` with an overlayfs on a
    tmpfs (`/overlay`, which also holds the downloaded image), petting stops,
    `switch_root` into OpenRC, whose `gt-be98-watchdog` reopens the watchdog;
@@ -130,13 +142,29 @@ To keep the kernel small: `CONFIG_RELR` (packed relocations, −2 MB), and the
 tracing set is tracepoints + kprobe events + perf counters (no function
 tracer, BPF or KALLSYMS_ALL).
 
-### Flash space
+### Flash space and flashing slot 1
 
-The netroot FIT (~16 MB) is close to the stock bootfs (13.7 MB): vol 3 needs
-a few more LEBs. Slot 1's rootfs volume (vol 4) is not used by this OS; U-Boot
-only checks its squashfs magic before booting slot 1, so the build's
-`rootfs1-stub.squashfs` (4 KiB) can replace it (operator decision; done on
-2026-10-08, the old vol 4 is backed up on the build host).
+Slot 1 holds the OS: vol 3 `bootfs1` = `ml-bootfs.itb` (~16 MB, 127 LEBs
+used of 397 reserved), vol 4 `rootfs1` = `rootfs.squashfs` (~28.8 MB, 228
+LEBs; given 265 LEBs = 32.1 MiB for growth). On this box's UBI device
+(2024 LEBs, 306 free with vol 4 at its 9-LEB stub) that leaves 50 free LEBs;
+vol 3 needs no resize. U-Boot only checks vol 4's squashfs magic, which the
+rootfs has. Flash from STOCK with the kit (`nand-phase2-kit`: static
+`ubirsvol`, `ubiupdatevol`, `stock-slot1-flash.sh`), the itb and the rootfs
+built together (the itb carries the rootfs sha256):
+
+```sh
+cd /tmp/gtb && sha256sum -c SHA256SUMS
+./stock-slot1-flash.sh --check rootfs.squashfs <rootfs sha256> ml-bootfs.itb <itb sha256>   # plan only
+./stock-slot1-flash.sh         rootfs.squashfs <rootfs sha256> ml-bootfs.itb <itb sha256>
+#   = ubirsvol /dev/ubi0 -n 4 -S 265; ubiupdatevol /dev/ubi0_4 rootfs.squashfs;
+#     ubiupdatevol /dev/ubi0_3 ml-bootfs.itb; each read back and sha256-checked;
+#     refuses when the UBI device lacks the free LEBs
+bcm_bootstate 3; reboot
+```
+
+`qemu-slot1.sh` rehearses exactly this on the box's UBI device in nandsim
+(the kit script, then the slot-1 boot with no network device at all).
 
 ## Boot, services, post-codes
 
@@ -149,7 +177,9 @@ the rootfs refuses such a write).
 | c0..c5 | `/init` | `/init` runs, `/proc`, `/sys`, `/dev`+`/tmp`, command line, USB pins |
 | c6 / c7 / c9 | `/init` | USB NIC found / address / boot-time watchdog petting started |
 | d7 / d8 | `/init` | looking for a `GTBE98-ROOT` USB partition / found and mounted |
+| db / dc | `/init` | reading UBI vol 4 `rootfs1` / copied, sha256 ok |
 | d9 / da | `/init` | fetching the rootfs over HTTP / fetched, sha256 ok |
+| e9 / eb | `/init` | UBI `rootfs1` unavailable (no NAND partition, attach failed, no volume, no expected sha256) / its sha256 does not match this image's rootfs (then HTTP is tried) |
 | f1 / f2 / f3 | `/init` | squashfs mounted / overlay mounted / `switch_root` to OpenRC |
 | e0 e1 e2 e3 e4 e5 e6 | `/init` | rescue because: no rootfs source / squashfs mount failed / overlay failed / no `/sbin/init` / `RESCUE=1` / HTTP fetch failed / sha256 mismatch |
 | e8 | `/init` | no lifeline address within 45 s (nothing pets: U-Boot's watchdog resets) |
