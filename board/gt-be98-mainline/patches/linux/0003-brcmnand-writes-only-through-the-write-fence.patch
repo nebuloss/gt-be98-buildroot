@@ -1,0 +1,40 @@
+From: GT-BE98 mainline OS <noreply@example.invalid>
+Subject: [PATCH] DEBUG: mtd: rawnand: brcmnand: writes only through the write fence
+
+GT-BE98 mainline development OS, not for upstream (NAND-PHASE2.md).
+
+allow_write becomes a runtime parameter (/sys/module/brcmnand/parameters/
+allow_write, default 0 = refuse everything, as before). With allow_write=1 the
+chip is still fenced (fence_writes): every program/erase must pass the MTD
+write fence, i.e. come from fenced UBI I/O or an explicit restore entry.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+diff --git a/drivers/mtd/nand/raw/brcmnand/brcmnand.c b/drivers/mtd/nand/raw/brcmnand/brcmnand.c
+index 0f4fc67b7..25fb978ea 100644
+--- a/drivers/mtd/nand/raw/brcmnand/brcmnand.c
++++ b/drivers/mtd/nand/raw/brcmnand/brcmnand.c
+@@ -53,8 +53,8 @@ module_param(wp_on, int, 0444);
+  * This also stops the on-flash BBT code from (re)writing a bad block table.
+  */
+ static bool allow_write;
+-module_param(allow_write, bool, 0444);
+-MODULE_PARM_DESC(allow_write, "allow NAND program/erase (default: off, read-only)");
++module_param(allow_write, bool, 0644);
++MODULE_PARM_DESC(allow_write, "allow NAND program/erase (default: off, read-only); even then every program/erase needs the MTD write fence (UBI fence)");
+ 
+ /***********************************************************************
+  * Definitions
+@@ -3188,6 +3188,12 @@ static int brcmnand_init_cs(struct brcmnand_host *host,
+ 	nand_writereg(ctrl, cfg_offs,
+ 		      nand_readreg(ctrl, cfg_offs) & ~CFG_BUS_WIDTH);
+ 
++	/*
++	 * GT-BE98: with allow_write=1, a program/erase still has to pass the
++	 * MTD write fence in the NAND core (registered by the UBI fence).
++	 */
++	chip->fence_writes = true;
++
+ 	ret = nand_scan(chip, 1);
+ 	if (ret)
+ 		return ret;

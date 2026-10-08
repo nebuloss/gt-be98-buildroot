@@ -1,0 +1,177 @@
+#!/bin/sh
+# SPDX-License-Identifier: GPL-2.0
+# GT-BE98 NAND phase-2 rehearsal (G5 restore + G6 fence), runs as /init in
+# QEMU on the patched kernel with nandsim shaped like the box's NAND
+# (Macronix MX30LF2G28AD: 256 MiB, 128 KiB blocks, 2 KiB pages; nandsim OOB
+# 64 B with software BCH-8 instead of the box's 108-B controller layout),
+# partitions loader (16 blocks) / image (2024) / rest (8, the BBT area).
+# The image partition is loaded with the page data of the box's corrected
+# backup. Every check prints "GATE <name> PASS|FAIL"; the run ends with
+# "RH-DONE".
+export PATH=/bin:/sbin:/tools
+/bin/busybox --install -s /bin
+mount -t proc proc /proc
+mount -t sysfs sysfs /sys
+mount -t devtmpfs devtmpfs /dev
+mount -t tmpfs -o size=90% tmpfs /tmp
+mount -t debugfs debugfs /sys/kernel/debug
+
+say() { echo "RH: $*"; }
+pass=0; fail=0
+gate() {
+	if eval "$2" >/tmp/gate.out 2>&1; then
+		echo "GATE $1 PASS"; pass=$((pass + 1))
+	else
+		echo "GATE $1 FAIL ($2)"; sed 's/^/    /' /tmp/gate.out | tail -n 5; fail=$((fail + 1))
+	fi
+}
+FW=/sys/module/nandsim/parameters/fence_writes
+UF=/sys/module/ubi/parameters/fence
+DBG=/sys/kernel/debug/ubi
+EB=131072; WS=2048; OOB=$(cat /sys/class/mtd/mtd1/oobsize)
+STOCK_BOOTFS2=74efd23e3c466ab10f486faab8cda97c8b2054c6627ec3f17d72306a50746f53
+STOCK_META=51aa0cb2f0d76748d99f08a491da7d3cf99c1f5bc7c6df3899cf4e23286bd4df
+D=/data
+
+say "kernel $(uname -r)"
+cat /proc/mtd
+gate geometry "[ \$(cat /sys/class/mtd/mtd1/size) = 265289728 ] && [ \$(cat /sys/class/mtd/mtd1/erasesize) = $EB ] && [ \$(cat /sys/class/mtd/mtd1/writesize) = $WS ]"
+
+# ---- L: load the box's data (fence off on the simulated chip) -------------------
+echo 0 > $FW
+echo "" > $UF
+say "loading loader + image page data"
+nandwrite -q /dev/mtd0 $D/loader.data
+nandwrite -q /dev/mtd1 $D/image.data
+nanddump -q --bb=dumpbad -f /tmp/load.data /dev/mtd1
+gate load_identical "cmp -s /tmp/load.data $D/image.data"
+rm -f /tmp/load.data
+gt-be98-nandtool pebmap /dev/mtd1 > /tmp/pebmap.txt
+say "pebmap: $(grep -c ' vol 13 ' /tmp/pebmap.txt) jffs2, $(grep -c ' free$' /tmp/pebmap.txt) free, $(grep -c ' vol ' /tmp/pebmap.txt) used"
+
+# >=6-bit flip in a slot PEB (bootfs2 LEB 5, page 3): re-program the page
+# raw with 6 more 0 bits; the ECC still corrects it, reads report 6 flips
+P=$(sed -n 's/^PEB \([0-9]*\) vol 5 lnum 5$/\1/p' /tmp/pebmap.txt)
+OFF=$((P * EB + 3 * WS))
+say "injecting 6 bitflips in bootfs2 LEB 5 = PEB $P page 3"
+nanddump -q -n --oob -s $OFF -l $WS -f /tmp/pg.raw /dev/mtd1
+gt-be98-nandtool flipzero /tmp/pg.raw /tmp/pg.inj $WS $OOB 6
+nandwrite -q -n -o -s $OFF /dev/mtd1 /tmp/pg.inj
+nanddump -s $OFF -l $WS -f /tmp/pg.ecc /dev/mtd1 2>/tmp/pg.log
+dd if=$D/image.data of=/tmp/pg.orig bs=$WS skip=$((OFF / WS)) count=1 2>/dev/null
+gate injected_still_correctable "cmp -s /tmp/pg.ecc /tmp/pg.orig && grep -q 'corrected' /tmp/pg.log"
+cat /tmp/pg.log
+
+# the reference for the restore test: raw data + OOB of the whole partition
+nanddump -q -n --oob --bb=dumpbad -f /tmp/backup.raw /dev/mtd1
+say "raw backup $(wc -c < /tmp/backup.raw) bytes"
+
+# ---- N: the chip is fenced, nothing registered: no write path at all ------------
+echo 1 > $FW
+FREEPEB=$(sed -n 's/^PEB \([0-9]*\) free$/\1/p' /tmp/pebmap.txt | head -n1)
+dd if=/dev/zero of=/tmp/zero.page bs=$WS count=1 2>/dev/null
+gate mtd_erase_refused "! flash_erase -q /dev/mtd1 $((FREEPEB * EB)) 1"
+gate mtd_write_refused "! nandwrite -q -s $((FREEPEB * EB)) /dev/mtd1 /tmp/zero.page"
+gate mtd_markbad_refused "! gt-be98-ubileb markbad /dev/mtd1 $((FREEPEB * EB))"
+say "unfenced UBI attach (must not be able to write)"
+ubiattach -m 1 -d 0
+sleep 10
+ubinfo -a > /tmp/ubinfo.before
+say "unfenced ubi0 ro_mode=$(cat /sys/class/ubi/ubi0/ro_mode)"
+gate unfenced_ubi_cannot_create "! ubimkvol /dev/ubi0 -N evil -s 1MiB"
+ubidetach -d 0
+
+# ---- F: fenced session on jffs2 ---------------------------------------------------
+echo jffs2 > $UF
+ubiattach -m 1 -d 0
+cat $DBG/ubi0/fence
+gate fence_active "grep -q 'state active' $DBG/ubi0/fence && grep -q 'jffs2:13' $DBG/ubi0/fence"
+gate fenced_rw_mode "[ \$(cat /sys/class/ubi/ubi0/ro_mode) = 0 ]"
+gate vtbl_change_refused "! ubimkvol /dev/ubi0 -N evil -s 1MiB"
+gate vol_remove_refused "! ubirmvol /dev/ubi0 -n 4"
+echo hello > /tmp/small
+gate other_volume_write_refused "! gt-be98-ubileb write /dev/ubi0_6 /tmp/small"
+gate raw_write_refused_while_fenced "! nandwrite -q -s $((FREEPEB * EB)) /dev/mtd1 /tmp/zero.page"
+gate restore_refused_while_attached "! sh -c 'echo add 1 $FREEPEB 1 > $DBG/fence_restore'"
+gate bootfs2_reads_stock_hash "[ \$(sha256sum /dev/ubi0_5 | cut -d' ' -f1) = $STOCK_BOOTFS2 ]"
+gate scrub_refused "grep -qE 'scrub_refused [1-9]' $DBG/ubi0/fence"
+
+mkdir -p /mnt
+mount -t ubifs ubi0:jffs2 /mnt
+df -k /mnt
+mkdir -p /mnt/mainline-os && echo "rehearsal marker" > /mnt/mainline-os/marker && sync
+N=${RH_LOOPS:-300}
+say "write loop: $N x 1 MiB write+sync+delete"
+i=0
+while [ $i -lt $N ]; do
+	dd if=/dev/urandom of=/mnt/churn bs=64k count=16 2>/dev/null
+	sync
+	rm -f /mnt/churn
+	sync
+	i=$((i + 1))
+	[ $((i % 50)) = 0 ] && say "loop $i: $(grep -E 'writes|erases' $DBG/ubi0/fence | tr '\n' ' ')"
+done
+gate marker_kept "grep -q 'rehearsal marker' /mnt/mainline-os/marker"
+umount /mnt
+cat $DBG/ubi0/fence
+gate fenced_writes_happened "grep -qE '^writes [1-9]' $DBG/ubi0/fence && grep -qE 'erases [1-9]' $DBG/ubi0/fence"
+dmesg | grep -iE 'fence|ubi0' | grep -viE 'fence: (write|erase) PEB' | tail -n 30
+dmesg | grep -cE 'fence: (write|erase) PEB' | sed 's/^/RH: logged fence write\/erase lines: /'
+ubidetach -d 0
+
+# ---- V: verification ---------------------------------------------------------------
+echo "" > $UF
+nanddump -q --bb=dumpbad -f /tmp/final.data /dev/mtd1
+gt-be98-nandtool pebdiff $D/image.data /tmp/final.data $EB /tmp/pebmap.txt > /tmp/diff.txt
+tail -n 1 /tmp/diff.txt
+grep '^changed' /tmp/diff.txt | head -n 20
+gate only_jffs2_and_free_changed "grep -q 'other 0' /tmp/diff.txt && ! grep '^changed' /tmp/diff.txt | grep -vqE '\\((free|vol 13 lnum [0-9]+)\\)'"
+rm -f /tmp/final.data
+nanddump -q --bb=dumpbad -f /tmp/loader.final /dev/mtd0
+gate loader_unchanged "cmp -s /tmp/loader.final $D/loader.data"
+gate injected_peb_untouched "nanddump -q -n --oob -s $OFF -l $WS -f /tmp/pg.now /dev/mtd1 && cmp -s /tmp/pg.now /tmp/pg.inj"
+say "re-attach without a fence (writes impossible), stock-style reads"
+ubiattach -m 1 -d 0
+ubinfo -a > /tmp/ubinfo.after
+gate volume_table_unchanged "diff /tmp/ubinfo.before /tmp/ubinfo.after"
+gate bootfs2_still_verifies "[ \$(sha256sum /dev/ubi0_5 | cut -d' ' -f1) = $STOCK_BOOTFS2 ]"
+gate metadata_unchanged "[ \$(sha256sum /dev/ubi0_1 | cut -d' ' -f1) = $STOCK_META ] && [ \$(sha256sum /dev/ubi0_2 | cut -d' ' -f1) = $STOCK_META ]"
+mount -t ubifs -o ro ubi0:jffs2 /mnt && gate jffs2_mounts_with_marker "grep -q 'rehearsal marker' /mnt/mainline-os/marker" && umount /mnt
+ubidetach -d 0
+
+# ---- R: restore the raw backup (G5 restore half) ---------------------------------
+gt-be98-nandrestore --dry-run /tmp/backup.raw /dev/mtd1 | tail -n 3
+gt-be98-nandrestore /tmp/backup.raw /dev/mtd1 > /tmp/restore.txt; rc=$?
+tail -n 3 /tmp/restore.txt
+gate restore_ran "[ $rc = 0 ]"
+nanddump -q -n --oob --bb=dumpbad -f /tmp/after.raw /dev/mtd1
+gate restore_bit_exact "cmp -s /tmp/after.raw /tmp/backup.raw"
+rm -f /tmp/after.raw
+gate restore_entries_cleared "[ -z \"\$(cat $DBG/fence_restore)\" ]"
+
+# ---- G7 rehearsal: a stock-created test volume, fence on it --------------------------
+say "G7: stock-style ubimkvol mltest (fence off), then fence=mltest"
+echo 0 > $FW
+ubiattach -m 1 -d 0
+ubimkvol /dev/ubi0 -N mltest -s 2MiB
+MLID=$(ubinfo -d 0 -N mltest | sed -n 's/^Volume ID: *\([0-9]*\).*/\1/p')
+ubidetach -d 0
+echo 1 > $FW
+nanddump -q --bb=dumpbad -f /tmp/g7.before /dev/mtd1
+gt-be98-nandtool pebmap /dev/mtd1 > /tmp/pebmap.g7
+echo mltest > $UF
+ubiattach -m 1 -d 0
+dd if=/dev/urandom of=/tmp/pattern bs=126976 count=4 2>/dev/null
+gate g7_write_mltest "gt-be98-ubileb write /dev/ubi0_$MLID /tmp/pattern"
+gate g7_readback "dd if=/dev/ubi0_$MLID bs=126976 count=4 2>/dev/null | cmp -s - /tmp/pattern"
+gate g7_jffs2_refused_under_mltest "! gt-be98-ubileb write /dev/ubi0_13 /tmp/small"
+ubidetach -d 0
+echo "" > $UF
+nanddump -q --bb=dumpbad -f /tmp/g7.after /dev/mtd1
+gt-be98-nandtool pebdiff /tmp/g7.before /tmp/g7.after $EB /tmp/pebmap.g7 > /tmp/g7.diff
+tail -n 1 /tmp/g7.diff
+gate g7_only_mltest_and_free_changed "grep -q 'other 0' /tmp/g7.diff && ! grep '^changed' /tmp/g7.diff | grep -vqE '\\((free|vol $MLID lnum [0-9]+)\\)'"
+
+echo "RH-SUMMARY pass $pass fail $fail"
+echo "RH-DONE"
+echo o > /proc/sysrq-trigger

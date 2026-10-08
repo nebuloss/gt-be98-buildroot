@@ -13,6 +13,14 @@
  *       -n (no ECC), ECC without. Per page with a difference:
  *       "page <i> erased <0|1> flips <n> maxsector <m> oobdiff <k>", then a
  *       summary line. A page is "erased" when its corrected data is all 0xff.
+ *   gt-be98-nandtool pebdiff A B ERASESIZE PEBMAP
+ *       A and B are data-only dumps (no OOB) of the same partition. Lists
+ *       every eraseblock whose content differs, with its owner in PEBMAP
+ *       (a "pebmap" listing of A), then a per-owner summary.
+ *   gt-be98-nandtool flipzero IN OUT WRITESIZE OOBSIZE NBITS
+ *       (simulation only) copy the one-page raw dump IN to OUT with NBITS
+ *       data bits of the first 512-byte sector changed from 1 to 0, i.e.
+ *       NBITS bitflips that a raw re-program of the page produces on NAND.
  *   gt-be98-nandtool data|oob DUMP WRITESIZE OOBSIZE
  *       write only the page data (or only the OOB) of a "nanddump --oob"
  *       dump to stdout (to compare dumps whose OOB sizes differ).
@@ -153,8 +161,91 @@ static int split(const char *f, int want_oob, unsigned ws, unsigned oob)
 	return 0;
 }
 
+static int pebdiff(const char *fa, const char *fb, unsigned eb, const char *map)
+{
+	FILE *a = fopen(fa, "rb"), *b = fopen(fb, "rb"), *m = fopen(map, "r");
+	static char owner[65536][32];
+	char line[128];
+	unsigned char *ba, *bb;
+	unsigned long peb = 0, ndiff = 0, nfree = 0, nother = 0;
+	unsigned long per_vol[256] = { 0 };
+	unsigned p, v, l;
+
+	if (!a || !b || !m || !eb) {
+		fprintf(stderr, "pebdiff: cannot open the inputs\n");
+		return 1;
+	}
+	while (fgets(line, sizeof(line), m)) {
+		if (sscanf(line, "PEB %u vol %u lnum %u", &p, &v, &l) == 3 && p < 65536)
+			snprintf(owner[p], sizeof(owner[p]), "vol %u lnum %u", v, l);
+		else if (sscanf(line, "PEB %u", &p) == 1 && p < 65536) {
+			char *w = strchr(line, ' ');
+
+			w = w ? strchr(w + 1, ' ') : NULL;
+			snprintf(owner[p], sizeof(owner[p]), "%s", w ? w + 1 : "?");
+			owner[p][strcspn(owner[p], "\n")] = 0;
+		}
+	}
+	ba = malloc(eb);
+	bb = malloc(eb);
+	while (fread(ba, 1, eb, a) == eb && fread(bb, 1, eb, b) == eb) {
+		if (memcmp(ba, bb, eb)) {
+			const char *o = peb < 65536 && owner[peb][0] ? owner[peb] : "?";
+
+			printf("changed PEB %lu (%s)\n", peb, o);
+			ndiff++;
+			if (sscanf(o, "vol %u", &v) == 1 && v < 256)
+				per_vol[v]++;
+			else if (!strcmp(o, "free"))
+				nfree++;
+			else
+				nother++;
+		}
+		peb++;
+	}
+	printf("pebdiff summary: %lu PEBs compared, %lu changed: free %lu other %lu",
+	       peb, ndiff, nfree, nother);
+	for (v = 0; v < 256; v++)
+		if (per_vol[v])
+			printf(" vol%u %lu", v, per_vol[v]);
+	printf("\n");
+	return 0;
+}
+
+static int flipzero(const char *in, const char *out, unsigned ws, unsigned oob,
+		    unsigned n)
+{
+	FILE *i = fopen(in, "rb"), *o = fopen(out, "wb");
+	unsigned char *b = malloc(ws + oob);
+	unsigned pos, bit, done = 0;
+
+	if (!i || !o || fread(b, 1, ws + oob, i) != ws + oob) {
+		fprintf(stderr, "flipzero: bad input\n");
+		return 1;
+	}
+	/* one bit per byte, spread over the sector (every 32 bytes) */
+	for (pos = 0; pos < 512 && done < n; pos += 32) {
+		for (bit = 0; bit < 8; bit++) {
+			if (b[pos] & (1u << bit)) {
+				b[pos] &= ~(1u << bit);
+				done++;
+				break;
+			}
+		}
+	}
+	fwrite(b, 1, ws + oob, o);
+	fclose(o);
+	printf("flipzero: %u bits cleared in sector 0\n", done);
+	return done == n ? 0 : 1;
+}
+
 int main(int argc, char **argv)
 {
+	if (argc == 7 && !strcmp(argv[1], "flipzero"))
+		return flipzero(argv[2], argv[3], strtoul(argv[4], NULL, 0),
+				strtoul(argv[5], NULL, 0), strtoul(argv[6], NULL, 0));
+	if (argc == 6 && !strcmp(argv[1], "pebdiff"))
+		return pebdiff(argv[2], argv[3], strtoul(argv[4], NULL, 0), argv[5]);
 	if (argc == 5 && (!strcmp(argv[1], "data") || !strcmp(argv[1], "oob")))
 		return split(argv[2], !strcmp(argv[1], "oob"), strtoul(argv[3], NULL, 0),
 			     strtoul(argv[4], NULL, 0));
@@ -165,6 +256,7 @@ int main(int argc, char **argv)
 			     strtoul(argv[5], NULL, 0));
 	fprintf(stderr, "usage: gt-be98-nandtool pebmap /dev/mtdN\n"
 		"       gt-be98-nandtool flips RAW ECC WRITESIZE OOBSIZE\n"
+		"       gt-be98-nandtool pebdiff A B ERASESIZE PEBMAP\n"
 		"       gt-be98-nandtool data|oob DUMP WRITESIZE OOBSIZE\n");
 	return 2;
 }

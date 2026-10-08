@@ -1,0 +1,217 @@
+From: GT-BE98 mainline OS <noreply@example.invalid>
+Subject: [PATCH] DEBUG: mtd: write fence gate for NAND chips
+
+GT-BE98 mainline development OS, not for upstream (NAND-PHASE2.md).
+
+mtd_fence_register()/mtd_fence_check(): a NAND chip with nand_chip.fence_writes
+set only programs, erases or marks a block bad when the registered fence
+(the UBI fence) vouches for the calling task and range. Without a registered
+fence every such operation is refused with -EROFS. The NAND core checks it in
+nand_do_write_ops(), nand_do_write_oob(), nand_erase_nand() and
+nand_block_markbad_lowlevel(), so on-flash BBT updates are covered too.
+nandsim gets a fence_writes parameter (runtime) for the rehearsal.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+diff --git a/drivers/mtd/mtdcore.c b/drivers/mtd/mtdcore.c
+index 16629382a..998a77f75 100644
+--- a/drivers/mtd/mtdcore.c
++++ b/drivers/mtd/mtdcore.c
+@@ -1507,6 +1507,50 @@ int mtd_erase(struct mtd_info *mtd, struct erase_info *instr)
+ 	return ret;
+ }
+ EXPORT_SYMBOL_GPL(mtd_erase);
++
++/* ---- write fence (see include/linux/mtd/mtd.h) ---- */
++static DEFINE_SPINLOCK(mtd_fence_lock);
++static mtd_fence_fn mtd_fence_cb;
++
++int mtd_fence_register(mtd_fence_fn fn)
++{
++	int ret = 0;
++
++	spin_lock(&mtd_fence_lock);
++	if (mtd_fence_cb)
++		ret = -EBUSY;
++	else
++		mtd_fence_cb = fn;
++	spin_unlock(&mtd_fence_lock);
++	return ret;
++}
++EXPORT_SYMBOL_GPL(mtd_fence_register);
++
++void mtd_fence_unregister(mtd_fence_fn fn)
++{
++	spin_lock(&mtd_fence_lock);
++	if (mtd_fence_cb == fn)
++		mtd_fence_cb = NULL;
++	spin_unlock(&mtd_fence_lock);
++}
++EXPORT_SYMBOL_GPL(mtd_fence_unregister);
++
++int mtd_fence_check(struct mtd_info *master, u64 ofs, u64 len,
++		    enum mtd_fence_op op)
++{
++	static const char * const opname[] = { "write", "erase", "markbad" };
++	int ret;
++
++	spin_lock(&mtd_fence_lock);
++	ret = mtd_fence_cb ? mtd_fence_cb(master, ofs, len, op) : -EROFS;
++	spin_unlock(&mtd_fence_lock);
++	if (ret)
++		pr_err_ratelimited("mtd: write fence refused %s 0x%llx+0x%llx on %s%s\n",
++				   opname[op], ofs, len, master->name,
++				   mtd_fence_cb ? "" : " (no fence registered)");
++	return ret;
++}
++EXPORT_SYMBOL_GPL(mtd_fence_check);
+ ALLOW_ERROR_INJECTION(mtd_erase, ERRNO);
+ 
+ /*
+diff --git a/drivers/mtd/nand/raw/nand_base.c b/drivers/mtd/nand/raw/nand_base.c
+index a5b278ab9..91b82a393 100644
+--- a/drivers/mtd/nand/raw/nand_base.c
++++ b/drivers/mtd/nand/raw/nand_base.c
+@@ -425,12 +425,25 @@ static uint8_t *nand_fill_oob(struct nand_chip *chip, uint8_t *oob, size_t len,
+  *
+  * NAND write out-of-band.
+  */
++/* GT-BE98 write fence gate (include/linux/mtd/mtd.h) */
++static int nand_fence(struct nand_chip *chip, loff_t ofs, u64 len,
++		      enum mtd_fence_op op)
++{
++	if (!chip->fence_writes)
++		return 0;
++	return mtd_fence_check(nand_to_mtd(chip), ofs, len, op);
++}
++
+ static int nand_do_write_oob(struct nand_chip *chip, loff_t to,
+ 			     struct mtd_oob_ops *ops)
+ {
+ 	struct mtd_info *mtd = nand_to_mtd(chip);
+ 	int chipnr, page, status, len, ret;
+ 
++	ret = nand_fence(chip, to, mtd->writesize, MTD_FENCE_WRITE);
++	if (ret)
++		return ret;
++
+ 	pr_debug("%s: to = 0x%08x, len = %i\n",
+ 			 __func__, (unsigned int)to, (int)ops->ooblen);
+ 
+@@ -571,6 +584,11 @@ static int nand_block_markbad_lowlevel(struct nand_chip *chip, loff_t ofs)
+ 	struct mtd_info *mtd = nand_to_mtd(chip);
+ 	int res, ret = 0;
+ 
++	res = nand_fence(chip, ofs, 1ULL << chip->phys_erase_shift,
++			 MTD_FENCE_MARKBAD);
++	if (res)
++		return res;
++
+ 	if (!(chip->bbt_options & NAND_BBT_NO_OOB_BBM)) {
+ 		struct erase_info einfo;
+ 
+@@ -4324,6 +4342,10 @@ static int nand_do_write_ops(struct nand_chip *chip, loff_t to,
+ 	if (!writelen)
+ 		return 0;
+ 
++	ret = nand_fence(chip, to, writelen, MTD_FENCE_WRITE);
++	if (ret)
++		return ret;
++
+ 	/* Reject writes, which are not page aligned */
+ 	if (NOTALIGNED(to) || NOTALIGNED(ops->len)) {
+ 		pr_notice("%s: attempt to write non page aligned data\n",
+@@ -4534,6 +4556,10 @@ int nand_erase_nand(struct nand_chip *chip, struct erase_info *instr,
+ 	if (check_offs_len(chip, instr->addr, instr->len))
+ 		return -EINVAL;
+ 
++	ret = nand_fence(chip, instr->addr, instr->len, MTD_FENCE_ERASE);
++	if (ret)
++		return ret;
++
+ 	/* Check if the region is secured */
+ 	if (nand_region_is_secured(chip, instr->addr, instr->len))
+ 		return -EIO;
+diff --git a/drivers/mtd/nand/raw/nandsim.c b/drivers/mtd/nand/raw/nandsim.c
+index fe968037f..4f0a42113 100644
+--- a/drivers/mtd/nand/raw/nandsim.c
++++ b/drivers/mtd/nand/raw/nandsim.c
+@@ -129,6 +129,24 @@ module_param(cache_file,     charp, 0400);
+ module_param(bbt,	     uint, 0400);
+ module_param(bch,	     uint, 0400);
+ 
++/* GT-BE98 write fence: when set, every program/erase needs mtd_fence_check() */
++static bool fence_writes;
++static struct nand_chip *ns_fence_chip;
++static int ns_fence_set(const char *val, const struct kernel_param *kp)
++{
++	int ret = param_set_bool(val, kp);
++
++	if (!ret && ns_fence_chip)
++		ns_fence_chip->fence_writes = fence_writes;
++	return ret;
++}
++static const struct kernel_param_ops ns_fence_ops = {
++	.set = ns_fence_set,
++	.get = param_get_bool,
++};
++module_param_cb(fence_writes, &ns_fence_ops, &fence_writes, 0644);
++MODULE_PARM_DESC(fence_writes, "GT-BE98 write fence on this chip (0 = off)");
++
+ MODULE_PARM_DESC(id_bytes,       "The ID bytes returned by NAND Flash 'read ID' command");
+ MODULE_PARM_DESC(first_id_byte,  "The first byte returned by NAND Flash 'read ID' command (manufacturer ID) (obsolete)");
+ MODULE_PARM_DESC(second_id_byte, "The second byte returned by NAND Flash 'read ID' command (chip ID) (obsolete)");
+@@ -2339,6 +2357,8 @@ static int __init ns_init_module(void)
+ 		NS_ERR("Could not scan NAND Simulator device\n");
+ 		goto free_gp_list;
+ 	}
++	chip->fence_writes = fence_writes;
++	ns_fence_chip = chip;
+ 
+ 	if (overridesize) {
+ 		uint64_t new_size = (uint64_t)nsmtd->erasesize << overridesize;
+diff --git a/include/linux/mtd/mtd.h b/include/linux/mtd/mtd.h
+index 8d10d9d2e..838939f7f 100644
+--- a/include/linux/mtd/mtd.h
++++ b/include/linux/mtd/mtd.h
+@@ -696,6 +696,24 @@ struct mtd_notifier {
+ };
+ 
+ 
++/*
++ * Write fence (GT-BE98, DEBUG): NAND chips with nand_chip.fence_writes set
++ * only program, erase or mark blocks bad when mtd_fence_check() allows it,
++ * i.e. when a registered fence (UBI's, drivers/mtd/ubi/fence.c) vouches for
++ * the calling task and range. No registered fence: everything is refused.
++ */
++enum mtd_fence_op {
++	MTD_FENCE_WRITE,
++	MTD_FENCE_ERASE,
++	MTD_FENCE_MARKBAD,
++};
++typedef int (*mtd_fence_fn)(struct mtd_info *master, u64 ofs, u64 len,
++			    enum mtd_fence_op op);
++int mtd_fence_register(mtd_fence_fn fn);
++void mtd_fence_unregister(mtd_fence_fn fn);
++int mtd_fence_check(struct mtd_info *master, u64 ofs, u64 len,
++		    enum mtd_fence_op op);
++
+ extern void register_mtd_user (struct mtd_notifier *new);
+ extern int unregister_mtd_user (struct mtd_notifier *old);
+ void *mtd_kmalloc_up_to(const struct mtd_info *mtd, size_t *size);
+diff --git a/include/linux/mtd/rawnand.h b/include/linux/mtd/rawnand.h
+index 5c70e7bd3..2218f3a65 100644
+--- a/include/linux/mtd/rawnand.h
++++ b/include/linux/mtd/rawnand.h
+@@ -1286,6 +1286,11 @@ struct nand_secure_region {
+  * @priv: Chip private data
+  */
+ struct nand_chip {
++	/*
++	 * GT-BE98 write fence: program/erase/markbad only through
++	 * mtd_fence_check() (drivers/mtd/nand/raw/nand_base.c)
++	 */
++	bool fence_writes;
+ 	struct nand_device base;
+ 	struct nand_id id;
+ 	struct nand_parameters parameters;
