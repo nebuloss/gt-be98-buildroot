@@ -212,7 +212,7 @@ loaded by the services (`modprobe`).
 
 The webui-go delivery (`WEBUI_DIR`) is installed with `/etc/webui/platform.conf`
 set to `WAN_IF=rnr0` (the LAN port: a plain DHCP client, never bridged),
-`MGMT_IF=eth0` (the USB lifeline), `DNSMASQ_DNS=0`, and no
+`MGMT_IF="eth0 rnr0"` (the UI on the USB lifeline and on the LAN port), `DNSMASQ_DNS=0`, and no
 `ALLOW_MULTI_PORT_BRIDGE`. The service is **enabled only when a password is
 provisioned** in the local configuration (`WEBUI_PASSWORD`, or
 `WEBUI_PASSWORD_HASH`): the build writes `/etc/webui/auth.conf` (`SALT=`,
@@ -220,6 +220,10 @@ provisioned** in the local configuration (`WEBUI_PASSWORD`, or
 `webui.db` on the first start). Without one the service stays disabled, and
 `gt-be98-webui-guard` (required by `webui`) refuses a manual start, so the
 webui never serves its first-run "set password" page on the LAN.
+With `WAN_IF` (rnr0) also listed in `MGMT_IF`, the webui skips its WAN block
+on rnr0 (`WAN_BLOCK_PORTS` is not applied there), so the UI is reachable from
+the LAN rnr0 sits on: intended for this dev box (password-protected; needs a
+webui whose `MGMT_IF` takes a list, webui-go mainline-os 6554144 or later).
 `gt-be98-netguard` keeps `rnr*`/`eth*` out of any bridge whatever the web UI
 does. The package version is a digest of the delivery, so a new webui build
 is picked up by a plain `build.sh`.
