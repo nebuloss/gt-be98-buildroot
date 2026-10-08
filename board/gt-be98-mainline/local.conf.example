@@ -49,9 +49,12 @@ IMAGE=netroot
 # it). @DHCP_SERVER@ / @DHCP_ROUTER@ are replaced at boot by the lifeline's
 # DHCP lease values. Changing it only needs build.sh (post-image).
 ROOTFS_URL=
-# NAND access (PHASE 1): off (default: no NAND node in the DT) or ro
-# (read-only: UBI attached read-only, the stock /jffs mounted read-only and
-# /jffs/mainline-os applied; NAND.md). There is no write mode.
+# NAND access: off (default: no NAND node in the DT), ro (PHASE 1:
+# read-only; UBI attached read-only, the stock /jffs mounted read-only and
+# /jffs/mainline-os applied; NAND.md), or rw-jffs (PHASE 2: the "image"
+# partition writable in the DT, writes possible ONLY through the UBI write
+# fence, and only when /etc/conf.d/gt-be98-jffs says JFFS_MODE=rw;
+# NAND-PHASE2.md). The loader partition is always read-only.
 NAND=off
 # the size probe ml-bootfs-pad<N>.itb is padded to this many MiB
 PAD_TOTAL_MB=30

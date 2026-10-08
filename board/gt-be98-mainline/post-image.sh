@@ -51,7 +51,7 @@ die() { echo "post-image: $*" >&2; exit 1; }
 [ -f "$STOCK_BOOTFS" ] || die "STOCK_BOOTFS $STOCK_BOOTFS missing"
 case "$RESCUE" in 0|1) ;; *) die "RESCUE must be 0 or 1" ;; esac
 case "$IMAGE" in netroot|initrd) ;; *) die "IMAGE must be netroot or initrd" ;; esac
-case "$NAND" in off|ro) ;; *) die "NAND must be off or ro (there is no write mode)" ;; esac
+case "$NAND" in off|ro|rw-jffs) ;; *) die "NAND must be off, ro or rw-jffs" ;; esac
 case "$ROOTFS_URL" in ''|http://*) ;; *) die "ROOTFS_URL: http:// only (BusyBox wget)" ;; esac
 case "$ROOTFS_URL" in *[!A-Za-z0-9:/._~%+@-]*) die "ROOTFS_URL: unexpected characters" ;; esac
 [ "$IMAGE" = netroot ] && [ -z "$ROOTFS_URL" ] &&
@@ -143,7 +143,9 @@ cat > "$D/gt-be98-os.dts" <<'EOF'
 		partition@200000 {
 			label = "image";
 			reg = <0x200000 0xfd00000>;
+#ifndef ML_NAND_RW_JFFS
 			read-only;
+#endif
 		};
 	};
 };
@@ -160,7 +162,10 @@ cat > "$D/gt-be98-os.dts" <<'EOF'
 EOF
 mkdtb() {	# [initrd start, initrd end]
 	set -- ${1:+-DML_INITRD_START=$1 -DML_INITRD_END=$2}
-	[ "$NAND" = ro ] && set -- "$@" -DML_NAND_RO
+	case "$NAND" in
+	ro) set -- "$@" -DML_NAND_RO ;;
+	rw-jffs) set -- "$@" -DML_NAND_RO -DML_NAND_RW_JFFS ;;
+	esac
 	cpp -nostdinc -undef -D__DTS__ -DML_USB -DML_PCIE -DML_PCIE_ALL \
 		-DML_MPM_SIZE=0x10000000 "$@" -x assembler-with-cpp \
 		-I "$D" -I "$SHARE" -I "$LINUX_DIR/arch/arm64/boot/dts/broadcom/bcmbca" \
@@ -220,10 +225,15 @@ fi
 dumpimage -l "$B/ml-bootfs.itb" > "$B/ml-bootfs.layout"
 dtc -q -I dtb -O dts "$B/gt-be98-os.dtb" > "$D/gt-be98-os.dtb.dts"
 grep -q 'brcm,bcm6345-wdt' "$D/gt-be98-os.dtb.dts" || die "DTB has no watchdog node"
-if [ "$NAND" = ro ]; then
-	# every NAND partition must be read-only
-	awk '/partition@/{p=1; ro=0} p&&/read-only/{ro=1} p&&/^\t*};/{if(!ro){print "rw"; exit} p=0}' \
-		"$D/gt-be98-os.dtb.dts" | grep -q rw && die "a NAND partition is not read-only"
+if [ "$NAND" != off ]; then
+	# NAND=ro: every partition read-only; NAND=rw-jffs: only "image" (UBI)
+	# writable, and only through the UBI write fence (NAND-PHASE2.md)
+	awk '/partition@/{p=1; ro=0; lab=""} p&&/label/{lab=$3} p&&/read-only/{ro=1} p&&/^\t*};/{if(!ro) print lab; p=0}' \
+		"$D/gt-be98-os.dtb.dts" > "$D/rw-partitions"
+	case "$NAND" in
+	ro) [ ! -s "$D/rw-partitions" ] || die "a NAND partition is not read-only" ;;
+	rw-jffs) [ "$(cat "$D/rw-partitions")" = '"image";' ] || die "NAND=rw-jffs: only \"image\" may be writable" ;;
+	esac
 	grep -q 'brcm,nand-ecc-use-strap' "$D/gt-be98-os.dtb.dts" || die "NAND node missing"
 fi
 

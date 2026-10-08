@@ -128,6 +128,35 @@ dmesg | grep -iE 'fence|ubi0' | grep -viE 'fence: (write|erase) PEB' | tail -n 3
 dmesg | grep -cE 'fence: (write|erase) PEB' | sed 's/^/RH: logged fence write\/erase lines: /'
 ubidetach -d 0
 
+# ---- P: power cuts during fenced writes (UBI's power-cut emulation: after a
+# random number of EC/VID/data writes UBI stops writing, as after a power
+# loss), then fenced re-attach + UBIFS mount (journal replay) ------------------
+c=1
+while [ $c -le ${RH_CUTS:-5} ]; do
+	ubiattach -m 1 -d 0 -O 2048 >/dev/null
+	mount -t ubifs ubi0:jffs2 /mnt
+	echo 7 > $DBG/ubi0/tst_emulate_power_cut
+	echo 20 > $DBG/ubi0/tst_emulate_power_cut_min
+	echo 300 > $DBG/ubi0/tst_emulate_power_cut_max
+	i=0
+	while [ $i -lt 200 ] && [ "$(cat /sys/class/ubi/ubi0/ro_mode)" = 0 ]; do
+		dd if=/dev/urandom of=/mnt/cut.$i bs=64k count=4 2>/dev/null
+		sync 2>/dev/null
+		[ $((i % 3)) = 2 ] && rm -f /mnt/cut.$((i - 2))
+		i=$((i + 1))
+	done
+	say "power cut $c after $i writes (ro_mode=$(cat /sys/class/ubi/ubi0/ro_mode))"
+	umount /mnt 2>/dev/null || umount -l /mnt
+	ubidetach -d 0
+	ubiattach -m 1 -d 0 -O 2048 >/dev/null
+	gate "power_cut_${c}_reattach_fenced" "grep -q 'state active' $DBG/ubi0/fence"
+	gate "power_cut_${c}_ubifs_mounts" "mount -t ubifs ubi0:jffs2 /mnt && grep -q 'rehearsal marker' /mnt/mainline-os/marker"
+	rm -f /mnt/cut.* 2>/dev/null; sync
+	umount /mnt 2>/dev/null
+	ubidetach -d 0
+	c=$((c + 1))
+done
+
 # ---- V: verification ---------------------------------------------------------------
 echo "" > $UF
 nanddump -q --bb=dumpbad -f /tmp/final.data /dev/mtd1
@@ -183,4 +212,6 @@ gate g7_only_mltest_and_free_changed "grep -q 'other 0' /tmp/g7.diff && ! grep '
 
 echo "RH-SUMMARY pass $pass fail $fail"
 echo "RH-DONE"
-echo o > /proc/sysrq-trigger
+sync
+poweroff -f
+sleep 30

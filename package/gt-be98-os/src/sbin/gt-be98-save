@@ -4,6 +4,9 @@
 #
 #   ssh root@<box> gt-be98-save > state.tgz          (tar.gz on stdout)
 #   gt-be98-save -o /tmp/state.tgz                    (and state.tgz.sha256)
+#   gt-be98-save --local                              (PHASE 2, JFFS_MODE=rw:
+#                         write /jffs/mainline-os/state.tgz directly, through
+#                         the UBI write fence; the previous one is kept .prev)
 #
 # The archive holds exactly the paths gt-be98-jffs restores (ALLOW_PATHS of
 # /etc/conf.d/gt-be98-jffs): the web UI state (/etc/webui: webui.db,
@@ -15,12 +18,33 @@ set -eu
 ALLOW_PATHS=
 . /etc/conf.d/gt-be98-jffs
 out=
+loc=0
 [ "${1:-}" = -o ] && out=${2:?gt-be98-save -o FILE}
+if [ "${1:-}" = --local ]; then
+	grep -qE '^ubi0:[^ ]+ /jffs ubifs rw' /proc/mounts ||
+		{ echo "gt-be98-save: /jffs is not mounted read-write (JFFS_MODE=rw, NAND-PHASE2.md)" >&2; exit 1; }
+	loc=1
+	umask 077
+	mkdir -p /jffs/mainline-os
+	chmod 0700 /jffs/mainline-os
+	out=/jffs/mainline-os/state.tgz.new
+fi
 list=
 for p in $ALLOW_PATHS; do [ -e "/$p" ] && list="$list $p"; done
 [ -n "$list" ] || { echo "gt-be98-save: nothing to save" >&2; exit 1; }
 if [ -n "$out" ]; then
 	tar -czf "$out" -C / $list
+	if [ $loc = 1 ]; then
+		d=/jffs/mainline-os
+		[ -f $d/state.tgz ] && cp $d/state.tgz $d/state.tgz.prev
+		sum=$(sha256sum $d/state.tgz.new | cut -d' ' -f1)
+		mv $d/state.tgz.new $d/state.tgz
+		echo "$sum  state.tgz" > $d/state.tgz.sha256
+		chmod 0600 $d/*
+		sync
+		echo "gt-be98-save: $d/state.tgz ($(wc -c < $d/state.tgz) B) written to the NAND through the fence" >&2
+		exit 0
+	fi
 	(cd "$(dirname "$out")" && sha256sum "$(basename "$out")" > "$(basename "$out").sha256")
 	echo "gt-be98-save: $out ($(wc -c < "$out") B), $out.sha256" >&2
 else

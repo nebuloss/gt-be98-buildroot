@@ -1,5 +1,12 @@
-# /etc/conf.d/gt-be98-jffs - stock /jffs, read-only (PHASE 1)
+# /etc/conf.d/gt-be98-jffs - stock /jffs (NAND.md, NAND-PHASE2.md)
 JFFS=yes
+# ro (default): read-only. rw: re-attach UBI with the write fence
+# (FENCE_VOLUMES only) and remount /jffs read-write; needs an image built
+# with NAND=rw-jffs, otherwise it stays read-only. OFF until approved.
+JFFS_MODE=ro
+# the only UBI volumes the fence lets mainline write (rw mode); "mltest" for
+# the sacrificial-volume step (G7), "jffs2" afterwards
+FENCE_VOLUMES=jffs2
 # NAND MTD partition holding the UBI device (DT label)
 IMAGE_MTD=image
 # stock UBIFS volume mounted on /jffs

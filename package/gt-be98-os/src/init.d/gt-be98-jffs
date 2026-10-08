@@ -1,7 +1,9 @@
 #!/sbin/openrc-run
 # SPDX-License-Identifier: GPL-2.0
-# Read-only access to the stock /jffs (PHASE 1) and the persistent state the
-# mainline OS keeps there.
+# Access to the stock /jffs and the persistent state the mainline OS keeps
+# there. JFFS_MODE=ro (default, PHASE 1) or rw (PHASE 2: UBI re-attached with
+# the write fence on FENCE_VOLUMES, brcmnand.allow_write=1, /jffs read-write;
+# only on an image built with NAND=rw-jffs). Read-only mode:
 #   1. the NAND "image" MTD partition must be read-only (DT read-only, and
 #      the brcmnand driver refuses program/erase without
 #      brcmnand.allow_write=1); otherwise stop;
@@ -25,38 +27,95 @@ nand_mtd() {	# the mtd number of the partition labelled $1
 	sed -n "s/^mtd\([0-9]*\): [0-9a-f]* [0-9a-f]* \"$1\"$/\1/p" /proc/mtd | head -n1
 }
 
+AW=/sys/module/brcmnand/parameters/allow_write
+UF=/sys/module/ubi/parameters/fence
+FD=/sys/kernel/debug/ubi/ubi0/fence
+
+# back to the phase-1 state: no writes possible
+lock_down() {
+	mountpoint -q /jffs && umount /jffs
+	[ -e /sys/class/ubi/ubi0 ] && ubidetach -d 0 >/dev/null 2>&1
+	[ -w "$AW" ] && echo 0 > "$AW"
+	[ -w "$UF" ] && echo "" > "$UF"
+}
+
 start() {
 	[ "${JFFS:-yes}" = yes ] || { einfo "JFFS=no"; return 0; }
-	local m flags vol
+	local m flags writable mode=${JFFS_MODE:-ro}
 	m=$(nand_mtd "$IMAGE_MTD")
 	if [ -z "$m" ]; then
-		einfo "no NAND \"$IMAGE_MTD\" partition (image built without NAND=ro): image defaults"
+		einfo "no NAND \"$IMAGE_MTD\" partition (image built without NAND=ro/rw-jffs): image defaults"
 		return 0
 	fi
-	# MTD_WRITEABLE = 0x400 must be clear
+	# MTD_WRITEABLE = 0x400
 	flags=$(cat /sys/class/mtd/mtd$m/flags)
-	if [ $(( flags & 0x400 )) -ne 0 ]; then
-		eerror "mtd$m ($IMAGE_MTD) is WRITEABLE (flags $flags): refusing to attach UBI"
-		return 0
+	writable=$(( (flags & 0x400) != 0 ))
+	if [ "$mode" = rw ] && [ $writable = 0 ]; then
+		ewarn "JFFS_MODE=rw but mtd$m is read-only (image not built with NAND=rw-jffs): read-only"
+		mode=ro
 	fi
-	if [ ! -e /sys/class/ubi/ubi0 ]; then
-		ebegin "Attaching UBI read-only on mtd$m ($IMAGE_MTD)"
-		ubiattach -m "$m" -d 0 >/dev/null 2>&1
-		eend $? || return 0
+	if [ "$mode" = rw ]; then
+		start_rw "$m" && { apply_state; remount_rw; return 0; }
+		eerror "read-write /jffs failed: falling back to read-only"
+		lock_down
 	fi
-	if [ "$(cat /sys/class/ubi/ubi0/ro_mode 2>/dev/null)" != 1 ]; then
-		eerror "ubi0 is NOT in read-only mode: detaching"
-		ubidetach -d 0 >/dev/null 2>&1
-		return 0
-	fi
-	mkdir -p /jffs
-	if ! mountpoint -q /jffs; then
-		ebegin "Mounting ubi0:$JFFS_VOLUME read-only on /jffs"
-		mount -t ubifs -o ro ubi0:"$JFFS_VOLUME" /jffs
-		eend $? || return 0
-	fi
+	start_ro "$m" $writable || return 0
 	apply_state
 	return 0
+}
+
+start_ro() {	# $1 mtd, $2 writable
+	lock_down
+	ebegin "Attaching UBI read-only on mtd$1 ($IMAGE_MTD)"
+	ubiattach -m "$1" -d 0 >/dev/null 2>&1
+	eend $? || return 1
+	if [ "$(cat /sys/class/ubi/ubi0/ro_mode 2>/dev/null)" != 1 ]; then
+		if [ "$2" = 1 ] && [ "$(cat $AW 2>/dev/null)" = N ]; then
+			ewarn "mtd$1 is writable (NAND=rw-jffs image) but brcmnand.allow_write=0 and no UBI fence: nothing can be written"
+		else
+			eerror "ubi0 is NOT in read-only mode: detaching"
+			lock_down
+			return 1
+		fi
+	fi
+	mkdir -p /jffs
+	ebegin "Mounting ubi0:$JFFS_VOLUME read-only on /jffs"
+	mount -t ubifs -o ro ubi0:"$JFFS_VOLUME" /jffs
+	eend $?
+}
+
+start_rw() {	# $1 mtd: fenced attach, checked, then allow_write
+	local v
+	lock_down
+	[ -w "$UF" ] && [ -w "$AW" ] || { eerror "kernel without the write fence"; return 1; }
+	echo "$FENCE_VOLUMES" > "$UF"
+	ebegin "Attaching UBI on mtd$1 with the write fence ($FENCE_VOLUMES)"
+	ubiattach -m "$1" -d 0 >/dev/null 2>&1
+	eend $? || return 1
+	if ! grep -q '^state active' "$FD" 2>/dev/null; then
+		eerror "UBI fence not active ($FD)"; return 1
+	fi
+	for v in $(echo "$FENCE_VOLUMES" | tr ',' ' '); do
+		grep -q "^volumes.* $v:" "$FD" || { eerror "fence does not cover $v"; return 1; }
+	done
+	[ "$(cat /sys/class/ubi/ubi0/ro_mode)" = 0 ] || { eerror "ubi0 in read-only mode"; return 1; }
+	einfo "fence: $(grep -E '^(volumes|pebs)' "$FD" | tr '\n' ' ')"
+	echo 1 > "$AW"
+	logger -t gt-be98-jffs "write fence active ($FENCE_VOLUMES), brcmnand.allow_write=1"
+	mkdir -p /jffs
+	ebegin "Mounting ubi0:$JFFS_VOLUME read-only on /jffs (then read-write)"
+	mount -t ubifs -o ro ubi0:"$JFFS_VOLUME" /jffs
+	eend $?
+}
+
+remount_rw() {
+	case ",$FENCE_VOLUMES," in
+	*,"$JFFS_VOLUME",*) ;;
+	*) einfo "/jffs stays read-only ($JFFS_VOLUME is not in FENCE_VOLUMES)"; return 0 ;;
+	esac
+	ebegin "Remounting /jffs read-write (fenced)"
+	mount -o remount,rw /jffs
+	eend $? || { lock_down; return 1; }
 }
 
 allowed() {	# copy the allowed paths of tree $1 over /
@@ -101,7 +160,7 @@ apply_state() {
 }
 
 stop() {
-	mountpoint -q /jffs && umount /jffs
-	[ -e /sys/class/ubi/ubi0 ] && ubidetach -d 0 >/dev/null 2>&1
+	sync
+	lock_down
 	return 0
 }

@@ -1,15 +1,85 @@
-# GT-BE98 mainline OS - NAND PHASE 2: mainline read-write on /jffs only (DESIGN, not implemented)
+# GT-BE98 mainline OS - NAND PHASE 2: mainline read-write on /jffs only
 
-Status: design only. Nothing here is built. Phase 1 (read-only, NAND.md)
-stays the default and the fallback; phase 2 is opt-in per image and only
-after every GO criterion below is met.
+Status: **approved and implemented** (2026-10-08), every switch default-OFF;
+validated in simulation (G5 restore, G6). Nothing has been enabled on the
+box. Phase 1 (read-only, NAND.md) stays the default and the fallback.
 
 ## Gate status
 
 | Gate | Status |
 |---|---|
 | Validation step 1, layout (criteria **G1-G4**) | **PASSED** 2026-10-08, see below |
-| G5-G9 (rehearsal, sacrificial volume, real session, backup/restore) | not started; phase 2 implementation **on hold until the owner approves** |
+| G5 backup | taken 2026-10-08 by the orchestrator (`~/oe-tool/backup/nand-raw-20261008`, raw + corrected, `SHA256SUMS`) |
+| G5 restore | procedure + tool done (`nand/RESTORE.md`), **PASSED in simulation** (bit-exact); never run on the box |
+| G6 rehearsal | **PASSED in simulation** 2026-10-08: 32/32 gates (`nand/rehearsal/results-20261008.txt`) |
+| G7 sacrificial volume | scripts ready (`nand/phase2/`), rehearsed in simulation; to run on the box next |
+| G8, G9 | not started |
+
+## Implementation (2026-10-08)
+
+Kernel (`patches/linux/`, applied by Buildroot to every image; inert unless
+switched on):
+
+| Patch | What |
+|---|---|
+| 0001 | brcmnand refuses program/erase unless `brcmnand.allow_write=1` (phase 1) |
+| 0002 | MTD write fence gate: a chip with `fence_writes` (brcmnand, nandsim) programs, erases or marks bad only when `mtd_fence_check()` passes, i.e. the registered fence vouches for the calling task and range; nothing registered = refused. Checked in the NAND core (`nand_do_write_ops`, `nand_do_write_oob`, `nand_erase_nand`, `nand_block_markbad_lowlevel`), so BBT updates are covered |
+| 0003 | brcmnand: `allow_write` becomes runtime (0644), the chip is always fenced |
+| 0004 | UBI write fence `ubi.fence=<volumes>` (runtime, for devices attached afterwards): free and fenced-volume PEBs only; all other PEBs (and attach erase candidates not owned by a fenced volume) in a `fence_off` tree, never moved, scrubbed or erased; LEB write/unmap/atomic change only on fenced volumes, so no volume-table change; bad-block marking refused; fastmap must be off; all writes refused until set up; each program/erase registered in flight for the MTD gate; rate-limited log of every write/erase with PEB and owner; `debugfs ubi/ubiN/fence` (state, PEB counts, writes, erases, refused, scrub_refused, gate counters); `debugfs ubi/fence_restore` (raw restore of listed PEBs, only with no UBI device on the chip) |
+
+So a NAND write needs, all at once: an image built with `NAND=rw-jffs`
+(the `image` partition writable in the DT; `loader` always read-only),
+`brcmnand.allow_write=1`, and either fenced UBI I/O on a fenced volume or an
+explicit restore entry with UBI detached.
+
+OS (`gt-be98-os`): `/etc/conf.d/gt-be98-jffs` `JFFS_MODE=ro` (default) |
+`rw` with `FENCE_VOLUMES` (default `jffs2`; `mltest` for G7). In `rw` mode
+the service sets the fence, attaches, checks `debugfs` (state active, the
+volumes covered, not read-only), only then sets `allow_write=1`, mounts `/jffs`
+read-only, applies the saved state and remounts read-write; any failure falls
+back to the phase-1 read-only state (`lock_down`). `gt-be98-save --local`
+writes `/jffs/mainline-os/state.tgz` directly (previous kept as `.prev`).
+
+Tools (`nand/build-phase2-kit.sh` -> `$OUT/images/nand-phase2-kit/`, static,
+not in the rootfs): `gt-be98-nandrestore`, `gt-be98-ubileb` (LEB writes with
+the atomic-change ioctl: no volume-table update), `gt-be98-nandtool`,
+`nanddump`, the G7 scripts and patterns.
+
+### G6 / G5-restore rehearsal (simulation) PASSED - 2026-10-08
+
+`nand/rehearsal/run.sh`: QEMU virt, the patched kernel with nandsim shaped
+like the box's NAND (Macronix ID c2 da 90 95: 256 MiB, 128 KiB blocks, 2 KiB
+pages; partitions loader 16 / image 2024 / rest 8 blocks), loaded with the
+corrected page data of the box's backup; UBI attached with the box's VID
+header offset (2048). Differences from the box, stated: nandsim has 64 B of
+OOB with software BCH-8 (the box: 108 B controller layout, hardware BCH-8),
+allows sub-page writes (UBI writes 512-B units there), and the rehearsal
+kernel has a UBI wear-leveling threshold of 128 instead of 4096 so that
+wear-leveling actually runs. The fence logic and the UBI/UBIFS behaviour are
+the same; the brcmnand write path itself is exercised only on the box (G7).
+
+Results (32/32 gates, `nand/rehearsal/results-20261008.txt`):
+
+- data loaded bit-identical; a 6-bit flip injected in a bootfs2 PEB still
+  corrects (and reads return "6 corrected");
+- chip fenced, nothing registered: raw erase, raw write and bad-block marking
+  refused, the PEB unchanged; an unfenced UBI attach cannot write (its
+  wear-leveling write is refused at the gate, UBI goes read-only) and cannot
+  create a volume;
+- fence on jffs2: active, 407 fenced / 702 free / 915 fenced-off PEBs; volume
+  create and remove refused, writes to rootfs2 refused, raw writes refused,
+  restore refused while attached; bootfs2 reads the stock sha256 and its
+  6-bit-flip PEB's scrub request is refused (data readable, PEB untouched);
+- 300 x 1 MiB write+sync+delete on UBIFS jffs2: 170,392 fenced writes and
+  3,263 erases (wear-leveling moves included), 60 rate-limited log lines, the
+  marker file kept;
+- after detach: 108 PEBs changed: 37 jffs2 + 71 free, **0 other**; loader
+  unchanged; volume table unchanged; bootfs2 still the stock sha256;
+  metadata1/2 unchanged; jffs2 mounts with the marker;
+- restore: the 108 differing PEBs rewritten and verified, the whole partition
+  bit-exact to the pre-session raw dump, restore entries cleared;
+- G7 rehearsal: after a stock-style `ubimkvol mltest`, fence=mltest writes and
+  reads back 4 LEBs, a jffs2 write is refused, only 4 free PEBs changed.
 
 ### G1 (layout) PASSED - 2026-10-08
 
@@ -97,6 +167,18 @@ mainline's write path produces pages stock decodes.
    + OOB, raw and corrected, ~270 MB) is kept off the box, and a restore
    path that does not need mainline is tested (stock `ubiupdatevol` of the
    affected volumes / bootloader recovery).
+
+## Next on the box (in order, each gated by the previous)
+
+1. G7: a `NAND=rw-jffs` image; on stock `stock-mltest.sh create`; on
+   mainline `JFFS_MODE=rw FENCE_VOLUMES=mltest`, `mltest-mainline.sh write-a`;
+   on stock `stock-mltest.sh verify-a` and `write-b`; on mainline
+   `mltest-mainline.sh verify-b`; on stock `stock-mltest.sh remove`;
+   `stock-nandinfo.sh` before/after (only mltest and free PEBs, static
+   volume sha256s unchanged).
+2. G8: fresh raw dump, then one supervised `FENCE_VOLUMES=jffs2` session
+   (`gt-be98-save --local`), then a stock boot and `stock-nandinfo.sh`.
+3. G9: restore rehearsal on the box only if the owner wants it (RESTORE.md).
 
 ## Validation plan (in order; each step gates the next)
 
