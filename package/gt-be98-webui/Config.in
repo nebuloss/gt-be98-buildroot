@@ -1,29 +1,27 @@
 config BR2_PACKAGE_GT_BE98_WEBUI
-	bool "gt-be98-webui (prebuilt webui-go binary)"
+	bool "gt-be98-webui (prebuilt webui-go, mainline-os port)"
 	select BR2_PACKAGE_GT_BE98_OS
 	help
-	  Installs a prebuilt static arm64 gt-be98-webui-go binary (branch
-	  mainline-os, built separately on the build host) as
-	  /usr/sbin/webui, with /etc/webui/ for its configuration and the
-	  OpenRC service "webui" (installed, NOT enabled: rc-update add
-	  webui default). Leave the path empty to install only /etc/webui/
-	  and the service script.
+	  Installs the prebuilt gt-be98-webui-go delivery (branch
+	  mainline-os, built separately on the build host) from a local
+	  directory:
+	    webui                 -> /usr/sbin/webui
+	    www/                  -> /usr/share/webui/www/
+	    openrc/webui          -> /etc/init.d/webui
+	    openrc/webui.confd    -> /etc/conf.d/webui
+	    platform.conf.example -> /etc/webui/platform.conf (if absent)
+	  The service is installed but NOT enabled (rc-update add webui
+	  default). Empty directory: only /etc/webui and a placeholder
+	  service are installed.
 
 if BR2_PACKAGE_GT_BE98_WEBUI
 
-config BR2_PACKAGE_GT_BE98_WEBUI_BINARY
-	string "path to the prebuilt webui binary"
+config BR2_PACKAGE_GT_BE98_WEBUI_DIR
+	string "webui delivery directory (build host)"
 	default ""
 	help
-	  Absolute path on the build host. Empty: no binary installed.
-
-config BR2_PACKAGE_GT_BE98_WEBUI_EXTRA_DIR
-	string "optional directory copied into the rootfs"
-	default ""
-	help
-	  Absolute path of a directory whose contents are copied as-is
-	  over the rootfs (e.g. etc/init.d/webui, etc/conf.d/webui,
-	  etc/webui/*, usr/share/webui/www/...) as delivered with the
-	  binary. Files from it replace the defaults of this package.
+	  Absolute path of the webui-go build output (the directory with
+	  webui, www/, openrc/, platform.conf.example). Set from WEBUI_DIR
+	  in the local configuration by board/gt-be98-mainline/build.sh.
 
 endif

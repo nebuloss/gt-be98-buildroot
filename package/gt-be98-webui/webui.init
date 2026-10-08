@@ -6,7 +6,7 @@
 description="GT-BE98 web UI (webui-go)"
 
 : "${WEBUI_BIN:=/usr/sbin/webui}"
-: "${WEBUI_ARGS:=-conf /etc/webui}"
+: "${WEBUI_ARGS:=-platform linux -listen :80 -conf /etc/webui -www /usr/share/webui/www}"
 
 command="$WEBUI_BIN"
 command_args="$WEBUI_ARGS"

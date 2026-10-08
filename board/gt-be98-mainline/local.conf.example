@@ -47,7 +47,6 @@ RESCUE=0
 WDT_MAX=600
 
 # --- web UI (gt-be98-webui; optional) -------------------------------------------------
-# WEBUI_BINARY=/path/to/webui      (prebuilt static arm64)
-# WEBUI_EXTRA_DIR=/path/to/overlay (init script, conf, www, as delivered)
-WEBUI_BINARY=
-WEBUI_EXTRA_DIR=
+# webui-go mainline-os build output (webui, www/, openrc/, platform.conf.example);
+# the service is installed disabled. Empty: not installed.
+WEBUI_DIR=

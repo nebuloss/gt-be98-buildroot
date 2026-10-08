@@ -14,7 +14,7 @@ HERE=$(cd "$(dirname "$0")" && pwd)
 EXT=$(cd "$HERE/../.." && pwd)
 CONF=${GT_BE98_LOCAL_CONF:-$HOME/.config/gt-be98-os/local.conf}
 [ -f "$CONF" ] || { echo "no local configuration $CONF (see $HERE/local.conf.example)"; exit 1; }
-BR2_SRC= OUT= BR2_DL_DIR= SSH_HOSTKEY_DIR= WEBUI_BINARY= WEBUI_EXTRA_DIR=
+BR2_SRC= OUT= BR2_DL_DIR= SSH_HOSTKEY_DIR= WEBUI_DIR=
 . "$CONF"
 : "${BR2_SRC:?BR2_SRC not set in $CONF}" "${OUT:?OUT not set in $CONF}"
 export BR2_DL_DIR
@@ -34,8 +34,7 @@ if [ ! -f "$OUT/.config" ] || [ "$EXT/configs/gt-be98_mainline_defconfig" -nt "$
 	make -C "$BR2_SRC" O="$OUT" BR2_EXTERNAL="$EXT" gt-be98_mainline_defconfig
 	{
 		echo "BR2_PACKAGE_GT_BE98_OS_LOCAL_CONF=\"$CONF\""
-		echo "BR2_PACKAGE_GT_BE98_WEBUI_BINARY=\"$WEBUI_BINARY\""
-		echo "BR2_PACKAGE_GT_BE98_WEBUI_EXTRA_DIR=\"$WEBUI_EXTRA_DIR\""
+		echo "BR2_PACKAGE_GT_BE98_WEBUI_DIR=\"$WEBUI_DIR\""
 	} > "$OUT/gt-be98-local.fragment"
 	"$BR2_SRC/support/kconfig/merge_config.sh" -m -O "$OUT" "$OUT/.config" \
 		"$OUT/gt-be98-local.fragment" >/dev/null
