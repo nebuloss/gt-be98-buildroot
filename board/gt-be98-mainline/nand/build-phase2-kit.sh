@@ -6,6 +6,7 @@
 #   gt-be98-ubileb, gt-be98-nandrestore, gt-be98-nandtool, nanddump,
 #   ubinfo, ubimkvol, ubirmvol (mtd-utils, for stock: G7 create/remove)
 #   stock-mltest.sh, mltest-mainline.sh, g7-compare.sh, stock-nandinfo.sh,
+#   jffs-mainline.sh, stock-jffs-check.sh (G8),
 #   patternA.bin, patternB.bin (G7)
 #   SHA256SUMS
 set -eu
@@ -30,7 +31,7 @@ for u in ubinfo ubimkvol ubirmvol; do
 done
 $STRIP "$D"/gt-be98-* "$D/nanddump" "$D/ubinfo" "$D/ubimkvol" "$D/ubirmvol"
 cp "$HERE/phase2/stock-mltest.sh" "$HERE/phase2/mltest-mainline.sh" "$HERE/phase2/g7-compare.sh" \
-	"$HERE/stock-nandinfo.sh" "$D/"
+	"$HERE/phase2/jffs-mainline.sh" "$HERE/phase2/stock-jffs-check.sh" "$HERE/stock-nandinfo.sh" "$D/"
 chmod 0755 "$D"/*.sh
 # deterministic G7 patterns, 4 LEBs each (126976 B)
 python3 - "$D" <<'PY'
@@ -45,5 +46,5 @@ for name, seed in (("patternA.bin", b"gt-be98 G7 A"), ("patternB.bin", b"gt-be98
 PY
 (cd "$D" && sha256sum gt-be98-ubileb gt-be98-nandrestore gt-be98-nandtool nanddump \
 	ubinfo ubimkvol ubirmvol stock-mltest.sh mltest-mainline.sh g7-compare.sh \
-	stock-nandinfo.sh patternA.bin patternB.bin > SHA256SUMS)
+	jffs-mainline.sh stock-jffs-check.sh stock-nandinfo.sh patternA.bin patternB.bin > SHA256SUMS)
 cat "$D/SHA256SUMS"

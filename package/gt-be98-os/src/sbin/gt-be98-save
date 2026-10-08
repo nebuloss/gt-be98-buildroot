@@ -11,9 +11,9 @@
 # The archive holds exactly the paths gt-be98-jffs restores (ALLOW_PATHS of
 # /etc/conf.d/gt-be98-jffs): the web UI state (/etc/webui: webui.db,
 # platform.conf, auth.conf, ssh/), the SSH host keys, authorized_keys,
-# dhcpcd and chrony state. The mainline OS never writes the NAND: the
-# orchestrator stores the archive in /jffs/mainline-os/ on the next STOCK
-# boot (board/gt-be98-mainline/NAND.md, stock-apply-state.sh).
+# dhcpcd and chrony state. Without --local nothing is written to the NAND:
+# the archive is stored in /jffs/mainline-os/ on the next STOCK boot
+# (board/gt-be98-mainline/NAND.md, stock-apply-state.sh).
 set -eu
 ALLOW_PATHS=
 . /etc/conf.d/gt-be98-jffs

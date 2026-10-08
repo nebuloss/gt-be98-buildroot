@@ -37,8 +37,17 @@ FD=/sys/kernel/debug/ubi/ubi0/fence
 
 # back to the phase-1 state: no writes possible
 lock_down() {
-	mountpoint -q /jffs && umount /jffs
-	[ -e /sys/class/ubi/ubi0 ] && ubidetach -d 0 >/dev/null 2>&1
+	sync
+	if mountpoint -q /jffs && ! umount /jffs 2>/dev/null; then
+		# busy (a shell in /jffs, an open file): at least make UBIFS commit
+		# and stop writing before writes are switched off underneath it
+		ewarn "/jffs busy: remounting read-only"
+		mount -o remount,ro /jffs 2>/dev/null || ewarn "/jffs: read-only remount failed"
+		umount /jffs 2>/dev/null
+	fi
+	if [ -e /sys/class/ubi/ubi0 ] && ! ubidetach -d 0 >/dev/null 2>&1; then
+		ewarn "ubi0 still attached (in use): from now on its writes are refused"
+	fi
 	[ -w "$AW" ] && echo 0 > "$AW"
 	[ -w "$UF" ] && echo "" > "$UF"
 }

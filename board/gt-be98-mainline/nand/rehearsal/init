@@ -265,6 +265,46 @@ gate g7_s4_remove "$K/stock-mltest.sh remove && ! ubinfo -d 0 -N mltest >/dev/nu
 ubidetach -d 0
 echo 1 > $FW
 
+# ---- G8 rehearsal with the kit scripts, in the box sequence (phase2/G8.md) ----
+say "G8: the kit scripts in the box sequence"
+export G8_REHEARSAL=1 G8_JFFS=/jffs G8_MTD=/dev/mtd1
+mkdir -p /jffs
+# mainline, phase 1
+echo 1 > $FW; echo "" > $UF
+ubiattach -m 1 -d 0 -O 2048 >/dev/null
+mount -t ubifs -o ro ubi0:jffs2 /jffs
+gate g8_before "W=/tmp/g8 $K/jffs-mainline.sh before"
+umount /jffs; ubidetach -d 0
+# mainline, fence on jffs2, /jffs rw (what gt-be98-jffs does)
+echo jffs2 > $UF
+ubiattach -m 1 -d 0 -O 2048 >/dev/null
+mount -t ubifs -o ro ubi0:jffs2 /jffs && mount -o remount,rw /jffs
+gate g8_check "$K/jffs-mainline.sh check"
+gate g8_test "$K/jffs-mainline.sh test"
+# stands for gt-be98-save --local (no rootfs here): the same files
+mkdir -p /jffs/mainline-os
+tar -czf /jffs/mainline-os/state.tgz -C / init
+(cd /jffs/mainline-os && echo "$(sha256sum state.tgz | cut -d' ' -f1)  state.tgz" > state.tgz.sha256)
+sync
+gate g8_loop "$K/jffs-mainline.sh loop 20"
+gate g8_verify "W=/tmp/g8 $K/jffs-mainline.sh verify"
+$K/jffs-mainline.sh status | grep -E '^(state|volumes|pebs|writes|mtd_gate)' | sed 's/^/RH: /'
+gate g8_rootfs2_refused "! gt-be98-ubileb write /dev/ubi0_6 /tmp/small"
+cd /; umount /jffs; ubidetach -d 0; echo "" > $UF
+gate g8_pebdiff "W=/tmp/g8 $K/jffs-mainline.sh after"
+tail -n 1 /tmp/g8/pebdiff.txt | sed 's/^/RH: /'
+rm -f /tmp/g8/*.data
+# stock (a fresh boot: fresh kernel log)
+dmesg -c > /dev/null
+echo 0 > $FW
+ubiattach -m 1 -d 0 -O 2048 >/dev/null
+mount -t ubifs ubi0:jffs2 /jffs
+gate g8_stock_read "$K/stock-jffs-check.sh read"
+gate g8_stock_write "$K/stock-jffs-check.sh write"
+gate g8_stock_clean "$K/stock-jffs-check.sh clean"
+umount /jffs; ubidetach -d 0
+echo 1 > $FW
+
 echo "RH-SUMMARY pass $pass fail $fail"
 echo "RH-DONE"
 sync
