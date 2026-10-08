@@ -24,5 +24,6 @@ start_pre() {
 }
 
 stop_pre() {
+	gt-be98-postcode fc "watchdog petting stopped by request: reset follows unless restarted"
 	ewarn "watchdog no longer petted: the box resets in ~30 s unless started again"
 }
