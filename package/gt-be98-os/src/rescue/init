@@ -2,8 +2,13 @@
 # SPDX-License-Identifier: GPL-2.0
 # GT-BE98 mainline OS - initramfs /init (static BusyBox ash, PID 1).
 #
-# The kernel Image carries a small initramfs: a static BusyBox, this script,
-# and the whole OS as one squashfs image (/rootfs.squashfs). /init
+# The kernel Image carries a small built-in initramfs: a static BusyBox and
+# this script. The whole OS is one squashfs image, /rootfs.squashfs, in a
+# second cpio that the kernel unpacks on top: the "rootfs" image of the FIT,
+# which U-Boot loads into RAM with the rest of the bootfs volume and which
+# our DTB names in /chosen/linux,initrd-start/-end. If that does not arrive
+# (wrong address, corrupt data), /rootfs.squashfs is missing: rescue (e0).
+# /init
 #   1. mounts /proc, /sys, /dev, /tmp and routes the USB power pins;
 #   2. OS path: loop-mounts the squashfs read-only at /rom, puts an overlayfs
 #      over it with a tmpfs upper layer, and switch_roots into OpenRC
@@ -100,7 +105,11 @@ os_boot() {
 		REASON=e4; log "rescue requested (RESCUE=1 / ml.rescue=1)"; return 1
 	fi
 	if [ ! -f "$ROOTFS" ]; then
-		REASON=e0; log "os: $ROOTFS missing"; return 1
+		REASON=e0
+		log "os: $ROOTFS missing (rootfs initrd not unpacked)"
+		log "os: DT initrd $(od -An -tx1 /sys/firmware/devicetree/base/chosen/linux,initrd-start 2>/dev/null | tr -d ' \n')..$(od -An -tx1 /sys/firmware/devicetree/base/chosen/linux,initrd-end 2>/dev/null | tr -d ' \n')"
+		dmesg | grep -iE 'initrd|initramfs|ramdisk' | while read -r l; do log "dmesg: $l"; done
+		return 1
 	fi
 	pc f0
 	log "os: $ROOTFS $(wc -c < "$ROOTFS") bytes"

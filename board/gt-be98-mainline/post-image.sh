@@ -2,18 +2,23 @@
 # SPDX-License-Identifier: GPL-2.0
 # GT-BE98 mainline OS: build ml-bootfs.itb (Buildroot post-image script).
 #
-#  1. initramfs list: the rescue BusyBox + /init + rootfs.squashfs
+#  1. built-in initramfs: the rescue BusyBox + /init
 #     ($BINARIES_DIR/gt-be98-initramfs.list, the kernel's
-#     CONFIG_INITRAMFS_SOURCE);
-#  2. relink the kernel with it (the exact Buildroot make command, captured
-#     by the gt-be98-os LINUX_PRE_BUILD hook): only usr/ and vmlinux change,
-#     the installed modules stay valid;
-#  3. the board DT: open-ethernet tools/mainline-boot/gt-be98-mlboot.dts with
+#     CONFIG_INITRAMFS_SOURCE); relink the kernel with it (the exact
+#     Buildroot make command, captured by the gt-be98-os LINUX_PRE_BUILD
+#     hook): only usr/ and vmlinux change, the installed modules stay valid;
+#  2. rootfs.cpio: a newc cpio holding /rootfs.squashfs (the whole OS);
+#  3. ml-bootfs.itb: mkbootfs.py (stock FIT: ATF, U-Boot, vendor DTBs
+#     unchanged; our Image.lzo as "kernel"; our DTB as "fdt_mainline" for
+#     conf_lx_GT-BE98*) plus an unreferenced "rootfs" image carrying
+#     rootfs.cpio (fit-rootfs.py);
+#  4. the board DT: open-ethernet tools/mainline-boot/gt-be98-mlboot.dts with
 #     ML_USB (USB host + watchdog), ML_PCIE + ML_PCIE_ALL (four radios), the
-#     256 MB MPM pool, and /chosen/bootargs = the forced CONFIG_CMDLINE;
-#  4. ml-bootfs.itb with mkbootfs.py: the stock bootfs FIT (ATF, U-Boot,
-#     vendor DTBs reused unchanged), our Image.lzo as "kernel", our DTB as
-#     "fdt_mainline" for conf_lx_GT-BE98*;
+#     256 MB MPM pool, /chosen/bootargs = the forced CONFIG_CMDLINE, and
+#     /chosen/linux,initrd-start/-end = where the "rootfs" data sits once
+#     U-Boot has read the bootfs volume to FIT_LOAD (0x2000000). The FIT is
+#     built twice: with placeholder addresses (same size), then with the real
+#     ones; the layout must not move between the two;
 #  5. size checks (README.md, "Size") and ml-bootfs.info.
 set -eu
 
@@ -25,6 +30,7 @@ RESCUE=0
 WDT_MAX=600
 [ -n "$LOCAL_CONF" ] && . "$LOCAL_CONF"
 SHARE=$HOST_DIR/share/gt-be98-mainline/mainline-boot
+HERE=$(cd "$(dirname "$0")" && pwd)
 B=$BINARIES_DIR
 export PATH="$HOST_DIR/bin:$HOST_DIR/sbin:$PATH"
 
@@ -63,69 +69,127 @@ slink /bin/sh busybox 0777 0 0
 file /init $B/rescue/init 0755 0 0
 file /etc/udhcpc.script $B/rescue/udhcpc.script 0755 0 0
 file /etc/ml-defaults $B/rescue/ml-defaults 0644 0 0
-file /rootfs.squashfs $B/rootfs.squashfs 0644 0 0
 EOF
 
-# ---- 2. relink the kernel with the initramfs ------------------------------------
-echo "post-image: relinking the kernel with the rescue initramfs + rootfs.squashfs"
+# ---- 1b. relink the kernel with the rescue initramfs ------------------------------
+echo "post-image: relinking the kernel with the rescue initramfs"
 (
 	unset MAKEFLAGS MAKEOVERRIDES MAKELEVEL MFLAGS
 	sh "$BUILD_DIR/gt-be98-linux-relink.sh"
 )
 cp "$LINUX_DIR/arch/arm64/boot/Image" "$B/Image"
 
-# ---- 3. device tree -------------------------------------------------------------
+# ---- 2. rootfs initrd -----------------------------------------------------------
+printf 'file /rootfs.squashfs %s 0644 0 0\n' "$B/rootfs.squashfs" > "$B/rootfs.cpio.list"
+"$LINUX_DIR/usr/gen_init_cpio" "$B/rootfs.cpio.list" > "$B/rootfs.cpio"
+
+# ---- 3./4. device tree + FIT (twice) ----------------------------------------------
+FIT_LOAD=0x2000000
 CMDLINE=$(sed -n 's/^CONFIG_CMDLINE="\(.*\)"$/\1/p' "$LINUX_DIR/.config")
 [ -n "$CMDLINE" ] || die "no CONFIG_CMDLINE in $LINUX_DIR/.config"
 grep -q '^CONFIG_CMDLINE_FORCE=y' "$LINUX_DIR/.config" || die "CONFIG_CMDLINE_FORCE off"
 D=$B/dt
 mkdir -p "$D"
 printf '#define ML_BOOTARGS "%s"\n' "$CMDLINE" > "$D/mlboot-bootargs.h"
-cpp -nostdinc -undef -D__DTS__ -DML_USB -DML_PCIE -DML_PCIE_ALL \
-	-DML_MPM_SIZE=0x10000000 -x assembler-with-cpp \
-	-I "$D" -I "$LINUX_DIR/arch/arm64/boot/dts/broadcom/bcmbca" \
-	-I "$LINUX_DIR/scripts/dtc/include-prefixes" -I "$LINUX_DIR/include" \
-	"$SHARE/gt-be98-mlboot.dts" > "$D/gt-be98-os.dts.pre"
-dtc -q -I dts -O dtb -o "$B/gt-be98-os.dtb" "$D/gt-be98-os.dts.pre"
-# the watchdog node the OS pets must be there
-dtc -q -I dtb -O dts "$B/gt-be98-os.dtb" | grep -q 'brcm,bcm6345-wdt' ||
-	die "DTB has no watchdog node"
+cat > "$D/gt-be98-os.dts" <<'EOF'
+/* GT-BE98 mainline OS: the diagnostic board dts + the rootfs initrd */
+#include "gt-be98-mlboot.dts"
 
-# ---- 4. FIT ---------------------------------------------------------------------
+/ {
+	chosen {
+		linux,initrd-start = /bits/ 64 <ML_INITRD_START>;
+		linux,initrd-end = /bits/ 64 <ML_INITRD_END>;
+	};
+};
+EOF
+mkdtb() {	# $1 initrd start, $2 initrd end
+	cpp -nostdinc -undef -D__DTS__ -DML_USB -DML_PCIE -DML_PCIE_ALL \
+		-DML_MPM_SIZE=0x10000000 -DML_INITRD_START=$1 -DML_INITRD_END=$2 \
+		-x assembler-with-cpp \
+		-I "$D" -I "$SHARE" -I "$LINUX_DIR/arch/arm64/boot/dts/broadcom/bcmbca" \
+		-I "$LINUX_DIR/scripts/dtc/include-prefixes" -I "$LINUX_DIR/include" \
+		"$D/gt-be98-os.dts" > "$D/gt-be98-os.dts.pre"
+	dtc -q -I dts -O dtb -o "$B/gt-be98-os.dtb" "$D/gt-be98-os.dts.pre"
+}
 lzop -f -c "$B/Image" > "$B/Image.lzo"
-rm -rf "$B/fit"
-python3 "$SHARE/mkbootfs.py" "$STOCK_BOOTFS" "$B/Image.lzo" "$B/gt-be98-os.dtb" \
-	"$B/ml-bootfs.itb" "$B/fit"
+BASE=$(python3 "$HERE/fit-rootfs.py" base "$STOCK_BOOTFS")
+mkfit() {
+	rm -rf "$B/fit"
+	python3 "$SHARE/mkbootfs.py" "$STOCK_BOOTFS" "$B/Image.lzo" "$B/gt-be98-os.dtb" \
+		"$B/ml-bootfs.itb" "$B/fit" >/dev/null
+	python3 "$HERE/fit-rootfs.py" add "$B/fit/bootfs.its" "$B/rootfs.cpio" "$B/fit/os.its"
+	mkimage -E -p "$BASE" -f "$B/fit/os.its" "$B/ml-bootfs.itb" >/dev/null
+	python3 "$HERE/fit-rootfs.py" pos "$B/ml-bootfs.itb"
+}
+# pass 1: placeholder addresses (64-bit cells: same DTB size as the real ones)
+mkdtb 0x0 0x0
+set -- $(mkfit)
+POS=$1 LEN=$2
+[ "$LEN" = "$(stat -c %s "$B/rootfs.cpio")" ] || die "rootfs data-size $LEN != rootfs.cpio"
+START=$(printf '0x%x' $((FIT_LOAD + POS)))
+END=$(printf '0x%x' $((FIT_LOAD + POS + LEN)))
+# pass 2: the real addresses; the layout must not move
+mkdtb "$START" "$END"
+set -- $(mkfit)
+[ "$1 $2" = "$POS $LEN" ] || die "FIT layout moved between the passes ($POS/$LEN -> $1/$2)"
 dumpimage -l "$B/ml-bootfs.itb" > "$B/ml-bootfs.layout"
+# checks: the DT points at the cpio (newc magic there), the watchdog node the
+# OS pets is present
+magic=$(dd if="$B/ml-bootfs.itb" bs=1 skip="$POS" count=6 2>/dev/null)
+[ "$magic" = 070701 ] || die "no newc cpio at FIT offset $POS"
+dtc -q -I dtb -O dts "$B/gt-be98-os.dtb" > "$D/gt-be98-os.dtb.dts"
+grep -q 'brcm,bcm6345-wdt' "$D/gt-be98-os.dtb.dts" || die "DTB has no watchdog node"
+grep -q "linux,initrd-start = <0x00 $START>" "$D/gt-be98-os.dtb.dts" ||
+	die "initrd-start $START not in the DTB"
+FIT_END=$((FIT_LOAD + $(stat -c %s "$B/ml-bootfs.itb")))
+# a minimal squashfs for slot 1's rootfs volume (vol 4): U-Boot only checks
+# its squashfs magic before booting slot 1 (README.md, "Flash space")
+rm -rf "$B/rootfs1-stub.d" "$B/rootfs1-stub.squashfs"
+mkdir -p "$B/rootfs1-stub.d"
+echo "GT-BE98 mainline OS: slot 1 rootfs placeholder (the OS is in bootfs1)" \
+	> "$B/rootfs1-stub.d/README"
+mksquashfs "$B/rootfs1-stub.d" "$B/rootfs1-stub.squashfs" -noappend -all-root \
+	-no-progress >/dev/null
 
 # ---- 5. size checks ---------------------------------------------------------------
-# U-Boot (vendor 2019.07, relocated to the top of DRAM) reads the bootfs
-# volume to 0x2000000 and decompresses the kernel to 0x200000; the arm64
-# image_size (incl. BSS, le64 at offset 16) must end below the FIT:
-# 0x2000000 - 0x200000 = 30 MiB. CONFIG_SYS_BOOTM_LEN of the shipped U-Boot
-# is 64 MiB (README.md, "Size").
+# README.md, "Size limits". U-Boot reads the whole bootfs volume to
+# FIT_LOAD = 0x2000000 and decompresses the kernel to 0x200000:
+#  - the kernel's image_size (incl. BSS, le64 at offset 16) must end below
+#    the FIT: < 0x2000000 - 0x200000 = 30 MiB;
+#  - the FIT must end below U-Boot's relocated copy, heap (32 MiB) and stack:
+#    its own DT declares 128 MiB of RAM, so it relocates under 0x8000000 and
+#    its data start around 0x5c00000. Hard limit: FIT end <= 0x5000000
+#    (a 48 MiB FIT), warning above 0x4800000 (40 MiB).
 isz=$(od -A n -t u8 -j 16 -N 8 "$B/Image" | tr -d ' ')
 ifile=$(stat -c %s "$B/Image")
 fsz=$(stat -c %s "$B/ml-bootfs.itb")
 ssz=$(stat -c %s "$STOCK_BOOTFS")
 rsz=$(stat -c %s "$B/rootfs.squashfs")
 lim=$((0x2000000 - 0x200000))
+flim=$((0x5000000))
 {
 	echo "GT-BE98 mainline OS image"
 	echo "built: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
 	echo "kernel: $LINUX_VERSION"
 	sed 's/^/release: /' "$TARGET_DIR/etc/gt-be98-release" 2>/dev/null || true
-	echo "rootfs.squashfs: $rsz B"
 	echo "Image file: $ifile B"
 	echo "Image image_size (incl. BSS): $isz B (limit $lim B, margin $((lim - isz)) B)"
 	echo "Image.lzo: $(stat -c %s "$B/Image.lzo") B"
+	echo "rootfs.squashfs: $rsz B (rootfs.cpio $LEN B at FIT offset $POS)"
+	echo "rootfs initrd in RAM: $START..$END (DT /chosen/linux,initrd-*)"
 	echo "ml-bootfs.itb: $fsz B (stock bootfs $ssz B, +$((fsz - ssz)) B)"
+	printf 'FIT in RAM: 0x%x..0x%x (limit 0x%x, margin %d B)\n' $FIT_LOAD $FIT_END $flim $((flim - FIT_END))
 	echo "stock bootfs sha256: $(sha256sum "$STOCK_BOOTFS" | cut -d' ' -f1)"
 	echo "rescue: RESCUE=$RESCUE WDT_MAX=$WDT_MAX"
 	echo "cmdline: $CMDLINE"
 	echo "sha256 ml-bootfs.itb: $(sha256sum "$B/ml-bootfs.itb" | cut -d' ' -f1)"
+	echo "sha256 rootfs1-stub.squashfs: $(sha256sum "$B/rootfs1-stub.squashfs" | cut -d' ' -f1) ($(stat -c %s "$B/rootfs1-stub.squashfs") B)"
 } > "$B/ml-bootfs.info"
 cat "$B/ml-bootfs.info"
 [ "$isz" -lt "$lim" ] || die "Image image_size $isz B >= $lim B: does not fit below the FIT"
 [ "$isz" -lt $((lim - 1048576)) ] ||
-	echo "post-image: WARNING: less than 1 MiB left below the 30 MiB limit"
+	echo "post-image: WARNING: less than 1 MiB left below the 30 MiB kernel limit"
+[ "$FIT_END" -le "$flim" ] || die "FIT ends at $FIT_END > $flim: it would reach U-Boot's memory"
+[ "$FIT_END" -le $((0x4800000)) ] ||
+	echo "post-image: WARNING: FIT larger than 40 MiB (limit 48 MiB)"
+exit 0
