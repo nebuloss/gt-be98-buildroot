@@ -68,7 +68,7 @@ make -s -C "$K" O="$O" ARCH=arm64 CROSS_COMPILE="$CROSS" -j"$(nproc)" Image
 T=$S/tools
 rm -rf "$T"; mkdir -p "$T"
 M=$(ls -d "$OUT"/build/mtd-[0-9]* | head -n1)
-MF="-static -O2 -I$M/include -I$M -include $M/config.h"
+MF="-static -O2 -I$M/include -I$M -include $M/include/config.h"
 ML="$M/lib/libmtd.c $M/lib/libmtd_legacy.c $M/lib/common.c"
 UL="$M/lib/libubi.c"
 $CC $MF -o "$T/nanddump" "$M/nand-utils/nanddump.c" $ML
