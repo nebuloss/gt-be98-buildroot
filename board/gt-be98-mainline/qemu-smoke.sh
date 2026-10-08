@@ -17,6 +17,8 @@
 # Expected in QEMU: no /dev/watchdog, so gt-be98-watchdog and the services
 # that need it (gt-be98-drivers) do not start, and no network address.
 #
+# SMOKE_WEBUI_PASSWORD=<pw>: provision a web UI password in the test copy
+# and check that the webui starts and serves (otherwise: that it refuses).
 # Needs: qemu-system-aarch64; the Buildroot output from build.sh; ~3 GB in
 # $SCRATCH (default /dev/shm/gt-be98-qemu).
 set -eu
@@ -79,9 +81,16 @@ ip link add br-smoke type bridge; ip link set br-smoke up
 for i in /sys/class/net/usb* /sys/class/net/eth*; do [ -e "$i" ] && ip link set "${i##*/}" master br-smoke; done
 sleep 3; echo "bridge ports now: $(ls /sys/class/net/br-smoke/brif 2>/dev/null | tr '\n' ' ')(expect none)"
 ip link del br-smoke
+if [ -f /etc/webui/auth.conf ]; then
+echo "=== webui (password provisioned: must run and serve):"
+rc-service webui start >/dev/null 2>&1; sleep 3; rc-service webui status 2>&1 | tail -1
+curl -s -o /dev/null -w "http :80 -> %{http_code}\n" http://127.0.0.1/
+curl -s -X POST -d "action=auth_status" http://127.0.0.1/api 2>/dev/null | head -c 200; echo
+else
 echo "=== webui guard (no password provisioned: webui must NOT start):"
 rc-service webui start >/dev/null 2>&1; rc-service webui status 2>&1 | tail -1
 pidof webui >/dev/null && echo "webui RUNNING (BAD)" || echo "webui not running (ok)"
+fi
 echo "=== regdb:"; iw reg reload && sleep 1; iw reg get | head -3
 echo "=== postcode last:"; cat /run/gt-be98-postcode.last
 echo "=== messages:"; tail -n 30 /var/log/messages
@@ -92,6 +101,11 @@ EOF
 "$HOSTB/fakeroot" -- sh -c "
 	unsquashfs -q -d '$R' '$OUT/images/rootfs.squashfs' >/dev/null &&
 	install -D -m 0755 '$SCRATCH/smoke.start' '$R/etc/local.d/zz-smoke.start' &&
+	if [ -n '${SMOKE_WEBUI_PASSWORD:-}' ]; then
+		salt=\$(head -c 16 /dev/urandom | od -An -tx1 | tr -d ' \\n');
+		printf 'SALT=%s\\nHASH=%s\\n' \$salt \$(printf '%s%s' \$salt '${SMOKE_WEBUI_PASSWORD:-}' | sha256sum | cut -d' ' -f1) > '$R/etc/webui/auth.conf';
+		chmod 600 '$R/etc/webui/auth.conf';
+	fi &&
 	ln -sf /etc/init.d/local '$R/etc/runlevels/default/local' &&
 	mksquashfs '$R' '$SCRATCH/root.sq' -comp xz -noappend -no-progress >/dev/null"
 (cd "$SCRATCH" && sha256sum root.sq > root.sq.sha256)
