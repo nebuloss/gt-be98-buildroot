@@ -1,0 +1,5 @@
+# /etc/conf.d/gt-be98-router (service disabled by default; the web UI's
+# Wi-Fi AP page enables it and writes the files in ROUTER_DIR)
+ROUTER_DIR=/etc/gt-be98-router
+# seconds to wait for each Wi-Fi interface at start
+IFACE_WAIT=20

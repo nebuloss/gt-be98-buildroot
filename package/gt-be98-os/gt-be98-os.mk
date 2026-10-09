@@ -13,7 +13,7 @@ GT_BE98_OS_DEPENDENCIES = host-lzop host-dtc host-uboot-tools
 GT_BE98_OS_LOCAL_CONF = $(call qstrip,$(BR2_PACKAGE_GT_BE98_OS_LOCAL_CONF))
 
 GT_BE98_OS_SERVICES = gt-be98-watchdog gt-be98-netguard gt-be98-jffs gt-be98-drivers gt-be98-wifi \
-	gt-be98-telnet gt-be98-boot-done gt-be98-persist gt-be98-autosave sshd dhcpcd chronyd \
+	gt-be98-telnet gt-be98-boot-done gt-be98-persist gt-be98-autosave gt-be98-router sshd dhcpcd chronyd \
 	syslogd dnsmasq
 
 define GT_BE98_OS_BUILD_CMDS

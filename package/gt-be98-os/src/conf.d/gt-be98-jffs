@@ -17,7 +17,7 @@ SAVE_ON_STOP=yes
 # gt-be98-autosave: check every AUTOSAVE_INTERVAL s; save when a file under
 # AUTOSAVE_WATCH (relative to /) changed and has settled
 AUTOSAVE_INTERVAL=300
-AUTOSAVE_WATCH="etc/webui etc/ssh root/.ssh etc/conf.d/gt-be98-macaddr"
+AUTOSAVE_WATCH="etc/webui etc/ssh root/.ssh etc/conf.d/gt-be98-macaddr etc/hostapd etc/conf.d/gt-be98-wifi-ap etc/gt-be98-router"
 # removed from /jffs (relative paths) once it is read-write
 CLEANUP_PATHS="mainline-os/g8-test"
 # compare the static volumes' sha256 with the previous boot (background)
@@ -31,4 +31,4 @@ JFFS_VOLUME=jffs2
 # directory on /jffs with the mainline state (state.tgz[.sha256], overlay/)
 STATE_DIR=mainline-os
 # paths (relative to /) restored from it; anything else is ignored
-ALLOW_PATHS="etc/webui etc/conf.d/gt-be98-macaddr etc/ssh/ssh_host_ed25519_key etc/ssh/ssh_host_ed25519_key.pub etc/ssh/ssh_host_ecdsa_key etc/ssh/ssh_host_ecdsa_key.pub etc/ssh/ssh_host_rsa_key etc/ssh/ssh_host_rsa_key.pub etc/ssh/authorized_keys root/.ssh var/lib/dhcpcd var/lib/chrony"
+ALLOW_PATHS="etc/webui etc/conf.d/gt-be98-macaddr etc/hostapd etc/conf.d/gt-be98-wifi-ap etc/gt-be98-router etc/runlevels/default/gt-be98-wifi etc/runlevels/default/gt-be98-router etc/ssh/ssh_host_ed25519_key etc/ssh/ssh_host_ed25519_key.pub etc/ssh/ssh_host_ecdsa_key etc/ssh/ssh_host_ecdsa_key.pub etc/ssh/ssh_host_rsa_key etc/ssh/ssh_host_rsa_key.pub etc/ssh/authorized_keys root/.ssh var/lib/dhcpcd var/lib/chrony"

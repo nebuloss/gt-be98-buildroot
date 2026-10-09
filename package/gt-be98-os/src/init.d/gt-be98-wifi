@@ -3,8 +3,13 @@
 # Optional Wi-Fi: loads bca_pcie_ipc.ko (the four PCIe radios) and runs
 # hostapd on the configured interfaces. NOT enabled by default:
 #   rc-update add gt-be98-wifi default ; rc-service gt-be98-wifi start
+# HOSTAPD_CONFS: /etc/conf.d/gt-be98-wifi, overridden by
+# /etc/conf.d/gt-be98-wifi-ap when present (written by the web UI's Wi-Fi AP
+# page, saved to /jffs). `rc-service gt-be98-wifi reload` restarts hostapd
+# only (new configs); the driver stays loaded.
 # Firmware: /lib/firmware/brcm/bca (gt-be98-vendor-firmware).
 description="Open Wi-Fi driver + hostapd (optional)"
+extra_started_commands="reload"
 
 depend() {
 	need gt-be98-watchdog
@@ -14,19 +19,15 @@ depend() {
 
 wifi_loaded() { grep -q '^bca_pcie_ipc ' /proc/modules; }
 
-start() {
-	# cfg80211 is built in and asks for regulatory.db before the rootfs is
-	# mounted: that first load fails and is not retried, so country_code in
-	# hostapd would hang in COUNTRY_UPDATE. Reload it from /lib/firmware
-	# (wireless-regdb, signed; the kernel carries the regdb keys).
-	iw reg reload 2>/dev/null && einfo "regulatory database loaded" ||
-		ewarn "iw reg reload failed: leave country_code out of hostapd.conf"
-	if ! wifi_loaded; then
-		ebegin "Loading bca_pcie_ipc ${WIFI_ARGS}"
-		if [ -n "${WIFI_KO:-}" ]; then insmod "$WIFI_KO" $WIFI_ARGS
-		else modprobe bca_pcie_ipc $WIFI_ARGS; fi
-		eend $? || return 1
-	fi
+# the web UI's HOSTAPD_CONFS (parsed, not sourced: one quoted list of paths)
+ap_override() {
+	local f=/etc/conf.d/gt-be98-wifi-ap
+	[ -f "$f" ] || return 0
+	HOSTAPD_CONFS=$(sed -n 's/^HOSTAPD_CONFS="\([^"$`\;]*\)"$/\1/p' "$f" | tail -n1)
+}
+
+start_hostapd() {
+	ap_override
 	[ -n "${HOSTAPD_CONFS:-}" ] || { einfo "no HOSTAPD_CONFS: driver only"; return 0; }
 	local c i n
 	for c in $HOSTAPD_CONFS; do
@@ -43,12 +44,39 @@ start() {
 	eend $?
 }
 
-stop() {
-	if [ -f /run/hostapd.pid ]; then
-		ebegin "Stopping hostapd"
-		start-stop-daemon --stop --exec /usr/sbin/hostapd --pidfile /run/hostapd.pid
-		eend $?
+stop_hostapd() {
+	[ -f /run/hostapd.pid ] || return 0
+	ebegin "Stopping hostapd"
+	start-stop-daemon --stop --exec /usr/sbin/hostapd --pidfile /run/hostapd.pid \
+		--retry TERM/5/KILL/2
+	eend $?
+	rm -f /run/hostapd.pid
+}
+
+start() {
+	# cfg80211 is built in and asks for regulatory.db before the rootfs is
+	# mounted: that first load fails and is not retried, so country_code in
+	# hostapd would hang in COUNTRY_UPDATE. Reload it from /lib/firmware
+	# (wireless-regdb, signed; the kernel carries the regdb keys).
+	iw reg reload 2>/dev/null && einfo "regulatory database loaded" ||
+		ewarn "iw reg reload failed: leave country_code out of hostapd.conf"
+	if ! wifi_loaded; then
+		ebegin "Loading bca_pcie_ipc ${WIFI_ARGS}"
+		if [ -n "${WIFI_KO:-}" ]; then insmod "$WIFI_KO" $WIFI_ARGS
+		else modprobe bca_pcie_ipc $WIFI_ARGS; fi
+		eend $? || return 1
 	fi
+	start_hostapd
+}
+
+# new hostapd configs without reloading the driver
+reload() {
+	stop_hostapd
+	start_hostapd
+}
+
+stop() {
+	stop_hostapd
 	if [ "${WIFI_UNLOAD_ON_STOP:-yes}" = yes ] && wifi_loaded; then
 		ebegin "Unloading bca_pcie_ipc"
 		rmmod bca_pcie_ipc

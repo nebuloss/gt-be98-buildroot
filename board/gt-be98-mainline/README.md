@@ -276,6 +276,37 @@ fallbacks for a bench without a DHCP server: `RNR0_FALLBACK`/`USB_FALLBACK`
 in the local configuration. No udev: devtmpfs only; modules not built in are
 loaded by the services (`modprobe`).
 
+### Wi-Fi access points and router mode
+
+Both services are installed, NOT enabled; the web UI's Wi-Fi AP page
+(webui-go, linux platform) writes their files and enables them with
+`rc-update`. Standard interfaces only (nl80211 through hostapd/iw, iproute2,
+nftables, dnsmasq): no driver internals or module parameters.
+
+- `gt-be98-wifi`: loads `bca_pcie_ipc`, runs one hostapd on `HOSTAPD_CONFS`.
+  `/etc/conf.d/gt-be98-wifi-ap` (web UI, `HOSTAPD_CONFS="..."`, parsed not
+  sourced) overrides the image's value, so the image keeps owning
+  `WIFI_ARGS`. The web UI writes `/etc/hostapd/hostapd-<bcawlN>.conf` (0600,
+  `wmm_enabled=1`, `ctrl_interface=/run/hostapd`, `country_code` only when
+  `iw reg reload` succeeds). `rc-service gt-be98-wifi reload` restarts
+  hostapd only; the driver stays loaded.
+- `gt-be98-router` (`need gt-be98-wifi`): from `/etc/gt-be98-router/`
+  (`router.conf`: `ROUTER_WAN`, `ROUTER_LANS="bcawl3=192.168.83.1/24 ..."`;
+  `router.nft`; `dnsmasq.conf`) it puts each address on its Wi-Fi interface,
+  loads `table ip gt_be98_router` (Wi-Fi LANs may reach the WAN and each
+  other, replies come back, nothing else is forwarded into or out of them;
+  masquerade out of the WAN), sets `net.ipv4.ip_forward=1` and runs its own
+  dnsmasq (DHCP + DNS bound to the Wi-Fi interfaces, upstream from
+  `/etc/resolv.conf`; leases in `/run/gt-be98-router.leases`). It refuses a
+  LAN that is not `bcawl*`, a Wi-Fi/bridge WAN, or a LAN that is a bridge
+  port; nothing is bridged, `gt-be98-netguard` still applies. `stop` removes
+  the addresses it set, the table, and turns forwarding off.
+- Persistence: `etc/hostapd`, `etc/conf.d/gt-be98-wifi-ap`,
+  `etc/gt-be98-router` and the two runlevel links
+  (`etc/runlevels/default/gt-be98-{wifi,router}`) are in `ALLOW_PATHS` and
+  `AUTOSAVE_WATCH` (`/etc/conf.d/gt-be98-jffs`): restored by `gt-be98-jffs`
+  in the boot runlevel, before the default runlevel starts the services.
+
 ### Web UI
 
 The webui-go delivery (`WEBUI_DIR`) is installed with `/etc/webui/platform.conf`
