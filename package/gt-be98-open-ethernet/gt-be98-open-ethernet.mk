@@ -4,8 +4,8 @@
 #
 ################################################################################
 
-# branch reflash-1 (main + pcie-msi + eth-dt-mac)
-GT_BE98_OPEN_ETHERNET_VERSION = 1efec89815adb4d3e04f12759e2612cb89eb01bd
+# branch main
+GT_BE98_OPEN_ETHERNET_VERSION = aae7c89321f1dd74a6089825479a53e092d03dec
 GT_BE98_OPEN_ETHERNET_SITE = git@github.com:nebuloss/gt-be98-open-ethernet.git
 GT_BE98_OPEN_ETHERNET_SITE_METHOD = git
 GT_BE98_OPEN_ETHERNET_LICENSE = GPL-2.0
