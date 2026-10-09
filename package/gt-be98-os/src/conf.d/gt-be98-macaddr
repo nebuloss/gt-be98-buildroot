@@ -1,0 +1,8 @@
+# /etc/conf.d/gt-be98-macaddr - Runner port MAC overrides (gt-be98-macaddr)
+# Written by the web UI; saved to /jffs (gt-be98-save, ALLOW_PATHS of
+# /etc/conf.d/gt-be98-jffs). Keys here win over /etc/conf.d/gt-be98-drivers.
+# Empty = the default: rnr0 the factory MAC from the DT, the other ports the
+# board's base MAC made locally administered, +N for rnrN.
+#   RNR_MAC_BASE=aa:bb:cc:dd:ee:ff  base for every port (locally administered, +N)
+#   RNR_MAC<N>=aa:bb:cc:dd:ee:ff    exactly this MAC for rnrN (unicast)
+# Apply without a reload: gt-be98-macaddr --apply [rnrN]

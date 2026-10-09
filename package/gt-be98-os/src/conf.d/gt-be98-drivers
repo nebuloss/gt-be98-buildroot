@@ -6,6 +6,10 @@ RUNNER_ARGS="flow_offload=1"
 RUNNER_KO=
 # interfaces to bring up after the load (dhcpcd brings up the ones it manages)
 RUNNER_UP_IFACES=
-# stable port MACs: derived from the board's base MAC (U-Boot ethaddr) by
-# gt-be98-macaddr; set a base here to override it (aa:bb:cc:dd:ee:ff)
+# Runner port MACs (gt-be98-macaddr): rnr0 keeps the factory MAC from the
+# DT, the other ports get the board's base MAC (U-Boot ethaddr) made locally
+# administered, +N for rnrN. Overrides (also in /etc/conf.d/gt-be98-macaddr,
+# which wins and is the one the web UI writes and /jffs keeps):
+#   RNR_MAC_BASE=aa:bb:cc:dd:ee:ff  base for every port (locally administered, +N)
+#   RNR_MAC<N>=aa:bb:cc:dd:ee:ff    exactly this MAC for rnrN (unicast)
 RNR_MAC_BASE=

@@ -224,12 +224,48 @@ the committed (stock) slot. `gt-be98-wdtd` opens `/dev/watchdog`
 interface matching `rnr* eth* usb* enx*` is detached the moment anything
 makes it a bridge port, and hairpin mode is turned off on every bridge port
 (link events + a 5 s sweep). A bridge with only Wi-Fi interfaces (bcawl*) is
-allowed. Runner ports get a **stable MAC** (`gt-be98-macaddr`): the board's
-base MAC (`ethaddr` of the U-Boot environment, which the vendor U-Boot
-exports into the Linux DT as `/uboot_env`), made locally administered, +N
-for rnrN; set by `gt-be98-drivers` after each load and by the dhcpcd hook
-`05-gt-be98-mac` if dhcpcd sees the port first. `RNR_MAC_BASE` in
-`/etc/conf.d/gt-be98-drivers` overrides the base.
+allowed.
+
+#### Runner port MAC addresses
+
+`gt-be98-macaddr` is the one policy, applied by `gt-be98-drivers` after each
+load (ports still down) and by the dhcpcd hook `05-gt-be98-mac` if dhcpcd
+sees a port first. For rnrN, the first that applies:
+
+| Source | Address |
+|---|---|
+| override | `RNR_MAC<N>=aa:bb:cc:dd:ee:ff`: exactly that (must be unicast, non-zero) |
+| base | `RNR_MAC_BASE=aa:bb:cc:dd:ee:ff`: the base made locally administered (first octet \|0x02), +N on the last octet; every port, rnr0 included |
+| factory | the MAC the driver read from the DT: U-Boot fills `local-mac-address` of the `ethernet0` port from its `ethaddr`, the board's factory MAC that stock uses too (rnr0) |
+| derived | U-Boot `ethaddr` (exported into the DT as `/uboot_env`), locally administered, +N |
+| hash | a hash of the U-Boot identity values, locally administered, +N |
+
+Default (no key set): rnr0 keeps its factory MAC, the other ports get the
+derived address; all are stable across boots and driver reloads. An
+explicit key wins over the DT MAC. Invalid values are ignored with a
+warning (the next source applies).
+
+The keys are read (never sourced) from `/etc/conf.d/gt-be98-drivers`, then
+`/etc/conf.d/gt-be98-macaddr`, which wins (an empty key there clears one
+from the first file). `gt-be98-macaddr` is the file the web UI writes; it
+is in `ALLOW_PATHS`/`AUTOSAVE_WATCH` of `/etc/conf.d/gt-be98-jffs`, so it is
+saved to `/jffs` (`gt-be98-save`, `gt-be98-autosave`) and restored before
+the driver loads. `/etc/conf.d/gt-be98-drivers` itself is image-owned and
+NOT persisted (a new image's driver defaults must not be masked by a saved
+copy).
+
+```sh
+gt-be98-macaddr --status          # iface current wanted source factory
+gt-be98-macaddr --apply [rnrN]    # apply now: link down, address, up, dhcpcd rebind
+```
+
+At runtime the address changes with the link down (the Runner driver has
+no live address change; its `ndo_set_mac_address` rebuilds the parser DA
+filters, the router MACs); `--apply` takes the link down and up again if it
+was up, then `dhcpcd -n` so the lease follows the new client id (dhcpcd's
+`clientid` is the MAC). The factory MAC is recorded in
+`/run/gt-be98-macaddr/` while the driver's address is in place, so "reset to
+factory" (remove the key, `--apply`) works after an override.
 
 dhcpcd (manager mode) on the USB lifeline (`eth*`, `usb*`, `enx*`) and on
 `rnr0` only; it picks up `rnr0` when the Runner module loads and a USB NIC

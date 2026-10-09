@@ -1,47 +1,196 @@
 #!/bin/sh
 # SPDX-License-Identifier: GPL-2.0
-# gt-be98-macaddr IFACE: the stable MAC address of a Runner port (rnrN).
+# gt-be98-macaddr: the MAC address policy of the Runner ports (rnrN).
 #
-# The open Runner driver gives its netdevs a random MAC on every load (no
-# local-mac-address in the DT), so every reload took a new DHCP lease. The
-# address here is deterministic across boots and reloads, read-only:
-#   1. RNR_MAC_BASE in /etc/conf.d/gt-be98-drivers, if set (lab override);
-#   2. the board's base MAC: "ethaddr" of the U-Boot environment, which the
-#      vendor U-Boot exports into the Linux DT as /uboot_env
-#      (bcmbca-dtsetup.c set_uboot_env);
-#   3. a hash of the other U-Boot environment identity values (serial#,
-#      boardid, *addr), if there is no ethaddr.
-# The result is the base MAC made locally administered (first octet |0x02,
-# never multicast) with N added to the last octet for rnrN: unique to the
-# box, stable, and different from the addresses the stock firmware uses.
-# A port whose MAC came from the DT (local-mac-address filled in by U-Boot
-# through the ethernetN aliases: addr_assign_type 0) keeps it: its current
-# address is printed, so the callers leave it alone.
-# Prints nothing and exits 1 if no source exists.
+#   gt-be98-macaddr IFACE          the MAC IFACE should have (exit 1: none)
+#   gt-be98-macaddr --status       one line per rnr port:
+#                                  IFACE CURRENT WANTED SOURCE FACTORY
+#                                  (WANTED/FACTORY "-" when there is none)
+#   gt-be98-macaddr --apply [IFACE...]
+#                                  give the ports (default: every rnrN) their
+#                                  wanted MAC: link down, address, link up if
+#                                  it was up, then a dhcpcd rebind so the
+#                                  lease follows the new client id
+#
+# Policy for rnrN, first match wins (SOURCE in --status):
+#   override  RNR_MACn=aa:bb:cc:dd:ee:ff: exactly this address (a unicast,
+#             non-zero MAC; anything else is ignored with a warning)
+#   base      RNR_MAC_BASE=aa:bb:cc:dd:ee:ff: the base made locally
+#             administered (first octet |0x02), +n on the last octet
+#   factory   the address the driver took from the DT: U-Boot fills in
+#             local-mac-address for the ethernet0 port from its ethaddr,
+#             i.e. the board's factory MAC, the one stock uses (rnr0)
+#   derived   U-Boot ethaddr (/uboot_env in the DT), locally administered, +n
+#   hash      a hash of the U-Boot identity values (serial#, boardid,
+#             *addr), locally administered, +n
+# The derived/hash/base addresses are stable across boots and reloads and
+# differ from the stock ones. Keys are READ (never sourced) from
+# /etc/conf.d/gt-be98-drivers, then /etc/conf.d/gt-be98-macaddr (wins;
+# written by the web UI, saved to /jffs by gt-be98-save / gt-be98-autosave).
+#
+# The factory address is known only from the driver: a port it gave a DT
+# MAC has addr_assign_type 0 until something sets another address. This
+# script records that address in $RUN/<iface>.factory the first time it
+# sees the port, so "reset to factory" works after an override (the record
+# lives in /run and is refreshed at every driver load).
 set -u
-IF=${1:?usage: gt-be98-macaddr IFACE}
-if [ "$(cat "/sys/class/net/$IF/addr_assign_type" 2>/dev/null)" = 0 ]; then
-	cat "/sys/class/net/$IF/address" && exit 0
-fi
-RNR_MAC_BASE=
-[ -f /etc/conf.d/gt-be98-drivers ] && . /etc/conf.d/gt-be98-drivers
-ENV=/sys/firmware/devicetree/base/uboot_env
+SYSNET=${GT_BE98_SYSNET:-/sys/class/net}
+CONFD=${GT_BE98_CONFD:-/etc/conf.d}
+ENV=${GT_BE98_UBOOT_ENV:-/sys/firmware/devicetree/base/uboot_env}
+RUN=${GT_BE98_MAC_RUN:-/run/gt-be98-macaddr}
 
-valid() { echo "$1" | grep -qiE '^[0-9a-f]{2}(:[0-9a-f]{2}){5}$'; }
-base=$RNR_MAC_BASE
-if [ -z "$base" ] && [ -r "$ENV" ]; then
-	base=$(tr '\000' '\n' < "$ENV" | sed -n 's/^ethaddr=//p' | head -n1)
-fi
-if ! valid "$base" && [ -r "$ENV" ]; then
-	h=$(tr '\000' '\n' < "$ENV" | grep -aE '^(serial#|boardid|[a-z0-9_]*addr)=' | sort |
-		sha256sum | cut -c1-12)
-	[ -n "$h" ] && [ "$h" != "$(printf '' | sha256sum | cut -c1-12)" ] &&
-		base=$(echo "$h" | sed 's/\(..\)/\1:/g; s/:$//')
-fi
-valid "$base" || exit 1
-n=$(echo "$IF" | sed -n 's/^rnr\([0-9]*\)$/\1/p')
-n=${n:-0}
-set -- $(echo "$base" | tr ':' ' ')
-o1=$(( (0x$1 | 0x02) & 0xfe ))
-o6=$(( (0x$6 + n) & 0xff ))
-printf '%02x:%s:%s:%s:%s:%02x\n' "$o1" "$2" "$3" "$4" "$5" "$o6"
+warn() { echo "gt-be98-macaddr: $*" >&2; }
+
+# value of KEY in the config files: the last assignment wins, an empty one
+# included (an empty RNR_MACn in gt-be98-macaddr clears one from the other
+# file); quotes and a trailing comment are dropped
+conf() {
+	local f v r=
+	for f in "$CONFD/gt-be98-drivers" "$CONFD/gt-be98-macaddr"; do
+		[ -r "$f" ] || continue
+		grep -qE "^[[:space:]]*$1=" "$f" || continue
+		v=$(grep -E "^[[:space:]]*$1=" "$f" | tail -n1)
+		r=$(echo "${v#*=}" | sed "s/[[:space:]]#.*//; s/[[:space:]]*\$//; s/^[\"']//; s/[\"']\$//")
+	done
+	echo "$r"
+}
+
+# a well-formed MAC, lower case (exit 1 otherwise)
+norm() {
+	echo "$1" | grep -qiE '^[0-9a-f]{2}(:[0-9a-f]{2}){5}$' || return 1
+	echo "$1" | tr 'A-F' 'a-f'
+}
+
+# an address a port may use: well-formed, unicast, not all-zero
+unicast() {
+	local m
+	m=$(norm "$1") || return 1
+	[ "$m" != 00:00:00:00:00:00 ] || return 1
+	[ $(( 0x${m%%:*} & 1 )) = 0 ]
+}
+
+# base MAC + n, locally administered, never multicast
+offset() {	# base n
+	local IFS=:
+	# shellcheck disable=SC2086
+	set -- $1 "$2"
+	printf '%02x:%s:%s:%s:%s:%02x\n' $(( (0x$1 | 0x02) & 0xfe )) "$2" "$3" "$4" "$5" \
+		$(( (0x$6 + $7) & 0xff ))
+}
+
+# the factory (DT) MAC of $1, recorded while the driver's address is in place
+factory() {
+	local i=$1 m
+	if [ "$(cat "$SYSNET/$i/addr_assign_type" 2>/dev/null)" = 0 ] &&
+	   m=$(norm "$(cat "$SYSNET/$i/address" 2>/dev/null)"); then
+		if [ "$(cat "$RUN/$i.factory" 2>/dev/null)" != "$m" ]; then
+			mkdir -p "$RUN" 2>/dev/null && echo "$m" > "$RUN/$i.factory" 2>/dev/null
+		fi
+		echo "$m"
+		return 0
+	fi
+	m=$(cat "$RUN/$i.factory" 2>/dev/null) && unicast "$m" && echo "$m"
+}
+
+# "MAC SOURCE" that $1 should have (exit 1: no source)
+wanted() {
+	local i=$1 n m base h
+	n=$(echo "$i" | sed -n 's/^rnr\([0-9][0-9]*\)$/\1/p')
+	n=${n:-0}
+	m=$(conf "RNR_MAC$n")
+	if [ -n "$m" ]; then
+		if unicast "$m"; then
+			echo "$(norm "$m") override"
+			return 0
+		fi
+		warn "RNR_MAC$n=$m is not a unicast MAC address: ignored"
+	fi
+	base=$(conf RNR_MAC_BASE)
+	if [ -n "$base" ]; then
+		if norm "$base" >/dev/null; then
+			echo "$(offset "$(norm "$base")" "$n") base"
+			return 0
+		fi
+		warn "RNR_MAC_BASE=$base is not a MAC address: ignored"
+	fi
+	m=$(factory "$i") && { echo "$m factory"; return 0; }
+	if [ -r "$ENV" ]; then
+		base=$(tr '\000' '\n' < "$ENV" | sed -n 's/^ethaddr=//p' | head -n1)
+		if norm "$base" >/dev/null; then
+			echo "$(offset "$(norm "$base")" "$n") derived"
+			return 0
+		fi
+		h=$(tr '\000' '\n' < "$ENV" | grep -aE '^(serial#|boardid|[a-z0-9_]*addr)=' | sort |
+			sha256sum | cut -c1-12)
+		if [ -n "$h" ] && [ "$h" != "$(printf '' | sha256sum | cut -c1-12)" ]; then
+			echo "$(offset "$(echo "$h" | sed 's/\(..\)/\1:/g; s/:$//')" "$n") hash"
+			return 0
+		fi
+	fi
+	return 1
+}
+
+ports() {
+	local p
+	for p in "$SYSNET"/rnr*; do
+		[ -e "$p" ] && echo "${p##*/}"
+	done
+}
+
+is_up() { ip -o link show dev "$1" 2>/dev/null | grep -q '[<,]UP[,>]'; }
+
+apply() {	# iface
+	local i=$1 w m src have up=0 r
+	[ -e "$SYSNET/$i" ] || { warn "$i: no such interface"; return 1; }
+	have=$(cat "$SYSNET/$i/address")
+	w=$(wanted "$i") || { echo "$i: no MAC source, keeping $have"; return 0; }
+	m=${w% *}
+	src=${w#* }
+	[ "$have" = "$m" ] && return 0
+	is_up "$i" && up=1
+	# the Runner driver refuses an address change on a running port
+	[ $up = 1 ] && ip link set dev "$i" down
+	ip link set dev "$i" address "$m"
+	r=$?
+	[ $up = 1 ] && ip link set dev "$i" up
+	[ $r = 0 ] || { warn "$i: setting $m failed"; return 1; }
+	echo "$i: MAC $m ($src, was $have)"
+	logger -t gt-be98 "$i: MAC $m ($src, was $have)" 2>/dev/null
+	# dhcpcd's client id is the MAC: rebind so the lease follows (a port
+	# dhcpcd does not manage is ignored by it)
+	if [ $up = 1 ] && pidof dhcpcd >/dev/null 2>&1; then
+		dhcpcd -n "$i" >/dev/null 2>&1
+	fi
+	return 0
+}
+
+case "${1:-}" in
+--status)
+	for i in $(ports); do
+		cur=$(cat "$SYSNET/$i/address" 2>/dev/null)
+		w=$(wanted "$i" 2>/dev/null) || w="- none"
+		f=$(factory "$i") || f=-
+		echo "$i ${cur:--} $w $f"
+	done
+	;;
+--apply)
+	shift
+	[ $# -gt 0 ] || set -- $(ports)
+	rc=0
+	for i in "$@"; do
+		case "$i" in
+		rnr[0-9]*) apply "$i" || rc=1 ;;
+		*) warn "$i: not a Runner port"; rc=1 ;;
+		esac
+	done
+	exit $rc
+	;;
+''|-*)
+	echo "usage: gt-be98-macaddr IFACE | --status | --apply [IFACE...]" >&2
+	exit 2
+	;;
+*)
+	w=$(wanted "$1") || exit 1
+	echo "${w% *}"
+	;;
+esac
