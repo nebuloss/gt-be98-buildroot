@@ -37,6 +37,8 @@ define GT_BE98_OS_INSTALL_TARGET_CMDS
 	done
 	$(INSTALL) -D -m 0644 $(@D)/dhcpcd-hooks/05-gt-be98-mac \
 		$(TARGET_DIR)/lib/dhcpcd/dhcpcd-hooks/05-gt-be98-mac
+	$(INSTALL) -D -m 0644 $(@D)/dhcpcd-hooks/06-gt-be98-router \
+		$(TARGET_DIR)/lib/dhcpcd/dhcpcd-hooks/06-gt-be98-router
 	mkdir -p $(TARGET_DIR)/rom $(TARGET_DIR)/overlay $(TARGET_DIR)/data \
 		$(TARGET_DIR)/etc/ssh/authorized_keys $(TARGET_DIR)/etc/syslog.d
 endef

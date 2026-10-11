@@ -293,14 +293,25 @@ nftables, dnsmasq): no driver internals or module parameters.
 - `gt-be98-router` (`need gt-be98-wifi`): from `/etc/gt-be98-router/`
   (`router.conf`: `ROUTER_WAN`, `ROUTER_LANS="bcawl3=192.168.83.1/24 ..."`;
   `router.nft`; `dnsmasq.conf`) it puts each address on its Wi-Fi interface,
-  loads `table ip gt_be98_router` (Wi-Fi LANs may reach the WAN and each
-  other, replies come back, nothing else is forwarded into or out of them;
-  masquerade out of the WAN), sets `net.ipv4.ip_forward=1` and runs its own
+  loads `table ip gt_be98_router` (Wi-Fi LANs may reach anything, only
+  replies and DNATed forwards come back into them; masquerade on every
+  non-Wi-Fi output, since the box often has two default routes: the USB
+  dongle `eth0`, preferred, and `rnr0`), policy-routes the Wi-Fi LANs by
+  input interface (`ip rule iif bcawlN table 180`; table 180 = the WAN's
+  default route, `unreachable` until it has one, plus `throw` routes for
+  10/8, 172.16/12, 192.168/16 and the WAN subnet so local destinations use
+  the main table; never a `from <subnet>` rule, which would capture
+  dnsmasq's own replies; the dhcpcd hook `06-gt-be98-router` rebuilds it
+  with `rc-service gt-be98-router reroute` when the WAN lease changes),
+  sets `net.ipv4.ip_forward=1` and runs its own
   dnsmasq (DHCP + DNS bound to the Wi-Fi interfaces, upstream from
   `/etc/resolv.conf`; leases in `/run/gt-be98-router.leases`). It refuses a
   LAN that is not `bcawl*`, a Wi-Fi/bridge WAN, or a LAN that is a bridge
-  port; nothing is bridged, `gt-be98-netguard` still applies. `stop` removes
-  the addresses it set, the table, and turns forwarding off.
+  port; nothing is bridged, `gt-be98-netguard` still applies. The WAN's own
+  link, address and routes are never touched (it may be the only management
+  path). `stop` removes the addresses and rules it set, both tables, and
+  turns forwarding off. hostapd always runs under `gt-be98-wifi` (`-B -P
+  /run/hostapd.pid`), never by hand.
 - Persistence: `etc/hostapd`, `etc/conf.d/gt-be98-wifi-ap`,
   `etc/gt-be98-router` and the two runlevel links
   (`etc/runlevels/default/gt-be98-{wifi,router}`) are in `ALLOW_PATHS` and

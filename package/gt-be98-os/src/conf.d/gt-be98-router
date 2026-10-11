@@ -3,3 +3,6 @@
 ROUTER_DIR=/etc/gt-be98-router
 # seconds to wait for each Wi-Fi interface at start
 IFACE_WAIT=20
+# routing table + ip rule priority for the Wi-Fi LANs (policy routing by
+# input interface to the WAN's default route)
+ROUTER_TABLE=180

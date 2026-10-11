@@ -7,12 +7,23 @@
 #   $ROUTER_DIR/router.conf   ROUTER_WAN="rnr0" ROUTER_LANS="bcawl3=192.168.83.1/24 ..."
 #   $ROUTER_DIR/router.nft    table ip gt_be98_router (forward + masquerade)
 #   $ROUTER_DIR/dnsmasq.conf  this instance's dnsmasq config
+# Routing: the box often has two default routes (the USB management dongle
+# eth0, preferred, and rnr0), so the Wi-Fi LANs are policy-routed by INPUT
+# interface (never by source subnet: that captured dnsmasq's own replies):
+# `ip rule iif bcawlN table $ROUTER_TABLE`, a table holding the WAN's default
+# route plus `throw` routes for the private ranges and the WAN's own subnet
+# (local/LAN destinations fall back to the main table). The dhcpcd hook
+# 06-gt-be98-router runs `reroute` when the WAN's lease changes. Masquerade
+# applies on any non-Wi-Fi output (router.nft). The WAN itself (its address,
+# its routes, its link) is never touched: it may be the only management path.
 # Settings: /etc/conf.d/gt-be98-router. Saved to /jffs with the AP configs.
 description="Wi-Fi router mode: routed Wi-Fi subnets, DHCP/DNS, NAT out of the WAN"
+extra_started_commands="reroute"
 
 ROUTER_DIR=${ROUTER_DIR:-/etc/gt-be98-router}
 DNSMASQ_PID=/run/gt-be98-router-dnsmasq.pid
 APPLIED=/run/gt-be98-router.applied
+ROUTER_TABLE=${ROUTER_TABLE:-180}
 
 depend() {
 	need gt-be98-wifi
@@ -41,6 +52,32 @@ load_conf() {
 	done
 }
 
+# (re)build the Wi-Fi routing table from the WAN's current default route;
+# without one, Wi-Fi traffic to the internet is unreachable (never leaked
+# through another default route)
+route_table() {
+	local gw n
+	gw=$(ip -4 route show default dev "$ROUTER_WAN" | sed -n 's/^default via \([0-9.]*\).*/\1/p' | head -n1)
+	ip route flush table "$ROUTER_TABLE" 2>/dev/null
+	if [ -n "$gw" ]; then
+		ip route replace default via "$gw" dev "$ROUTER_WAN" table "$ROUTER_TABLE"
+	else
+		ewarn "$ROUTER_WAN has no default route yet: Wi-Fi internet unreachable until its lease"
+		ip route replace unreachable default table "$ROUTER_TABLE"
+	fi
+	for n in 10.0.0.0/8 172.16.0.0/12 192.168.0.0/16 \
+		$(ip -4 route show dev "$ROUTER_WAN" scope link | sed -n 's|^\([0-9.]*/[0-9]*\) .*|\1|p'); do
+		ip route replace throw "$n" table "$ROUTER_TABLE"
+	done
+}
+
+reroute() {
+	load_conf || return 1
+	ebegin "Router mode: Wi-Fi routing table $ROUTER_TABLE via $ROUTER_WAN"
+	route_table
+	eend 0
+}
+
 start() {
 	load_conf || return 1
 	local l i a n
@@ -60,8 +97,11 @@ start() {
 			return 1
 		fi
 		ip addr replace "$a" dev "$i" || { eend 1 "$a on $i failed"; return 1; }
+		ip rule del iif "$i" table "$ROUTER_TABLE" priority "$ROUTER_TABLE" 2>/dev/null
+		ip rule add iif "$i" table "$ROUTER_TABLE" priority "$ROUTER_TABLE"
 		echo "$l" >> $APPLIED
 	done
+	route_table
 	nft -c -f "$ROUTER_DIR/router.nft" && nft -f "$ROUTER_DIR/router.nft" ||
 		{ eend 1 "router.nft rejected"; return 1; }
 	sysctl -q -w net.ipv4.ip_forward=1
@@ -82,9 +122,11 @@ stop() {
 	# the addresses this instance set (router.conf may already be the next one)
 	if [ -f $APPLIED ]; then
 		while read -r l; do
+			ip rule del iif "${l%%=*}" table "$ROUTER_TABLE" priority "$ROUTER_TABLE" 2>/dev/null
 			ip addr del "${l#*=}" dev "${l%%=*}" 2>/dev/null
 		done < $APPLIED
 		rm -f $APPLIED
 	fi
+	ip route flush table "$ROUTER_TABLE" 2>/dev/null
 	eend 0
 }

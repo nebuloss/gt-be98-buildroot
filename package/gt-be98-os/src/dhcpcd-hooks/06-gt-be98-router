@@ -1,0 +1,10 @@
+# dhcpcd hook (sourced): when the router mode's WAN gets or changes its
+# lease, rebuild the Wi-Fi routing table (its default route follows the
+# WAN's gateway). Does nothing unless gt-be98-router is running.
+case "$reason" in BOUND|RENEW|REBIND|REBOOT|STATIC) ;; *) return 0 2>/dev/null || exit 0 ;; esac
+[ -f /run/gt-be98-router.applied ] || { return 0 2>/dev/null || exit 0; }
+_wan=$(sed -n 's/^ROUTER_WAN="\([A-Za-z0-9_.-]*\)"$/\1/p' /etc/gt-be98-router/router.conf 2>/dev/null | tail -n1)
+if [ -n "$_wan" ] && [ "$interface" = "$_wan" ]; then
+	rc-service gt-be98-router reroute >/dev/null 2>&1 &
+fi
+unset _wan
