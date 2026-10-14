@@ -5,11 +5,22 @@
 #   rc-update add gt-be98-wifi default ; rc-service gt-be98-wifi start
 # HOSTAPD_CONFS: /etc/conf.d/gt-be98-wifi, overridden by
 # /etc/conf.d/gt-be98-wifi-ap when present (written by the web UI's Wi-Fi AP
-# page, saved to /jffs). `rc-service gt-be98-wifi reload` restarts hostapd
-# only (new configs); the driver stays loaded.
+# page, saved to /jffs).
+#
+# One hostapd process per config file (one per radio; extra SSIDs are bss=
+# sections of that radio's config, their netdevs created by hostapd), keyed
+# by the config's interface=:
+#   pid  /run/hostapd-<iface>.pid    log  /var/log/hostapd-<iface>.log
+#   state /run/gt-be98-wifi/<iface>.conf (config path) and .sum (checksum of
+#   the config content, its path and HOSTAPD_ARGS)
+# `rc-service gt-be98-wifi reload` applies new configs without touching the
+# driver: instances whose checksum changed (or that died) are restarted,
+# new configs started, removed ones stopped, the others left running.
 # Firmware: /lib/firmware/brcm/bca (gt-be98-vendor-firmware).
 description="Open Wi-Fi driver + hostapd (optional)"
 extra_started_commands="reload"
+
+STATE=/run/gt-be98-wifi
 
 depend() {
 	need gt-be98-watchdog
@@ -26,31 +37,117 @@ ap_override() {
 	HOSTAPD_CONFS=$(sed -n 's/^HOSTAPD_CONFS="\([^"$`\;]*\)"$/\1/p' "$f" | tail -n1)
 }
 
-start_hostapd() {
-	ap_override
-	[ -n "${HOSTAPD_CONFS:-}" ] || { einfo "no HOSTAPD_CONFS: driver only"; return 0; }
-	local c i n
-	for c in $HOSTAPD_CONFS; do
-		[ -f "$c" ] || { eerror "$c missing"; return 1; }
-		i=$(sed -n 's/^interface=//p' "$c" | head -n1)
-		n=0
-		while [ -n "$i" ] && [ ! -e "/sys/class/net/$i" ] && [ $n -lt ${IFACE_WAIT:-20} ]; do
-			sleep 1; n=$((n + 1))
-		done
-	done
-	ebegin "Starting hostapd ($HOSTAPD_CONFS)"
-	start-stop-daemon --start --exec /usr/sbin/hostapd --pidfile /run/hostapd.pid \
-		-- -B -P /run/hostapd.pid ${HOSTAPD_ARGS} $HOSTAPD_CONFS
-	eend $?
+# interface= of a config (the first one: bss= sections follow it)
+conf_iface() { sed -n 's/^interface=\([A-Za-z0-9_.-]*\)[[:space:]]*$/\1/p' "$1" | head -n1; }
+
+conf_sum() {
+	{ echo "$1"; echo "${HOSTAPD_ARGS:-}"; cat "$1"; } | sha256sum | cut -d' ' -f1
 }
 
-stop_hostapd() {
+hap_pid() { echo "/run/hostapd-$1.pid"; }
+
+hap_running() {
+	local p
+	p=$(cat "$(hap_pid "$1")" 2>/dev/null) || return 1
+	[ -n "$p" ] && kill -0 "$p" 2>/dev/null
+}
+
+# start the instance of config $1 for interface $2
+hap_start() {
+	local c=$1 i=$2 n=0
+	while [ ! -e "/sys/class/net/$i" ] && [ $n -lt ${IFACE_WAIT:-20} ]; do
+		sleep 1; n=$((n + 1))
+	done
+	[ -e "/sys/class/net/$i" ] || ewarn "$i not present after ${IFACE_WAIT:-20}s, starting hostapd anyway"
+	mkdir -p "$STATE"
+	ebegin "Starting hostapd on $i ($c)"
+	start-stop-daemon --start --exec /usr/sbin/hostapd --pidfile "$(hap_pid "$i")" \
+		-- -B -P "$(hap_pid "$i")" -t -f "/var/log/hostapd-$i.log" ${HOSTAPD_ARGS:-} "$c"
+	if eend $?; then
+		echo "$c" > "$STATE/$i.conf"
+		conf_sum "$c" > "$STATE/$i.sum"
+	else
+		rm -f "$STATE/$i.conf" "$STATE/$i.sum"
+		return 1
+	fi
+}
+
+hap_stop() {
+	local i=$1
+	# a dead instance has nothing to stop (ssd would report a failure)
+	if hap_running "$i"; then
+		ebegin "Stopping hostapd on $i"
+		start-stop-daemon --stop --exec /usr/sbin/hostapd --pidfile "$(hap_pid "$i")" \
+			--retry TERM/5/KILL/2
+		eend $?
+	fi
+	rm -f "$(hap_pid "$i")" "$STATE/$i.conf" "$STATE/$i.sum"
+}
+
+# interfaces with an instance (state or pidfile)
+hap_instances() {
+	local f i seen=
+	for f in "$STATE"/*.conf /run/hostapd-*.pid; do
+		[ -e "$f" ] || continue
+		case "$f" in
+		"$STATE"/*) i=${f#"$STATE"/}; i=${i%.conf} ;;
+		*) i=${f#/run/hostapd-}; i=${i%.pid} ;;
+		esac
+		case " $seen " in *" $i "*) ;; *) seen="$seen $i" ;; esac
+	done
+	echo $seen
+}
+
+# the single hostapd of the previous version of this service
+stop_legacy() {
 	[ -f /run/hostapd.pid ] || return 0
-	ebegin "Stopping hostapd"
+	ebegin "Stopping hostapd (single instance)"
 	start-stop-daemon --stop --exec /usr/sbin/hostapd --pidfile /run/hostapd.pid \
 		--retry TERM/5/KILL/2
 	eend $?
 	rm -f /run/hostapd.pid
+}
+
+# bring the instances in line with HOSTAPD_CONFS: start new or changed
+# configs, stop removed ones, leave unchanged running ones alone
+apply_hostapd() {
+	local c i want= pairs= rc=0
+	ap_override
+	stop_legacy
+	for c in ${HOSTAPD_CONFS:-}; do
+		if [ ! -f "$c" ]; then eerror "$c missing"; rc=1; continue; fi
+		i=$(conf_iface "$c")
+		if [ -z "$i" ]; then eerror "$c: no interface="; rc=1; continue; fi
+		case " $want " in
+		*" $i "*) eerror "$c: interface $i already used by another config"; rc=1; continue ;;
+		esac
+		want="$want $i"
+		pairs="$pairs$i $c
+"
+	done
+	# removed configs
+	for i in $(hap_instances); do
+		case " $want " in *" $i "*) ;; *) hap_stop "$i" ;; esac
+	done
+	[ -n "$want" ] || { einfo "no HOSTAPD_CONFS: driver only"; return $rc; }
+	for i in $want; do
+		c=$(printf '%s' "$pairs" | awk -v i="$i" '$1 == i { print $2; exit }')
+		if hap_running "$i" && [ "$(cat "$STATE/$i.conf" 2>/dev/null)" = "$c" ] &&
+		   [ "$(cat "$STATE/$i.sum" 2>/dev/null)" = "$(conf_sum "$c")" ]; then
+			einfo "hostapd on $i: unchanged"
+			continue
+		fi
+		hap_running "$i" || [ ! -f "$(hap_pid "$i")" ] || ewarn "hostapd on $i had died"
+		hap_stop "$i"
+		hap_start "$c" "$i" || rc=1
+	done
+	return $rc
+}
+
+stop_hostapd() {
+	local i
+	stop_legacy
+	for i in $(hap_instances); do hap_stop "$i"; done
 }
 
 start() {
@@ -66,13 +163,12 @@ start() {
 		else modprobe bca_pcie_ipc $WIFI_ARGS; fi
 		eend $? || return 1
 	fi
-	start_hostapd
+	apply_hostapd
 }
 
-# new hostapd configs without reloading the driver
+# new hostapd configs without reloading the driver: only what changed
 reload() {
-	stop_hostapd
-	start_hostapd
+	apply_hostapd
 }
 
 stop() {
@@ -82,4 +178,24 @@ stop() {
 		rmmod bca_pcie_ipc
 		eend $?
 	fi
+}
+
+status() {
+	local rc i c
+	default_status
+	rc=$?
+	if wifi_loaded; then einfo "driver: bca_pcie_ipc loaded"; else einfo "driver: not loaded"; fi
+	for i in $(hap_instances); do
+		c=$(cat "$STATE/$i.conf" 2>/dev/null)
+		if hap_running "$i"; then
+			if [ -n "$c" ] && [ -f "$c" ] && [ "$(cat "$STATE/$i.sum" 2>/dev/null)" != "$(conf_sum "$c")" ]; then
+				ewarn "hostapd on $i: running (pid $(cat "$(hap_pid "$i")")), ${c}: changed since start (reload)"
+			else
+				einfo "hostapd on $i: running (pid $(cat "$(hap_pid "$i")")), ${c:-?}"
+			fi
+		else
+			eerror "hostapd on $i: not running (${c:-?})"
+		fi
+	done
+	return $rc
 }
