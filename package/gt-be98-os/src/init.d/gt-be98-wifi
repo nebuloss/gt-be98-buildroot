@@ -16,6 +16,16 @@
 # `rc-service gt-be98-wifi reload` applies new configs without touching the
 # driver: instances whose checksum changed (or that died) are restarted,
 # new configs started, removed ones stopped, the others left running.
+#
+# Bridges: WIFI_BRIDGES="brwifi1 brwifi2 ..." (same files as HOSTAPD_CONFS)
+# are created by this service (no STP, forward_delay 0, up) before any
+# hostapd starts, and the configs' bridge= must name one of them: hostapd
+# then only adds its BSS netdevs as ports. A bridge hostapd created itself
+# would be deleted when it stops, taking the network's address with it.
+# Bridges no longer listed are deleted after the instances using them have
+# stopped; only bridges this service created ($STATE/bridges) are deleted.
+# Only brwifiN bridges, and only bcawl* netdevs in the configs (interface=,
+# bss=): rnr0 or any other interface is never enslaved by this service.
 # Firmware: /lib/firmware/brcm/bca (gt-be98-vendor-firmware).
 description="Open Wi-Fi driver + hostapd (optional)"
 extra_started_commands="reload"
@@ -30,11 +40,80 @@ depend() {
 
 wifi_loaded() { grep -q '^bca_pcie_ipc ' /proc/modules; }
 
-# the web UI's HOSTAPD_CONFS (parsed, not sourced: one quoted list of paths)
+# the web UI's HOSTAPD_CONFS and WIFI_BRIDGES (parsed, not sourced)
 ap_override() {
 	local f=/etc/conf.d/gt-be98-wifi-ap
 	[ -f "$f" ] || return 0
 	HOSTAPD_CONFS=$(sed -n 's/^HOSTAPD_CONFS="\([^"$`\;]*\)"$/\1/p' "$f" | tail -n1)
+	WIFI_BRIDGES=$(sed -n 's/^WIFI_BRIDGES="\([A-Za-z0-9 ]*\)"$/\1/p' "$f" | tail -n1)
+}
+
+# brwifi<digits> only
+valid_bridge() {
+	case "$1" in brwifi[0-9]*) ;; *) return 1 ;; esac
+	case "${1#brwifi}" in *[!0-9]*) return 1 ;; esac
+}
+
+br_owned() { grep -qx "$1" "$STATE/bridges" 2>/dev/null; }
+
+# create (or adopt an existing) bridge $1: no STP, forward_delay 0, up
+br_create() {
+	local b=$1
+	if [ -e "/sys/class/net/$b" ]; then
+		[ -d "/sys/class/net/$b/bridge" ] || { eerror "$b exists and is not a bridge"; return 1; }
+	else
+		ebegin "Creating bridge $b"
+		ip link add name "$b" type bridge stp_state 0 forward_delay 0
+		eend $? || return 1
+	fi
+	ip link set dev "$b" type bridge stp_state 0 forward_delay 0 &&
+		ip link set dev "$b" up || { eerror "$b: setup failed"; return 1; }
+	mkdir -p "$STATE"
+	br_owned "$b" || echo "$b" >> "$STATE/bridges"
+}
+
+# delete bridge $1 if this service owns it and it has no foreign port
+br_remove() {
+	local b=$1 p
+	br_owned "$b" || return 0
+	if [ -e "/sys/class/net/$b" ]; then
+		for p in $(ls "/sys/class/net/$b/brif" 2>/dev/null); do
+			case "$p" in
+			bcawl*) ;;
+			*) ewarn "$b has port $p (not Wi-Fi): left in place"; return 1 ;;
+			esac
+		done
+		ebegin "Deleting bridge $b"
+		ip link del dev "$b"
+		eend $? || return 1
+	fi
+	grep -vx "$b" "$STATE/bridges" > "$STATE/bridges.new" 2>/dev/null
+	mv -f "$STATE/bridges.new" "$STATE/bridges"
+}
+
+# owned bridges not in the list $1
+br_prune() {
+	local b
+	for b in $(cat "$STATE/bridges" 2>/dev/null); do
+		case " $1 " in *" $b "*) ;; *) br_remove "$b" ;; esac
+	done
+}
+
+# a config may only name bcawl* netdevs and listed bridges
+conf_check() {
+	local c=$1 brs=$2 v
+	for v in $(sed -nE 's/^(interface|bss)=//p' "$c"); do
+		case "$v" in
+		bcawl[0-9]*) ;;
+		*) eerror "$c: $v is not a Wi-Fi netdev (bcawl*)"; return 1 ;;
+		esac
+	done
+	for v in $(sed -n 's/^bridge=//p' "$c"); do
+		case " $brs " in
+		*" $v "*) ;;
+		*) eerror "$c: bridge=$v is not in WIFI_BRIDGES"; return 1 ;;
+		esac
+	done
 }
 
 # interface= of a config (the first one: bss= sections follow it)
@@ -111,13 +190,19 @@ stop_legacy() {
 # bring the instances in line with HOSTAPD_CONFS: start new or changed
 # configs, stop removed ones, leave unchanged running ones alone
 apply_hostapd() {
-	local c i want= pairs= rc=0
+	local c i b want= pairs= brs= rc=0
 	ap_override
 	stop_legacy
+	# bridges first: hostapd must find them
+	for b in ${WIFI_BRIDGES:-}; do
+		valid_bridge "$b" || { eerror "bridge '$b' refused (brwifiN only)"; rc=1; continue; }
+		br_create "$b" && brs="$brs $b" || rc=1
+	done
 	for c in ${HOSTAPD_CONFS:-}; do
 		if [ ! -f "$c" ]; then eerror "$c missing"; rc=1; continue; fi
 		i=$(conf_iface "$c")
 		if [ -z "$i" ]; then eerror "$c: no interface="; rc=1; continue; fi
+		conf_check "$c" "$brs" || { rc=1; continue; }
 		case " $want " in
 		*" $i "*) eerror "$c: interface $i already used by another config"; rc=1; continue ;;
 		esac
@@ -129,7 +214,7 @@ apply_hostapd() {
 	for i in $(hap_instances); do
 		case " $want " in *" $i "*) ;; *) hap_stop "$i" ;; esac
 	done
-	[ -n "$want" ] || { einfo "no HOSTAPD_CONFS: driver only"; return $rc; }
+	[ -n "$want" ] || { einfo "no HOSTAPD_CONFS: driver only"; br_prune "$brs"; return $rc; }
 	for i in $want; do
 		c=$(printf '%s' "$pairs" | awk -v i="$i" '$1 == i { print $2; exit }')
 		if hap_running "$i" && [ "$(cat "$STATE/$i.conf" 2>/dev/null)" = "$c" ] &&
@@ -141,6 +226,8 @@ apply_hostapd() {
 		hap_stop "$i"
 		hap_start "$c" "$i" || rc=1
 	done
+	# bridges no longer listed, now that no instance uses them
+	br_prune "$brs"
 	return $rc
 }
 
@@ -148,6 +235,7 @@ stop_hostapd() {
 	local i
 	stop_legacy
 	for i in $(hap_instances); do hap_stop "$i"; done
+	br_prune ""
 }
 
 start() {
@@ -185,6 +273,13 @@ status() {
 	default_status
 	rc=$?
 	if wifi_loaded; then einfo "driver: bca_pcie_ipc loaded"; else einfo "driver: not loaded"; fi
+	for i in $(cat "$STATE/bridges" 2>/dev/null); do
+		if [ -d "/sys/class/net/$i/bridge" ]; then
+			einfo "bridge $i: ports $(ls "/sys/class/net/$i/brif" 2>/dev/null | tr '\n' ' ')"
+		else
+			eerror "bridge $i: missing"
+		fi
+	done
 	for i in $(hap_instances); do
 		c=$(cat "$STATE/$i.conf" 2>/dev/null)
 		if hap_running "$i"; then
