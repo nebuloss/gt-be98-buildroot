@@ -4,8 +4,8 @@
 #
 ################################################################################
 
-# branch main
-GT_BE98_OPEN_WIFI_VERSION = 93ae26f0ed2e246782c10ef06b06046b4b5324c7
+# branch ml-integ10-mbss
+GT_BE98_OPEN_WIFI_VERSION = 749366271504b75ac2c7dbe27c8310b2e64a69b8
 GT_BE98_OPEN_WIFI_SITE = git@github.com:nebuloss/gt-be98-open-wifi.git
 GT_BE98_OPEN_WIFI_SITE_METHOD = git
 GT_BE98_OPEN_WIFI_LICENSE = GPL-2.0-only
