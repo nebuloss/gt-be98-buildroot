@@ -1,5 +1,6 @@
 # /etc/conf.d/gt-be98-netguard
-# interfaces that must never be bridge ports (shell patterns)
+# interfaces that must never be bridge ports (shell patterns). Their 802.1Q
+# sub-interfaces may only be the Wi-Fi networks' trunk VLANs (WIFI_VLANS).
 NETGUARD_PROTECT="rnr* eth* usb* enx*"
 # periodic sweep in seconds (on top of reacting to every link event)
 NETGUARD_SWEEP=5

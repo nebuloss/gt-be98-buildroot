@@ -3,18 +3,14 @@
 # Wi-Fi router mode (optional, NOT enabled by default; the web UI's Wi-Fi AP
 # page enables it): each Wi-Fi radio is its own routed subnet, with DHCP + DNS
 # from a dnsmasq bound to the Wi-Fi interfaces only, and NAT out of the WAN.
-# A LAN is a Wi-Fi radio (bcawlN) or a Wi-Fi network bridge (brwifiN: its
-# BSSes on one or more radios, the bridge created by gt-be98-wifi from
-# WIFI_BRIDGES); nothing else, never the WAN or a wired port.
-#   $ROUTER_DIR/router.conf   ROUTER_WAN="rnr0" ROUTER_LANS="brwifi1=192.168.80.1/24 ..."
-#   $ROUTER_DIR/router.nft    table ip gt_be98_router (forward + masquerade) and
-#                             table bridge gt_be98_router_iso (client isolation),
-#                             one file: checked (nft -c) then loaded (nft -f)
+# Nothing is bridged; only bcawl* interfaces may be router LANs.
+#   $ROUTER_DIR/router.conf   ROUTER_WAN="rnr0" ROUTER_LANS="bcawl3=192.168.83.1/24 ..."
+#   $ROUTER_DIR/router.nft    table ip gt_be98_router (forward + masquerade)
 #   $ROUTER_DIR/dnsmasq.conf  this instance's dnsmasq config
 # Routing: the box often has two default routes (the USB management dongle
 # eth0, preferred, and rnr0), so the Wi-Fi LANs are policy-routed by INPUT
 # interface (never by source subnet: that captured dnsmasq's own replies):
-# `ip rule iif <LAN> table $ROUTER_TABLE`, a table holding the WAN's default
+# `ip rule iif bcawlN table $ROUTER_TABLE`, a table holding the WAN's default
 # route plus `throw` routes for the private ranges and the WAN's own subnet
 # (local/LAN destinations fall back to the main table). The dhcpcd hook
 # 06-gt-be98-router runs `reroute` when the WAN's lease changes. Masquerade
@@ -49,8 +45,7 @@ load_conf() {
 	for l in $ROUTER_LANS; do
 		case "${l%%=*}" in
 		bcawl[0-9]|bcawl[0-9][0-9]) ;;
-		brwifi[0-9]|brwifi[0-9][0-9]|brwifi[0-9][0-9][0-9]) ;;
-		*) eerror "router LAN '${l%%=*}' refused: Wi-Fi radios (bcawl*) or Wi-Fi bridges (brwifi*) only"; return 1 ;;
+		*) eerror "router LAN '${l%%=*}' refused: Wi-Fi radios (bcawl*) only"; return 1 ;;
 		esac
 		echo "${l#*=}" | grep -qE '^[0-9]{1,3}(\.[0-9]{1,3}){3}/[0-9]{1,2}$' ||
 			{ eerror "router LAN address '${l#*=}' refused"; return 1; }
@@ -124,7 +119,6 @@ stop() {
 	fi
 	sysctl -q -w net.ipv4.ip_forward=0
 	nft delete table ip gt_be98_router 2>/dev/null
-	nft delete table bridge gt_be98_router_iso 2>/dev/null
 	# the addresses this instance set (router.conf may already be the next one)
 	if [ -f $APPLIED ]; then
 		while read -r l; do

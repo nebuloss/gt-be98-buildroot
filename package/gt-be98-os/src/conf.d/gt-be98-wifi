@@ -6,9 +6,14 @@ WIFI_KO=
 # hostapd configurations (space separated); see /etc/hostapd/*.example.
 # Shipped defaults, four radios: the 2.4 GHz netdev is bcawl3 (PCI domain 2).
 HOSTAPD_CONFS=
-# bridges the service creates before hostapd (brwifiN only); the configs'
-# bridge= must name one of them
+# Wi-Fi networks (pure L2, see /etc/init.d/gt-be98-wifi): their bridges
+# (brwifiN), each with a REQUIRED VLAN on the trunk port (brwifiN:vid,
+# 1-4094); the configs' bridge= must name one of them. The web UI writes
+# these into /etc/conf.d/gt-be98-wifi-ap.
 WIFI_BRIDGES=
+WIFI_VLANS=
+WIFI_TRUNK=rnr0
+WIFI_ISOLATE=
 HOSTAPD_ARGS=
 IFACE_WAIT=20
 WIFI_UNLOAD_ON_STOP=yes

@@ -5,43 +5,97 @@
 #   1. no protected interface (NETGUARD_PROTECT: rnr*, eth*, usb*, enx*: the
 #      LAN ports and the USB lifeline) is ever a bridge port: one is
 #      detached the moment it is enslaved (a bridged/looped LAN port caused a
-#      broadcast storm on the owner's LAN);
-#   2. no bridge port ever has hairpin mode on.
+#      broadcast storm on the owner's LAN). This holds for the bare ports
+#      (rnr0 above all: the trunk and management port). An 802.1Q
+#      sub-interface of a protected port (<port>.<vid>) may be a bridge port
+#      only as a Wi-Fi network's trunk VLAN: <WIFI_TRUNK>.<vid> in bridge
+#      brwifiN, listed as brwifiN:<vid> in WIFI_VLANS (gt-be98-wifi);
+#      anything else is detached;
+#   2. no bridge port ever has hairpin mode on;
+#   3. the Wi-Fi ports (bcawl*) of the WIFI_ISOLATE bridges are isolated,
+#      those of other brwifi bridges and the trunk VLANs are not.
 # Reacts to every link event (ip monitor) and sweeps every NETGUARD_SWEEP s.
 # Settings: /etc/conf.d/gt-be98-netguard.
 set -u
 NETGUARD_PROTECT=${NETGUARD_PROTECT:-"rnr* eth* usb* enx*"}
 NETGUARD_SWEEP=${NETGUARD_SWEEP:-5}
 
+WIFI_AP=/etc/conf.d/gt-be98-wifi-ap
+WIFI_DEF=/etc/conf.d/gt-be98-wifi
+
 log() { logger -t gt-be98-netguard -- "$*" 2>/dev/null; echo "gt-be98-netguard: $*" > /dev/kmsg 2>/dev/null; }
+# the patterns are matched, never expanded as file names (set -f)
 protected() {
-	local p
+	local p r=1
+	set -f
 	for p in $NETGUARD_PROTECT; do
-		case "$1" in $p) return 0 ;; esac
+		case "$1" in $p) r=0; break ;; esac
+	done
+	set +f
+	return $r
+}
+# Wi-Fi network settings as gt-be98-wifi reads them: the web UI's file when
+# present, else the defaults (WIFI_TRUNK defaults to rnr0)
+wifi_conf() {
+	local f=$WIFI_DEF t
+	[ -f "$WIFI_AP" ] && f=$WIFI_AP
+	VLANS=$(sed -n 's/^WIFI_VLANS="\{0,1\}\([A-Za-z0-9: ]*\)"\{0,1\}$/\1/p' "$f" 2>/dev/null | tail -n1)
+	ISOLATE=$(sed -n 's/^WIFI_ISOLATE="\{0,1\}\([A-Za-z0-9 ]*\)"\{0,1\}$/\1/p' "$f" 2>/dev/null | tail -n1)
+	t=$(sed -n 's/^WIFI_TRUNK="\{0,1\}\([A-Za-z0-9]*\)"\{0,1\}$/\1/p' "$f" 2>/dev/null | tail -n1)
+	TRUNK=${t:-rnr0}
+	case "$TRUNK" in rnr[0-3]) ;; *) TRUNK= ;; esac
+}
+# is sub-interface $1 the listed trunk VLAN of bridge $2?
+wifi_vlan_ok() {
+	local p v
+	[ -n "$TRUNK" ] || return 1
+	case "$2" in brwifi[0-9]*) ;; *) return 1 ;; esac
+	for p in $VLANS; do
+		v=${p#*:}
+		case "$v" in ''|0*|*[!0-9]*) continue ;; esac
+		[ "${p%%:*}" = "$2" ] && [ "$1" = "$TRUNK.$v" ] && return 0
 	done
 	return 1
 }
 sweep() {
-	local n i m
+	local n i m f
+	wifi_conf
 	for n in /sys/class/net/*; do
 		i=${n##*/}
 		if [ -e "$n/brport" ]; then
 			m=$(readlink "$n/master" 2>/dev/null); m=${m##*/}
-			if protected "$i"; then
-				ip link set "$i" nomaster &&
-					log "detached $i from bridge $m (protected port: never bridged)"
-				continue
-			fi
+			case "$i" in
+			*.*)	# 802.1Q sub-interface of a protected port: listed trunk VLANs only
+				if protected "${i%%.*}" && ! wifi_vlan_ok "$i" "$m"; then
+					ip link set "$i" nomaster &&
+						log "detached $i from bridge $m (not a listed Wi-Fi VLAN of $m)"
+					continue
+				fi ;;
+			*)	if protected "$i"; then
+					ip link set "$i" nomaster &&
+						log "detached $i from bridge $m (protected port: never bridged)"
+					continue
+				fi ;;
+			esac
 			if [ "$(cat "$n/brport/hairpin_mode" 2>/dev/null)" = 1 ]; then
 				echo 0 > "$n/brport/hairpin_mode" &&
 					log "hairpin turned off on $i (bridge $m)"
 			fi
+			# Wi-Fi port isolation (the trunk VLAN is never isolated)
+			case "$m" in
+			brwifi[0-9]*)
+				f=0
+				case "$i" in bcawl*) case " $ISOLATE " in *" $m "*) f=1 ;; esac ;; esac
+				[ "$(cat "$n/brport/isolated" 2>/dev/null)" = "$f" ] ||
+					{ echo "$f" > "$n/brport/isolated" 2>/dev/null &&
+						log "isolated=$f on $i (bridge $m)"; } ;;
+			esac
 		fi
 	done
 }
 
 sweep
-log "guarding: never bridged: $NETGUARD_PROTECT; hairpin never on"
+log "guarding: never bridged: $NETGUARD_PROTECT (sub-interfaces: listed Wi-Fi VLANs in brwifi* only); hairpin never on"
 # one event stream: every link change from the kernel, plus a periodic tick
 {
 	ip -o monitor link &
