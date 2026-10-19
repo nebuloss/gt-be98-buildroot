@@ -1,0 +1,492 @@
+#!/bin/sh
+# SPDX-License-Identifier: GPL-2.0
+# gt-be98-wifi-gen: render the hostapd configs of the Wi-Fi networks.
+#
+# A Wi-Fi network (SSID, security, VLAN, band set) is one BSS on each radio
+# of its band set. Per radio this writes one hostapd config: the radio-wide
+# lines, the radio's anchor BSS (slot 0, the radio netdev bcawlN) and one
+# bss= section per further network (slot k, netdev bcawlN-k). All the radio
+# configs are run by ONE hostapd process (gt-be98-wifi) so that hostapd
+# builds the 6 GHz Reduced Neighbor Report and a BSS can be added/removed at
+# runtime through the global control socket. For that, each BSS also gets a
+# single-BSS config (ADD bss_config=<phy>:<file>).
+#
+#   gt-be98-wifi-gen -n NETWORKS -o OUTDIR [-s SLOTS] [-m "2g=MAC 5gl=MAC ..."]
+#                    [-d "2g=bcawl3 5gl=bcawl0 5gh=bcawl1 6g=bcawl2"]
+#                    [-C MAX_BSS] [-x CTRL_DIR] [-c] [-R 0|1] [-K 0|1] [-N]
+#
+#   -n  the network list (format below)          -o  output dir (created)
+#   -s  slot state file: read, and rewritten when the plan is valid (unless
+#       -N). Sticky slot and BSSID index per (network, radio).
+#   -m  the radios' own MAC addresses (default: /sys/class/net/<dev>/address)
+#   -d  band -> radio netdev (default the driver's fixed names, ifname_fixed=1)
+#   -C  BSSes per radio, 1..16 (default 4 = the driver's BCA_MAX_BSS today;
+#       the firmware is MBSS16: 16 = the hard maximum)
+#   -x  ctrl_interface of every BSS (default /run/hostapd)
+#   -c  write country_code (only when the regulatory database is loaded:
+#       without it hostapd hangs in COUNTRY_UPDATE)
+#   -R  rnr=1 on the 2.4/5 GHz BSSes (default 1)
+#   -K  a network promoted to the anchor keeps its BSSID (default 0: the
+#       driver cannot yet apply a non-default MAC to bsscfg 0, so the anchor
+#       is always the radio's own address)
+#   -N  dry run: the slot file is not rewritten (OUTDIR/slots.new is)
+#
+# Network list (hostapd-like: key=value, the value is the rest of the line,
+# never quoted; '#' comment lines; a block starts at network= or radio=):
+#   country=XX                      global, before the first block
+#   radio=2g|5gl|5gh|6g             radio-wide settings of one radio
+#     enabled=1  channel=N  width=20|40|80
+#   network=ID                      1..99999, the bridge is brwifiID
+#     ssid=...                      1-32 bytes
+#     security=open|owe|open-owe|psk2|psk2sae|sae
+#                                   open-owe: open on 2.4/5 GHz, OWE on 6 GHz;
+#                                   psk2sae: WPA2/WPA3, pure SAE on 6 GHz
+#     passphrase=...                8-63 printable ASCII (psk2: or 64 hex)
+#     bands=2g 5gl 5gh 6g           any non-empty subset
+#     vlan=1..4094                  required, one VLAN per network
+#     hidden=0|1  isolate=0|1  max_clients=1..2007
+#     slot.<band>=K  mac.<band>=S   optional explicit sticky slot / BSSID
+#                                   index (written by the web UI)
+#
+# Slots: a network keeps the slot it got on a radio (remembered in -s, or
+# given as slot.<band>) as long as it stays on that radio: deleting another
+# network never renumbers it. A new network takes the lowest free slot, in
+# list order. When the anchor (slot 0) leaves a radio, the network with the
+# lowest slot becomes the anchor (that radio restarts once).
+#
+# BSSIDs (explicit bssid= in every section) follow the stock MBSS16 rule
+# (ASUS rc gen_mssid_hwaddr_mac0 + reset_mssid_hwaddr), radio MAC m, index
+# S = 1..15: octet 0 = (0x60 + ((m5 + adj) % 15) * 8) | 0x02 (locally
+# administered, per radio), octets 1-4 of m + S, octet 5 = (m5 & 0xf0) |
+# ((m5 + S) & 0x0f). S = 0 is the radio's own address (the anchor). An index
+# whose BSSID equals any radio's address or another BSS's BSSID (any radio)
+# is never handed out.
+#
+# OUTDIR: hostapd-<dev>.conf, bss-<ifname>.conf, hdr-<dev>, sec-<ifname>
+# (mode 0600: they hold the passphrases) and plan:
+#   radio <band> <dev> <conf> <sha256 of the radio-wide lines>
+#   bss <dev> <ifname> <slot> <net> <index> <bssid> <bridge> <conf> <sha256 of the section>
+#   net <id> <bridge> <vlan> <isolate 0|1>     (networks on >= 1 radio)
+# Exit 1 with the reasons on stderr when the list is refused: then nothing
+# but OUTDIR is written.
+set -u
+NETS='' OUT='' SLOTS='' MACS='' DEVS='' CAP=4 CTRL=/run/hostapd CC=0 RNR=1 KEEP=0 DRY=0
+SYSNET=${GT_BE98_SYSNET:-/sys/class/net}
+usage() { sed -n '/^#   gt-be98-wifi-gen -n/,/^#   -N/p' "$0" | sed 's/^# \{0,1\}//' >&2; exit 2; }
+while getopts n:o:s:m:d:C:x:cR:K:N o; do
+	case $o in
+	n) NETS=$OPTARG ;; o) OUT=$OPTARG ;; s) SLOTS=$OPTARG ;; m) MACS=$OPTARG ;;
+	d) DEVS=$OPTARG ;; C) CAP=$OPTARG ;; x) CTRL=$OPTARG ;; c) CC=1 ;;
+	R) RNR=$OPTARG ;; K) KEEP=$OPTARG ;; N) DRY=1 ;; *) usage ;;
+	esac
+done
+[ -n "$NETS" ] && [ -n "$OUT" ] || usage
+[ -f "$NETS" ] || { echo "gt-be98-wifi-gen: $NETS: no such file" >&2; exit 1; }
+case "$CAP" in [1-9]|1[0-6]) ;; *) echo "gt-be98-wifi-gen: -C $CAP: 1..16" >&2; exit 1 ;; esac
+case "$CTRL" in /*) ;; *) echo "gt-be98-wifi-gen: -x must be absolute" >&2; exit 1 ;; esac
+case "$CTRL" in *[!A-Za-z0-9/_.-]*) echo "gt-be98-wifi-gen: -x $CTRL refused" >&2; exit 1 ;; esac
+DEVS=${DEVS:-"2g=bcawl3 5gl=bcawl0 5gh=bcawl1 6g=bcawl2"}
+# default radio MACs: the radio netdevs' current addresses
+if [ -z "$MACS" ]; then
+	for p in $DEVS; do
+		d=${p#*=}
+		a=$(cat "$SYSNET/$d/address" 2>/dev/null) && MACS="$MACS ${p%%=*}=$a"
+	done
+fi
+umask 077
+mkdir -p "$OUT" || exit 1
+rm -f "$OUT"/hostapd-*.conf "$OUT"/bss-*.conf "$OUT"/hdr-* "$OUT"/sec-* \
+	"$OUT"/plan "$OUT"/plan.raw "$OUT"/slots.new
+S=${SLOTS:-/dev/null}
+[ -f "$S" ] || S=/dev/null
+
+LC_ALL=C awk -v cap="$CAP" -v ctrl="$CTRL" -v devlist="$DEVS" -v maclist="$MACS" \
+	-v ccok="$CC" -v rnr="$RNR" -v keep="$KEEP" -v out="$OUT" -v slotsf="$S" '
+function err(m) { print "gt-be98-wifi-gen: " m > "/dev/stderr"; nerr++ }
+function warn(m) { print "gt-be98-wifi-gen: warning: " m > "/dev/stderr" }
+function trim(s) { sub(/^[ \t]+/, "", s); sub(/[ \t]+$/, "", s); return s }
+# decimal, no leading zero; NB values cut out of a line are strings: compare
+# them as numbers with "+ 0"
+function isnum(s) { return s ~ /^[0-9]+$/ && s !~ /^0[0-9]/ }
+function hexv(c) { return index("0123456789abcdef", tolower(c)) - 1 }
+function hex2(n) { return sprintf("%02x", n) }
+function validband(b) { return b == "2g" || b == "5gl" || b == "5gh" || b == "6g" }
+# MAC "aa:bb:cc:dd:ee:ff" -> o[0..5]; 1 on success
+function parsemac(m, o,    i, p, n) {
+	m = tolower(m)
+	if (m !~ /^[0-9a-f][0-9a-f](:[0-9a-f][0-9a-f])(:[0-9a-f][0-9a-f])(:[0-9a-f][0-9a-f])(:[0-9a-f][0-9a-f])(:[0-9a-f][0-9a-f])$/)
+		return 0
+	n = split(m, p, ":")
+	for (i = 1; i <= 6; i++) o[i - 1] = hexv(substr(p[i], 1, 1)) * 16 + hexv(substr(p[i], 2, 1))
+	return 1
+}
+# BSSID of index s on radio b (stock MBSS16 rule, see the header)
+function bssid(b, s,    o, v, i, r, adj, o0, d) {
+	if (s == 0) return bmac[b]
+	parsemac(bmac[b], o)
+	v = 0
+	for (i = 0; i < 6; i++) v = v * 256 + o[i]
+	v += s
+	adj = (o[0] == 96 && o[5] % 15 == 0) ? 1 : 0
+	o0 = 96 + ((o[5] + adj) % 15) * 8
+	if (int(o0 / 2) % 2 == 0) o0 += 2	# ETHER_SET_LOCALADDR
+	r = hex2(o0)
+	# no "^": busybox awk without FEATURE_AWK_LIBM has no pow()
+	d = 1099511627776	# 256^5
+	for (i = 1; i <= 4; i++) { d /= 256; r = r ":" hex2(int(v / d) % 256) }
+	return r ":" hex2(o[5] - o[5] % 16 + (o[5] + s) % 16)
+}
+function printable(s) { return s ~ /^[ -~]*$/ }
+function ishex64(s) { return length(s) == 64 && s ~ /^[0-9A-Fa-f]+$/ }
+function chans(b, ch) {
+	if (b == "2g") return isnum(ch) && ch >= 1 && ch <= 13
+	if (b == "5gl") return isnum(ch) && ch >= 36 && ch <= 64 && ch % 4 == 0
+	if (b == "5gh") return isnum(ch) && ((ch >= 100 && ch <= 144 && ch % 4 == 0) || (ch >= 149 && ch <= 177 && (ch - 149) % 4 == 0))
+	if (b == "6g") return isnum(ch) && ch >= 1 && ch <= 233 && (ch - 1) % 4 == 0
+	return 0
+}
+function ht40(b, ch,    base) {
+	if (b == "2g") return ch <= 7 ? "+" : "-"
+	if (ch > 161) return ""
+	base = ch >= 149 ? 149 : 36
+	return (int((ch - base) / 4) % 2 == 0) ? "+" : "-"
+}
+function vht80(ch,    i, n, bs) {
+	n = split("36 52 100 116 132 149", bs, " ")
+	for (i = 1; i <= n; i++) if (ch >= bs[i] + 0 && ch <= bs[i] + 12) return bs[i] + 6
+	return 0
+}
+function ssidline(s,    i, h) {
+	if (printable(s) && s !~ /^ / && s !~ / $/) return "ssid=" s
+	h = ""
+	for (i = 1; i <= length(s); i++) h = h hex2(ord[substr(s, i, 1)])
+	return "ssid2=" h
+}
+BEGIN {
+	nbands = split("2g 5gl 5gh 6g", BANDS, " ")
+	for (i = 1; i < 256; i++) ord[sprintf("%c", i)] = i
+	n = split(devlist, t, " ")
+	for (i = 1; i <= n; i++) {
+		split(t[i], kv, "="); b = kv[1]; d = kv[2]
+		if (!validband(b) || d !~ /^bcawl[0-9]+$/) { err("-d " t[i] ": band=bcawlN"); continue }
+		dev[b] = d
+	}
+	n = split(maclist, t, " ")
+	for (i = 1; i <= n; i++) {
+		split(t[i], kv, "="); b = kv[1]
+		if (!validband(b) || !parsemac(kv[2], o)) { err("-m " t[i] ": band=aa:bb:cc:dd:ee:ff"); continue }
+		if (o[0] % 2) { err("-m " t[i] ": a multicast address"); continue }
+		bmac[b] = tolower(kv[2])
+	}
+	nnet = 0; cur = ""; country = ""
+}
+# ---- slot state: "<band> <slot> <net> <index>" ----
+FILENAME == slotsf {
+	if ($0 ~ /^#/ || NF == 0) next
+	if (NF != 4 || !validband($1) || !isnum($2) || !isnum($3) || !isnum($4)) {
+		warn(slotsf ":" FNR ": ignored"); next
+	}
+	st_slot[$1, $3] = $2 + 0; st_mac[$1, $3] = $4 + 0
+	next
+}
+# ---- network list ----
+/^#/ || /^[ \t]*$/ { next }
+{
+	if ($0 ~ /\r/) { err("line " FNR ": carriage return"); next }
+	eq = index($0, "=")
+	if (!eq) { err("line " FNR ": not key=value"); next }
+	k = trim(substr($0, 1, eq - 1)); v = substr($0, eq + 1)
+	if (k != "ssid" && k != "passphrase") v = trim(v)
+}
+k == "network" {
+	if (!isnum(v) || v + 0 < 1 || v + 0 > 99999) { err("line " FNR ": network id 1..99999"); cur = "x"; next }
+	if (v in nid) { err("network " v " listed twice"); cur = "x"; next }
+	nnet++; net[nnet] = v; nid[v] = nnet; cur = "n"; ci = nnet
+	sec[ci] = ""; ssid[ci] = ""; pass[ci] = ""; vlan[ci] = ""; hid[ci] = 0; iso[ci] = 0; maxc[ci] = ""
+	nb[ci] = 0
+	next
+}
+k == "radio" {
+	if (!validband(v)) { err("line " FNR ": radio 2g|5gl|5gh|6g"); cur = "x"; next }
+	if (v in rseen) { err("radio " v " listed twice"); cur = "x"; next }
+	rseen[v] = 1; cur = "r"; cr = v
+	next
+}
+cur == "" {
+	if (k == "country") {
+		if (v !~ /^[A-Z][A-Z]$/) err("country " v ": two upper-case letters")
+		else country = v
+	} else err("line " FNR ": " k " before the first network=/radio=")
+	next
+}
+cur == "x" { next }
+cur == "r" {
+	if (k == "enabled" && (v == "0" || v == "1")) renab[cr] = v
+	else if (k == "channel" && isnum(v)) rch[cr] = v + 0
+	else if (k == "width" && (v == "20" || v == "40" || v == "80")) rw[cr] = v + 0
+	else err("radio " cr ": " k "=" v " refused")
+	next
+}
+cur == "n" {
+	if (k == "ssid") ssid[ci] = v
+	else if (k == "security") sec[ci] = v
+	else if (k == "passphrase") pass[ci] = v
+	else if (k == "bands") {
+		nb[ci] = split(v, t, /[ \t,]+/)
+		for (i = 1; i <= nb[ci]; i++) {
+			if (!validband(t[i]) || ((ci, t[i]) in hasb)) { err("network " net[ci] ": band " t[i] " refused"); continue }
+			hasb[ci, t[i]] = 1
+		}
+	}
+	else if (k == "vlan") vlan[ci] = v
+	else if (k == "hidden" && (v == "0" || v == "1")) hid[ci] = v
+	else if (k == "isolate" && (v == "0" || v == "1")) iso[ci] = v
+	else if (k == "max_clients" && isnum(v) && v + 0 >= 1 && v + 0 <= 2007) maxc[ci] = v + 0
+	else if (k ~ /^slot\./ && validband(substr(k, 6)) && isnum(v)) ex_slot[substr(k, 6), net[ci]] = v + 0
+	else if (k ~ /^mac\./ && validband(substr(k, 5)) && isnum(v) && v + 0 <= 15) ex_mac[substr(k, 5), net[ci]] = v + 0
+	else if (k ~ /^(hidden|isolate|max_clients|slot\.[0-9a-z]+|mac\.[0-9a-z]+)$/) err("network " net[ci] ": " k "=" v " refused")
+	else err("network " net[ci] ": unknown key " k)	# never echo a value that may be a secret
+	next
+}
+END {
+	# ---- validate each network ----
+	for (i = 1; i <= nnet; i++) {
+		id = net[i]; tag = "network " id
+		if (length(ssid[i]) < 1 || length(ssid[i]) > 32 || ssid[i] ~ /[\001-\037\177]/)
+			err(tag ": ssid must be 1-32 bytes, no control characters")
+		else if (ssid[i] in ssidseen) err(tag ": ssid also used by network " ssidseen[ssid[i]])
+		else ssidseen[ssid[i]] = id
+		s = sec[i]
+		if (s == "open" || s == "owe" || s == "open-owe") {
+			if (pass[i] != "") err(tag ": security " s " takes no passphrase")
+		} else if (s == "psk2") {
+			if (!((printable(pass[i]) && length(pass[i]) >= 8 && length(pass[i]) <= 63) || ishex64(pass[i])))
+				err(tag ": the WPA2 passphrase must be 8-63 printable ASCII characters, or 64 hex digits")
+		} else if (s == "psk2sae" || s == "sae") {
+			if (!(printable(pass[i]) && length(pass[i]) >= 8 && length(pass[i]) <= 63))
+				err(tag ": the WPA3 (SAE) passphrase must be 8-63 printable ASCII characters")
+		} else err(tag ": security must be open, owe, open-owe, psk2, psk2sae or sae")
+		if (nb[i] == 0) err(tag ": no band")
+		if (((i, "6g") in hasb) && (s == "open" || s == "psk2"))
+			err(tag ": 6 GHz needs WPA3-SAE (sae, psk2sae) or OWE (owe, open-owe)")
+		if (!isnum(vlan[i]) || vlan[i] + 0 < 1 || vlan[i] + 0 > 4094) err(tag ": vlan 1..4094 is required")
+		else if (vlan[i] in vseen) err(tag ": vlan " vlan[i] " also used by network " vseen[vlan[i]])
+		else vseen[vlan[i]] = id
+	}
+	for (bi = 1; bi <= nbands; bi++) {
+		b = BANDS[bi]
+		if (!(b in dev)) { err("no netdev for radio " b " (-d)"); continue }
+		if (b in rch) {
+			if (!chans(b, rch[b])) err("radio " b ": channel " rch[b] " is not a channel of this radio")
+		} else rch[b] = (b == "2g") ? 6 : (b == "5gl") ? 36 : (b == "5gh") ? 100 : 37
+		if (!(b in rw)) rw[b] = 20
+		if (b == "6g" && rw[b] != 20) err("radio 6g: 20 MHz only")
+		if (b == "2g" && rw[b] == 80) err("radio 2g: 80 MHz is 5 GHz only")
+		if ((b == "5gl" || b == "5gh") && rw[b] == 40 && ht40(b, rch[b]) == "") err("radio " b ": channel " rch[b] " has no 40 MHz pair")
+		if ((b == "5gl" || b == "5gh") && rw[b] == 80 && vht80(rch[b]) == 0) err("radio " b ": channel " rch[b] " has no 80 MHz block")
+	}
+	if (nerr) exit 1
+
+	# ---- slots, per radio: sticky, slot 0 = anchor ----
+	for (bi = 1; bi <= nbands; bi++) {
+		b = BANDS[bi]
+		live[b] = (renab[b] != "0") && (b in bmac)
+		if (renab[b] != "0" && !(b in bmac)) {
+			for (i = 1; i <= nnet; i++) if ((i, b) in hasb) { warn("radio " b " (" dev[b] "): no MAC address (radio absent?): its networks are not rendered"); break }
+		}
+		if (!live[b]) continue
+		for (k = 0; k < cap; k++) used[b, k] = ""
+		m = 0
+		for (i = 1; i <= nnet; i++) if ((i, b) in hasb) mem[b, ++m] = i
+		nmem[b] = m
+		if (m > cap) { err("radio " b ": " m " networks, at most " cap " per radio"); continue }
+		# explicit slots first, then the remembered ones
+		for (j = 1; j <= m; j++) {
+			i = mem[b, j]; id = net[i]; sl[b, id] = -1
+			if ((b, id) in ex_slot) {
+				k = ex_slot[b, id]
+				if (k >= cap) err("network " id ": slot." b "=" k ": at most " cap " BSS per radio (slots 0.." cap - 1 ")")
+				else if (used[b, k] != "") err("network " id ": slot." b "=" k " also network " net[used[b, k]])
+				else { used[b, k] = i; sl[b, id] = k }
+			}
+		}
+		for (j = 1; j <= m; j++) {
+			i = mem[b, j]; id = net[i]
+			if (sl[b, id] >= 0 || !((b, id) in st_slot)) continue
+			k = st_slot[b, id]
+			if (k < cap && used[b, k] == "") { used[b, k] = i; sl[b, id] = k }
+			else warn("network " id ": remembered slot " k " on " b " not available: reallocated")
+		}
+		# the anchor left: the lowest slot becomes the anchor (one radio restart)
+		if (m && used[b, 0] == "") {
+			best = -1
+			for (k = 1; k < cap; k++) if (used[b, k] != "") { best = k; break }
+			if (best > 0) {
+				i = used[b, best]; used[b, best] = ""; used[b, 0] = i; sl[b, net[i]] = 0
+				promoted[b, net[i]] = 1
+			}
+		}
+		# new networks, in list order: lowest free slot
+		for (j = 1; j <= m; j++) {
+			i = mem[b, j]; id = net[i]
+			if (sl[b, id] >= 0) continue
+			for (k = 0; k < cap; k++) if (used[b, k] == "") break
+			if (k >= cap) { err("radio " b ": no free slot for network " id); continue }
+			used[b, k] = i; sl[b, id] = k
+		}
+	}
+	if (nerr) exit 1
+
+	# ---- BSSID indices: sticky, unique per radio, no BSSID twice anywhere ----
+	for (bi = 1; bi <= nbands; bi++) { b = BANDS[bi]; if (b in bmac) owner[bmac[b]] = "radio " b }
+	for (bi = 1; bi <= nbands; bi++) {
+		b = BANDS[bi]
+		if (!live[b]) continue
+		for (k = 0; k < cap; k++) {
+			i = used[b, k]; if (i == "") continue
+			id = net[i]; want = -1
+			if (k == 0 && !(keep && promoted[b, id])) want = 0
+			else if ((b, id) in ex_mac) want = ex_mac[b, id]
+			else if ((b, id) in st_mac) want = st_mac[b, id]
+			if (k > 0 && want == 0) want = -1
+			if (want >= 0) {
+				a = bssid(b, want)
+				if (want > 0 && (a in owner)) {
+					if ((b, id) in ex_mac) { err("network " id ": mac." b "=" want " gives " a ", already " owner[a]); continue }
+					warn("network " id ": BSSID index " want " on " b " collides with " owner[a] ": reallocated")
+					want = -1
+				} else if (want > 0 && ((b, want) in idxused)) {
+					warn("network " id ": BSSID index " want " on " b " taken: reallocated"); want = -1
+				}
+			}
+			mi[b, id] = want
+			if (want >= 0) { idxused[b, want] = 1; if (want > 0) owner[bssid(b, want)] = "network " id " on " b }
+		}
+	}
+	for (bi = 1; bi <= nbands; bi++) {
+		b = BANDS[bi]
+		if (!live[b]) continue
+		for (k = 0; k < cap; k++) {
+			i = used[b, k]; if (i == "") continue
+			id = net[i]
+			if (mi[b, id] >= 0) continue
+			for (s = 1; s <= 15; s++) if (!((b, s) in idxused) && !(bssid(b, s) in owner)) break
+			if (s > 15) { err("radio " b ": no free BSSID for network " id); continue }
+			mi[b, id] = s; idxused[b, s] = 1; owner[bssid(b, s)] = "network " id " on " b
+		}
+	}
+	if (nerr) exit 1
+
+	# ---- render ----
+	plan = out "/plan.raw"
+	printf "" > plan	# exists even for an empty list
+	for (bi = 1; bi <= nbands; bi++) {
+		b = BANDS[bi]
+		if (!live[b] || nmem[b] == 0) continue
+		d = dev[b]; ch = rch[b]; w = rw[b]
+		hdr = out "/hdr-" d
+		print "driver=nl80211" > hdr
+		if (b == "2g") {
+			print "hw_mode=g" > hdr; print "channel=" ch > hdr; print "ieee80211n=1" > hdr
+			if (w == 40) print "ht_capab=[HT40" ht40(b, ch) "]" > hdr
+		} else if (b == "6g") {
+			print "hw_mode=a" > hdr; print "op_class=131" > hdr; print "channel=" ch > hdr
+			print "ieee80211ax=1" > hdr
+		} else {
+			print "hw_mode=a" > hdr; print "channel=" ch > hdr
+			print "ieee80211n=1" > hdr; print "ieee80211ac=1" > hdr
+			if (w == 20) print "vht_oper_chwidth=0" > hdr
+			else if (w == 40) { print "ht_capab=[HT40" ht40(b, ch) "]" > hdr; print "vht_oper_chwidth=0" > hdr }
+			else { print "ht_capab=[HT40" ht40(b, ch) "]" > hdr; print "vht_oper_chwidth=1" > hdr; print "vht_oper_centr_freq_seg0_idx=" vht80(ch) > hdr }
+		}
+		if (ccok && country != "") {
+			print "country_code=" country > hdr; print "ieee80211d=1" > hdr
+			if (b != "2g" && b != "6g") print "ieee80211h=1" > hdr
+		}
+		close(hdr)
+		print "radio " b " " d " " out "/hostapd-" d ".conf" > plan
+		for (k = 0; k < cap; k++) {
+			i = used[b, k]; if (i == "") continue
+			id = net[i]; ifn = (k == 0) ? d : d "-" k
+			a = bssid(b, mi[b, id]); br = "brwifi" id
+			f = out "/sec-" ifn
+			print "# network " id " slot " k " (BSSID index " mi[b, id] ")" > f
+			print "ctrl_interface=" ctrl > f
+			print "bssid=" a > f
+			print "bridge=" br > f
+			print ssidline(ssid[i]) > f
+			print "utf8_ssid=1" > f
+			# REQUIRED: without WMM the firmware RSN capabilities (0x000c) do
+			# not match hostapd 3/4 RSN IE and clients drop (reason 17)
+			print "wmm_enabled=1" > f
+			print "auth_algs=1" > f
+			if (hid[i]) print "ignore_broadcast_ssid=1" > f
+			if (iso[i]) print "ap_isolate=1" > f
+			if (maxc[i] != "") print "max_num_sta=" maxc[i] > f
+			if (rnr && b != "6g") print "rnr=1" > f
+			s = sec[i]
+			if (b == "6g") { if (s == "psk2sae") s = "sae"; else if (s == "open-owe") s = "owe" }
+			else if (s == "open-owe") s = "open"
+			if (s == "open") print "wpa=0" > f
+			else {
+				print "wpa=2" > f; print "rsn_pairwise=CCMP" > f
+				if (s == "owe") { print "wpa_key_mgmt=OWE" > f; print "ieee80211w=2" > f }
+				else if (s == "psk2") print "wpa_key_mgmt=WPA-PSK" > f
+				else if (s == "psk2sae") { print "wpa_key_mgmt=WPA-PSK SAE" > f; print "ieee80211w=1" > f; print "sae_pwe=2" > f }
+				else { print "wpa_key_mgmt=SAE" > f; print "ieee80211w=2" > f; print "sae_require_mfp=1" > f; print "sae_pwe=" (b == "6g" ? 1 : 2) > f }
+				if (s != "owe") {
+					if (ishex64(pass[i])) print "wpa_psk=" tolower(pass[i]) > f
+					else print "wpa_passphrase=" pass[i] > f
+				}
+			}
+			close(f)
+			print "bss " d " " ifn " " k " " id " " mi[b, id] " " a " " br " " out "/bss-" ifn ".conf" > plan
+			onradio[id] = 1
+		}
+	}
+	for (i = 1; i <= nnet; i++) if (net[i] in onradio)
+		print "net " net[i] " brwifi" net[i] " " vlan[i] " " iso[i] > plan
+	close(plan)
+	# ---- slot state ----
+	sf = out "/slots.new"
+	print "# gt-be98-wifi-gen: sticky slot and BSSID index per (network, radio): <band> <slot> <network> <index>" > sf
+	for (bi = 1; bi <= nbands; bi++) {
+		b = BANDS[bi]
+		for (i = 1; i <= nnet; i++) {
+			id = net[i]
+			if (!((i, b) in hasb)) continue
+			if (live[b]) print b " " sl[b, id] " " id " " mi[b, id] > sf
+			else if ((b, id) in st_slot) print b " " st_slot[b, id] " " id " " st_mac[b, id] > sf
+		}
+	}
+	close(sf)
+}
+' "$S" "$NETS" || exit 1
+
+# assemble the configs; the section/header checksums drive per-BSS changes
+H="# generated by gt-be98-wifi-gen - do not edit, regenerated on every change"
+sum() { sha256sum "$1" | cut -d' ' -f1; }
+: > "$OUT/plan"
+while read -r t a b c d e f g h; do
+	case $t in
+	radio)	# radio <band> <dev> <conf>
+		{ echo "$H"; echo "interface=$b"; cat "$OUT/hdr-$b"; } > "$c"
+		echo "radio $a $b $c $(sum "$OUT/hdr-$b")" >> "$OUT/plan" ;;
+	bss)	# bss <dev> <ifname> <slot> <net> <index> <bssid> <bridge> <conf>
+		if [ "$c" = 0 ]; then
+			{ echo; cat "$OUT/sec-$b"; } >> "$OUT/hostapd-$a.conf"
+		else
+			{ echo; echo "bss=$b"; cat "$OUT/sec-$b"; } >> "$OUT/hostapd-$a.conf"
+		fi
+		{ echo "$H"; echo "interface=$b"; cat "$OUT/hdr-$a"; echo; cat "$OUT/sec-$b"; } > "$h"
+		echo "bss $a $b $c $d $e $f $g $h $(sum "$OUT/sec-$b")" >> "$OUT/plan" ;;
+	net)	echo "$t $a $b $c $d" >> "$OUT/plan" ;;
+	esac
+done < "$OUT/plan.raw"
+rm -f "$OUT/plan.raw"
+if [ -n "$SLOTS" ] && [ "$DRY" = 0 ]; then
+	if ! cmp -s "$OUT/slots.new" "$SLOTS" 2>/dev/null; then
+		cp "$OUT/slots.new" "$SLOTS.new" && chmod 0644 "$SLOTS.new" && mv -f "$SLOTS.new" "$SLOTS" || exit 1
+	fi
+fi
+exit 0

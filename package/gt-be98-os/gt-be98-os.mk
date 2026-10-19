@@ -26,7 +26,7 @@ define GT_BE98_OS_INSTALL_TARGET_CMDS
 	$(INSTALL) -D -m 0755 $(@D)/nandtool $(TARGET_DIR)/usr/sbin/gt-be98-nandtool
 	for f in gt-be98-postcode gt-be98-health gt-be98-wdtd gt-be98-status \
 		gt-be98-macaddr gt-be98-netguard gt-be98-save gt-be98-nandcheck \
-		gt-be98-nandpage gt-be98-autosave; do \
+		gt-be98-nandpage gt-be98-autosave gt-be98-wifi-gen; do \
 		$(INSTALL) -D -m 0755 $(@D)/sbin/$$f $(TARGET_DIR)/usr/sbin/$$f || exit 1; \
 	done
 	for s in $(GT_BE98_OS_SERVICES); do \

@@ -1,0 +1,46 @@
+# Example Wi-Fi network list for gt-be98-wifi (WIFI_NETWORKS). Copy to
+# /etc/hostapd/networks.conf, set the passphrases, then in
+# /etc/conf.d/gt-be98-wifi: WIFI_NETWORKS=/etc/hostapd/networks.conf
+# Format and rules: /usr/sbin/gt-be98-wifi-gen (header). key=value, the
+# value is the rest of the line (never quoted); a block starts at network=
+# or radio=. Each network is one BSS on every radio of its bands, bridged
+# (brwifi<id>) to its own 802.1Q VLAN on WIFI_TRUNK.
+#
+# Bands: 2g (bcawl3), 5gl (bcawl0, ch 36-64), 5gh (bcawl1, ch 100+), 6g (bcawl2).
+# 6 GHz takes only WPA3-SAE (sae, psk2sae: rendered as SAE with H2E) or OWE
+# (owe, open-owe: open on 2.4/5 GHz, OWE on 6 GHz); PMF is required there.
+# country= is written only once the regulatory database is loaded.
+#country=XX
+
+radio=2g
+channel=6
+width=20
+radio=5gl
+channel=36
+width=80
+radio=5gh
+channel=100
+width=80
+radio=6g
+channel=37
+
+network=10
+ssid=home
+security=psk2sae
+passphrase=CHANGE-ME-NOW
+bands=2g 5gl 5gh
+vlan=10
+
+network=20
+ssid=iot
+security=psk2
+passphrase=CHANGE-ME-TOO
+bands=2g
+vlan=20
+
+network=30
+ssid=guest
+security=open-owe
+bands=2g 5gl 5gh 6g
+vlan=30
+isolate=1
