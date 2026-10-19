@@ -22,6 +22,7 @@ NETGUARD_SWEEP=${NETGUARD_SWEEP:-5}
 
 WIFI_AP=/etc/conf.d/gt-be98-wifi-ap
 WIFI_DEF=/etc/conf.d/gt-be98-wifi
+WIFI_L2=${GT_BE98_WIFI_L2:-/run/gt-be98-wifi/l2.conf}
 
 log() { logger -t gt-be98-netguard -- "$*" 2>/dev/null; echo "gt-be98-netguard: $*" > /dev/kmsg 2>/dev/null; }
 # the patterns are matched, never expanded as file names (set -f)
@@ -29,16 +30,20 @@ protected() {
 	local p r=1
 	set -f
 	for p in $NETGUARD_PROTECT; do
+		# shellcheck disable=SC2254 # $p is a pattern
 		case "$1" in $p) r=0; break ;; esac
 	done
 	set +f
 	return $r
 }
-# Wi-Fi network settings as gt-be98-wifi reads them: the web UI's file when
-# present, else the defaults (WIFI_TRUNK defaults to rnr0)
+# Wi-Fi network settings as gt-be98-wifi applies them: its effective file
+# while it runs (it adds the VLANs and isolation of its network list,
+# WIFI_NETWORKS), else the web UI's file when present, else the defaults
+# (WIFI_TRUNK defaults to rnr0)
 wifi_conf() {
 	local f=$WIFI_DEF t
 	[ -f "$WIFI_AP" ] && f=$WIFI_AP
+	[ -f "$WIFI_L2" ] && f=$WIFI_L2
 	VLANS=$(sed -n 's/^WIFI_VLANS="\{0,1\}\([A-Za-z0-9: ]*\)"\{0,1\}$/\1/p' "$f" 2>/dev/null | tail -n1)
 	ISOLATE=$(sed -n 's/^WIFI_ISOLATE="\{0,1\}\([A-Za-z0-9 ]*\)"\{0,1\}$/\1/p' "$f" 2>/dev/null | tail -n1)
 	t=$(sed -n 's/^WIFI_TRUNK="\{0,1\}\([A-Za-z0-9]*\)"\{0,1\}$/\1/p' "$f" 2>/dev/null | tail -n1)

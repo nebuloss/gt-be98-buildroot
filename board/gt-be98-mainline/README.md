@@ -283,13 +283,27 @@ Both services are installed, NOT enabled; the web UI's Wi-Fi AP page
 `rc-update`. Standard interfaces only (nl80211 through hostapd/iw, iproute2,
 nftables, dnsmasq): no driver internals or module parameters.
 
-- `gt-be98-wifi`: loads `bca_pcie_ipc`, runs one hostapd on `HOSTAPD_CONFS`.
-  `/etc/conf.d/gt-be98-wifi-ap` (web UI, `HOSTAPD_CONFS="..."`, parsed not
-  sourced) overrides the image's value, so the image keeps owning
-  `WIFI_ARGS`. The web UI writes `/etc/hostapd/hostapd-<bcawlN>.conf` (0600,
-  `wmm_enabled=1`, `ctrl_interface=/run/hostapd`, `country_code` only when
-  `iw reg reload` succeeds). `rc-service gt-be98-wifi reload` restarts
-  hostapd only; the driver stays loaded.
+- `gt-be98-wifi`: loads `bca_pcie_ipc` and runs ONE hostapd for every radio
+  (`hostapd -g /run/hostapd-global`, each radio added with `ADD
+  bss_config=<phy>:<config>`; one process is what lets hostapd put the
+  co-located 6 GHz BSSes in the 2.4/5 GHz Reduced Neighbor Report). Two
+  sources, combinable on different radios: `WIFI_NETWORKS` (a network list,
+  `/etc/hostapd/networks.conf.example`; `gt-be98-wifi-gen` renders one
+  hostapd config per radio with `bss=` sections at sticky slots
+  (`/etc/hostapd/wifi-slots`), an explicit `bssid=` per BSS (stock MBSS16
+  rule), `bridge=brwifi<id>`, the 6 GHz rules (SAE-H2E or OWE, PMF
+  required) and `rnr=1` on 2.4/5 GHz; at most `WIFI_MAX_BSS`, default 4,
+  per radio) and `HOSTAPD_CONFS` (ready-made configs, one per radio).
+  `/etc/conf.d/gt-be98-wifi-ap` (web UI, parsed not sourced) overrides the
+  image's values, so the image keeps owning `WIFI_ARGS`. The web UI writes
+  `/etc/hostapd/hostapd-<bcawlN>.conf` (0600, `wmm_enabled=1`,
+  `ctrl_interface=/run/hostapd`, `country_code` only when `iw reg reload`
+  succeeds). `rc-service gt-be98-wifi reload` applies a change through the
+  global control socket, the driver staying loaded: a further BSS (slot
+  k >= 1) added, removed or changed is `ADD`ed/`REMOVE`d alone; a radio
+  whose radio-wide lines, anchor BSS (slot 0) or ready-made config changed
+  restarts alone; the process restarts only when it died or `HOSTAPD_ARGS`
+  changed. hostapd log: `/var/log/hostapd.log`.
 - `gt-be98-router` (`need gt-be98-wifi`): from `/etc/gt-be98-router/`
   (`router.conf`: `ROUTER_WAN`, `ROUTER_LANS="bcawl3=192.168.83.1/24 ..."`;
   `router.nft`; `dnsmasq.conf`) it puts each address on its Wi-Fi interface,
@@ -311,7 +325,7 @@ nftables, dnsmasq): no driver internals or module parameters.
   link, address and routes are never touched (it may be the only management
   path). `stop` removes the addresses and rules it set, both tables, and
   turns forwarding off. hostapd always runs under `gt-be98-wifi` (`-B -P
-  /run/hostapd.pid`), never by hand.
+  /run/hostapd-wifi.pid`), never by hand.
 - Persistence: `etc/hostapd`, `etc/conf.d/gt-be98-wifi-ap`,
   `etc/gt-be98-router` and the two runlevel links
   (`etc/runlevels/default/gt-be98-{wifi,router}`) are in `ALLOW_PATHS` and

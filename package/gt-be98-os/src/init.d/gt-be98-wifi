@@ -1,32 +1,55 @@
 #!/sbin/openrc-run
+# shellcheck shell=busybox
 # SPDX-License-Identifier: GPL-2.0
 # Optional Wi-Fi: loads bca_pcie_ipc.ko (the four PCIe radios) and runs
-# hostapd on the configured interfaces. NOT enabled by default:
+# hostapd on the configured radios. NOT enabled by default:
 #   rc-update add gt-be98-wifi default ; rc-service gt-be98-wifi start
-# HOSTAPD_CONFS: /etc/conf.d/gt-be98-wifi, overridden by
-# /etc/conf.d/gt-be98-wifi-ap when present (written by the web UI's Wi-Fi AP
-# page, saved to /jffs).
+# Settings: /etc/conf.d/gt-be98-wifi, overridden by /etc/conf.d/gt-be98-wifi-ap
+# when present (written by the web UI, saved to /jffs).
 #
-# One hostapd process per config file (one per radio; extra SSIDs are bss=
-# sections of that radio's config, their netdevs created by hostapd), keyed
-# by the config's interface=:
-#   pid  /run/hostapd-<iface>.pid    log  /var/log/hostapd-<iface>.log
-#   state /run/gt-be98-wifi/<iface>.conf (config path) and .sum (checksum of
-#   the config content, its path and HOSTAPD_ARGS)
-# `rc-service gt-be98-wifi reload` applies new configs without touching the
-# driver: instances whose checksum changed (or that died) are restarted,
-# new configs started, removed ones stopped, the others left running.
+# ONE hostapd process serves every radio (so that it builds the Reduced
+# Neighbor Report of the co-located 6 GHz BSSes, and so that one BSS can be
+# added or removed without touching the others). It starts with only its
+# global control socket (HOSTAPD_GLOBAL, default /run/hostapd-global) and
+# each radio is added to it (ADD bss_config=<phy>:<radio config>): a radio
+# that fails stays down alone, it does not stop the process or the others.
+#   pid /run/hostapd-wifi.pid   log /var/log/hostapd.log
+#   state /run/gt-be98-wifi/applied/<radio> (what hostapd runs), gen/ (the
+#   rendered configs), l2.conf (the effective bridges/VLANs, for netguard)
+# Two sources of radio configs, both may be used (on different radios):
+#   WIFI_NETWORKS=/etc/hostapd/networks.conf   the Wi-Fi networks (see
+#       /usr/sbin/gt-be98-wifi-gen): one BSS per (network, radio of its band
+#       set) at a sticky slot (WIFI_SLOTS, default /etc/hostapd/wifi-slots;
+#       slot 0 = the radio netdev bcawlN, slot k = bcawlN-k), with an
+#       explicit BSSID (stock MBSS16 rule) and bridge=brwifi<network id>.
+#       Their bridges, VLANs and isolation come from the list. At most
+#       WIFI_MAX_BSS (default 4, the driver's limit today; 1..16) per radio.
+#   HOSTAPD_CONFS="/etc/hostapd/a.conf ..."    ready-made configs, one per
+#       radio (interface= + bss= sections), as before.
+# `rc-service gt-be98-wifi reload` applies new settings without touching the
+# driver, through the global control socket:
+#   - a radio whose radio-wide lines, anchor BSS (slot 0) or ready-made
+#     config changed is restarted alone (REMOVE <radio>, ADD <radio config>):
+#     hostapd removes every BSS of a radio with its first one, and the
+#     driver's anchor start re-runs the radio prologue;
+#   - a further BSS (slot k >= 1) that was added, removed or changed is
+#     added (ADD bss_config=<phy>:<bss config>), removed (REMOVE <ifname>)
+#     or both, the other BSSes of the radio left running; if that fails the
+#     radio is restarted;
+#   - unchanged radios and BSSes are not touched; a HOSTAPD_ARGS change or a
+#     dead process restarts the process.
+# A network list that is refused leaves everything running as it was.
 #
 # Wi-Fi networks are pure L2: each network is a bridge brwifiN holding its
-# BSSes (bss=bcawlN-k) and the 802.1Q sub-interface <trunk>.<vid> of the wired
-# trunk port; no address on the box, no NAT. Settings (same files as
-# HOSTAPD_CONFS):
-#   WIFI_BRIDGES="brwifi1 brwifi2"        the networks' bridges
+# BSSes and the 802.1Q sub-interface <trunk>.<vid> of the wired trunk port;
+# no address on the box, no NAT. Besides the network list, settings (same
+# files):
+#   WIFI_BRIDGES="brwifi1 brwifi2"        the bridges of HOSTAPD_CONFS
 #   WIFI_VLANS="brwifi1:100 brwifi2:200"  REQUIRED VLAN id (1-4094) per bridge
 #   WIFI_TRUNK=rnr0                       trunk port, rnr0..rnr3 (default rnr0)
 #   WIFI_ISOLATE="brwifi1"                bridges whose Wi-Fi ports are
 #                                         isolated (reach the trunk only)
-# Before any hostapd starts, for each bridge with a VLAN: the bridge (no STP,
+# Before any BSS starts, for each bridge with a VLAN: the bridge (no STP,
 # forward_delay 0, up, IPv6 off: no address of the box on it), the trunk
 # brought up if it is down (never down, never re-addressed: it keeps its
 # untagged management address and dhcpcd), <trunk>.<vid> created (IPv6 off),
@@ -34,16 +57,24 @@
 # naming it is refused. The trunk itself or any bare port is never enslaved.
 # hostapd then only adds its BSS netdevs as ports (a bridge hostapd created
 # itself would be deleted when it stops). reload creates new bridges and
-# sub-interfaces and deletes the ones no longer listed after the instances
+# sub-interfaces and deletes the ones no longer listed after the BSSes
 # using them stopped; only what this service created ($STATE/bridges,
 # $STATE/vlans) is ever deleted. Only bcawl* netdevs in the configs
 # (interface=, bss=). gt-be98-netguard allows exactly the listed
 # <trunk>.<vid> in their bridges and keeps the isolation flags.
 # Firmware: /lib/firmware/brcm/bca (gt-be98-vendor-firmware).
+# shellcheck disable=SC2034 # read by openrc-run
 description="Open Wi-Fi driver + hostapd (optional)"
+# shellcheck disable=SC2034 # read by openrc-run
 extra_started_commands="reload"
 
-STATE=/run/gt-be98-wifi
+# (GT_BE98_*: the offline test harness only)
+RUNDIR=${GT_BE98_RUN:-/run}
+SYSNET=${GT_BE98_SYSNET:-/sys/class/net}
+WIFI_GEN=${GT_BE98_WIFI_GEN:-/usr/sbin/gt-be98-wifi-gen}
+STATE=$RUNDIR/gt-be98-wifi
+HAP_PID=$RUNDIR/hostapd-wifi.pid
+HAP_LOG=${GT_BE98_HAP_LOG:-/var/log/hostapd.log}
 
 depend() {
 	need gt-be98-watchdog
@@ -63,6 +94,10 @@ ap_override() {
 	WIFI_ISOLATE=$(sed -n 's/^WIFI_ISOLATE="\([A-Za-z0-9 ]*\)"$/\1/p' "$f" | tail -n1)
 	t=$(sed -n 's/^WIFI_TRUNK="\{0,1\}\([A-Za-z0-9]*\)"\{0,1\}$/\1/p' "$f" | tail -n1)
 	WIFI_TRUNK=${t:-rnr0}
+	# the network list (optional): a path, and the per-radio BSS limit
+	WIFI_NETWORKS=$(sed -n 's/^WIFI_NETWORKS="\{0,1\}\([A-Za-z0-9/_.-]*\)"\{0,1\}$/\1/p' "$f" | tail -n1)
+	t=$(sed -n 's/^WIFI_MAX_BSS="\{0,1\}\([0-9]*\)"\{0,1\}$/\1/p' "$f" | tail -n1)
+	[ -z "$t" ] || WIFI_MAX_BSS=$t
 }
 
 valid_trunk() { case "$1" in rnr[0-3]) return 0 ;; *) return 1 ;; esac; }
@@ -83,7 +118,7 @@ br_vid() {
 # check WIFI_VLANS into VLANS_OK: brwifiN:vid, one VLAN per bridge, a VLAN
 # for one bridge only, the bridge listed in WIFI_BRIDGES
 check_vlans() {
-	local p b v seenb= seenv= rc=0
+	local p b v seenb='' seenv='' rc=0
 	VLANS_OK=
 	for p in ${WIFI_VLANS:-}; do
 		b=${p%%:*}; v=${p#*:}
@@ -114,7 +149,7 @@ ipv6_off() { echo 1 > "/proc/sys/net/ipv6/conf/$1/disable_ipv6" 2>/dev/null; }
 # <trunk>.<vid> into bridge $3: the trunk is only brought up if down
 vlan_attach() {
 	local t=$1 v=$2 b=$3 s=$1.$2 m
-	valid_trunk "$t" && valid_vid "$v" || { eerror "VLAN $s refused"; return 1; }
+	if ! valid_trunk "$t" || ! valid_vid "$v"; then eerror "VLAN $s refused"; return 1; fi
 	[ -e "/sys/class/net/$t" ] || { eerror "trunk $t not present: $b not bridged"; return 1; }
 	if [ $(( $(cat "/sys/class/net/$t/flags") & 1 )) = 0 ]; then
 		ip link set dev "$t" up || { eerror "trunk $t: up failed"; return 1; }
@@ -141,6 +176,7 @@ vlan_attach() {
 # owned sub-interfaces not in the list $1
 vlan_prune() {
 	local s
+	# shellcheck disable=SC2013 # one validated name per line
 	for s in $(cat "$STATE/vlans" 2>/dev/null); do
 		case " $1 " in *" $s "*) continue ;; esac
 		case "$s" in rnr[0-3].[0-9]*) ;; *) continue ;; esac
@@ -159,7 +195,9 @@ isolate_ports() {
 	local b p f
 	for b in $1; do
 		case " ${WIFI_ISOLATE:-} " in *" $b "*) f=on ;; *) f=off ;; esac
-		for p in $(ls "/sys/class/net/$b/brif" 2>/dev/null); do
+		for p in "/sys/class/net/$b/brif"/*; do
+			[ -e "$p" ] || continue
+			p=${p##*/}
 			case "$p" in bcawl*) bridge link set dev "$p" isolated $f ;; esac
 		done
 	done
@@ -184,8 +222,10 @@ br_create() {
 		eend $? || return 1
 	fi
 	ipv6_off "$b"
-	ip link set dev "$b" type bridge stp_state 0 forward_delay 0 &&
-		ip link set dev "$b" up || { eerror "$b: setup failed"; return 1; }
+	if ! { ip link set dev "$b" type bridge stp_state 0 forward_delay 0 &&
+		ip link set dev "$b" up; }; then
+		eerror "$b: setup failed"; return 1
+	fi
 	mkdir -p "$STATE"
 	br_owned "$b" || echo "$b" >> "$STATE/bridges"
 }
@@ -195,7 +235,9 @@ br_remove() {
 	local b=$1 p
 	br_owned "$b" || return 0
 	if [ -e "/sys/class/net/$b" ]; then
-		for p in $(ls "/sys/class/net/$b/brif" 2>/dev/null); do
+		for p in "/sys/class/net/$b/brif"/*; do
+			[ -e "$p" ] || continue
+			p=${p##*/}
 			case "$p" in
 			bcawl*) ;;
 			*) vlan_owned "$p" && continue
@@ -213,6 +255,7 @@ br_remove() {
 # owned bridges not in the list $1
 br_prune() {
 	local b
+	# shellcheck disable=SC2013 # one validated name per line
 	for b in $(cat "$STATE/bridges" 2>/dev/null); do
 		case " $1 " in *" $b "*) ;; *) br_remove "$b" ;; esac
 	done
@@ -221,12 +264,14 @@ br_prune() {
 # a config may only name bcawl* netdevs and listed bridges
 conf_check() {
 	local c=$1 brs=$2 v
+	# shellcheck disable=SC2013 # netdev names: no whitespace
 	for v in $(sed -nE 's/^(interface|bss)=//p' "$c"); do
 		case "$v" in
 		bcawl[0-9]*) ;;
 		*) eerror "$c: $v is not a Wi-Fi netdev (bcawl*)"; return 1 ;;
 		esac
 	done
+	# shellcheck disable=SC2013 # bridge names: no whitespace
 	for v in $(sed -n 's/^bridge=//p' "$c"); do
 		case " $brs " in
 		*" $v "*) ;;
@@ -239,82 +284,268 @@ conf_check() {
 conf_iface() { sed -n 's/^interface=\([A-Za-z0-9_.-]*\)[[:space:]]*$/\1/p' "$1" | head -n1; }
 
 conf_sum() {
-	{ echo "$1"; echo "${HOSTAPD_ARGS:-}"; cat "$1"; } | sha256sum | cut -d' ' -f1
+	{ echo "$1"; cat "$1"; } | sha256sum | cut -d' ' -f1
 }
 
-hap_pid() { echo "/run/hostapd-$1.pid"; }
+# ---- the hostapd process and its global control socket ----
+
+hap_global() { echo "${HOSTAPD_GLOBAL:-$RUNDIR/hostapd-global}"; }
+
+# one command on the global control socket; its reply on stdout
+hap_cmd() {
+	local g
+	g=$(hap_global)
+	hostapd_cli -p "${g%/*}" -i "${g##*/}" raw "$@" 2>&1
+}
+
+# a global command that must answer OK
+hap_ok() {
+	local r
+	r=$(hap_cmd "$@")
+	[ "$(printf '%s\n' "$r" | tail -n1)" = OK ] && return 0
+	eerror "hostapd: $1 ${2:-}: ${r:-no reply}"
+	return 1
+}
 
 hap_running() {
 	local p
-	p=$(cat "$(hap_pid "$1")" 2>/dev/null) || return 1
+	p=$(cat "$HAP_PID" 2>/dev/null) || return 1
 	[ -n "$p" ] && kill -0 "$p" 2>/dev/null
 }
 
-# start the instance of config $1 for interface $2
-hap_start() {
-	local c=$1 i=$2 n=0
-	while [ ! -e "/sys/class/net/$i" ] && [ $n -lt ${IFACE_WAIT:-20} ]; do
-		sleep 1; n=$((n + 1))
-	done
-	[ -e "/sys/class/net/$i" ] || ewarn "$i not present after ${IFACE_WAIT:-20}s, starting hostapd anyway"
-	mkdir -p "$STATE"
-	ebegin "Starting hostapd on $i ($c)"
-	start-stop-daemon --start --exec /usr/sbin/hostapd --pidfile "$(hap_pid "$i")" \
-		-- -B -P "$(hap_pid "$i")" -t -f "/var/log/hostapd-$i.log" ${HOSTAPD_ARGS:-} "$c"
-	if eend $?; then
-		echo "$c" > "$STATE/$i.conf"
-		conf_sum "$c" > "$STATE/$i.sum"
-	else
-		rm -f "$STATE/$i.conf" "$STATE/$i.sum"
-		return 1
-	fi
-}
+# what the process was started with (a change restarts it)
+hap_args_sum() { echo "$(hap_global) ${HOSTAPD_ARGS:-}" | sha256sum | cut -d' ' -f1; }
 
-hap_stop() {
-	local i=$1
-	# a dead instance has nothing to stop (ssd would report a failure)
-	if hap_running "$i"; then
-		ebegin "Stopping hostapd on $i"
-		start-stop-daemon --stop --exec /usr/sbin/hostapd --pidfile "$(hap_pid "$i")" \
+hap_daemon_stop() {
+	if hap_running; then
+		ebegin "Stopping hostapd"
+		start-stop-daemon --stop --exec /usr/sbin/hostapd --pidfile "$HAP_PID" \
 			--retry TERM/5/KILL/2
 		eend $?
 	fi
-	rm -f "$(hap_pid "$i")" "$STATE/$i.conf" "$STATE/$i.sum"
+	rm -f "$HAP_PID" "$STATE/hostapd.args" "$(hap_global)"
+	rm -rf "$STATE/applied"
 }
 
-# interfaces with an instance (state or pidfile)
-hap_instances() {
-	local f i seen=
-	for f in "$STATE"/*.conf /run/hostapd-*.pid; do
-		[ -e "$f" ] || continue
-		case "$f" in
-		"$STATE"/*) i=${f#"$STATE"/}; i=${i%.conf} ;;
-		*) i=${f#/run/hostapd-}; i=${i%.pid} ;;
-		esac
-		case " $seen " in *" $i "*) ;; *) seen="$seen $i" ;; esac
+# hostapd with only its global control socket; the radios are added to it
+hap_daemon_start() {
+	local g n=0
+	g=$(hap_global)
+	mkdir -p "$STATE/applied" "${g%/*}" "${HOSTAPD_CTRL:-$RUNDIR/hostapd}"
+	rm -f "$g"
+	ebegin "Starting hostapd (global control $g)"
+	# shellcheck disable=SC2086 # HOSTAPD_ARGS: several options
+	start-stop-daemon --start --exec /usr/sbin/hostapd --pidfile "$HAP_PID" \
+		-- -B -P "$HAP_PID" -t -f "$HAP_LOG" -g "$g" ${HOSTAPD_ARGS:-}
+	eend $? || return 1
+	while [ "$(hap_cmd PING)" != PONG ] && [ $n -lt 5 ]; do
+		sleep 1; n=$((n + 1))
 	done
-	echo $seen
+	[ "$(hap_cmd PING)" = PONG ] || { eerror "hostapd: no answer on $g"; return 1; }
+	hap_args_sum > "$STATE/hostapd.args"
 }
 
-# the single hostapd of the previous version of this service
+# the wiphy of a radio netdev (the key of ADD bss_config=), waiting for it
+radio_phy() {
+	local d=$1 n=0
+	while [ ! -e "$SYSNET/$d" ] && [ $n -lt "${IFACE_WAIT:-20}" ]; do
+		sleep 1; n=$((n + 1))
+	done
+	cat "$SYSNET/$d/phy80211/name" 2>/dev/null && return 0
+	eerror "$d: not present after ${IFACE_WAIT:-20}s (or not a wiphy netdev)"
+	return 1
+}
+
+# ---- units: one per radio ----
+# $STATE/want/<dev> and $STATE/applied/<dev>:
+#   conf <path>            the radio config (ADD of the whole radio)
+#   radio <key>            radio-wide lines + anchor BSS (or the whole
+#                          ready-made config): a change restarts the radio
+#   bss <ifname> <sum> <path>   a further BSS, added/removed alone
+
+unit_line() { sed -n "s/^$2 //p" "$1" 2>/dev/null; }
+
+# remove radio $1 from hostapd (all its BSSes)
+unit_remove() {
+	local d=$1
+	if [ -f "$STATE/applied/$d" ]; then
+		ebegin "hostapd: removing radio $d"
+		hap_ok REMOVE "$d"
+		eend $?
+	fi
+	rm -f "$STATE/applied/$d"
+}
+
+# is $2 in the list $1 (" a b c ")?
+in_list() { case "$1" in *" $2 "*) return 0 ;; esac; return 1; }
+
+# hostapd's state of BSS $1 (ENABLED, COUNTRY_UPDATE, DISABLED, ...)
+bss_state() {
+	hostapd_cli -p "${HOSTAPD_CTRL:-$RUNDIR/hostapd}" -i "$1" status 2>/dev/null |
+		sed -n 's/^state=//p' | head -n1
+}
+
+# the BSS netdevs hostapd runs, as " a b c "
+hap_live() { echo " $(hap_cmd INTERFACES | tr '\n' ' ') "; }
+
+# (re)start radio $1 with all its BSSes
+unit_restart() {
+	local d=$1 w="$STATE/want/$1" c phy
+	c=$(unit_line "$w" conf)
+	if [ -f "$STATE/applied/$d" ] || in_list "$(hap_live)" "$d"; then
+		ebegin "hostapd: removing radio $d"
+		hap_ok REMOVE "$d"
+		eend $?
+		rm -f "$STATE/applied/$d"
+	fi
+	phy=$(radio_phy "$d") || return 1
+	ebegin "hostapd: starting radio $d ($c)"
+	hap_ok ADD "bss_config=$phy:$c"
+	eend $? || return 1
+	cp "$w" "$STATE/applied/$d"
+}
+
+# bring radio $1 in line with its unit, per BSS where hostapd allows it
+unit_apply() {
+	local d=$1 w="$STATE/want/$1" a="$STATE/applied/$1" live i s p phy ok=1
+	if [ ! -f "$a" ] || [ "$(unit_line "$a" conf)" != "$(unit_line "$w" conf)" ] ||
+	   [ "$(unit_line "$a" radio)" != "$(unit_line "$w" radio)" ]; then
+		unit_restart "$d"
+		return
+	fi
+	# what hostapd really runs: a BSS it lost is added again
+	live=$(hap_live)
+	in_list "$live" "$d" || { ewarn "hostapd lost radio $d"; unit_restart "$d"; return; }
+	if cmp -s "$a" "$w"; then
+		while read -r i s p; do
+			[ -z "$i" ] || in_list "$live" "$i" || ok=0
+		done <<-EOF
+		$(unit_line "$a" bss)
+		EOF
+		if [ $ok = 1 ]; then einfo "hostapd on $d: unchanged"; return 0; fi
+		ok=1
+	fi
+	phy=$(cat "$SYSNET/$d/phy80211/name" 2>/dev/null) || { unit_restart "$d"; return; }
+	# removed or changed BSSes first (frees their netdev name and BSSID)
+	while read -r i s p; do
+		[ -n "$i" ] || continue
+		in_list "$live" "$i" || continue
+		grep -qx "bss $i $s $p" "$w" && continue
+		ebegin "hostapd: removing BSS $i"
+		hap_ok REMOVE "$i"
+		eend $? || ok=0
+	done <<-EOF
+	$(unit_line "$a" bss)
+	EOF
+	live=$(hap_live)
+	while read -r i s p; do
+		[ -n "$i" ] || continue
+		in_list "$live" "$i" && continue
+		ebegin "hostapd: adding BSS $i ($p)"
+		hap_ok ADD "bss_config=$phy:$p"
+		eend $? || ok=0
+	done <<-EOF
+	$(unit_line "$w" bss)
+	EOF
+	if [ $ok = 1 ]; then
+		cp "$w" "$a"
+		return 0
+	fi
+	ewarn "hostapd on $d: per-BSS change failed, restarting the radio"
+	unit_restart "$d"
+}
+
+# the radios' own addresses, "band=mac ...": kept once all radios were seen
+# since the driver loaded (hostapd may set a radio netdev's address to its
+# first BSS's bssid=). At start, waits up to IFACE_WAIT s for the radios.
+radio_macs() {
+	local p d a m='' miss n=0
+	[ -s "$STATE/radio-macs" ] && { cat "$STATE/radio-macs"; return 0; }
+	while :; do
+		m='' miss=0
+		for p in ${WIFI_RADIO_DEVS:-2g=bcawl3 5gl=bcawl0 5gh=bcawl1 6g=bcawl2}; do
+			d=${p#*=}
+			if a=$(cat "$SYSNET/$d/address" 2>/dev/null); then m="$m ${p%%=*}=$a"; else miss=1; fi
+		done
+		[ $miss = 0 ] || [ "${WAIT_RADIOS:-0}" = 0 ] || [ $n -ge "${IFACE_WAIT:-20}" ] && break
+		sleep 1; n=$((n + 1))
+	done
+	if [ $miss = 0 ]; then mkdir -p "$STATE"; echo "$m" > "$STATE/radio-macs"; fi
+	echo "$m"
+}
+
+# the network list -> $STATE/gen (configs + plan) and $STATE/slots; the
+# bridges/VLANs/isolation of its networks are added to WIFI_*
+gen_networks() {
+	local n=$WIFI_NETWORKS t a b c d cc='' net_br='' net_vl='' net_iso='' macs
+	rm -rf "$STATE/gen.new"
+	[ -n "$n" ] || { rm -rf "$STATE/gen"; return 0; }
+	[ -f "$n" ] || { eerror "WIFI_NETWORKS $n: missing"; return 1; }
+	[ "${REGDB_OK:-0}" = 1 ] && cc=-c
+	macs=$(radio_macs)
+	# shellcheck disable=SC2086 # $cc: an option or nothing
+	"$WIFI_GEN" -n "$n" -o "$STATE/gen.new" -s "${WIFI_SLOTS:-/etc/hostapd/wifi-slots}" -m "$macs" \
+		-C "${WIFI_MAX_BSS:-4}" -x "${HOSTAPD_CTRL:-$RUNDIR/hostapd}" -R "${WIFI_RNR:-1}" \
+		-K "${WIFI_ANCHOR_KEEP_BSSID:-0}" ${WIFI_RADIO_DEVS:+-d "$WIFI_RADIO_DEVS"} $cc ||
+		{ eerror "$n refused: nothing changed"; rm -rf "$STATE/gen.new"; return 1; }
+	rm -rf "$STATE/gen"
+	mv "$STATE/gen.new" "$STATE/gen"
+	# the generator wrote the configs under gen.new: point the plan at gen
+	sed -i "s#$STATE/gen.new/#$STATE/gen/#g" "$STATE/gen/plan"
+	while read -r t a b c d; do
+		[ "$t" = net ] || continue
+		net_br="$net_br $b"; net_vl="$net_vl $b:$c"
+		[ "$d" = 1 ] && net_iso="$net_iso $b"
+	done < "$STATE/gen/plan"
+	WIFI_BRIDGES="${WIFI_BRIDGES:-}$net_br"
+	WIFI_VLANS="${WIFI_VLANS:-}$net_vl"
+	WIFI_ISOLATE="${WIFI_ISOLATE:-}$net_iso"
+}
+
+# the arguments, one space apart
+words() { echo "$*"; }
+
+# the effective L2 settings, for gt-be98-netguard
+write_l2() {
+	local vl is
+	# shellcheck disable=SC2086 # word lists, normalised by words
+	vl=$(words ${WIFI_VLANS:-})
+	# shellcheck disable=SC2086 # word lists, normalised by words
+	is=$(words ${WIFI_ISOLATE:-})
+	mkdir -p "$STATE"
+	{
+		echo "# written by gt-be98-wifi: the effective Wi-Fi network settings"
+		echo "WIFI_TRUNK=\"${WIFI_TRUNK:-rnr0}\""
+		echo "WIFI_VLANS=\"$vl\""
+		echo "WIFI_ISOLATE=\"$is\""
+	} > "$STATE/l2.conf.new" && mv -f "$STATE/l2.conf.new" "$STATE/l2.conf"
+}
+
+# the per-config hostapd instances of the previous versions of this service
 stop_legacy() {
-	[ -f /run/hostapd.pid ] || return 0
-	ebegin "Stopping hostapd (single instance)"
-	start-stop-daemon --stop --exec /usr/sbin/hostapd --pidfile /run/hostapd.pid \
-		--retry TERM/5/KILL/2
-	eend $?
-	rm -f /run/hostapd.pid
+	local f
+	for f in "$RUNDIR"/hostapd.pid "$RUNDIR"/hostapd-*.pid; do
+		[ -f "$f" ] || continue
+		[ "$f" = "$HAP_PID" ] && continue
+		ebegin "Stopping hostapd (${f##*/})"
+		start-stop-daemon --stop --exec /usr/sbin/hostapd --pidfile "$f" \
+			--retry TERM/5/KILL/2
+		eend $?
+		rm -f "$f"
+	done
+	rm -f "$STATE"/bcawl*.conf "$STATE"/bcawl*.sum
 }
 
-# bring the instances in line with HOSTAPD_CONFS: start new or changed
-# configs, stop removed ones, leave unchanged running ones alone
+# bring hostapd in line with the settings: only what changed
 apply_hostapd() {
-	local c i b v want= pairs= brs= subs= rc=0 t
+	local c i b v want='' brs='' subs='' rc=0 t d p plan="$STATE/gen/plan"
 	ap_override
 	stop_legacy
+	gen_networks || return 1
 	t=${WIFI_TRUNK:-rnr0}
 	valid_trunk "$t" || { eerror "trunk '$t' refused (rnr0..rnr3): no Wi-Fi network bridged"; t=; rc=1; }
 	check_vlans || rc=1
+	write_l2
 	# drop the sub-interfaces no longer wanted first (old trunk, changed
 	# VLAN): a bridge never holds the VLANs of two trunks, not even briefly
 	if [ -n "$t" ]; then
@@ -326,6 +557,7 @@ apply_hostapd() {
 	subs=
 	# bridges and their trunk VLANs first: hostapd must find them
 	for b in ${WIFI_BRIDGES:-}; do
+		case " $brs " in *" $b "*) continue ;; esac
 		valid_bridge "$b" || { eerror "bridge '$b' refused (brwifiN only)"; rc=1; continue; }
 		v=$(br_vid "$b") || { eerror "$b has no VLAN (WIFI_VLANS): not bridged"; rc=1; continue; }
 		[ -n "$t" ] || { rc=1; continue; }
@@ -333,51 +565,69 @@ apply_hostapd() {
 		vlan_attach "$t" "$v" "$b" || { rc=1; continue; }
 		brs="$brs $b"; subs="$subs $t.$v"
 	done
+	# the units: generated radios, then ready-made configs
+	rm -rf "$STATE/want"; mkdir -p "$STATE/want"
+	if [ -f "$plan" ]; then
+		while read -r d c v; do
+			[ -n "$d" ] || continue
+			conf_check "$c" "$brs" || { rc=1; continue; }
+			{
+				echo "conf $c"
+				# radio-wide lines + the anchor section
+				echo "radio $v $(awk -v d="$d" '$1 == "bss" && $2 == d && $4 == 0 { print $3 ":" $10 }' "$plan")"
+				awk -v d="$d" '$1 == "bss" && $2 == d && $4 != 0 { print "bss " $3 " " $10 " " $9 }' "$plan"
+			} > "$STATE/want/$d"
+			want="$want $d"
+		done <<-EOF
+		$(awk '$1 == "radio" { print $3, $4, $5 }' "$plan")
+		EOF
+	fi
 	for c in ${HOSTAPD_CONFS:-}; do
 		if [ ! -f "$c" ]; then eerror "$c missing"; rc=1; continue; fi
 		i=$(conf_iface "$c")
 		if [ -z "$i" ]; then eerror "$c: no interface="; rc=1; continue; fi
 		conf_check "$c" "$brs" || { rc=1; continue; }
 		case " $want " in
-		*" $i "*) eerror "$c: interface $i already used by another config"; rc=1; continue ;;
+		*" $i "*) eerror "$c: radio $i already configured (WIFI_NETWORKS or another config)"; rc=1; continue ;;
 		esac
+		{ echo "conf $c"; echo "radio $(conf_sum "$c")"; } > "$STATE/want/$i"
 		want="$want $i"
-		pairs="$pairs$i $c
-"
-	done
-	# removed configs
-	for i in $(hap_instances); do
-		case " $want " in *" $i "*) ;; *) hap_stop "$i" ;; esac
 	done
 	if [ -z "$want" ]; then
-		einfo "no HOSTAPD_CONFS: driver only"
+		einfo "no Wi-Fi network or HOSTAPD_CONFS: driver only"
+		hap_daemon_stop
 		vlan_prune "$subs"; br_prune "$brs"
 		return $rc
 	fi
-	for i in $want; do
-		c=$(printf '%s' "$pairs" | awk -v i="$i" '$1 == i { print $2; exit }')
-		if hap_running "$i" && [ "$(cat "$STATE/$i.conf" 2>/dev/null)" = "$c" ] &&
-		   [ "$(cat "$STATE/$i.sum" 2>/dev/null)" = "$(conf_sum "$c")" ]; then
-			einfo "hostapd on $i: unchanged"
-			continue
-		fi
-		hap_running "$i" || [ ! -f "$(hap_pid "$i")" ] || ewarn "hostapd on $i had died"
-		hap_stop "$i"
-		hap_start "$c" "$i" || rc=1
+	# the process: (re)started when dead or started with other arguments
+	if ! hap_running || [ "$(cat "$STATE/hostapd.args" 2>/dev/null)" != "$(hap_args_sum)" ] ||
+	   [ "$(hap_cmd PING)" != PONG ]; then
+		[ -f "$HAP_PID" ] && ! hap_running && ewarn "hostapd had died"
+		hap_daemon_stop
+		hap_daemon_start || { vlan_prune "$subs"; br_prune "$brs"; return 1; }
+	fi
+	# radios no longer configured
+	for p in "$STATE"/applied/*; do
+		[ -f "$p" ] || continue
+		d=${p##*/}
+		case " $want " in *" $d "*) ;; *) unit_remove "$d" ;; esac
+	done
+	for d in $want; do
+		unit_apply "$d" || rc=1
 	done
 	isolate_ports "$brs"
-	# VLANs and bridges no longer listed, now that no instance uses them
+	# VLANs and bridges no longer listed, now that no BSS uses them
 	vlan_prune "$subs"
 	br_prune "$brs"
 	return $rc
 }
 
 stop_hostapd() {
-	local i
 	stop_legacy
-	for i in $(hap_instances); do hap_stop "$i"; done
+	hap_daemon_stop
 	vlan_prune ""
 	br_prune ""
+	rm -f "$STATE/l2.conf"
 }
 
 start() {
@@ -385,19 +635,24 @@ start() {
 	# mounted: that first load fails and is not retried, so country_code in
 	# hostapd would hang in COUNTRY_UPDATE. Reload it from /lib/firmware
 	# (wireless-regdb, signed; the kernel carries the regdb keys).
-	iw reg reload 2>/dev/null && einfo "regulatory database loaded" ||
-		ewarn "iw reg reload failed: leave country_code out of hostapd.conf"
+	if iw reg reload 2>/dev/null; then
+		einfo "regulatory database loaded"; REGDB_OK=1
+	else
+		ewarn "iw reg reload failed: leave country_code out of hostapd.conf"; REGDB_OK=0
+	fi
 	if ! wifi_loaded; then
 		ebegin "Loading bca_pcie_ipc ${WIFI_ARGS}"
+		# shellcheck disable=SC2086 # WIFI_ARGS: module parameters
 		if [ -n "${WIFI_KO:-}" ]; then insmod "$WIFI_KO" $WIFI_ARGS
 		else modprobe bca_pcie_ipc $WIFI_ARGS; fi
 		eend $? || return 1
 	fi
-	apply_hostapd
+	WAIT_RADIOS=1 apply_hostapd
 }
 
-# new hostapd configs without reloading the driver: only what changed
+# new settings without reloading the driver: only what changed
 reload() {
+	if iw reg reload 2>/dev/null; then REGDB_OK=1; else REGDB_OK=0; fi
 	apply_hostapd
 }
 
@@ -407,32 +662,48 @@ stop() {
 		ebegin "Unloading bca_pcie_ipc"
 		rmmod bca_pcie_ipc
 		eend $?
+		rm -f "$STATE/radio-macs"
 	fi
 }
 
 status() {
-	local rc i c
+	local rc i d p live ports iso
 	default_status
 	rc=$?
 	if wifi_loaded; then einfo "driver: bca_pcie_ipc loaded"; else einfo "driver: not loaded"; fi
+	# the effective isolation (incl. the network list's) while running
+	iso=$(sed -n 's/^WIFI_ISOLATE="\(.*\)"$/\1/p' "$STATE/l2.conf" 2>/dev/null)
+	[ -f "$STATE/l2.conf" ] || iso=${WIFI_ISOLATE:-}
+	# shellcheck disable=SC2013 # one validated name per line
 	for i in $(cat "$STATE/bridges" 2>/dev/null); do
 		if [ -d "/sys/class/net/$i/bridge" ]; then
-			einfo "bridge $i: ports $(ls "/sys/class/net/$i/brif" 2>/dev/null | tr '\n' ' ')$(case " ${WIFI_ISOLATE:-} " in *" $i "*) echo "(Wi-Fi ports isolated)" ;; esac)"
+			ports=
+			for p in "/sys/class/net/$i/brif"/*; do [ -e "$p" ] && ports="$ports${p##*/} "; done
+			einfo "bridge $i: ports $ports$(case " $iso " in *" $i "*) echo "(Wi-Fi ports isolated)" ;; esac)"
 		else
 			eerror "bridge $i: missing"
 		fi
 	done
-	for i in $(hap_instances); do
-		c=$(cat "$STATE/$i.conf" 2>/dev/null)
-		if hap_running "$i"; then
-			if [ -n "$c" ] && [ -f "$c" ] && [ "$(cat "$STATE/$i.sum" 2>/dev/null)" != "$(conf_sum "$c")" ]; then
-				ewarn "hostapd on $i: running (pid $(cat "$(hap_pid "$i")")), ${c}: changed since start (reload)"
-			else
-				einfo "hostapd on $i: running (pid $(cat "$(hap_pid "$i")")), ${c:-?}"
-			fi
+	if ! hap_running; then
+		[ -d "$STATE/applied" ] && eerror "hostapd: not running"
+		return $rc
+	fi
+	einfo "hostapd: running (pid $(cat "$HAP_PID")), global control $(hap_global)"
+	live=$(hap_live)
+	for p in "$STATE"/applied/*; do
+		[ -f "$p" ] || continue
+		d=${p##*/}
+		if in_list "$live" "$d"; then
+			einfo "radio $d: $(bss_state "$d"), $(unit_line "$p" conf)"
 		else
-			eerror "hostapd on $i: not running (${c:-?})"
+			eerror "radio $d: not in hostapd ($(unit_line "$p" conf))"
 		fi
+		while read -r i _ _; do
+			[ -n "$i" ] || continue
+			if in_list "$live" "$i"; then einfo "  BSS $i: $(bss_state "$i")"; else eerror "  BSS $i: missing"; fi
+		done <<-EOF
+		$(unit_line "$p" bss)
+		EOF
 	done
 	return $rc
 }

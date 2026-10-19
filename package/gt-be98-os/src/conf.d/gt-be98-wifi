@@ -3,17 +3,39 @@
 #WIFI_ARGS="bind_domain=2 max_eps=1 hybrid_msi=0 rx_nullbuf=0"
 WIFI_ARGS=
 WIFI_KO=
-# hostapd configurations (space separated); see /etc/hostapd/*.example.
-# Shipped defaults, four radios: the 2.4 GHz netdev is bcawl3 (PCI domain 2).
+# The Wi-Fi networks (see /etc/hostapd/networks.conf.example and
+# /usr/sbin/gt-be98-wifi-gen): each network becomes one BSS on each radio of
+# its band set, all radios in one hostapd process. Their bridges brwifi<id>,
+# VLANs and isolation come from the list. Empty: none.
+WIFI_NETWORKS=
+# sticky slot + BSSID index per (network, radio); keep it with the list
+WIFI_SLOTS=/etc/hostapd/wifi-slots
+# BSSes per radio (1..16; the firmware is MBSS16). 4 = the driver's limit
+# today (BCA_MAX_BSS, and 8 clients per radio in its peer table).
+WIFI_MAX_BSS=4
+# rnr=1 on the 2.4/5 GHz BSSes (hostapd adds the co-located 6 GHz BSSes to
+# the Reduced Neighbor Report on its own, since all radios share a process)
+WIFI_RNR=1
+# 1: a network promoted to slot 0 (the anchor left the radio) keeps its
+# BSSID; needs a driver that applies a non-default MAC to bsscfg 0
+WIFI_ANCHOR_KEEP_BSSID=0
+# band -> radio netdev, default "2g=bcawl3 5gl=bcawl0 5gh=bcawl1 6g=bcawl2"
+WIFI_RADIO_DEVS=
+# ready-made hostapd configurations, one per radio (space separated; see
+# /etc/hostapd/*.example). Shipped defaults, four radios: the 2.4 GHz netdev
+# is bcawl3 (PCI domain 2). May be combined with WIFI_NETWORKS on other radios.
 HOSTAPD_CONFS=
-# Wi-Fi networks (pure L2, see /etc/init.d/gt-be98-wifi): their bridges
-# (brwifiN), each with a REQUIRED VLAN on the trunk port (brwifiN:vid,
-# 1-4094); the configs' bridge= must name one of them. The web UI writes
-# these into /etc/conf.d/gt-be98-wifi-ap.
+# their bridges (brwifiN), each with a REQUIRED VLAN on the trunk port
+# (brwifiN:vid, 1-4094); the configs' bridge= must name one of them. The web
+# UI writes these into /etc/conf.d/gt-be98-wifi-ap.
 WIFI_BRIDGES=
 WIFI_VLANS=
 WIFI_TRUNK=rnr0
 WIFI_ISOLATE=
+# the one hostapd process: extra options, global control socket, and the
+# ctrl_interface of the generated BSSes
 HOSTAPD_ARGS=
+HOSTAPD_GLOBAL=/run/hostapd-global
+HOSTAPD_CTRL=/run/hostapd
 IFACE_WAIT=20
 WIFI_UNLOAD_ON_STOP=yes

@@ -183,6 +183,47 @@ rc-service gt-be98-wifi stop             # hostapd stops, module unloads
 Result 2026-10-08 (2.4 GHz, WPA2): AP up, a client got 18 Mbit/s up,
 11 Mbit/s down.
 
+### T7b. Wi-Fi networks, one hostapd for all radios (multi-SSID)
+
+Offline first (build host, no box): `sh package/gt-be98-os/test/gt-be98-wifi-gen-test.sh
+<hostapd-confcheck>` (the generator; hostapd's own parser and checks from
+`test/build-hostapd-confcheck.sh`) and `sh package/gt-be98-os/test/gt-be98-wifi-service-test.sh`
+(the service's ADD/REMOVE decisions against a fake hostapd): both `ALL OK`.
+
+On the box (trunk VLANs 10/20/30 reachable from a lab switch port):
+
+```sh
+cp /etc/hostapd/networks.conf.example /etc/hostapd/networks.conf   # passphrases
+echo 'WIFI_NETWORKS=/etc/hostapd/networks.conf' >> /etc/conf.d/gt-be98-wifi
+rc-service gt-be98-wifi start
+pidof hostapd                                       # ONE pid
+hostapd_cli -p /run -i hostapd-global raw INTERFACES
+#   bcawl3 bcawl3-1 bcawl3-2 bcawl0 bcawl0-1 bcawl1 bcawl1-1 bcawl2
+cat /run/gt-be98-wifi/gen/plan /etc/hostapd/wifi-slots   # slots, BSSIDs, bridges
+for i in bcawl3 bcawl3-1 bcawl3-2; do hostapd_cli -p /run/hostapd -i $i status | grep -E '^(state|bssid|ssid)'; done
+ip -br link show master brwifi30                    # guest BSSes + rnr0.30
+```
+
+Pass: one process; every BSS `state=ENABLED` with the `bssid` of the plan
+(and `ip link` shows it as the netdev MAC); each network's BSSes in its
+`brwifi<id>`; a client on each SSID gets an address from its VLAN.
+Per-BSS changes (the counters, not the verdict, are what to read:
+`grep -E 'REMOVE|ADD|Remove|Add' /var/log/hostapd.log` and the client links):
+
+1. change iot's passphrase, `rc-service gt-be98-wifi reload`: only
+   `bcawl3-2` is removed and added; a client on home (`bcawl3-1`) and guest
+   (`bcawl3`) stays associated (no deauth, ping without a gap > 1 s).
+2. delete network 10 (home): `bcawl3-1`, `bcawl0-1`, `bcawl1-1` removed,
+   nothing else; iot keeps `bcawl3-2` and its BSSID.
+3. add a network on 5gl: one `ADD bss_config`; the other radios untouched.
+4. change guest (the anchor of every radio): each radio restarts once
+   (expected: hostapd removes a radio with its first BSS, and the driver's
+   anchor start re-runs the radio prologue).
+Refute: any other radio's or BSS's client dropping in 1-3; a BSS whose
+BSSID differs from the plan; two BSSes with one BSSID. Driver limits that
+can make 1-3 fail on the box today (not the OS): MULTI-SSID-TARGET G4/G12
+(a removed BSS's peers/rings not released), G5 (anchor `WLC_DOWN`), G13/G15.
+
 ## T8. Watchdog
 
 1. **Healthy box stays up**: leave it 20 min; uptime keeps growing,
