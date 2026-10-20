@@ -224,6 +224,49 @@ BSSID differs from the plan; two BSSes with one BSSID. Driver limits that
 can make 1-3 fail on the box today (not the OS): MULTI-SSID-TARGET G4/G12
 (a removed BSS's peers/rings not released), G5 (anchor `WLC_DOWN`), G13/G15.
 
+### T7c. WPA2/WPA3-Enterprise (802.1X, external RADIUS)
+
+Offline: section 9 of `gt-be98-wifi-gen-test.sh` (with `hostapd-confcheck`
+built from the image's hostapd `.config`, so the EAP/RADIUS options are the
+image's; against the EAP-less hostapd of earlier images every Enterprise
+config fails to parse). On the box: `grep -c auth_server_addr
+/usr/sbin/hostapd` is non-zero (0 on an EAP-less build: no RADIUS client,
+the key is unknown).
+
+RADIUS server: any lab host reachable from the box's management address,
+e.g. hostapd's integrated RADIUS server (a full hostapd build: `eap_server=1`,
+`radius_server_clients=` with the box's address and the secret,
+`radius_server_auth_port=1812`, `eap_user_file=` with a PEAP/MSCHAPv2 user,
+`ca_cert=`/`server_cert=`/`private_key=`) or FreeRADIUS (`clients.conf`,
+`users`). One network on the box:
+
+```
+network=40
+ssid=corp
+security=wpa2-wpa3-eap
+radius_server=<lab host>
+radius_secret=<secret>
+bands=2g 5gl 6g
+vlan=40
+```
+
+`rc-service gt-be98-wifi reload`; on the 6 GHz BSS `hostapd_cli -p
+/run/hostapd -i bcawl2-<k> get_config` shows `key_mgmt=WPA-EAP-SHA256`.
+Client (`wpa_supplicant -c` with `key_mgmt=WPA-EAP WPA-EAP-SHA256`,
+`ieee80211w=1`, `eap=PEAP`, `identity=`, `password=`,
+`phase2="auth=MSCHAPV2"`, `ca_cert=`), once per band:
+Pass: `CTRL-EVENT-EAP-SUCCESS` then `CTRL-EVENT-CONNECTED`; `wpa_cli status`
+shows `key_mgmt=WPA2-EAP-SHA256` (2.4/5 GHz: SHA256 is preferred, `pmf=1`)
+or the same with `pmf=2` on 6 GHz; the RADIUS server logged an
+Access-Accept for the box's address; DHCP from VLAN 40; ping both ways.
+Repeat with `security=wpa2-eap` (client `key_mgmt=WPA-EAP`) on 2.4 GHz.
+Refute: an Access-Accept but no `CONNECTED` (4-way: `reason=17` is an RSN
+IE mismatch between the firmware's beacon and hostapd's message 3 - read
+the driver's `AP RSN-CAPS` line in the kernel log), no Access-Request at the
+server (RADIUS path/secret: hostapd log `RADIUS`), or a wrong secret
+accepted. Then change `radius_secret` on the box only and reload: the
+server must log a bad authenticator and the client must fail.
+
 ## T8. Watchdog
 
 1. **Healthy box stays up**: leave it 20 min; uptime keeps growing,

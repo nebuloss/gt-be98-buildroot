@@ -113,6 +113,14 @@ BR2_PACKAGE_HOSTAPD=y
 BR2_PACKAGE_HOSTAPD_DRIVER_NL80211=y
 BR2_PACKAGE_HOSTAPD_WPA3=y
 BR2_PACKAGE_HOSTAPD_ACS=y
+# WPA2/WPA3-Enterprise (gt-be98-wifi-gen security=wpa2-eap|wpa3-eap|wpa2-wpa3-eap):
+# Buildroot's one EAP switch. It drops CONFIG_NO_RADIUS/CONFIG_NO_ACCOUNTING
+# (the RADIUS client + accounting: what an external RADIUS server needs) and
+# turns on CONFIG_EAP (hostapd's integrated EAP server and its methods) and
+# CONFIG_RADIUS_SERVER. Those two cannot be left out separately; they are
+# dormant unless a config sets eap_server=1 / radius_server_clients=, which
+# the generator never writes.
+BR2_PACKAGE_HOSTAPD_EAP=y
 BR2_PACKAGE_WPA_SUPPLICANT=y
 BR2_PACKAGE_WPA_SUPPLICANT_NL80211=y
 BR2_PACKAGE_WPA_SUPPLICANT_CLI=y

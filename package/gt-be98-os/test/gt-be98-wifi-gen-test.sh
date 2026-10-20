@@ -258,6 +258,75 @@ conf_ok "colliding bases"
 rm -f "$T/slots"; gen "$T/s16" -C 16
 check "colliding bases, 16 networks: refused (only 16 BSSIDs per octet-0 block)" "1 yes" "$? $(grep -q 'no free BSSID' "$T/err" && echo yes || echo no)"
 M="2g=00:00:5e:00:53:a0 5gl=00:00:5e:00:53:a4 5gh=00:00:5e:00:53:a8 6g=00:00:5e:00:53:ac"
+
+# ---- 9. Enterprise (802.1X, external RADIUS): RFC 5737/3849 addresses ----
+eap() {	# eap ID SSID SECURITY BANDS VLAN SERVER SECRET [extra lines]
+	printf 'network=%s\nssid=%s\nsecurity=%s\nbands=%s\nvlan=%s\nradius_server=%s\nradius_secret=%s\n' \
+		"$1" "$2" "$3" "$4" "$5" "$6" "$7"
+	[ $# -gt 7 ] && printf '%s\n' "$8"
+	return 0
+}
+{
+	eap 50 corp2 wpa2-eap "2g 5gl" 50 192.0.2.10 'rad-secret 50'
+	eap 51 corp3 wpa3-eap "5gh 6g" 51 2001:db8::10 rad-secret-51 'radius_port=11812'
+	eap 52 corpt wpa2-wpa3-eap "2g 5gl 5gh 6g" 52 192.0.2.10 rad-secret-52 'radius_acct_server=192.0.2.11'
+	printf 'radius_acct_port=11813\n'
+} > "$T/e1"
+rm -f "$T/slots"; gen "$T/e1"; check "enterprise: accepted" 0 $?
+check "wpa2-eap: WPA-EAP, no PMF, 802.1X to the server" \
+	"yes no yes yes yes yes no no" \
+	"$(has bcawl3 wpa_key_mgmt=WPA-EAP) $(grep -q '^ieee80211w=' "$T/o/sec-bcawl3" && echo yes || echo no) $(has bcawl3 ieee8021x=1) $(has bcawl3 auth_server_addr=192.0.2.10) $(has bcawl3 auth_server_port=1812) $(has bcawl3 'auth_server_shared_secret=rad-secret 50') $(grep -q '^acct_server' "$T/o/sec-bcawl3" && echo yes || echo no) $(grep -qE '^wpa_(passphrase|psk)=' "$T/o/sec-bcawl3" && echo yes || echo no)"
+check "wpa3-eap: WPA-EAP-SHA256, PMF required, IPv6 server, port" "yes yes yes yes" \
+	"$(has bcawl1 wpa_key_mgmt=WPA-EAP-SHA256) $(has bcawl1 ieee80211w=2) $(has bcawl1 auth_server_addr=2001:db8::10) $(has bcawl1 auth_server_port=11812)"
+check "wpa2-wpa3-eap: both AKMs, PMF optional (2.4/5 GHz)" "yes yes yes yes" \
+	"$(has bcawl3-1 'wpa_key_mgmt=WPA-EAP WPA-EAP-SHA256') $(has bcawl3-1 ieee80211w=1) $(has bcawl0-1 'wpa_key_mgmt=WPA-EAP WPA-EAP-SHA256') $(has bcawl1-1 ieee80211w=1)"
+check "wpa2-wpa3-eap on 6 GHz: WPA3-Enterprise only, PMF required" "yes yes no" \
+	"$(has bcawl2-1 wpa_key_mgmt=WPA-EAP-SHA256) $(has bcawl2-1 ieee80211w=2) $(has bcawl2-1 ieee80211w=1)"
+check "accounting: own port, secret defaults to radius_secret" "yes yes yes" \
+	"$(has bcawl3-1 acct_server_addr=192.0.2.11) $(has bcawl3-1 acct_server_port=11813) $(has bcawl3-1 acct_server_shared_secret=rad-secret-52)"
+check "RADIUS secrets only in 0600 files" "" \
+	"$(for f in "$T"/o/*; do grep -q rad-secret "$f" && [ "$(stat -c %a "$f")" != 600 ] && echo "${f##*/}"; done)"
+check "secrets not in the plan" "no" "$(grep -q rad-secret "$T/o/plan" && echo yes || echo no)"
+conf_ok "enterprise"
+if [ -n "$CONFCHECK" ]; then
+	"$CONFCHECK" "$T/o/bss-bcawl3.conf" "$T/o/bss-bcawl1.conf" "$T/o/bss-bcawl3-1.conf" > "$T/cc" 2>&1
+	# akm bits (src/common/defs.h): IEEE8021X 0x1, IEEE8021X_SHA256 0x80
+	check "hostapd reads the AKM/PMF the generator meant" "akm=0x1/mfp=0 akm=0x80/mfp=2 akm=0x81/mfp=1" \
+		"$(grep -o 'akm=0x[0-9a-f]*/mfp=[0-9]' "$T/cc" | tr '\n' ' ' | sed 's/ $//')"
+	# negative controls: hostapd must refuse 802.1X with no server, PMF
+	# optional on 6 GHz, and an unparsable server address
+	sed '/^auth_server_addr=/d' "$T/o/bss-bcawl3.conf" > "$T/bad4.conf"
+	sed 's/^ieee80211w=2$/ieee80211w=1/' "$T/o/bss-bcawl2.conf" > "$T/bad5.conf"
+	sed 's/^auth_server_addr=.*/auth_server_addr=radius.example/' "$T/o/bss-bcawl3.conf" > "$T/bad6.conf"
+	check "hostapd refuses 802.1X without a server, PMF optional on 6 GHz, a host name" "FAIL FAIL FAIL" \
+		"$("$CONFCHECK" "$T/bad4.conf" "$T/bad5.conf" "$T/bad6.conf" 2>/dev/null | grep -E '^(OK|FAIL) ' | cut -d' ' -f1 | tr '\n' ' ' | sed 's/ $//')"
+fi
+cp "$T/slots" "$T/slots.keep"
+refuse1() {	# name, then the eap() args
+	nm=$1; shift; eap "$@" > "$T/r"; refuse "$nm" "$T/r"
+}
+refuse1 "wpa2-eap on 6 GHz" 1 a wpa2-eap "5gl 6g" 5 192.0.2.10 secret1
+refuse1 "eap without radius_server" 1 a wpa3-eap 2g 5 "" secret1
+refuse1 "eap without radius_secret" 1 a wpa3-eap 2g 5 192.0.2.10 ""
+refuse1 "eap with a host name" 1 a wpa3-eap 2g 5 radius.example secret1
+refuse1 "eap with 0.0.0.0" 1 a wpa3-eap 2g 5 0.0.0.0 secret1
+refuse1 "eap with a multicast server" 1 a wpa3-eap 2g 5 224.0.0.1 secret1
+refuse1 "eap with an IPv6 multicast server" 1 a wpa3-eap 2g 5 ff02::1 secret1
+refuse1 "eap with an IPv6 link-local server" 1 a wpa3-eap 2g 5 fe80::1 secret1
+refuse1 "eap with a bad IPv6 address" 1 a wpa3-eap 2g 5 2001:db8::1::2 secret1
+refuse1 "eap with a leading-zero octet" 1 a wpa3-eap 2g 5 192.0.2.010 secret1
+refuse1 "radius_port 0" 1 a wpa3-eap 2g 5 192.0.2.10 secret1 radius_port=0
+refuse1 "radius_port 65536" 1 a wpa3-eap 2g 5 192.0.2.10 secret1 radius_port=65536
+refuse1 "eap with a passphrase" 1 a wpa3-eap 2g 5 192.0.2.10 secret1 passphrase=password1
+refuse1 "accounting port without server" 1 a wpa3-eap 2g 5 192.0.2.10 secret1 radius_acct_port=1813
+refuse1 "secret with a trailing space" 1 a wpa3-eap 2g 5 192.0.2.10 'secret1 '
+refuse1 "secret of 129 characters" 1 a wpa3-eap 2g 5 192.0.2.10 "$(printf '%0129d' 0)"
+{ net 1 a sae password1 2g 5; printf 'radius_server=192.0.2.10\n'; } > "$T/r"; refuse "radius_* on an SAE network" "$T/r"
+eap 1 a wpa3-eap 2g 5 radius.example 'Very-Secret-X' > "$T/r"; printf 'radius_acct_secret=Acct-Secret-Y \n' >> "$T/r"; gen "$T/r"
+check "a refused list never echoes a RADIUS secret" "1 no" \
+	"$? $(grep -qE 'Very-Secret-X|Acct-Secret-Y' "$T/err" && echo yes || echo no)"
+eap 1 a wpa3-eap 2g 5 192.0.2.10 'Very-Secret-X' > "$T/r"; gen "$T/r"
+check "an accepted list never prints a RADIUS secret" "0 " "$? $(cat "$T/err")"
 }
 
 for a in "busybox awk" mawk gawk; do

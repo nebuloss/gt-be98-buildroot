@@ -7,8 +7,14 @@
 # (brwifi<id>) to its own 802.1Q VLAN on WIFI_TRUNK.
 #
 # Bands: 2g (bcawl3), 5gl (bcawl0, ch 36-64), 5gh (bcawl1, ch 100+), 6g (bcawl2).
-# 6 GHz takes only WPA3-SAE (sae, psk2sae: rendered as SAE with H2E) or OWE
-# (owe, open-owe: open on 2.4/5 GHz, OWE on 6 GHz); PMF is required there.
+# 6 GHz takes only WPA3-SAE (sae, psk2sae: rendered as SAE with H2E), OWE
+# (owe, open-owe: open on 2.4/5 GHz, OWE on 6 GHz) or WPA3-Enterprise
+# (wpa3-eap, wpa2-wpa3-eap: rendered as wpa3-eap); PMF is required there.
+# Enterprise (wpa2-eap, wpa3-eap, wpa2-wpa3-eap) takes no passphrase: the box
+# relays EAP (PEAP, TTLS, EAP-TLS, ...) to an external RADIUS server given by
+# IP address (radius_server, radius_port 1812, radius_secret; optional
+# accounting radius_acct_server, radius_acct_port 1813, radius_acct_secret).
+# This file holds secrets: keep it mode 0600.
 # country= is written only once the regulatory database is loaded.
 #country=XX
 
@@ -44,3 +50,16 @@ security=open-owe
 bands=2g 5gl 5gh 6g
 vlan=30
 isolate=1
+
+# WPA2/WPA3-Enterprise (transition) on 2.4/5 GHz, WPA3-Enterprise on 6 GHz.
+# The RADIUS server must list the box's address as a client with this secret.
+network=40
+ssid=corp
+security=wpa2-wpa3-eap
+radius_server=192.0.2.10
+radius_secret=CHANGE-ME-RADIUS
+#radius_port=1812
+#radius_acct_server=192.0.2.10
+#radius_acct_port=1813
+bands=2g 5gl 5gh 6g
+vlan=40

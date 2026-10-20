@@ -291,9 +291,17 @@ nftables, dnsmasq): no driver internals or module parameters.
   `/etc/hostapd/networks.conf.example`; `gt-be98-wifi-gen` renders one
   hostapd config per radio with `bss=` sections at sticky slots
   (`/etc/hostapd/wifi-slots`), an explicit `bssid=` per BSS (stock MBSS16
-  rule), `bridge=brwifi<id>`, the 6 GHz rules (SAE-H2E or OWE, PMF
-  required) and `rnr=1` on 2.4/5 GHz; at most `WIFI_MAX_BSS`, default 4,
-  per radio) and `HOSTAPD_CONFS` (ready-made configs, one per radio).
+  rule), `bridge=brwifi<id>`, the 6 GHz rules (SAE-H2E, OWE or
+  WPA3-Enterprise, PMF required) and `rnr=1` on 2.4/5 GHz; at most
+  `WIFI_MAX_BSS`, default 4, per radio) and `HOSTAPD_CONFS` (ready-made
+  configs, one per radio). Enterprise networks (`security=wpa2-eap`,
+  `wpa3-eap` = WPA-EAP-SHA256 with PMF required, `wpa2-wpa3-eap`) relay
+  802.1X/EAP to an external RADIUS server (`radius_server=<IP>`,
+  `radius_port`, `radius_secret`, optional `radius_acct_*`); the image's
+  hostapd is built with `BR2_PACKAGE_HOSTAPD_EAP` (RADIUS client and
+  accounting; its integrated EAP/RADIUS server is compiled in but never
+  configured). The secrets live only in the 0600 network list and the 0600
+  generated configs, and no error message repeats one.
   `/etc/conf.d/gt-be98-wifi-ap` (web UI, parsed not sourced) overrides the
   image's values, so the image keeps owning `WIFI_ARGS`. The web UI writes
   `/etc/hostapd/hostapd-<bcawlN>.conf` (0600, `wmm_enabled=1`,

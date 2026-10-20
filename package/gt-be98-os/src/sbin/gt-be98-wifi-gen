@@ -38,10 +38,22 @@
 #     enabled=1  channel=N  width=20|40|80
 #   network=ID                      1..99999, the bridge is brwifiID
 #     ssid=...                      1-32 bytes
-#     security=open|owe|open-owe|psk2|psk2sae|sae
+#     security=open|owe|open-owe|psk2|psk2sae|sae|wpa2-eap|wpa3-eap|wpa2-wpa3-eap
 #                                   open-owe: open on 2.4/5 GHz, OWE on 6 GHz;
-#                                   psk2sae: WPA2/WPA3, pure SAE on 6 GHz
+#                                   psk2sae: WPA2/WPA3, pure SAE on 6 GHz;
+#                                   *-eap: Enterprise (802.1X, external RADIUS):
+#                                   wpa2-eap WPA-EAP; wpa3-eap WPA-EAP-SHA256,
+#                                   PMF required; wpa2-wpa3-eap both, PMF
+#                                   optional, wpa3-eap on 6 GHz
 #     passphrase=...                8-63 printable ASCII (psk2: or 64 hex)
+#     radius_server=IP              *-eap: the RADIUS authentication server,
+#                                   an IPv4 or IPv6 address (no host name)
+#     radius_port=1..65535          default 1812
+#     radius_secret=...             *-eap: the RADIUS shared secret, 1-128
+#                                   printable ASCII, no leading/trailing space
+#     radius_acct_server=IP  radius_acct_port=1..65535 (default 1813)
+#     radius_acct_secret=...        optional RADIUS accounting (default secret:
+#                                   radius_secret)
 #     bands=2g 5gl 5gh 6g           any non-empty subset
 #     vlan=1..4094                  required, one VLAN per network
 #     hidden=0|1  isolate=0|1  max_clients=1..2007
@@ -63,7 +75,7 @@
 # is never handed out.
 #
 # OUTDIR: hostapd-<dev>.conf, bss-<ifname>.conf, hdr-<dev>, sec-<ifname>
-# (mode 0600: they hold the passphrases) and plan:
+# (mode 0600: they hold the passphrases and RADIUS secrets) and plan:
 #   radio <band> <dev> <conf> <sha256 of the radio-wide lines>
 #   bss <dev> <ifname> <slot> <net> <index> <bssid> <bridge> <conf> <sha256 of the section>
 #   net <id> <bridge> <vlan> <isolate 0|1>     (networks on >= 1 radio)
@@ -138,6 +150,26 @@ function bssid(b, s,    o, v, i, r, adj, o0, d) {
 }
 function printable(s) { return s ~ /^[ -~]*$/ }
 function ishex64(s) { return length(s) == 64 && s ~ /^[0-9A-Fa-f]+$/ }
+function iseap(s) { return s == "wpa2-eap" || s == "wpa3-eap" || s == "wpa2-wpa3-eap" }
+function isport(s) { return isnum(s) && s + 0 >= 1 && s + 0 <= 65535 }
+# a unicast IP literal (auth_server_addr takes no host name)
+function isip(s,    p, n, i, c) {
+	if (s ~ /^[0-9.]+$/) {
+		if (split(s, p, ".") != 4) return 0
+		for (i = 1; i <= 4; i++) if (!isnum(p[i]) || p[i] + 0 > 255) return 0
+		return p[1] + 0 != 0 && p[1] + 0 < 224
+	}
+	# IPv6: hex groups and colons, "::" at most once, not multicast
+	# (ff00::/8), not link-local (fe80::/10: no scope id here)
+	if (s !~ /^[0-9A-Fa-f:]+$/ || length(s) > 39 || s ~ /:::/ || tolower(s) ~ /^(ff|fe[89ab])/) return 0
+	if (s == "::" || s ~ /^:[^:]/ || s ~ /[^:]:$/) return 0
+	c = index(s, "::")
+	if (c && index(substr(s, c + 2), "::")) return 0
+	n = split(s, p, ":")
+	for (i = 1; i <= n; i++) if (length(p[i]) > 4 || (!c && p[i] == "")) return 0
+	return c ? n <= 9 : n == 8
+}
+function secretok(s) { return printable(s) && length(s) >= 1 && length(s) <= 128 && s !~ /^ / && s !~ / $/ }
 function chans(b, ch) {
 	if (b == "2g") return isnum(ch) && ch >= 1 && ch <= 13
 	if (b == "5gl") return isnum(ch) && ch >= 36 && ch <= 64 && ch % 4 == 0
@@ -196,14 +228,15 @@ FILENAME == slotsf {
 	eq = index($0, "=")
 	if (!eq) { err("line " FNR ": not key=value"); next }
 	k = trim(substr($0, 1, eq - 1)); v = substr($0, eq + 1)
-	if (k != "ssid" && k != "passphrase") v = trim(v)
+	if (k != "ssid" && k != "passphrase" && k != "radius_secret" && k != "radius_acct_secret") v = trim(v)
 }
 k == "network" {
 	if (!isnum(v) || v + 0 < 1 || v + 0 > 99999) { err("line " FNR ": network id 1..99999"); cur = "x"; next }
 	if (v in nid) { err("network " v " listed twice"); cur = "x"; next }
 	nnet++; net[nnet] = v; nid[v] = nnet; cur = "n"; ci = nnet
 	sec[ci] = ""; ssid[ci] = ""; pass[ci] = ""; vlan[ci] = ""; hid[ci] = 0; iso[ci] = 0; maxc[ci] = ""
-	nb[ci] = 0
+	nb[ci] = 0; nra[ci] = 0
+	rs[ci] = ""; rp[ci] = ""; rk[ci] = ""; as[ci] = ""; ap[ci] = ""; ak[ci] = ""
 	next
 }
 k == "radio" {
@@ -231,6 +264,13 @@ cur == "n" {
 	if (k == "ssid") ssid[ci] = v
 	else if (k == "security") sec[ci] = v
 	else if (k == "passphrase") pass[ci] = v
+	# RADIUS: checked in END (never echo a secret)
+	else if (k == "radius_server") { rs[ci] = v; nra[ci]++ }
+	else if (k == "radius_port") { rp[ci] = v; nra[ci]++ }
+	else if (k == "radius_secret") { rk[ci] = v; nra[ci]++ }
+	else if (k == "radius_acct_server") { as[ci] = v; nra[ci]++ }
+	else if (k == "radius_acct_port") { ap[ci] = v; nra[ci]++ }
+	else if (k == "radius_acct_secret") { ak[ci] = v; nra[ci]++ }
 	else if (k == "bands") {
 		nb[ci] = split(v, t, /[ \t,]+/)
 		for (i = 1; i <= nb[ci]; i++) {
@@ -265,10 +305,24 @@ END {
 		} else if (s == "psk2sae" || s == "sae") {
 			if (!(printable(pass[i]) && length(pass[i]) >= 8 && length(pass[i]) <= 63))
 				err(tag ": the WPA3 (SAE) passphrase must be 8-63 printable ASCII characters")
-		} else err(tag ": security must be open, owe, open-owe, psk2, psk2sae or sae")
+		} else if (iseap(s)) {
+			if (pass[i] != "") err(tag ": security " s " takes no passphrase (the RADIUS server authenticates)")
+			if (!isip(rs[i])) err(tag ": security " s " needs radius_server=<IPv4 or IPv6 address>")
+			if (rp[i] == "") rp[i] = 1812
+			else if (!isport(rp[i])) err(tag ": radius_port must be 1..65535")
+			if (!secretok(rk[i])) err(tag ": radius_secret must be 1-128 printable ASCII characters, no leading/trailing space")
+			if (as[i] != "" || ap[i] != "" || ak[i] != "") {
+				if (!isip(as[i])) err(tag ": radius_acct_server=<IPv4 or IPv6 address> is required with radius_acct_port/radius_acct_secret")
+				if (ap[i] == "") ap[i] = 1813
+				else if (!isport(ap[i])) err(tag ": radius_acct_port must be 1..65535")
+				if (ak[i] == "") ak[i] = rk[i]
+				else if (!secretok(ak[i])) err(tag ": radius_acct_secret must be 1-128 printable ASCII characters, no leading/trailing space")
+			}
+		} else err(tag ": security must be open, owe, open-owe, psk2, psk2sae, sae, wpa2-eap, wpa3-eap or wpa2-wpa3-eap")
+		if (!iseap(s) && nra[i]) err(tag ": radius_* only with security wpa2-eap, wpa3-eap or wpa2-wpa3-eap")
 		if (nb[i] == 0) err(tag ": no band")
-		if (((i, "6g") in hasb) && (s == "open" || s == "psk2"))
-			err(tag ": 6 GHz needs WPA3-SAE (sae, psk2sae) or OWE (owe, open-owe)")
+		if (((i, "6g") in hasb) && (s == "open" || s == "psk2" || s == "wpa2-eap"))
+			err(tag ": 6 GHz needs WPA3: SAE (sae, psk2sae), OWE (owe, open-owe) or WPA3-Enterprise (wpa3-eap, wpa2-wpa3-eap)")
 		if (!isnum(vlan[i]) || vlan[i] + 0 < 1 || vlan[i] + 0 > 4094) err(tag ": vlan 1..4094 is required")
 		else if (vlan[i] in vseen) err(tag ": vlan " vlan[i] " also used by network " vseen[vlan[i]])
 		else vseen[vlan[i]] = id
@@ -425,16 +479,31 @@ END {
 			if (maxc[i] != "") print "max_num_sta=" maxc[i] > f
 			if (rnr && b != "6g") print "rnr=1" > f
 			s = sec[i]
-			if (b == "6g") { if (s == "psk2sae") s = "sae"; else if (s == "open-owe") s = "owe" }
+			if (b == "6g") { if (s == "psk2sae") s = "sae"; else if (s == "open-owe") s = "owe"; else if (s == "wpa2-wpa3-eap") s = "wpa3-eap" }
 			else if (s == "open-owe") s = "open"
 			if (s == "open") print "wpa=0" > f
 			else {
 				print "wpa=2" > f; print "rsn_pairwise=CCMP" > f
 				if (s == "owe") { print "wpa_key_mgmt=OWE" > f; print "ieee80211w=2" > f }
 				else if (s == "psk2") print "wpa_key_mgmt=WPA-PSK" > f
+				else if (s == "wpa2-eap") print "wpa_key_mgmt=WPA-EAP" > f
+				else if (s == "wpa2-wpa3-eap") { print "wpa_key_mgmt=WPA-EAP WPA-EAP-SHA256" > f; print "ieee80211w=1" > f }
+				else if (s == "wpa3-eap") { print "wpa_key_mgmt=WPA-EAP-SHA256" > f; print "ieee80211w=2" > f }
 				else if (s == "psk2sae") { print "wpa_key_mgmt=WPA-PSK SAE" > f; print "ieee80211w=1" > f; print "sae_pwe=2" > f }
 				else { print "wpa_key_mgmt=SAE" > f; print "ieee80211w=2" > f; print "sae_require_mfp=1" > f; print "sae_pwe=" (b == "6g" ? 1 : 2) > f }
-				if (s != "owe") {
+				if (iseap(s)) {
+					# 802.1X: hostapd is the authenticator, the EAP
+					# conversation is relayed to the RADIUS server
+					print "ieee8021x=1" > f
+					print "auth_server_addr=" rs[i] > f
+					print "auth_server_port=" rp[i] > f
+					print "auth_server_shared_secret=" rk[i] > f
+					if (as[i] != "") {
+						print "acct_server_addr=" as[i] > f
+						print "acct_server_port=" ap[i] > f
+						print "acct_server_shared_secret=" ak[i] > f
+					}
+				} else if (s != "owe") {
 					if (ishex64(pass[i])) print "wpa_psk=" tolower(pass[i]) > f
 					else print "wpa_passphrase=" pass[i] > f
 				}
