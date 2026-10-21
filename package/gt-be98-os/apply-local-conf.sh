@@ -15,6 +15,9 @@
 #                        rnr0 when no DHCP server answers
 #   USB_FALLBACK         the same for the USB lifeline
 #   SYSLOG_REMOTE        host[:port]: forward all logs (UDP)
+#   NETCONSOLE           netconsole= target (@/rnr0,6666@A.B.C.D/): written
+#                        to /etc/conf.d/gt-be98-netconsole (kernel log over
+#                        UDP, incl. oops/panic). Empty: netconsole off.
 #   WEBUI_PASSWORD       web UI admin password (>= 6 characters), or
 #   WEBUI_PASSWORD_HASH  SALT:HASH as the webui stores it (HASH =
 #                        sha256(SALT || password), hex). Either one writes
@@ -30,6 +33,7 @@ TELNET_LIFELINE=auto
 RNR0_FALLBACK=
 USB_FALLBACK=
 SYSLOG_REMOTE=
+NETCONSOLE=
 WEBUI_PASSWORD=
 WEBUI_PASSWORD_HASH=
 if [ -n "$CONF" ]; then
@@ -106,6 +110,15 @@ fi
 rm -f "$TARGET_DIR/etc/syslog.d/60-remote.conf"
 if [ -n "$SYSLOG_REMOTE" ]; then
 	echo "*.*	@$SYSLOG_REMOTE" > "$TARGET_DIR/etc/syslog.d/60-remote.conf"
+fi
+# --- netconsole target (gt-be98-netconsole) ---------------------------------------
+if [ -n "$NETCONSOLE" ]; then
+	case "$NETCONSOLE" in
+	*[!A-Za-z0-9.:/@,+\;_-]*) echo "NETCONSOLE: unexpected characters" >&2; exit 1 ;;
+	*@*/*,*@*) ;;
+	*) echo "NETCONSOLE: [+][sport]@[sip]/[dev],[tport]@A.B.C.D/[mac]" >&2; exit 1 ;;
+	esac
+	sed -i "s|^NETCONSOLE=.*|NETCONSOLE=\"$NETCONSOLE\"|" "$TARGET_DIR/etc/conf.d/gt-be98-netconsole"
 fi
 # --- web UI password -> /etc/webui/auth.conf, enable the service -------------------
 AUTH=$TARGET_DIR/etc/webui/auth.conf

@@ -1,0 +1,25 @@
+# /etc/conf.d/gt-be98-netconsole - kernel log over UDP (gt-be98-netconsole)
+# Empty = disabled (the default): netconsole is not loaded.
+# Otherwise the netconsole= module parameter (Documentation/networking/
+# netconsole.rst):
+#   [+][r][src-port]@[src-ip]/[dev],[tgt-port]@<tgt-ip>/[tgt-mac]
+# e.g. everything from the first Runner port to UDP port 6666 of a lab host:
+#   NETCONSOLE="@/rnr0,6666@<lab-host IPv4>/"
+# The target must be an IPv4 address, not a name. Without a target MAC the
+# frames are sent to the Ethernet broadcast address; give the lab host's MAC
+# (or the router's, for a host behind one) to send them unicast. Several
+# targets: separate them with ";". A leading "+" sends extended (kmsg-format)
+# messages. Without a source address the interface's IPv4 address at load
+# time is used, so the service waits up to NETCONSOLE_WAIT s for it.
+# Receive with: socat -u udp-recv:6666 -    (or: nc -u -l 6666)
+# Kept across reboots in /jffs (ALLOW_PATHS of /etc/conf.d/gt-be98-jffs);
+# a build-time default comes from NETCONSOLE in the local configuration file.
+# Change without a reboot: rc-service gt-be98-netconsole restart
+NETCONSOLE=
+NETCONSOLE_WAIT=30
+# console loglevel to set once netconsole is up (dmesg -n). Empty: keep 4
+# (warnings are not sent; an oops, a panic and lockup reports always are,
+# the kernel raises the level for them). It is global: a higher level also
+# writes every such line synchronously to the UART (~87 us/char), which is
+# why the image runs at 4.
+NETCONSOLE_LOGLEVEL=

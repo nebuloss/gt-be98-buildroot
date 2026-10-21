@@ -40,7 +40,8 @@ fallback addresses, syslog target) or pulled at boot.
   corrupted stick.
 - `SYSLOG_REMOTE`: all logs to a lab host (UDP). Survives a hard reset of the
   box, which no local log does (DRAM is scrambled on reset, so ramoops cannot
-  help either).
+  help either). The kernel's own last words (oops, panic) go out the same
+  way through netconsole (README.md, "Crash logs (netconsole)").
 - Pull config over the network (not automated yet): a boot service could
   fetch `etc-overlay.tar` from a lab URL given at build time and unpack it
   over `/etc`. Same trust level as the build host.

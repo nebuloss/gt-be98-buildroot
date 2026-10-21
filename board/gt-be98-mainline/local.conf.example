@@ -39,6 +39,10 @@ RNR0_FALLBACK=
 USB_FALLBACK=
 # remote syslog target host[:port] (UDP)
 SYSLOG_REMOTE=
+# netconsole target (kernel log incl. oops/panic over UDP), netconsole=
+# syntax, e.g. @/rnr0,6666@A.B.C.D/ (IPv4 of the lab host). Empty: off.
+# Can also be set on the box in /etc/conf.d/gt-be98-netconsole.
+NETCONSOLE=
 
 # --- boot ----------------------------------------------------------------------------
 # netroot (default): small FIT (kernel + DTB + rescue initramfs); /init

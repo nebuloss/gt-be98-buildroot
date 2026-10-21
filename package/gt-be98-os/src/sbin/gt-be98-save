@@ -24,7 +24,7 @@
 set -eu
 ALLOW_PATHS=
 . /etc/conf.d/gt-be98-jffs
-AUTOSAVE_WATCH=${AUTOSAVE_WATCH:-"etc/webui etc/ssh root/.ssh etc/conf.d/gt-be98-macaddr etc/hostapd etc/conf.d/gt-be98-wifi-ap etc/gt-be98-router"}
+AUTOSAVE_WATCH=${AUTOSAVE_WATCH:-"etc/webui etc/ssh root/.ssh etc/conf.d/gt-be98-macaddr etc/hostapd etc/conf.d/gt-be98-wifi-ap etc/gt-be98-router etc/conf.d/gt-be98-netconsole"}
 out=
 loc=0
 ifch=0

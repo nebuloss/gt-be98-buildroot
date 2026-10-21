@@ -72,6 +72,7 @@ use (`gt-be98-mlboot.config`, `-s2`, `-pcie`, `-pcie-all`), then
 `linux/gt-be98-os.config` (squashfs/loop/overlay, seccomp, cgroups,
 namespaces, perf/ftrace/kprobes, netfilter and tc modules, USB storage), sets
 the forced command line (stage-2 `cmdline-s2` without `ignore_loglevel`,
+`panic=5` instead of `panic=1`,
 + `loglevel=4 pci=pcie_bus_safe pcie_aspm=off`: a quiet UART console, since
 every console line is written synchronously at ~87 us/char; post-codes are
 written at KERN_CRIT so the be98pc earlycon still sees them) and `CONFIG_INITRAMFS_SOURCE`, checks that every fragment line
@@ -197,6 +198,7 @@ the rootfs refuses such a write).
 
 Runlevels: **boot** `gt-be98-watchdog`, `gt-be98-netguard`, `gt-be98-persist`, `syslogd` (plus
 OpenRC's own); **default** `dhcpcd`, `sshd`, `chronyd`, `gt-be98-drivers`,
+`gt-be98-netconsole` (a no-op until a target is configured),
 `gt-be98-boot-done`. Installed, not enabled: `gt-be98-wifi`,
 `gt-be98-telnet` (enabled automatically only when the image has no SSH key),
 `dnsmasq`, `webui`.
@@ -379,10 +381,43 @@ changes back to the stick automatically is part of that plan, not done yet).
 - debugfs is mounted (`/sys/kernel/debug/bcm4916-runner`, `bca/...`), tracefs
   at `/sys/kernel/tracing`; `perf`, `trace-cmd`, `strace`, `gdbserver`,
   `devmem`/`memtool` are installed.
-- `oops=panic panic=1` stay on the forced command line (an oops reboots into
-  stock). To keep the box up after an oops while debugging:
+- `oops=panic panic=5` stay on the forced command line (an oops reboots into
+  stock 5 s later). To keep the box up after an oops while debugging:
   `sysctl -w kernel.panic_on_oops=0`.
+- Crash capture: see "Crash logs (netconsole)" below.
 - `CONFIG_MODULE_FORCE_UNLOAD=y`: `rmmod -f` exists for a wedged module.
+
+### Crash logs (netconsole)
+
+A panic reboots the box into the committed stock slot, the UART is not
+reachable, and **no RAM-based log survives**: the loader's DDR init re-keys
+the DDR scrambler from the hardware RNG on every reset (warm, watchdog or
+panic) and leaves no region unscrambled (open-ethernet
+`docs/mainline-noUART-bringup.md`, section 2a). So pstore/ramoops is
+compiled but has no region, and none is reserved in the DT: there is no
+provably safe one. The kernel log has to leave the box before the reset:
+
+- `CONFIG_NETCONSOLE=m` (+ `CONFIG_NETCONSOLE_DYNAMIC`, configfs). The
+  `gt-be98-netconsole` service (default runlevel, after `gt-be98-drivers` and
+  `dhcpcd`) loads it only if `/etc/conf.d/gt-be98-netconsole` sets
+  `NETCONSOLE` (default: empty, disabled). The value is the module's
+  `netconsole=` parameter, e.g. `NETCONSOLE="@/rnr0,6666@<lab-host>/"`
+  (`<lab-host>` = an IPv4 address; add the host's MAC after the last `/` to
+  send unicast instead of broadcast). Then `rc-service gt-be98-netconsole
+  restart`; `gt-be98-save` / autosave keep the file in `/jffs`. A build-time
+  default: `NETCONSOLE=` in the local configuration file.
+- On the lab host: `socat -u udp-recv:6666 - | tee -a gt-be98-console.log`.
+- The console loglevel stays 4 (warnings are not sent). An oops, a panic and
+  the soft-lockup report are always sent: the kernel raises the level for
+  them. `NETCONSOLE_LOGLEVEL=` in the conf.d file raises it for everything,
+  UART included (each line then costs ~87 us/char on the UART).
+- `panic=5` (and `CONFIG_PANIC_TIMEOUT=5`): 5 s between the panic report and
+  the reset, so the last frames are on the wire. `oops=panic` and
+  `softlockup_panic=1` are unchanged.
+- ⚠ Not yet tested on the box: netpoll transmits from the panic path with
+  interrupts off; the Runner driver (`rnr0`) handles a netpoll NAPI call, but
+  a frame sent that way has not been seen on the wire yet. Check once with
+  `echo c > /proc/sysrq-trigger` (it reboots into stock) before relying on it.
 
 ## Persistence
 

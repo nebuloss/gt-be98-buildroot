@@ -1,0 +1,104 @@
+#!/sbin/openrc-run
+# SPDX-License-Identifier: GPL-2.0
+# netconsole: kernel messages (oops, panic, soft-lockup reports) sent over
+# UDP to a lab host while the kernel is still alive, because nothing else
+# can carry them across the reboot that follows a panic:
+#   - DRAM is re-scrambled with a fresh random key by the loader's DDR init
+#     on every reset (warm, watchdog or panic), so pstore/ramoops reads back
+#     noise: no ramoops region is reserved (open-ethernet
+#     docs/mainline-noUART-bringup.md, section 2a);
+#   - the reboot after a panic lands on the committed stock slot, and the
+#     UART is not reachable.
+# Disabled unless /etc/conf.d/gt-be98-netconsole sets NETCONSOLE (the
+# module's netconsole= parameter). The kernel command line is forced
+# (CONFIG_CMDLINE_FORCE), so the target can only be given here.
+# Receive on the lab host with e.g. "socat -u udp-recv:6666 -" or
+# "nc -u -l 6666".
+description="netconsole: kernel log over UDP to a lab host (optional)"
+
+depend() {
+	# the target interface must exist and have its IPv4 address
+	after gt-be98-drivers dhcpcd gt-be98-jffs
+	use logger
+}
+
+loaded() { grep -q '^netconsole ' /proc/modules; }
+
+# interfaces named in the target list: [+][r][sport]@[sip]/[dev],[tport]@tip/[mac]
+# (targets separated by ";"); prints "dev has-source-ip" per target
+targets() {
+	echo "$NETCONSOLE" | tr ';' '\n' | while IFS= read -r t; do
+		[ -n "$t" ] || continue
+		local src="${t%%,*}" sip dev
+		src=${src#*@}		# [sip]/[dev]
+		sip=${src%%/*}
+		dev=${src#*/}
+		[ "$dev" = "$src" ] && dev=
+		echo "${dev:-eth0} ${sip:+1}"
+	done
+}
+
+# wait (bounded) until every target interface exists and, when the target
+# gives no source address, has an IPv4 address (netconsole takes the
+# interface's address once, at load time)
+wait_ifaces() {
+	local n=0 max="${NETCONSOLE_WAIT:-30}" dev sip ok
+	while :; do
+		ok=1
+		while read -r dev sip; do
+			[ -e "/sys/class/net/$dev" ] || { ok=0; break; }
+			[ -n "$sip" ] && continue
+			ip -4 -o addr show dev "$dev" 2>/dev/null | grep -q ' inet ' || { ok=0; break; }
+		done <<-EOF
+		$(targets)
+		EOF
+		[ $ok = 1 ] && return 0
+		[ $n -ge "$max" ] && return 1
+		sleep 1; n=$((n + 1))
+	done
+}
+
+start() {
+	if [ -z "${NETCONSOLE:-}" ]; then
+		einfo "netconsole: no target in /etc/conf.d/gt-be98-netconsole (disabled)"
+		return 0
+	fi
+	case "$NETCONSOLE" in
+	*[!A-Za-z0-9.:/@,+\;_-]*)
+		eerror "NETCONSOLE has unexpected characters: not loaded"
+		return 0 ;;
+	*@*/*,*@*) ;;
+	*)
+		eerror "NETCONSOLE must look like @/rnr0,6666@A.B.C.D/ (netconsole= syntax): not loaded"
+		return 0 ;;
+	esac
+	if loaded; then
+		einfo "netconsole already loaded"
+		return 0
+	fi
+	if ! wait_ifaces; then
+		ewarn "netconsole: interface(s) $(targets | cut -d' ' -f1 | tr '\n' ' ')not ready after ${NETCONSOLE_WAIT:-30} s: trying anyway"
+	fi
+	ebegin "Loading netconsole ($NETCONSOLE)"
+	modprobe netconsole netconsole="$NETCONSOLE"
+	if eend $? "netconsole load failed, see dmesg"; then
+		logger -t gt-be98-netconsole "netconsole active: $NETCONSOLE"
+		if [ -n "${NETCONSOLE_LOGLEVEL:-}" ]; then
+			# console loglevel is global: it applies to the UART too
+			dmesg -n "$NETCONSOLE_LOGLEVEL" && einfo "console loglevel $NETCONSOLE_LOGLEVEL"
+		fi
+	fi
+	# the OS stays up without it: never fail the runlevel
+	return 0
+}
+
+stop() {
+	# keep it to the very end of a shutdown/reboot: those messages matter too
+	case "${RC_RUNLEVEL:-}" in
+	shutdown|reboot) return 0 ;;
+	esac
+	loaded || return 0
+	ebegin "Unloading netconsole"
+	rmmod netconsole
+	eend $?
+}

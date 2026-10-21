@@ -10,8 +10,8 @@
 #      gt-be98-mlboot-s2.config, gt-be98-mlboot-pcie.config,
 #      gt-be98-mlboot-pcie-all.config: stage 2 + all four PCIe cores);
 #   2. linux/gt-be98-os.config (what the full userland needs);
-#   3. CONFIG_CMDLINE (cmdline-s2 without ignore_loglevel, + loglevel=4 and
-#      the PCIe options) and
+#   3. CONFIG_CMDLINE (cmdline-s2 without ignore_loglevel and with panic=5
+#      instead of panic=1, + loglevel=4 and the PCIe options) and
 #      CONFIG_INITRAMFS_SOURCE = ${BR_BINARIES_DIR}/gt-be98-initramfs.list
 #      (post-image.sh writes the real list and relinks the Image).
 # Every fragment line must survive olddefconfig (same rule as build.sh).
@@ -54,6 +54,13 @@ case " $CMDLINE " in
 *) echo "cmdline-s2 has no ignore_loglevel any more: revisit this script"; exit 1 ;;
 esac
 CMDLINE=$(echo " $CMDLINE " | sed 's/ ignore_loglevel / /; s/^ //; s/ $//')
+# panic=5 instead of cmdline-s2's panic=1 (gt-be98-os.config, "crash
+# capture": time for the last netconsole frames to leave the box)
+case " $CMDLINE " in
+*" panic=1 "*) ;;
+*) echo "cmdline-s2 has no panic=1 any more: revisit this script"; exit 1 ;;
+esac
+CMDLINE=$(echo " $CMDLINE " | sed 's/ panic=1 / panic=5 /; s/^ //; s/ $//')
 CMDLINE="$CMDLINE loglevel=4 pci=pcie_bus_safe pcie_aspm=off"
 
 $MK allnoconfig >/dev/null
