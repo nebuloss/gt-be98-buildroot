@@ -115,3 +115,19 @@ endif
 ifeq ($(BR2_PACKAGE_GT_BE98_OS)$(BR2_PACKAGE_LINUX_TOOLS_PERF),yy)
 PERF_MAKE_FLAGS += NO_RUST=1
 endif
+
+# hostapd: CONFIG_MBO, which Buildroot's hostapd package has no switch for.
+# HOSTAPD_CONFIG_ENABLE is expanded only when hostapd's configure step runs,
+# so appending here (external.mk is read after package/*/*.mk) uncomments
+# #CONFIG_MBO=y in hostapd/defconfig like the package's own options.
+ifeq ($(BR2_PACKAGE_GT_BE98_OS_HOSTAPD_MBO),y)
+HOSTAPD_CONFIG_ENABLE += CONFIG_MBO
+endif
+
+# hostapd WPS: Buildroot enables CONFIG_WPS with a prefix-matching sed, which
+# also uncomments #CONFIG_WPS_UPNP=y and #CONFIG_WPS_NFC=y. Only the WPS
+# element / push-button is wanted: comment those two back out (the DISABLE
+# expressions run after the ENABLE ones on each line).
+ifeq ($(BR2_PACKAGE_GT_BE98_OS)$(BR2_PACKAGE_HOSTAPD_WPS),yy)
+HOSTAPD_CONFIG_DISABLE += CONFIG_WPS_UPNP CONFIG_WPS_NFC
+endif

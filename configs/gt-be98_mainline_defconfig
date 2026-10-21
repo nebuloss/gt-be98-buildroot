@@ -121,6 +121,13 @@ BR2_PACKAGE_HOSTAPD_ACS=y
 # dormant unless a config sets eap_server=1 / radius_server_clients=, which
 # the generator never writes.
 BR2_PACKAGE_HOSTAPD_EAP=y
+# Wi-Fi Protected Setup (CONFIG_WPS: push-button and PIN; UPnP and NFC are
+# left out by package/gt-be98-os/gt-be98-os.mk). Off unless a hostapd config
+# sets wps_state=. Needed to test the driver's WPS element on a secondary BSS.
+BR2_PACKAGE_HOSTAPD_WPS=y
+# MBO (CONFIG_MBO; Buildroot has no switch for it, see
+# package/gt-be98-os/Config.in). Off unless a hostapd config sets mbo=1.
+BR2_PACKAGE_GT_BE98_OS_HOSTAPD_MBO=y
 BR2_PACKAGE_WPA_SUPPLICANT=y
 BR2_PACKAGE_WPA_SUPPLICANT_NL80211=y
 BR2_PACKAGE_WPA_SUPPLICANT_CLI=y

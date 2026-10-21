@@ -30,4 +30,14 @@ config BR2_PACKAGE_GT_BE98_OS_LOCAL_CONF
 	  passwordless USB telnet lifeline is then enabled), no firmware,
 	  and post-image.sh cannot build the FIT (it needs STOCK_BOOTFS).
 
+config BR2_PACKAGE_GT_BE98_OS_HOSTAPD_MBO
+	bool "hostapd: Multiband Operation (MBO)"
+	depends on BR2_PACKAGE_HOSTAPD
+	help
+	  Build Buildroot's hostapd with CONFIG_MBO (src/ap/mbo_ap.c), which
+	  Buildroot's hostapd package has no option for. The MBO element is
+	  only sent by a BSS whose config sets mbo=1; with WPA2, hostapd
+	  then requires PMF. WNM (BSS transition management) is not
+	  enabled by this option.
+
 endif
