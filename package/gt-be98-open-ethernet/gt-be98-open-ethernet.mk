@@ -4,8 +4,9 @@
 #
 ################################################################################
 
-# branch main
-GT_BE98_OPEN_ETHERNET_VERSION = aae7c89321f1dd74a6089825479a53e092d03dec
+# branch netpoll-tx-2026-10-22 (netconsole: be98pc bootcon handover 0510,
+# panic nbcon flush 0511, Runner netpoll-safe TX lock)
+GT_BE98_OPEN_ETHERNET_VERSION = 3d8100ce71af788648ff00b6f7f984e5ee52a1b8
 GT_BE98_OPEN_ETHERNET_SITE = git@github.com:nebuloss/gt-be98-open-ethernet.git
 GT_BE98_OPEN_ETHERNET_SITE_METHOD = git
 GT_BE98_OPEN_ETHERNET_LICENSE = GPL-2.0

@@ -20,7 +20,7 @@ trial-booted once from the stock slot.
 |---|---|---|
 | Buildroot | 2026.08 (latest release, 4 Sep 2026, signature checked) | buildroot.org |
 | toolchain | Buildroot internal: GCC 15.3, glibc 2.44, binutils (BR default), headers = the kernel | built |
-| kernel | Linux 7.2.9 + the 33 patches of open-ethernet `kernel-patches/mainline` (all series files, README order) | kernel.org + package `gt-be98-open-ethernet` |
+| kernel | Linux 7.2.9 + the 35 patches of open-ethernet `kernel-patches/mainline` (all series files, README order) | kernel.org + package `gt-be98-open-ethernet` |
 | init | OpenRC 0.56 (`openrc-init` as PID 1 after the initramfs) | |
 | Ethernet | `bcm4916-runner.ko` (open-ethernet `driver/runner`) | package `gt-be98-open-ethernet` |
 | Wi-Fi | `bca_pcie_ipc.ko` (open-wifi `driver/`, bench parameters, `bca_barpeek.ko` never installed) | package `gt-be98-open-wifi` |
@@ -414,10 +414,23 @@ provably safe one. The kernel log has to leave the box before the reset:
 - `panic=5` (and `CONFIG_PANIC_TIMEOUT=5`): 5 s between the panic report and
   the reset, so the last frames are on the wire. `oops=panic` and
   `softlockup_panic=1` are unchanged.
-- ⚠ Not yet tested on the box: netpoll transmits from the panic path with
-  interrupts off; the Runner driver (`rnr0`) handles a netpoll NAPI call, but
-  a frame sent that way has not been seen on the wire yet. Check once with
-  `echo c > /proc/sysrq-trigger` (it reboots into stock) before relying on it.
+- Two kernel patches make netconsole transmit at all (open-ethernet
+  `series.postcode`, root cause measured on the box 2026-10-22). The be98pc
+  post-code earlycon is a BOOT console kept by `keep_bootcon`, and while any
+  boot console is registered 7.2 printk starts no nbcon printer thread:
+  netconsole (an nbcon console with an unsafe `write_atomic()`) then queued
+  every line until something took the console lock. 0510 hands be98pc over
+  to a regular console at `late_initcall` (post-codes keep working). ⚠
+  `keep_bootcon` must STAY on the command line: without it the UART console
+  unregisters the boot console before the handover. 0511 flushes unsafe
+  nbcon consoles before the panic reboot; v7.2 only does it with `panic=0`,
+  so with `panic=5` no panic frame was ever sent.
+- The Runner driver takes its TX lock with a trylock under netpoll and
+  returns busy on contention, so a panic on a CPU that held the lock cannot
+  deadlock the netconsole send.
+- ⚠ Not yet seen on the wire from a real panic on this image: check once
+  with `echo c > /proc/sysrq-trigger` (it reboots into stock) before
+  relying on it.
 
 ## Persistence
 
