@@ -175,10 +175,12 @@ rc-service gt-be98-wifi stop             # hostapd stops, module unloads
   capabilities (0x000c) do not match hostapd's 3/4 RSN IE (0x0000) and
   clients drop with reason 17.
 - `country_code`: the image ships wireless-regdb (`/lib/firmware/regulatory.db`
-  + `.p7s`), but cfg80211 is built in and its boot-time load fails (no rootfs
-  yet) without retrying; the service runs `iw reg reload` before hostapd.
-  Use `country_code` only if `iw reg get` then shows the database
-  (otherwise hostapd hangs in COUNTRY_UPDATE).
+  + `.p7s`) in the rootfs and in the kernel's initramfs, where the built-in
+  cfg80211 loads it at boot (before 2026-10-26 that load failed, every hint
+  went to CRDA and timed out silently, and `iw reg set` left `00`). No CRDA
+  (`CFG80211_CRDA_SUPPORT` off). Check: `iw reg set FR; iw reg get` shows
+  `country FR` in the global domain. The service still runs `iw reg reload`
+  before hostapd and writes `country_code` only when it succeeds.
 
 Result 2026-10-08 (2.4 GHz, WPA2): AP up, a client got 18 Mbit/s up,
 11 Mbit/s down.

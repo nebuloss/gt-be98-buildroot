@@ -20,7 +20,7 @@ trial-booted once from the stock slot.
 |---|---|---|
 | Buildroot | 2026.08 (latest release, 4 Sep 2026, signature checked) | buildroot.org |
 | toolchain | Buildroot internal: GCC 15.3, glibc 2.44, binutils (BR default), headers = the kernel | built |
-| kernel | Linux 7.2.9 + the 35 patches of open-ethernet `kernel-patches/mainline` (all series files, README order) | kernel.org + package `gt-be98-open-ethernet` |
+| kernel | Linux 7.2.9 + the open-ethernet `kernel-patches/mainline` series files listed in `GT_BE98_OPEN_ETHERNET_SERIES` (README order; the build log prints the count) | kernel.org + package `gt-be98-open-ethernet` |
 | init | OpenRC 0.56 (`openrc-init` as PID 1 after the initramfs) | |
 | Ethernet | `bcm4916-runner.ko` (open-ethernet `driver/runner`) | package `gt-be98-open-ethernet` |
 | Wi-Fi | `bca_pcie_ipc.ko` (open-wifi `driver/`, bench parameters, `bca_barpeek.ko` never installed) | package `gt-be98-open-wifi` |
@@ -431,6 +431,14 @@ provably safe one. The kernel log has to leave the box before the reset:
 - ⚠ Not yet seen on the wire from a real panic on this image: check once
   with `echo c > /proc/sysrq-trigger` (it reboots into stock) before
   relying on it.
+- RCU stall then watchdog reset during `rmmod bca_pcie_ipc` (2026-10-22..26,
+  three times; netconsole showed CPU 0 frozen in `pr/ttyAMA0`): the printer
+  was the interrupted task, not the cause. A Wi-Fi MSI posted just before
+  the driver freed its vectors stayed latched in the root complex (only the
+  mapped interrupt's ack clears it), so the level PCIe interrupt, routed to
+  CPU 0, re-entered for ever. open-ethernet 0906 acknowledges such an MSI
+  and logs `MSI <n> has no interrupt mapped: cleared`. The UART printer
+  only widened the window: it keeps interrupts off for a whole record.
 
 ## Persistence
 

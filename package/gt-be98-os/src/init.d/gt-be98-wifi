@@ -631,10 +631,11 @@ stop_hostapd() {
 }
 
 start() {
-	# cfg80211 is built in and asks for regulatory.db before the rootfs is
-	# mounted: that first load fails and is not retried, so country_code in
-	# hostapd would hang in COUNTRY_UPDATE. Reload it from /lib/firmware
-	# (wireless-regdb, signed; the kernel carries the regdb keys).
+	# cfg80211 loads regulatory.db at boot from the initramfs (post-image.sh).
+	# The reload checks that a database is in use (REGDB_OK gates
+	# country_code: without one hostapd would hang in COUNTRY_UPDATE) and
+	# picks up the rootfs copy in /lib/firmware (wireless-regdb, signed; the
+	# kernel carries the regdb keys).
 	if iw reg reload 2>/dev/null; then
 		einfo "regulatory database loaded"; REGDB_OK=1
 	else

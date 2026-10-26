@@ -98,6 +98,20 @@ file /init $B/rescue/init 0755 0 0
 file /etc/udhcpc.script $B/rescue/udhcpc.script 0755 0 0
 file /etc/ml-defaults $B/rescue/ml-defaults 0644 0 0
 EOF
+# cfg80211 is built in and loads regulatory.db at late_initcall, from this
+# initramfs (the rootfs is not mounted yet). Without the files here that
+# load failed, cfg80211 kept the failure and every later regulatory hint
+# went to CRDA, which the OS does not ship (gt-be98-os.config).
+if grep -q '^BR2_PACKAGE_WIRELESS_REGDB=y' "$BR_CONFIG"; then
+	for f in regulatory.db regulatory.db.p7s; do
+		[ -s "$TARGET_DIR/lib/firmware/$f" ] || die "$TARGET_DIR/lib/firmware/$f missing (wireless-regdb)"
+	done
+	cat >> "$B/gt-be98-initramfs.list" <<EOF
+dir /lib/firmware 0755 0 0
+file /lib/firmware/regulatory.db $TARGET_DIR/lib/firmware/regulatory.db 0644 0 0
+file /lib/firmware/regulatory.db.p7s $TARGET_DIR/lib/firmware/regulatory.db.p7s 0644 0 0
+EOF
+fi
 echo "post-image: relinking the kernel with the rescue initramfs"
 (
 	unset MAKEFLAGS MAKEOVERRIDES MAKELEVEL MFLAGS
