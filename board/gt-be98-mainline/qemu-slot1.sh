@@ -31,7 +31,7 @@ OUT= BR2_DL_DIR=
 . "$CONF"
 WAIT=${1:-300}
 S=${SCRATCH:-/dev/shm/gt-be98-slot1}
-BK=${BACKUP:-$HOME/oe-tool/backup/nand-raw-20261008}
+BK=${BACKUP:-$HOME/be98/os-inputs/oe-tool/backup/nand-raw-20261008}
 . "$OUT/build/gt-be98-linux.env"
 V=$LINUX_VERSION
 B=$OUT/images

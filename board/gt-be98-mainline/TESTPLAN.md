@@ -47,7 +47,7 @@ ubinfo -d 0 | grep -E 'available logical|eraseblock size'
 
 Done once (operator decision): slot 1's rootfs volume (vol 4, the open-enet
 4.19 rootfs, unused by this OS) was backed up to the build host
-(`~/oe-tool/backup/slot1-rootfs1-vol4-20261008.bin`) and replaced by
+(`~/be98/os-inputs/oe-tool/backup/slot1-rootfs1-vol4-20261008.bin`) and replaced by
 `rootfs1-stub.squashfs` (4 KiB, sha256 in `ml-bootfs.info`) in a 1 MiB
 volume, which frees the space; vol 3 was recreated at 48 MiB. U-Boot only
 checks the squashfs magic of vol 4 before booting slot 1.

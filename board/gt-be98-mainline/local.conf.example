@@ -10,7 +10,7 @@ BR2_SRC=$HOME/os-build/buildroot-2026.08
 # Buildroot output directory (about 15 GB)
 OUT=$HOME/os-build/out-mainline
 # shared download directory
-BR2_DL_DIR=$HOME/be98/buildroot/dl
+BR2_DL_DIR=$HOME/be98/dl
 
 # --- FIT -----------------------------------------------------------------------
 # the stock bootfs FIT (dumpimage -p 0 of a stock .pkgtb): ATF, U-Boot and

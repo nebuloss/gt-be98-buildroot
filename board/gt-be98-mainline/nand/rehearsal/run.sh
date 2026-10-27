@@ -5,7 +5,7 @@
 #
 #   sh board/gt-be98-mainline/nand/rehearsal/run.sh [BACKUP_DIR]
 #
-# BACKUP_DIR (default ~/oe-tool/backup/nand-raw-20261008): the box's dumps;
+# BACKUP_DIR (default ~/be98/os-inputs/oe-tool/backup/nand-raw-20261008): the box's dumps;
 # the CORRECTED ones (mtd*-ecc-oob.bin) provide the page data loaded into
 # nandsim (the raw dumps keep the box's uncorrected bitflips and its 108-B
 # controller OOB, which nandsim's 64-B software-BCH layout cannot use).
@@ -25,7 +25,7 @@ EXT=$(cd "$HERE/../../../.." && pwd)
 CONF=${GT_BE98_LOCAL_CONF:-$HOME/.config/gt-be98-os/local.conf}
 OUT= BR2_DL_DIR=
 . "$CONF"
-BK=${1:-$HOME/oe-tool/backup/nand-raw-20261008}
+BK=${1:-$HOME/be98/os-inputs/oe-tool/backup/nand-raw-20261008}
 S=${SCRATCH:-/dev/shm/gt-be98-rehearsal}
 CC=${CC:-aarch64-linux-gnu-gcc}
 . "$OUT/build/gt-be98-linux.env"

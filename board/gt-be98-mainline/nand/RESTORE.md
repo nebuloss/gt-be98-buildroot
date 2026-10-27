@@ -7,7 +7,7 @@ box so far.
 
 ## The backup (G5, backup half)
 
-`~/oe-tool/backup/nand-raw-20261008/` on the build host, taken from mainline
+`~/be98/os-inputs/oe-tool/backup/nand-raw-20261008/` on the build host, taken from mainline
 (reads proven identical to stock), `SHA256SUMS` inside:
 
 | File | What |
