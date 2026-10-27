@@ -128,6 +128,14 @@ ifeq ($(BR2_PACKAGE_GT_BE98_OS_HOSTAPD_MBO),y)
 HOSTAPD_CONFIG_ENABLE += CONFIG_MBO
 endif
 
+# hostapd: CONFIG_FILS (6 GHz FILS discovery frames), same mechanism as MBO.
+# The prefix-matching enable also uncomments #CONFIG_FILS_SK_PFS=y: comment it
+# back out (FILS authentication is not wanted, only the discovery frame).
+ifeq ($(BR2_PACKAGE_GT_BE98_OS_HOSTAPD_FILS),y)
+HOSTAPD_CONFIG_ENABLE += CONFIG_FILS
+HOSTAPD_CONFIG_DISABLE += CONFIG_FILS_SK_PFS
+endif
+
 # hostapd WPS: Buildroot enables CONFIG_WPS with a prefix-matching sed, which
 # also uncomments #CONFIG_WPS_UPNP=y and #CONFIG_WPS_NFC=y. Only the WPS
 # element / push-button is wanted: comment those two back out (the DISABLE

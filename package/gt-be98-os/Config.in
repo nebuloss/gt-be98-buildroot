@@ -31,6 +31,16 @@ config BR2_PACKAGE_GT_BE98_OS_LOCAL_CONF
 	  passwordless USB telnet lifeline is then enabled), no firmware,
 	  and post-image.sh cannot build the FIT (it needs STOCK_BOOTFS).
 
+config BR2_PACKAGE_GT_BE98_OS_HOSTAPD_FILS
+	bool "hostapd: Fast Initial Link Setup discovery (FILS)"
+	depends on BR2_PACKAGE_HOSTAPD
+	help
+	  Build Buildroot's hostapd with CONFIG_FILS, which Buildroot's
+	  hostapd package has no option for. It lets a 6 GHz BSS send FILS
+	  discovery frames (fils_discovery_max_interval=); nothing changes
+	  unless a config sets a fils_* key. CONFIG_FILS_SK_PFS (FILS shared
+	  key authentication with PFS) is left out.
+
 config BR2_PACKAGE_GT_BE98_OS_HOSTAPD_MBO
 	bool "hostapd: Multiband Operation (MBO)"
 	depends on BR2_PACKAGE_HOSTAPD
