@@ -21,9 +21,11 @@
 #       /usr/sbin/gt-be98-wifi-gen): one BSS per (network, radio of its band
 #       set) at a sticky slot (WIFI_SLOTS, default /etc/hostapd/wifi-slots;
 #       slot 0 = the radio netdev bcawlN, slot k = bcawlN-k), with an
-#       explicit BSSID (stock MBSS16 rule) and bridge=brwifi<network id>.
-#       Their bridges, VLANs and isolation come from the list. At most
-#       WIFI_MAX_BSS (default 4, the driver's limit today; 1..16) per radio.
+#       explicit BSSID (the firmware's mbss8 rule) and bridge=brwifi<network
+#       id>. Their bridges, VLANs and isolation come from the list. At most
+#       WIFI_MAX_BSS BSSes per radio (1..8); unset, the count the driver
+#       advertises (`iw phy`: #{ AP } <= N, the firmware's own; the smallest
+#       of the radios), 4 when no radio states one.
 #   HOSTAPD_CONFS="/etc/hostapd/a.conf ..."    ready-made configs, one per
 #       radio (interface= + bss= sections), as before.
 # `rc-service gt-be98-wifi reload` applies new settings without touching the
@@ -474,6 +476,33 @@ radio_macs() {
 	echo "$m"
 }
 
+# the BSSes per radio for the network list: WIFI_MAX_BSS when set, else the
+# AP count of the driver's interface combination (iw phy <phy> info:
+# "#{ AP } <= N"), the smallest over the radios present; 4 when none says;
+# never above 8 (the BSSID rule's indices). Sets MAX_BSS, written to
+# $STATE/max-bss (not a $(...): a warning must not become the value).
+wifi_max_bss() {
+	local p d phy n m=''
+	for p in ${WIFI_RADIO_DEVS:-2g=bcawl3 5gl=bcawl0 5gh=bcawl1 6g=bcawl2}; do
+		d=${p#*=}
+		phy=$(cat "$SYSNET/$d/phy80211/name" 2>/dev/null) || continue
+		n=$(iw phy "$phy" info 2>/dev/null | sed -n 's/.*#{ *AP *} <= \([0-9][0-9]*\).*/\1/p' | head -n1)
+		[ -n "$n" ] || continue
+		[ -z "$m" ] || [ "$n" -lt "$m" ] && m=$n
+	done
+	n=${WIFI_MAX_BSS:-}
+	case "$n" in
+	'') n=${m:-4} ;;
+	*[!0-9]*|0*) ewarn "WIFI_MAX_BSS=$n refused: ${m:-4} (1..8)"; n=${m:-4} ;;
+	*) if [ -n "$m" ] && [ "$n" -gt "$m" ]; then
+		ewarn "WIFI_MAX_BSS=$n: the driver advertises $m AP interfaces per radio: $m"; n=$m
+	fi ;;
+	esac
+	[ "$n" -gt 8 ] && n=8
+	MAX_BSS=$n
+	mkdir -p "$STATE" && echo "$n" > "$STATE/max-bss"
+}
+
 # the network list -> $STATE/gen (configs + plan) and $STATE/slots; the
 # bridges/VLANs/isolation of its networks are added to WIFI_*
 gen_networks() {
@@ -483,9 +512,10 @@ gen_networks() {
 	[ -f "$n" ] || { eerror "WIFI_NETWORKS $n: missing"; return 1; }
 	[ "${REGDB_OK:-0}" = 1 ] && cc=-c
 	macs=$(radio_macs)
+	wifi_max_bss
 	# shellcheck disable=SC2086 # $cc: an option or nothing
 	"$WIFI_GEN" -n "$n" -o "$STATE/gen.new" -s "${WIFI_SLOTS:-/etc/hostapd/wifi-slots}" -m "$macs" \
-		-C "${WIFI_MAX_BSS:-4}" -x "${HOSTAPD_CTRL:-$RUNDIR/hostapd}" -R "${WIFI_RNR:-1}" \
+		-C "$MAX_BSS" -x "${HOSTAPD_CTRL:-$RUNDIR/hostapd}" -R "${WIFI_RNR:-1}" \
 		-K "${WIFI_ANCHOR_KEEP_BSSID:-0}" ${WIFI_RADIO_DEVS:+-d "$WIFI_RADIO_DEVS"} $cc ||
 		{ eerror "$n refused: nothing changed"; rm -rf "$STATE/gen.new"; return 1; }
 	rm -rf "$STATE/gen"

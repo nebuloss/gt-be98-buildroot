@@ -10,9 +10,11 @@ WIFI_KO=
 WIFI_NETWORKS=
 # sticky slot + BSSID index per (network, radio); keep it with the list
 WIFI_SLOTS=/etc/hostapd/wifi-slots
-# BSSes per radio (1..16; the firmware is MBSS16). 4 = the driver's limit
-# today (BCA_MAX_BSS, and 8 clients per radio in its peer table).
-WIFI_MAX_BSS=4
+# BSSes per radio, the anchor included (1..8). Empty: the count the driver
+# advertises (iw phy: #{ AP } <= N, the firmware's mbss8 => 8 on this box);
+# a value above it is lowered to it. The radio's clients are shared by its
+# BSSes (8 per radio today, the driver's peer table).
+WIFI_MAX_BSS=
 # rnr=1 on the 2.4/5 GHz BSSes (hostapd adds the co-located 6 GHz BSSes to
 # the Reduced Neighbor Report on its own, since all radios share a process)
 WIFI_RNR=1

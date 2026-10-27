@@ -222,7 +222,13 @@ Per-BSS changes (the counters, not the verdict, are what to read:
    (expected: hostapd removes a radio with its first BSS, and the driver's
    anchor start re-runs the radio prologue).
 Refute: any other radio's or BSS's client dropping in 1-3; a BSS whose
-BSSID differs from the plan; two BSSes with one BSSID. Driver limits that
+BSSID differs from the plan; two BSSes with one BSSID; a `MBSS-MAC
+REFUSED` line or a `MBSS-MAC[create] ... MISMATCH` in `dmesg` (the
+firmware refused a BSSID the generator chose: the mbss8 rule broken).
+5. five networks on one radio (`WIFI_MAX_BSS` unset):
+   `cat /run/gt-be98-wifi/max-bss` is the `#{ AP } <= N` of
+   `iw phy phy0 info` (8 with open-wifi main 649694f0 or later), and all
+   five BSSes are `ENABLED` with `MBSS-MAC[create] ... => MATCH`. Driver limits that
 can make 1-3 fail on the box today (not the OS): MULTI-SSID-TARGET G4/G12
 (a removed BSS's peers/rings not released), G5 (anchor `WLC_DOWN`), G13/G15.
 

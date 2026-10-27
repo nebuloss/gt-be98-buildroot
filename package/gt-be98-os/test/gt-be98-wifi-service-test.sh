@@ -70,7 +70,13 @@ case " $* " in
 esac
 exit 0
 X
-printf '#!/bin/sh\nexit 0\n' > "$T/bin/iw"
+# iw: "phy <phy> info" prints $FAKE/iw-<phy> when present (the interface
+# combination), nothing otherwise; every other command succeeds silently
+cat > "$T/bin/iw" <<'X'
+#!/bin/sh
+[ "$1" = phy ] && [ "$3" = info ] && [ -f "$FAKE/iw-$2" ] && cat "$FAKE/iw-$2"
+exit 0
+X
 chmod +x "$T/bin/"*
 PATH="$T/bin:$PATH"
 
@@ -242,6 +248,33 @@ apply
 check "no network: hostapd stopped" "stop" "$(tail -n1 "$T/daemon")"
 check "no network: no state left" "" "$(ls "$T/run/gt-be98-wifi/applied" 2>/dev/null)"
 check "no network: no error" "0 " "$rc $(grep -E ' E |cannot' "$T/out")"
+
+# 14. the BSS cap per radio: WIFI_MAX_BSS, else what the driver advertises
+combo() {	# combo PHY N: iw phy PHY info, as iw 6.17 prints a combination
+	printf '\tvalid interface combinations:\n\t\t * #{ AP } <= %s,\n\t\t   total <= %s, #channels <= 1\n' "$2" "$2" > "$T/iw-$1"
+}
+cap() { : > "$T/out"; wifi_max_bss; echo "$MAX_BSS $(cat "$T/run/gt-be98-wifi/max-bss") $(grep -c ' ! ' "$T/out")"; }
+check "cap: no iw combination, unset: 4" "4 4 0" "$(WIFI_MAX_BSS=; cap)"
+for p in 0 1 2 3; do combo phy$p 8; done
+check "cap: driver advertises 8, unset: 8" "8 8 0" "$(WIFI_MAX_BSS=; cap)"
+combo phy1 4
+check "cap: the smallest radio wins" "4 4 0" "$(WIFI_MAX_BSS=; cap)"
+combo phy1 8
+check "cap: WIFI_MAX_BSS=3 kept" "3 3 0" "$(WIFI_MAX_BSS=3; cap)"
+check "cap: WIFI_MAX_BSS=12 above the driver's: 8, warned" "8 8 1" "$(WIFI_MAX_BSS=12; cap)"
+check "cap: WIFI_MAX_BSS=x: the driver's, warned" "8 8 1" "$(WIFI_MAX_BSS=x; cap)"
+for p in 0 1 2 3; do combo phy$p 16; done
+check "cap: never above 8 (the BSSID rule)" "8 8 0" "$(WIFI_MAX_BSS=; cap)"
+rm -f "$T"/iw-phy*
+# the generator gets it: 5 networks on 2.4 GHz pass at 8, are refused at 4
+for p in 0 1 2 3; do combo phy$p 8; done
+for i in 1 2 3 4 5; do net $((60 + i)) "m$i" sae "password$i" 2g $((60 + i)); done > "$T/nets"
+WIFI_MAX_BSS=; apply
+check "5 networks on one radio, driver cap 8: rc 0, 5 BSSes" "0 5" "$rc $(awk '$1 == "bss" && $2 == "bcawl3"' "$G/plan" | wc -l | tr -d ' ')"
+rm -f "$T"/iw-phy*
+apply
+check "5 networks on one radio, no cap advertised (4): refused" "1" "$rc"
+: > "$T/nets"; apply; WIFI_MAX_BSS=4
 
 if [ $fail = 0 ]; then echo "ALL OK ($n checks)"; else echo "FAILED"; cat "$T/out"; fi
 exit $fail

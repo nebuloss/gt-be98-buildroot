@@ -292,10 +292,15 @@ nftables, dnsmasq): no driver internals or module parameters.
   sources, combinable on different radios: `WIFI_NETWORKS` (a network list,
   `/etc/hostapd/networks.conf.example`; `gt-be98-wifi-gen` renders one
   hostapd config per radio with `bss=` sections at sticky slots
-  (`/etc/hostapd/wifi-slots`), an explicit `bssid=` per BSS (stock MBSS16
-  rule), `bridge=brwifi<id>`, the 6 GHz rules (SAE-H2E, OWE or
-  WPA3-Enterprise, PMF required) and `rnr=1` on 2.4/5 GHz; at most
-  `WIFI_MAX_BSS`, default 4, per radio) and `HOSTAPD_CONFS` (ready-made
+  (`/etc/hostapd/wifi-slots`), an explicit `bssid=` per BSS (the
+  firmware's mbss8 rule: index = last byte & 7, one per BSS of a radio,
+  the radio address's included, all of a radio's secondaries in one
+  block, per-radio locally administered prefix), `bridge=brwifi<id>`, the
+  6 GHz rules (SAE-H2E, OWE or WPA3-Enterprise, PMF required) and `rnr=1`
+  on 2.4/5 GHz; at most `WIFI_MAX_BSS` BSSes per radio, 1..8, unset = the
+  count the driver advertises in `iw phy` (`#{ AP } <= N`, the firmware's
+  own: 8 on this box), 4 when no radio states one; the value used is in
+  `/run/gt-be98-wifi/max-bss`) and `HOSTAPD_CONFS` (ready-made
   configs, one per radio). Enterprise networks (`security=wpa2-eap`,
   `wpa3-eap` = WPA-EAP-SHA256 with PMF required, `wpa2-wpa3-eap`) relay
   802.1X/EAP to an external RADIUS server (`radius_server=<IP>`,

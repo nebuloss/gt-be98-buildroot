@@ -39,10 +39,12 @@ conf_ok() {	# every generated config parses with hostapd (when available)
 	fi
 }
 # every BSSID once over all radios, none is another radio's own address
-# unless it is that radio's anchor, the secondaries follow the MBSS16 rule
+# unless it is that radio's anchor, the secondaries follow the firmware's
+# mbss8 rule: one block per radio (octets 0-4 + octet 5 & 0xf8), a ucode
+# index (octet 5 & 7) of their own, never the anchor's
 bssid_rules() {
 	check "$1: no BSSID twice" "" "$(awk '$1 == "bss" { print $7 }' "$T/o/plan" | sort | uniq -d | tr '\n' ' ')"
-	check "$1: MBSS16 rule" "" "$(echo "$M" | tr ' ' '\n' | awk -F= -v plan="$T/o/plan" '
+	check "$1: mbss8 rule" "" "$(echo "$M" | tr ' ' '\n' | awk -F= -v plan="$T/o/plan" '
 		function h(x) { return index("0123456789abcdef", tolower(x)) - 1 }
 		function byte(s) { return h(substr(s, 1, 1)) * 16 + h(substr(s, 2, 1)) }
 		{ base[$1] = $2 }
@@ -55,10 +57,15 @@ bssid_rules() {
 				split(m, mo, ":"); split(a, ao, ":")
 				if (s == 0) { if (a != m) print f[3] ":anchor!=radio"; continue }
 				if (byte(ao[1]) % 4 != 2) print f[3] ":not-LA/unicast"
-				if (byte(ao[1]) != (96 + (byte(mo[6]) % 15) * 8) + 2) print f[3] ":octet0"
-				if (int(byte(ao[6]) / 16) != int(byte(mo[6]) / 16)) print f[3] ":high-nibble"
-				if (byte(ao[6]) % 16 != (byte(mo[6]) + s) % 16) print f[3] ":low-nibble"
-				if (ao[2] ao[3] ao[4] != mo[2] mo[3] mo[4]) print f[3] ":octets1-3"
+				adj = (byte(mo[1]) == 96 && byte(mo[6]) % 15 == 0) ? 1 : 0
+				if (byte(ao[1]) != (96 + ((byte(mo[6]) + adj) % 15) * 8) + 2) print f[3] ":octet0"
+				if (int(byte(ao[6]) / 8) != int(byte(mo[6]) / 8)) print f[3] ":block"
+				if (byte(ao[6]) % 8 != (byte(mo[6]) + s) % 8) print f[3] ":index"
+				if (byte(ao[6]) % 8 == byte(mo[6]) % 8) print f[3] ":anchor-index"
+				if ((f[2], byte(ao[6]) % 8) in seen) print f[3] ":index-twice"
+				seen[f[2], byte(ao[6]) % 8] = 1
+				if (s < 1 || s > 7) print f[3] ":index-range"
+				if (ao[2] ao[3] ao[4] ao[5] != mo[2] mo[3] mo[4] mo[5]) print f[3] ":octets1-4"
 				for (r in bdev) if (a == bdev[r]) print f[3] ":radio-address"
 			}
 		}' | tr '\n' ' ')"
@@ -214,12 +221,18 @@ net 8 hex psk2 "$(printf '%064d' 7 | tr 0 a)" 2g 8 > "$T/o6b"
 rm -f "$T/slots"; gen "$T/o6b"
 check "WPA2 raw PSK -> wpa_psk" "yes" "$(grep -q '^wpa_psk=a\{63\}7$' "$T/o/sec-bcawl3" && echo yes || echo no)"
 conf_ok "options"
-{ net 1 a sae password1 "2g 5gh" 1; printf 'slot.2g=3\nmac.2g=9\n'; } > "$T/o6c"
+{ net 1 a sae password1 "2g 5gh" 1; printf 'slot.2g=3\nmac.2g=5\n'; } > "$T/o6c"
 rm -f "$T/slots"; gen "$T/o6c"
 check "explicit slot/index (no anchor: promoted, index 0)" "bcawl3 0 1 0" "$(plan_bss | grep '^bcawl3' | cut -d' ' -f1-4)"
-{ net 1 a sae password1 "2g" 1; printf 'slot.2g=0\n'; net 2 b sae password2 "2g" 2; printf 'slot.2g=3\nmac.2g=9\n'; } > "$T/o6d"
+{ net 1 a sae password1 "2g" 1; printf 'slot.2g=0\n'; net 2 b sae password2 "2g" 2; printf 'slot.2g=3\nmac.2g=5\n'; } > "$T/o6d"
 rm -f "$T/slots"; gen "$T/o6d"
-check "explicit slot 3 + index 9" "bcawl3-3 3 2 9 b2:00:5e:00:53:a9" "$(plan_bss | grep ' 2 9 ' | cut -d' ' -f1-5)"
+check "explicit slot 3 + index 5" "bcawl3-3 3 2 5 b2:00:5e:00:53:a5" "$(plan_bss | grep ' 2 5 ' | cut -d' ' -f1-5)"
+sed 's/^mac.2g=5$/mac.2g=8/' "$T/o6d" > "$T/o6d8"
+rm -f "$T/slots"; gen "$T/o6d8"; check "explicit index 8 refused (mbss8: 1..7)" 1 $?
+# a slot file of the old 4-bit rule: index 9 is reallocated, the slot kept
+printf '2g 0 1 0\n2g 3 2 9\n' > "$T/slots"; sed '/^slot\./d; /^mac\./d' "$T/o6d" > "$T/o6f"; gen "$T/o6f"
+check "old sticky index 9: reallocated to 1, slot 3 kept, said so" "0 bcawl3-3 3 2 1 b2:00:5e:00:53:a1 yes" \
+	"$? $(plan_bss | grep '^bcawl3-3 ' | cut -d' ' -f1-5) $(grep -q 'outside 1..7' "$T/err" && echo yes || echo no)"
 cp "$T/slots" "$T/slots.keep"; gen "$T/n1" -N
 check "-N: slot file untouched, slots.new written" "same yes" \
 	"$(cmp -s "$T/slots" "$T/slots.keep" && echo same || echo changed) $([ -s "$T/o/slots.new" ] && echo yes || echo no)"
@@ -228,35 +241,42 @@ rm -f "$T/slots"; gen "$T/n2"; gen "$T/o6e"
 check "radio disabled: not rendered, its slots kept" "none 6g 0 30 0" \
 	"$(ls "$T/o/hostapd-bcawl2.conf" 2>/dev/null || echo none) $(grep '^6g 0 ' "$T/slots")"
 
-# ---- 7. 16 BSS per radio (MBSS16), the four radios ----
-: > "$T/s16"
-for i in $(seq 1 16); do
+# ---- 7. 8 BSS per radio (the firmware's mbss8), the four radios ----
+: > "$T/s8x4"
+for i in $(seq 1 8); do
 	case $((i % 4)) in 0) s=sae ;; 1) s=psk2sae ;; 2) s=owe ;; 3) s=open-owe ;; esac
 	if [ "$s" = owe ] || [ "$s" = open-owe ]; then
 		printf 'network=%s\nssid=net%s\nsecurity=%s\nbands=2g 5gl 5gh 6g\nvlan=%s\n' $((100 + i)) "$i" "$s" $((100 + i))
-	else net $((100 + i)) "net$i" "$s" "password$i" "2g 5gl 5gh 6g" $((100 + i)); fi >> "$T/s16"
+	else net $((100 + i)) "net$i" "$s" "password$i" "2g 5gl 5gh 6g" $((100 + i)); fi >> "$T/s8x4"
 done
-rm -f "$T/slots"; gen "$T/s16" -C 16; check "16x4: accepted with -C 16" 0 $?
-check "16x4: 64 BSSes" 64 "$(plan_bss | wc -l | tr -d ' ')"
-check "16x4: slots 0..15 on every radio" "16 16 16 16" "$(for d in bcawl3 bcawl0 bcawl1 bcawl2; do plan_bss | awk -v d="$d" '$1 == d || index($1, d "-") == 1 { print $2 }' | sort -un | wc -l | tr -d ' '; done | tr '\n' ' ' | sed 's/ $//')"
-check "16x4: ifnames bcawlN-1..15" "bcawl3-15" "$(plan_bss | awk '{ print $1 }' | grep -x 'bcawl3-15')"
-bssid_rules "16x4"
-check "16x4: 6g never WPA2/open" "" "$(grep -lE '^(wpa=0|wpa_key_mgmt=WPA-PSK.*)$' "$T"/o/sec-bcawl2* | tr '\n' ' ')"
-conf_ok "16x4"
-gen "$T/s16"; check "16 networks on a 4-BSS radio: refused" 1 $?
-{ cat "$T/s16"; net 999 extra sae password9 2g 999; } > "$T/s17"
-gen "$T/s17" -C 16; check "17th network on a 16-BSS radio: refused" 1 $?
+rm -f "$T/slots"; gen "$T/s8x4" -C 8; check "8x4: accepted with -C 8" 0 $?
+check "8x4: 32 BSSes" 32 "$(plan_bss | wc -l | tr -d ' ')"
+check "8x4: slots 0..7 on every radio" "8 8 8 8" "$(for d in bcawl3 bcawl0 bcawl1 bcawl2; do plan_bss | awk -v d="$d" '$1 == d || index($1, d "-") == 1 { print $2 }' | sort -un | wc -l | tr -d ' '; done | tr '\n' ' ' | sed 's/ $//')"
+check "8x4: ifnames bcawlN-1..7" "bcawl3-7" "$(plan_bss | awk '{ print $1 }' | grep -x 'bcawl3-7')"
+# by hand: radio ..:ac (index 4), prefix 0x60 + (0xac % 15) * 8 = 0x98, LA => 9a
+check "8x4: 6 GHz BSSIDs by hand (anchor index 4, 7 others)" \
+	"00:00:5e:00:53:ac 9a:00:5e:00:53:a8 9a:00:5e:00:53:a9 9a:00:5e:00:53:aa 9a:00:5e:00:53:ab 9a:00:5e:00:53:ad 9a:00:5e:00:53:ae 9a:00:5e:00:53:af" \
+	"$(awk '$1 == "bss" && $2 == "bcawl2" { print $7 }' "$T/o/plan" | sort | tr '\n' ' ' | sed 's/ $//')"
+bssid_rules "8x4"
+check "8x4: 6g never WPA2/open" "" "$(grep -lE '^(wpa=0|wpa_key_mgmt=WPA-PSK.*)$' "$T"/o/sec-bcawl2* | tr '\n' ' ')"
+conf_ok "8x4"
+gen "$T/s8x4"; check "8 networks on a 4-BSS radio: refused" 1 $?
+{ cat "$T/s8x4"; net 999 extra sae password9 2g 999; } > "$T/s9"
+gen "$T/s9" -C 8; check "9th network on an 8-BSS radio: refused" 1 $?
+gen "$T/s8x4" -C 9; check "-C 9 refused (mbss8)" 1 $?
 
-# ---- 8. radios whose addresses would collide under the rule ----
-# 2g and 5gl: same octets 1-4 and high nibble, m5 equal mod 15 (same octet 0)
-M="2g=02:00:00:00:00:10 5gl=02:00:00:00:00:1f 5gh=02:00:00:00:00:2e 6g=02:00:00:00:00:40"
-for i in 1 2 3 4 5 6 7 8; do net $((200 + i)) "c$i" sae "password$i" "2g 5gl 5gh 6g" $((200 + i)); done > "$T/s8"
-rm -f "$T/slots"; gen "$T/s8" -C 16; check "colliding bases, 8 networks: accepted" 0 $?
+# ---- 8. radios whose BSSIDs would collide under the rule ----
+# 2g 60:..:00 (adj 1) and 5gl 02:..:01 get the same prefix 6a and block ..:00;
+# 5gh's own address 6a:..:05 lies in that block too
+M="2g=60:00:00:00:00:00 5gl=02:00:00:00:00:01 5gh=6a:00:00:00:00:05 6g=02:00:00:00:00:40"
+for i in 1 2 3 4; do net $((200 + i)) "c$i" sae "password$i" "2g 5gl 5gh 6g" $((200 + i)); done > "$T/s4c"
+rm -f "$T/slots"; gen "$T/s4c" -C 4; check "colliding bases, 4 networks: accepted" 0 $?
 bssid_rules "colliding bases"
 check "collisions were avoided, not ignored" "yes" "$(plan_bss | awk '$1 ~ /^bcawl0-/ && $4 != $2 { x = 1 } END { print x ? "yes" : "no" }')"
 conf_ok "colliding bases"
-rm -f "$T/slots"; gen "$T/s16" -C 16
-check "colliding bases, 16 networks: refused (only 16 BSSIDs per octet-0 block)" "1 yes" "$? $(grep -q 'no free BSSID' "$T/err" && echo yes || echo no)"
+for i in 1 2 3 4 5 6 7 8; do net $((200 + i)) "c$i" sae "password$i" "2g 5gl 5gh 6g" $((200 + i)); done > "$T/s8c"
+rm -f "$T/slots"; gen "$T/s8c" -C 8
+check "colliding bases, 8 networks: refused (7 free BSSIDs in the shared block)" "1 yes" "$? $(grep -q 'no free BSSID' "$T/err" && echo yes || echo no)"
 M="2g=00:00:5e:00:53:a0 5gl=00:00:5e:00:53:a4 5gh=00:00:5e:00:53:a8 6g=00:00:5e:00:53:ac"
 
 # ---- 9. Enterprise (802.1X, external RADIUS): RFC 5737/3849 addresses ----
