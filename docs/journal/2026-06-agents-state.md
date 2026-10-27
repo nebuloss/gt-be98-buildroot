@@ -224,7 +224,7 @@ the fallback. Agent nvram key persisted; NO `service restart_*`.
   **`rootfs-0034`** on nebuloss/gt-be98-packages, asset
   `gt-be98-rootfs-0034.tar.gz` (sha256 `8b9dcf7f…37fc0`); public download-URL sha
   re-verified == staged sha before any .mk edit. Local dl cache seeded
-  (`~/be98/buildroot/dl/gt-be98-rootfs/`). Manifest updated + committed in the
+  (`~/be98/dl/gt-be98-rootfs/`). Manifest updated + committed in the
   gt-be98-packages checkout (`manifests/gt-be98-rootfs.yaml`). Bootfs NOT
   re-published (0031 boot chain unchanged).
 
