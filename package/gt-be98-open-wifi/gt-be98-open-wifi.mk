@@ -4,8 +4,8 @@
 #
 ################################################################################
 
-# main 2026-10-27 (649694f0; driver as verified on the box at ef9d03b7)
-GT_BE98_OPEN_WIFI_VERSION = 649694f0fe39ea82b091cfbc2bbffb8da7234008
+# main 2026-10-27 d89e6364 (box-verified: PS-BCMC GTK fix, ZW-SER, PHY parity, RMDOWN-PRE witness)
+GT_BE98_OPEN_WIFI_VERSION = d89e6364db0e44142011b1e88b39dfd14cee8499
 GT_BE98_OPEN_WIFI_SITE = git@github.com:nebuloss/gt-be98-open-wifi.git
 GT_BE98_OPEN_WIFI_SITE_METHOD = git
 GT_BE98_OPEN_WIFI_LICENSE = GPL-2.0-only
