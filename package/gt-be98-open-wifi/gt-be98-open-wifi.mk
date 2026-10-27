@@ -4,8 +4,8 @@
 #
 ################################################################################
 
-# main 2026-10-27 d89e6364 (box-verified: PS-BCMC GTK fix, ZW-SER, PHY parity, RMDOWN-PRE witness)
-GT_BE98_OPEN_WIFI_VERSION = d89e6364db0e44142011b1e88b39dfd14cee8499
+# main 2026-10-27 a8f91ab9 (box-verified: zero-copy-only TX + AQM + HBQD fix, max_clients 128, plus d89e6364 set)
+GT_BE98_OPEN_WIFI_VERSION = a8f91ab9e1f4e4848984cd5f104166914b541f07
 GT_BE98_OPEN_WIFI_SITE = git@github.com:nebuloss/gt-be98-open-wifi.git
 GT_BE98_OPEN_WIFI_SITE_METHOD = git
 GT_BE98_OPEN_WIFI_LICENSE = GPL-2.0-only
