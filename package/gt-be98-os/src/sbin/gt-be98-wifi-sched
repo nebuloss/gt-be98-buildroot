@@ -1,0 +1,109 @@
+#!/bin/sh
+# shellcheck shell=busybox
+# SPDX-License-Identifier: GPL-2.0
+# gt-be98-wifi-sched: the Wi-Fi schedules (schedule= of a network= or radio=
+# block of the network list, see /usr/sbin/gt-be98-wifi-gen).
+#
+#   gt-be98-wifi-sched now     print the local time the schedules are read at,
+#                              "D HH:MM" (D = 1 Monday .. 7 Sunday), and exit
+#                              0, only when the clock is synchronised (chrony:
+#                              leap status Normal); exit 1 otherwise
+#   gt-be98-wifi-sched check   once: when the schedule state now differs from
+#                              the one gt-be98-wifi applied ($STATE/gen/sched),
+#                              `rc-service gt-be98-wifi reload` (which removes
+#                              or adds only the BSSes/radios that changed)
+#   gt-be98-wifi-sched run     check at every minute boundary, forever (the
+#                              daemon gt-be98-wifi starts and stops)
+#
+# Without a synchronised clock (no RTC on the board: the time is wrong until
+# NTP answers) the schedules are not applied: every scheduled network and
+# radio runs, and gt-be98-wifi logs it. A schedule needs a clock that can be
+# trusted; failing closed would leave a box without NTP without Wi-Fi.
+#
+# Settings (parsed, not sourced; /etc/conf.d/gt-be98-wifi-ap wins over
+# /etc/conf.d/gt-be98-wifi):
+#   WIFI_NETWORKS   the network list
+#   WIFI_SCHED_TZ   the time zone of the schedules, a POSIX TZ string (there
+#                   is no zoneinfo in the image), e.g. CET-1CEST,M3.5.0,M10.5.0/3
+#                   or UTC0; empty: UTC
+set -u
+# (GT_BE98_*: the offline test harness only)
+CONFD=${GT_BE98_CONFD:-/etc/conf.d}
+RUNDIR=${GT_BE98_RUN:-/run}
+WIFI_GEN=${GT_BE98_WIFI_GEN:-/usr/sbin/gt-be98-wifi-gen}
+STATE=$RUNDIR/gt-be98-wifi
+
+log() {
+	if command -v logger > /dev/null 2>&1; then logger -t gt-be98-wifi-sched -- "$*"
+	else echo "gt-be98-wifi-sched: $*" >&2; fi
+}
+
+# the last value of KEY="..." (or KEY=...) in the conf files, charset $2
+conf_get() {
+	local k=$1 cs=$2 f v r=''
+	for f in "$CONFD/gt-be98-wifi" "$CONFD/gt-be98-wifi-ap"; do
+		[ -f "$f" ] || continue
+		v=$(sed -n "s/^$k=\"\\{0,1\\}\\($cs*\\)\"\\{0,1\\}\$/\\1/p" "$f" | tail -n1)
+		grep -q "^$k=" "$f" && r=$v
+	done
+	echo "$r"
+}
+
+settings() {
+	NETS=$(conf_get WIFI_NETWORKS '[A-Za-z0-9/_.-]')
+	TZV=$(conf_get WIFI_SCHED_TZ '[A-Za-z0-9+:,./<>-]')
+	if [ -n "$TZV" ] && [ ${#TZV} -le 64 ]; then TZ=$TZV; export TZ; else unset TZ; fi
+}
+
+# chrony reports a synchronised clock (CSV: the leap status is the last field)
+clock_synced() {
+	local t
+	case "${GT_BE98_CLOCK:-}" in synced) return 0 ;; unsynced) return 1 ;; esac
+	t=$(timeout 5 chronyc -n -c tracking 2>/dev/null) || return 1
+	[ "${t##*,}" = Normal ]
+}
+
+cmd_now() {
+	local d
+	settings
+	clock_synced || return 1
+	d=$(${GT_BE98_DATE:-date} +'%u %H:%M') || return 1
+	case "$d" in [1-7]\ [0-2][0-9]:[0-5][0-9]) echo "$d" ;; *) return 1 ;; esac
+}
+
+cmd_check() {
+	local now want cur
+	settings
+	[ -n "$NETS" ] && [ -f "$NETS" ] || return 0
+	# the service is not running this list
+	[ -f "$STATE/gen/plan" ] || return 0
+	cur=$(cat "$STATE/gen/sched" 2>/dev/null)
+	if ! grep -q '^[[:space:]]*schedule=[^[:space:]]' "$NETS"; then
+		# no schedule (any more): a reload only if one is still applied
+		[ -n "$cur" ] || return 0
+	fi
+	now=$(cmd_now) || return 0	# no trusted time: leave things as they run
+	# a list the generator refuses: the service would refuse it too
+	want=$("$WIFI_GEN" -n "$NETS" -Q -T "$now" 2>/dev/null) || return 0
+	[ "$want" = "$cur" ] && return 0
+	log "$(echo "$now" | cut -c3-) schedule [$(echo $want)] (running: [$(echo $cur)]): reloading gt-be98-wifi"
+	${GT_BE98_RELOAD:-rc-service gt-be98-wifi reload} > /dev/null 2>&1 ||
+		log "gt-be98-wifi reload failed: retried at the next minute"
+	return 0
+}
+
+cmd_run() {
+	local s
+	while :; do
+		s=$(date +%S); s=${s#0}
+		sleep $((60 - s))
+		cmd_check
+	done
+}
+
+case "${1:-}" in
+now) cmd_now ;;
+check) cmd_check ;;
+run) cmd_run ;;
+*) sed -n '/^#   gt-be98-wifi-sched now/,/^#   *daemon gt-be98-wifi/p' "$0" | sed 's/^# \{0,1\}//' >&2; exit 2 ;;
+esac

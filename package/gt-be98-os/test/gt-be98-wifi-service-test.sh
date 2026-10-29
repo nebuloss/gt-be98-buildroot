@@ -276,5 +276,24 @@ apply
 check "5 networks on one radio, no cap advertised (4): refused" "1" "$rc"
 : > "$T/nets"; apply; WIFI_MAX_BSS=4
 
+# 15. schedules: the list is rendered at the time gt-be98-wifi-sched gives;
+# a network leaving/entering its window is one BSS removed/added
+WIFI_SCHED="$T/bin/fake-sched"
+printf '#!/bin/sh\n[ "$1" = now ] && [ -f "$FAKE/now" ] && cat "$FAKE/now" && exit 0\nexit 1\n' > "$WIFI_SCHED"
+chmod +x "$WIFI_SCHED"
+{ net 1 always sae password1 2g 1; net 2 office sae password2 2g 2; printf 'schedule=weekdays@08:00-18:00\n'; } > "$T/nets"
+rm -f "$T/slots"
+echo '1 09:00' > "$T/now"; apply
+check "schedule, Mon 09:00: both BSSes" "0 phy3 bcawl3 bcawl3-1 net 2 on" "$rc $(hapd) $(cat "$G/sched")"
+echo '6 09:00' > "$T/now"; apply
+check "schedule, Sat 09:00: office's BSS removed alone" "0 REMOVE bcawl3-1 phy3 bcawl3 net 2 off" "$rc $cmds $(hapd) $(cat "$G/sched")"
+check "schedule, Sat: office's slot kept" "2g 1 2 1" "$(grep '^2g 1 ' "$T/slots")"
+echo '1 08:00' > "$T/now"; apply
+check "schedule, Mon 08:00: office's BSS added back alone" "0 ADD bss_config=phy3:$G/bss-bcawl3-1.conf" "$rc $cmds"
+rm -f "$T/now"; echo '6 09:00' > "$T/now.x"; apply
+check "schedule, clock not synchronised: every network runs, warned" "0 - net 2 on yes" \
+	"$rc -$cmds $(cat "$G/sched") $(grep -q 'schedules are not applied' "$T/out" && echo yes || echo no)"
+: > "$T/nets"; apply; WIFI_SCHED=/nonexistent
+
 if [ $fail = 0 ]; then echo "ALL OK ($n checks)"; else echo "FAILED"; cat "$T/out"; fi
 exit $fail

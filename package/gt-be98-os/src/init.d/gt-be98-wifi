@@ -42,6 +42,15 @@
 #     dead process restarts the process.
 # A network list that is refused leaves everything running as it was.
 #
+# Schedules (schedule= of a network or radio in the list): the list is
+# rendered for the current local time (gt-be98-wifi-sched now: only with a
+# synchronised clock, else every schedule counts as on), so a network or
+# radio outside its windows is simply not in the plan; the reload above
+# removes and adds its BSSes. The daemon gt-be98-wifi-sched (started and
+# stopped with this service, pid /run/gt-be98-wifi-sched.pid) checks at
+# every minute boundary and reloads when the schedule state changed.
+# WIFI_SCHED_TZ (same files): the schedules' POSIX TZ string, empty = UTC.
+#
 # Wi-Fi networks are pure L2: each network is a bridge brwifiN holding its
 # BSSes and the 802.1Q sub-interface <trunk>.<vid> of the wired trunk port;
 # no address on the box, no NAT. Besides the network list, settings (same
@@ -74,6 +83,8 @@ extra_started_commands="reload"
 RUNDIR=${GT_BE98_RUN:-/run}
 SYSNET=${GT_BE98_SYSNET:-/sys/class/net}
 WIFI_GEN=${GT_BE98_WIFI_GEN:-/usr/sbin/gt-be98-wifi-gen}
+WIFI_SCHED=${GT_BE98_WIFI_SCHED:-/usr/sbin/gt-be98-wifi-sched}
+SCHED_PID=$RUNDIR/gt-be98-wifi-sched.pid
 STATE=$RUNDIR/gt-be98-wifi
 HAP_PID=$RUNDIR/hostapd-wifi.pid
 HAP_LOG=${GT_BE98_HAP_LOG:-/var/log/hostapd.log}
@@ -506,17 +517,23 @@ wifi_max_bss() {
 # the network list -> $STATE/gen (configs + plan) and $STATE/slots; the
 # bridges/VLANs/isolation of its networks are added to WIFI_*
 gen_networks() {
-	local n=$WIFI_NETWORKS t a b c d cc='' net_br='' net_vl='' net_iso='' macs
+	local n=$WIFI_NETWORKS t a b c d cc='' net_br='' net_vl='' net_iso='' macs now=''
 	rm -rf "$STATE/gen.new"
 	[ -n "$n" ] || { rm -rf "$STATE/gen"; return 0; }
 	[ -f "$n" ] || { eerror "WIFI_NETWORKS $n: missing"; return 1; }
 	[ "${REGDB_OK:-0}" = 1 ] && cc=-c
+	# the schedules are read at the current local time, if it can be trusted
+	if grep -q '^[[:space:]]*schedule=[^[:space:]]' "$n"; then
+		now=$("$WIFI_SCHED" now 2>/dev/null) ||
+			ewarn "clock not synchronised (NTP): the Wi-Fi schedules are not applied, every scheduled network and radio runs"
+	fi
 	macs=$(radio_macs)
 	wifi_max_bss
 	# shellcheck disable=SC2086 # $cc: an option or nothing
 	"$WIFI_GEN" -n "$n" -o "$STATE/gen.new" -s "${WIFI_SLOTS:-/etc/hostapd/wifi-slots}" -m "$macs" \
 		-C "$MAX_BSS" -x "${HOSTAPD_CTRL:-$RUNDIR/hostapd}" -R "${WIFI_RNR:-1}" \
-		-K "${WIFI_ANCHOR_KEEP_BSSID:-0}" ${WIFI_RADIO_DEVS:+-d "$WIFI_RADIO_DEVS"} $cc ||
+		-K "${WIFI_ANCHOR_KEEP_BSSID:-0}" ${WIFI_RADIO_DEVS:+-d "$WIFI_RADIO_DEVS"} \
+		${now:+-T "$now"} $cc ||
 		{ eerror "$n refused: nothing changed"; rm -rf "$STATE/gen.new"; return 1; }
 	rm -rf "$STATE/gen"
 	mv "$STATE/gen.new" "$STATE/gen"
@@ -652,6 +669,27 @@ apply_hostapd() {
 	return $rc
 }
 
+# the schedule daemon (gt-be98-wifi-sched run), started when not running
+# (never stopped by reload: the daemon itself runs the reload)
+sched_running() {
+	local p
+	p=$(cat "$SCHED_PID" 2>/dev/null) || return 1
+	[ -n "$p" ] && kill -0 "$p" 2>/dev/null
+}
+
+sched_start() {
+	[ -x "$WIFI_SCHED" ] || return 0
+	sched_running && return 0
+	start-stop-daemon --start --background --make-pidfile --pidfile "$SCHED_PID" \
+		--exec "$WIFI_SCHED" -- run
+}
+
+sched_stop() {
+	[ -f "$SCHED_PID" ] || return 0
+	start-stop-daemon --stop --pidfile "$SCHED_PID" --retry TERM/5/KILL/2 > /dev/null 2>&1
+	rm -f "$SCHED_PID"
+}
+
 stop_hostapd() {
 	stop_legacy
 	hap_daemon_stop
@@ -679,15 +717,26 @@ start() {
 		eend $? || return 1
 	fi
 	WAIT_RADIOS=1 apply_hostapd
+	local rc=$?
+	sched_stop
+	sched_start
+	# the radios' LEDs come with the driver (gt-be98-leds)
+	[ -x /usr/sbin/gt-be98-leds ] && /usr/sbin/gt-be98-leds apply > /dev/null 2>&1
+	return $rc
 }
 
 # new settings without reloading the driver: only what changed
 reload() {
+	local rc
 	if iw reg reload 2>/dev/null; then REGDB_OK=1; else REGDB_OK=0; fi
 	apply_hostapd
+	rc=$?
+	sched_start
+	return $rc
 }
 
 stop() {
+	sched_stop
 	stop_hostapd
 	if [ "${WIFI_UNLOAD_ON_STOP:-yes}" = yes ] && wifi_loaded; then
 		ebegin "Unloading bca_pcie_ipc"
@@ -720,6 +769,7 @@ status() {
 		return $rc
 	fi
 	einfo "hostapd: running (pid $(cat "$HAP_PID")), global control $(hap_global)"
+	[ -s "$STATE/gen/sched" ] && einfo "schedules: $(tr '\n' ' ' < "$STATE/gen/sched")"
 	live=$(hap_live)
 	for p in "$STATE"/applied/*; do
 		[ -f "$p" ] || continue

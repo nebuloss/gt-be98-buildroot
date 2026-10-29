@@ -10,6 +10,10 @@ WIFI_KO=
 WIFI_NETWORKS=
 # sticky slot + BSSID index per (network, radio); keep it with the list
 WIFI_SLOTS=/etc/hostapd/wifi-slots
+# the time zone of the schedules (schedule= in the list), a POSIX TZ string
+# (the image has no zoneinfo), e.g. CET-1CEST,M3.5.0,M10.5.0/3; empty: UTC.
+# Schedules apply only while chrony reports a synchronised clock.
+WIFI_SCHED_TZ=
 # BSSes per radio, the anchor included (1..8). Empty: the count the driver
 # advertises (iw phy: #{ AP } <= N, the firmware's mbss8 => 8 on this box);
 # a value above it is lowered to it. The radio's clients are shared by its
