@@ -288,8 +288,9 @@ cur == "n" {
 		}
 	}
 	else if (k == "vlan") vlan[ci] = v
-	else if (k == "hidden" && (v == "0" || v == "1")) hid[ci] = v
-	else if (k == "isolate" && (v == "0" || v == "1")) iso[ci] = v
+	# v is a substr() result, a STRING: "0" is non-empty and so TRUE in awk; store the number
+	else if (k == "hidden" && (v == "0" || v == "1")) hid[ci] = v + 0
+	else if (k == "isolate" && (v == "0" || v == "1")) iso[ci] = v + 0
 	else if (k == "max_clients" && isnum(v) && v + 0 >= 1 && v + 0 <= 2007) maxc[ci] = v + 0
 	else if (k ~ /^slot\./ && validband(substr(k, 6)) && isnum(v)) ex_slot[substr(k, 6), net[ci]] = v + 0
 	else if (k ~ /^mac\./ && validband(substr(k, 5)) && isnum(v) && v + 0 <= 7) ex_mac[substr(k, 5), net[ci]] = v + 0

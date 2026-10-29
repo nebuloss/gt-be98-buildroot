@@ -217,6 +217,9 @@ check "a refused passphrase is not echoed" "no" "$(net 1 a sae short 2g 5 > "$T/
 rm -f "$T/slots"; gen "$T/o6"; check "options: accepted" 0 $?
 check "UTF-8 SSID -> ssid2 hex" "ssid2=636166c3a92077696669" "$(grep '^ssid' "$T/o/sec-bcawl3")"
 check "hidden, max_clients" "yes yes" "$(has bcawl3 ignore_broadcast_ssid=1) $(has bcawl0 max_num_sta=12)"
+{ net 7 seen sae password7 "2g 5gl" 7; printf 'hidden=0\nisolate=0\n'; } > "$T/o6z"
+rm -f "$T/slots"; gen "$T/o6z"; check "hidden=0 isolate=0: accepted" 0 $?
+check "hidden=0 isolate=0 -> SSID broadcast, no isolation" "no no" "$(has bcawl3 ignore_broadcast_ssid=1) $(has bcawl3 ap_isolate=1)"
 net 8 hex psk2 "$(printf '%064d' 7 | tr 0 a)" 2g 8 > "$T/o6b"
 rm -f "$T/slots"; gen "$T/o6b"
 check "WPA2 raw PSK -> wpa_psk" "yes" "$(grep -q '^wpa_psk=a\{63\}7$' "$T/o/sec-bcawl3" && echo yes || echo no)"
