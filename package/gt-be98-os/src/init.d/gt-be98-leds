@@ -1,0 +1,26 @@
+#!/sbin/openrc-run
+# shellcheck shell=busybox
+# SPDX-License-Identifier: GPL-2.0
+# The LEDs (/sys/class/leds) from /etc/conf.d/gt-be98-leds, with the
+# kernel's triggers: see /usr/sbin/gt-be98-leds. gt-be98-wifi applies them
+# again once the radios (and their LEDs) exist.
+# shellcheck disable=SC2034 # read by openrc-run
+description="LED triggers (Wi-Fi radio up/traffic, LED_NETDEV, LED_TRIGGER)"
+
+depend() {
+	after gt-be98-drivers
+}
+
+start() {
+	ebegin "Setting the LEDs"
+	/usr/sbin/gt-be98-leds apply | while read -r l; do einfo "$l"; done
+	eend 0
+}
+
+stop() {
+	return 0
+}
+
+status() {
+	/usr/sbin/gt-be98-leds status
+}

@@ -1,0 +1,145 @@
+#!/bin/sh
+# shellcheck shell=busybox
+# SPDX-License-Identifier: GPL-2.0
+# gt-be98-leds: drive the LEDs the kernel exposes (/sys/class/leds) from the
+# state of the box, with the kernel's own triggers (no polling loop here).
+#
+#   gt-be98-leds apply     set every configured LED (idempotent: run at boot
+#                          and again by gt-be98-wifi once the radios exist)
+#   gt-be98-leds off       every LED off, triggers detached
+#   gt-be98-leds status    one line per LED: name, trigger, its netdev
+#
+# What stock does (ASUSWRT rc, GT-BE98): the four Wi-Fi LEDs are not SoC
+# GPIOs (led_2g_gpio/led_5g_gpio = 255 in nvram) but GPIO 12 of each radio
+# chip, driven by the radio firmware's own LED engine: setup_leds() runs
+# `wl -i <radio> ledbh 12 7` (WL_LED_WI1, radio on + activity) on the four
+# radios, ATE turns them off with `ledbh 12 0`; AllLED=0 turns every LED off.
+# The SoC GPIO LEDs are power (GPIO 50), LAN (1), 10G white (47), WAN white
+# (17), WAN red (43), AFC (48), all active low, and three RGB "Aura" groups
+# on the LED controller's parallel outputs (2/4/3, 5/8/7, 14/16/15).
+# On this OS a Wi-Fi LED therefore appears only when the Wi-Fi driver
+# registers one (a LED class device whose parent is the radio's PCI device:
+# /sys/class/net/<radio>/device/leds/<led>), and a SoC LED only when the
+# board device tree declares it. Neither exists yet: until then `apply`
+# reports each configured LED as absent and changes nothing.
+#
+# Settings (/etc/conf.d/gt-be98-leds, parsed, not sourced):
+#   LEDS_OFF=0|1          1: every LED off (stock AllLED=0); the rest ignored
+#   WIFI_LEDS="bcawl3 bcawl0 bcawl1 bcawl2"
+#                         radios whose LEDs show link (radio up, a BSS
+#                         running) and blink on traffic: the netdev trigger
+#                         on the radio netdev (link, tx, rx). A driver that
+#                         implements the trigger's hardware offload hands it
+#                         to the firmware (stock's behaviour); `status`
+#                         shows offloaded=1 then
+#   LED_NETDEV="led=netdev ..."    further LEDs on a netdev (e.g. WAN on rnr0)
+#   LED_TRIGGER="led=trigger ..."  further LEDs on a named trigger
+#                         (default-on, heartbeat, timer, none, ...)
+set -u
+# (GT_BE98_*: the offline test harness only)
+CONF=${GT_BE98_LEDS_CONF:-/etc/conf.d/gt-be98-leds}
+LEDS=${GT_BE98_LEDS:-/sys/class/leds}
+SYSNET=${GT_BE98_SYSNET:-/sys/class/net}
+
+say() { echo "gt-be98-leds: $*"; }
+
+conf_get() {	# KEY charset default
+	local v
+	[ -f "$CONF" ] || { echo "$3"; return; }
+	grep -q "^$1=" "$CONF" || { echo "$3"; return; }
+	v=$(sed -n "s/^$1=\"\\{0,1\\}\\($2*\\)\"\\{0,1\\}\$/\\1/p" "$CONF" | tail -n1)
+	echo "$v"
+}
+
+settings() {
+	OFF=$(conf_get LEDS_OFF '[01]' 0)
+	WIFI=$(conf_get WIFI_LEDS '[A-Za-z0-9 ]' 'bcawl3 bcawl0 bcawl1 bcawl2')
+	NETDEV=$(conf_get LED_NETDEV '[A-Za-z0-9:_.= -]' '')
+	TRIG=$(conf_get LED_TRIGGER '[A-Za-z0-9:_.= -]' '')
+}
+
+# a LED name: one path component under $LEDS
+valid_led() {
+	case "$1" in ''|.|..|*/*) return 1 ;; esac
+	[ -d "$LEDS/$1" ]
+}
+
+# is trigger $2 offered by LED $1 ("none [netdev] timer ...")
+has_trigger() { tr ' []' '\n\n\n' < "$LEDS/$1/trigger" 2>/dev/null | grep -qx "$2"; }
+
+set_netdev() {	# led netdev
+	local l=$1 d=$2 f
+	has_trigger "$l" netdev || { say "$l: no netdev trigger (CONFIG_LEDS_TRIGGER_NETDEV)"; return 1; }
+	echo netdev > "$LEDS/$l/trigger" || return 1
+	echo "$d" > "$LEDS/$l/device_name" || return 1
+	for f in link tx rx; do
+		[ -e "$LEDS/$l/$f" ] && echo 1 > "$LEDS/$l/$f"
+	done
+	say "$l: netdev $d (link, tx, rx)"
+}
+
+set_trigger() {	# led trigger
+	has_trigger "$1" "$2" || { say "$1: trigger $2 not offered"; return 1; }
+	echo "$2" > "$LEDS/$1/trigger" && say "$1: $2"
+}
+
+cmd_off() {
+	local p l
+	for p in "$LEDS"/*; do
+		[ -d "$p" ] || continue
+		l=${p##*/}
+		echo none > "$p/trigger" 2>/dev/null
+		echo 0 > "$p/brightness" 2>/dev/null
+		say "$l: off"
+	done
+	return 0
+}
+
+cmd_apply() {
+	local d p l e rc=0 found
+	settings
+	[ "$OFF" = 1 ] && { cmd_off; return 0; }
+	for d in $WIFI; do
+		found=0
+		for p in "$SYSNET/$d/device/leds"/*; do
+			[ -e "$p" ] || continue
+			l=${p##*/}
+			valid_led "$l" || continue
+			found=1
+			set_netdev "$l" "$d" || rc=1
+		done
+		[ $found = 1 ] || say "$d: no LED (the driver registers none for this radio yet)"
+	done
+	for e in $NETDEV; do
+		l=${e%%=*}; d=${e#*=}
+		case "$e" in *=*) ;; *) say "LED_NETDEV '$e' refused (led=netdev)"; rc=1; continue ;; esac
+		valid_led "$l" || { say "$l: not present"; continue; }
+		set_netdev "$l" "$d" || rc=1
+	done
+	for e in $TRIG; do
+		l=${e%%=*}; d=${e#*=}
+		case "$e" in *=*) ;; *) say "LED_TRIGGER '$e' refused (led=trigger)"; rc=1; continue ;; esac
+		valid_led "$l" || { say "$l: not present"; continue; }
+		set_trigger "$l" "$d" || rc=1
+	done
+	return $rc
+}
+
+cmd_status() {
+	local p l t
+	for p in "$LEDS"/*; do
+		[ -d "$p" ] || continue
+		l=${p##*/}
+		t=$(sed -n 's/.*\[\([^]]*\)\].*/\1/p' "$p/trigger" 2>/dev/null)
+		echo "$l trigger=${t:-?} brightness=$(cat "$p/brightness" 2>/dev/null)$([ -e "$p/device_name" ] && echo " device=$(cat "$p/device_name")")$([ -e "$p/offloaded" ] && echo " offloaded=$(cat "$p/offloaded")")"
+	done
+	[ -d "$LEDS" ] || echo "no LED class ($LEDS absent: CONFIG_LEDS_CLASS)"
+	return 0
+}
+
+case "${1:-}" in
+apply) cmd_apply ;;
+off) cmd_off ;;
+status) cmd_status ;;
+*) sed -n '/^#   gt-be98-leds apply/,/^#   gt-be98-leds status/p' "$0" | sed 's/^# \{0,1\}//' >&2; exit 2 ;;
+esac

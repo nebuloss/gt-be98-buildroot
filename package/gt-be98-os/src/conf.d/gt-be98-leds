@@ -1,0 +1,11 @@
+# /etc/conf.d/gt-be98-leds (see /usr/sbin/gt-be98-leds)
+# 1: every LED off (stock AllLED=0)
+LEDS_OFF=0
+# radios whose LED shows radio up + traffic (the netdev trigger: link, tx,
+# rx), as stock's firmware LED behaviour WI1 (`wl ledbh 12 7`) did. A Wi-Fi
+# LED exists only once the driver registers one for the radio.
+WIFI_LEDS="bcawl3 bcawl0 bcawl1 bcawl2"
+# further LEDs: "led=netdev ..." and "led=trigger ..." (LED names as in
+# /sys/class/leds; the board device tree declares none yet)
+LED_NETDEV=
+LED_TRIGGER=
