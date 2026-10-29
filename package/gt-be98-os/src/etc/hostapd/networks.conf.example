@@ -14,6 +14,12 @@
 # relays EAP (PEAP, TTLS, EAP-TLS, ...) to an external RADIUS server given by
 # IP address (radius_server, radius_port 1812, radius_secret; optional
 # accounting radius_acct_server, radius_acct_port 1813, radius_acct_secret).
+# max_clients=N caps the clients of each of the network's BSSes (hostapd
+# max_num_sta; one more is disassociated with reason 5, "AP busy").
+# schedule= (network or radio): on only inside the windows, local time
+# (WIFI_SCHED_TZ in /etc/conf.d/gt-be98-wifi, a POSIX TZ string; UTC if
+# empty), e.g. weekdays@07:00-23:00 weekend@09:00-24:00 or daily@22:00-06:00;
+# applied only while the clock is synchronised (NTP).
 # This file holds secrets: keep it mode 0600.
 # country= is written only once the regulatory database is loaded.
 #country=XX
@@ -50,6 +56,8 @@ security=open-owe
 bands=2g 5gl 5gh 6g
 vlan=30
 isolate=1
+max_clients=16
+schedule=daily@08:00-23:00
 
 # WPA2/WPA3-Enterprise (transition) on 2.4/5 GHz, WPA3-Enterprise on 6 GHz.
 # The RADIUS server must list the box's address as a client with this secret.

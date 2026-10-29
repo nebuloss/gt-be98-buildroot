@@ -350,6 +350,93 @@ check "a refused list never echoes a RADIUS secret" "1 no" \
 	"$? $(grep -qE 'Very-Secret-X|Acct-Secret-Y' "$T/err" && echo yes || echo no)"
 eap 1 a wpa3-eap 2g 5 192.0.2.10 'Very-Secret-X' > "$T/r"; gen "$T/r"
 check "an accepted list never prints a RADIUS secret" "0 " "$? $(cat "$T/err")"
+
+# ---- 10. max_clients, both ways (the awk string-truth trap: a key cut out
+# of a line is a string, "0" is true; every numeric key is stored as v + 0) ----
+cp "$T/slots" "$T/slots.keep"
+{ net 1 a sae password1 "2g 5gl" 1; printf 'max_clients=1\n'; net 2 b sae password2 "2g" 2; } > "$T/m1"
+rm -f "$T/slots"; gen "$T/m1"; check "max_clients=1: accepted" 0 $?
+check "max_clients=1 -> max_num_sta=1 on both of its BSSes, none on the other network" "yes yes no" \
+	"$(has bcawl3 max_num_sta=1) $(has bcawl0 max_num_sta=1) $(grep -q '^max_num_sta' "$T/o/sec-bcawl3-1" && echo yes || echo no)"
+check "max_clients=1 also in the single-BSS config (ADD bss_config)" "1" "$(grep -c '^max_num_sta=1$' "$T/o/bss-bcawl0.conf")"
+{ net 1 a sae password1 2g 1; printf 'max_clients=2007\n'; } > "$T/m2"
+rm -f "$T/slots"; gen "$T/m2"; check "max_clients=2007 (the limit) -> max_num_sta=2007" "0 yes" "$? $(has bcawl3 max_num_sta=2007)"
+conf_ok "max_clients"
+for v in 0 2008 012 x -1; do
+	{ net 1 a sae password1 2g 1; printf 'max_clients=%s\n' "$v"; } > "$T/r"; refuse "max_clients=$v" "$T/r"
+done
+
+# ---- 11. -F: what the generator supports ----
+check "-F: exit 0 without -n/-o" 0 "$($SH "$G" -F > "$T/feat" 2>&1; echo $?)"
+check "-F: schedule and max_clients on, 6g 20 MHz only, twt/wds/320 not yet" \
+	"feature schedule 1|feature max_clients 1|width 6g 20|width 5gl 20 40 80|feature twt 0|feature wds 0|feature width320 0" \
+	"$(for k in 'feature schedule' 'feature max_clients' 'width 6g' 'width 5gl' 'feature twt' 'feature wds' 'feature width320'; do grep "^$k" "$T/feat"; done | tr '\n' '|' | sed 's/|$//')"
+check "-F: the security list is the one the checks take" "open owe open-owe psk2 psk2sae sae wpa2-eap wpa3-eap wpa2-wpa3-eap" \
+	"$(sed -n 's/^security //p' "$T/feat")"
+
+# ---- 12. schedules ----
+# net 1 always on (2g); net 2 weekdays 08-18 (2g 5gl); net 3 on 5gh, whose
+# radio runs 22:00-06:00 every day
+{
+	printf 'radio=5gh\nschedule=daily@22:00-06:00\n'
+	net 1 always sae password1 2g 1
+	net 2 office sae password2 "2g 5gl" 2; printf 'schedule=weekdays@08:00-18:00\n'
+	net 3 night sae password3 5gh 3
+} > "$T/s1"
+q() { $SH "$G" -n "$T/s1" -Q "$@" 2> "$T/err" | tr '\n' ' ' | sed 's/ $//'; }
+check "-Q without -T: every schedule on" "net 2 on radio 5gh on" "$(q)"
+check "-Q Mon 09:00" "net 2 on radio 5gh off" "$(q -T '1 09:00')"
+check "-Q Mon 07:59 (before the window)" "net 2 off radio 5gh off" "$(q -T '1 07:59')"
+check "-Q Mon 08:00 (start inclusive)" "net 2 on" "$(q -T '1 08:00' | cut -d' ' -f1-3)"
+check "-Q Mon 18:00 (end exclusive)" "net 2 off" "$(q -T '1 18:00' | cut -d' ' -f1-3)"
+check "-Q Sat 09:00 (weekdays only)" "net 2 off" "$(q -T '6 09:00' | cut -d' ' -f1-3)"
+check "-Q past midnight: Tue 23:00 on, Wed 05:59 on, Wed 06:00 off, Mon 05:00 on (from Sunday)" "on on off on" \
+	"$(for t in '2 23:00' '3 05:59' '3 06:00' '1 05:00'; do q -T "$t" | awk '{ print $NF }'; done | tr '\n' ' ' | sed 's/ $//')"
+{ net 1 a sae password1 2g 1; printf 'schedule=fri-mon@10:00-11:00, wed@22:00-02:00\n'; } > "$T/s2"
+check "-Q day range wraps (fri-mon), a day's window runs into the next day only" "on on off on on off off" \
+	"$(for t in '7 10:30' '1 10:59' '2 10:30' '3 23:00' '4 01:59' '4 02:00' '3 01:00'; do $SH "$G" -n "$T/s2" -Q -T "$t" | awk '{ print $NF }'; done | tr '\n' ' ' | sed 's/ $//')"
+rm -rf "$T/qo"; cp "$T/slots" "$T/slots.q" 2>/dev/null || : > "$T/slots.q"; cp "$T/slots.q" "$T/slots.q0"
+$SH "$G" -n "$T/s1" -Q -T '1 09:00' -o "$T/qo" -s "$T/slots.q" -m "$M" > /dev/null 2>&1
+check "-Q writes nothing (no OUTDIR, slot file untouched)" "no same" "$([ -e "$T/qo" ] && echo yes || echo no) $(cmp -s "$T/slots.q" "$T/slots.q0" && echo same || echo changed)"
+for v in 'mon@25:00-26:00' 'xyz@08:00-09:00' 'mon@08:00-08:00' 'mon-mon@08:00-09:00' 'mon@8:00-09:00' \
+	'mon@24:00-02:00' 'Mon@08:00-09:00' 'mon08:00-09:00' 'mon@08:00' 'mon@08:00-09:00-10:00' 'tue-wed-thu@08:00-09:00'; do
+	{ net 1 a sae password1 2g 1; printf 'schedule=%s\n' "$v"; } > "$T/r"; refuse "schedule=$v" "$T/r"
+done
+{ printf 'radio=2g\nschedule=daily\n'; net 1 a sae password1 2g 1; } > "$T/r"; refuse "radio schedule=daily (no time)" "$T/r"
+check "a refused schedule is named" "yes" "$(grep -q 'schedule=daily refused' "$T/err" && echo yes || echo no)"
+$SH "$G" -n "$T/s1" -Q -T '8 09:00' > /dev/null 2>&1; check "-T weekday 8 refused" 1 $?
+$SH "$G" -n "$T/s1" -Q -T '1 24:00' > /dev/null 2>&1; check "-T 24:00 refused" 1 $?
+{ net 1 a sae password1 2g 1; printf 'schedule=\n'; } > "$T/r"
+rm -f "$T/slots"; gen "$T/r" -T '1 03:00'; check "schedule= (empty): always on, no sched line" "0 bcawl3 " "$? $(plan_bss | cut -d' ' -f1) $(cat "$T/o/sched")"
+
+# render: all on first (sticky slots), then office off on a Saturday
+rm -f "$T/slots"; gen "$T/s1"; check "s1 without -T: accepted" 0 $?
+check "s1 all on: office 2g slot 1, 5gl anchor; night on 5gh" "bcawl3 0 1 0 bcawl3-1 1 2 1 bcawl0 0 2 0 bcawl1 0 3 0" \
+	"$(plan_bss | cut -d' ' -f1-4 | tr '\n' ' ' | sed 's/ $//')"
+check "sched file = the -Q state" "net 2 on radio 5gh on" "$(tr '\n' ' ' < "$T/o/sched" | sed 's/ $//')"
+b_office=$(bssid_of bcawl3-1)
+gen "$T/s1" -T '6 12:00'; check "Sat 12:00: accepted" 0 $?
+check "Sat 12:00: office and the 5gh radio not rendered, always kept" "bcawl3 0 1 0" "$(plan_bss | cut -d' ' -f1-4 | tr '\n' ' ' | sed 's/ $//')"
+check "Sat 12:00: no config for the 5gl/5gh radios" "none" "$(ls "$T"/o/hostapd-bcawl0.conf "$T"/o/hostapd-bcawl1.conf 2>/dev/null || echo none)"
+check "Sat 12:00: office's bridge not in the plan" "" "$(grep '^net 2 ' "$T/o/plan")"
+check "Sat 12:00: sched file" "net 2 off radio 5gh off" "$(tr '\n' ' ' < "$T/o/sched" | sed 's/ $//')"
+check "Sat 12:00: every slot remembered (office's 2g slot 1 and 5gl anchor, night's 5gh)" "2g 0 1 0|2g 1 2 1|5gl 0 2 0|5gh 0 3 0" \
+	"$(grep -v '^#' "$T/slots" | tr '\n' '|' | sed 's/|$//')"
+# a network added while office is off does not take office's slot or BSSID index
+{ cat "$T/s1"; net 4 added sae password4 2g 4; } > "$T/s1b"
+gen "$T/s1b" -T '6 12:00'
+check "added while office is off: slot 2, index 2 (office's 1 kept)" "bcawl3-2 2 4 2" "$(plan_bss | grep ' 4 ' | cut -d' ' -f1-4)"
+gen "$T/s1b" -T '1 12:00'
+check "office back on Monday: same slot and BSSID" "bcawl3-1 1 2 1 $b_office" "$(plan_bss | grep '^bcawl3-1 ' | cut -d' ' -f1-4) $(bssid_of bcawl3-1)"
+bssid_rules "schedules"
+conf_ok "schedules"
+# the anchor scheduled off while another network runs: promotion (one restart)
+{ net 1 a sae password1 2g 1; printf 'schedule=daily@08:00-20:00\n'; net 2 b sae password2 2g 2; } > "$T/s3"
+rm -f "$T/slots"; gen "$T/s3"; gen "$T/s3" -T '3 21:00'
+check "anchor off at night: b promoted to slot 0 (radio address)" "bcawl3 0 2 0" "$(plan_bss | cut -d' ' -f1-4)"
+# the limit counts the networks that are off
+for i in 1 2 3 4 5; do net $i n$i sae password$i 2g $i; [ $i = 5 ] && printf 'schedule=mon@08:00-09:00\n'; done > "$T/r"
+gen "$T/r" -T '2 12:00'; check "5 networks on a 4-BSS radio, one scheduled off: still refused" "1 yes" "$? $(grep -q 'at most 4 per radio' "$T/err" && echo yes || echo no)"
 }
 
 for a in "busybox awk" mawk gawk; do

@@ -14,6 +14,8 @@
 #   gt-be98-wifi-gen -n NETWORKS -o OUTDIR [-s SLOTS] [-m "2g=MAC 5gl=MAC ..."]
 #                    [-d "2g=bcawl3 5gl=bcawl0 5gh=bcawl1 6g=bcawl2"]
 #                    [-C MAX_BSS] [-x CTRL_DIR] [-c] [-R 0|1] [-K 0|1] [-N]
+#                    [-T "D HH:MM"] [-Q]
+#   gt-be98-wifi-gen -F
 #
 #   -n  the network list (format below)          -o  output dir (created)
 #   -s  slot state file: read, and rewritten when the plan is valid (unless
@@ -32,12 +34,25 @@
 #       driver cannot yet apply a non-default MAC to bsscfg 0, so the anchor
 #       is always the radio's own address)
 #   -N  dry run: the slot file is not rewritten (OUTDIR/slots.new is)
+#   -T  the local time the schedules are evaluated at: D = ISO weekday
+#       (1 = Monday .. 7 = Sunday, `date +%u`), HH:MM. Without -T every
+#       schedule is checked but treated as on (the service passes -T only
+#       when the clock is synchronised: gt-be98-wifi-sched now)
+#   -Q  query: check the list, print the schedule state (OUTDIR/sched
+#       format, below) on stdout and write nothing; -o is not needed
+#   -F  print what this generator supports (one "<what> <values>" per
+#       line: feature <name> 0|1, width <band> <MHz...>, security <modes>,
+#       max_clients <min> <max>) and exit. The web UI reads it: a feature
+#       another change adds to the generator shows up there by itself.
 #
 # Network list (hostapd-like: key=value, the value is the rest of the line,
 # never quoted; '#' comment lines; a block starts at network= or radio=):
 #   country=XX                      global, before the first block
 #   radio=2g|5gl|5gh|6g             radio-wide settings of one radio
 #     enabled=1  channel=N  width=20|40|80
+#     schedule=WINDOWS              optional: the radio runs only inside
+#                                   these windows (all its BSSes stop
+#                                   outside them; format below)
 #   network=ID                      1..99999, the bridge is brwifiID
 #     ssid=...                      1-32 bytes
 #     security=open|owe|open-owe|psk2|psk2sae|sae|wpa2-eap|wpa3-eap|wpa2-wpa3-eap
@@ -59,8 +74,26 @@
 #     bands=2g 5gl 5gh 6g           any non-empty subset
 #     vlan=1..4094                  required, one VLAN per network
 #     hidden=0|1  isolate=0|1  max_clients=1..2007
+#                                   max_clients: hostapd max_num_sta, per
+#                                   BSS (a client beyond it is
+#                                   disassociated, reason 5 "AP busy")
+#     schedule=WINDOWS              optional: the network runs only inside
+#                                   these windows (its BSSes are removed
+#                                   outside them, keeping their slots)
 #     slot.<band>=K  mac.<band>=S   optional explicit sticky slot / BSSID
 #                                   index S = 1..7 (0: the anchor's)
+#
+# Schedules (radio= and network= blocks): WINDOWS is 1-32 windows
+# separated by blanks or commas, each DAYS@HH:MM-HH:MM in local time; DAYS
+# is daily, weekdays (mon-fri), weekend (sat-sun), a day mon..sun or a range
+# of days (fri-mon wraps). A window whose end is not after its start runs
+# past midnight into the next day (22:00-06:00); 24:00 is the end of the
+# day. Empty or absent: always on. Outside every window the network (or
+# radio) is not rendered: a network keeps its slot and BSSID index (they
+# are not handed to another network), except slot 0, whose radio needs an
+# anchor (the next network is promoted, as when the anchor is deleted).
+# The per-radio limit counts the scheduled-off networks too, so that a list
+# accepted at one time is accepted at every time.
 #
 # Slots: a network keeps the slot it got on a radio (remembered in -s, or
 # given as slot.<band>) as long as it stays on that radio: deleting another
@@ -93,21 +126,51 @@
 #   radio <band> <dev> <conf> <sha256 of the radio-wide lines>
 #   bss <dev> <ifname> <slot> <net> <index> <bssid> <bridge> <conf> <sha256 of the section>
 #   net <id> <bridge> <vlan> <isolate 0|1>     (networks on >= 1 radio)
+# and sched (also -Q's output), one line per network/radio that has a
+# schedule, in list/band order: net <id> on|off, radio <band> on|off
 # Exit 1 with the reasons on stderr when the list is refused: then nothing
 # but OUTDIR is written.
 set -u
 NETS='' OUT='' SLOTS='' MACS='' DEVS='' CAP=4 CTRL=/run/hostapd CC=0 RNR=1 KEEP=0 DRY=0
+NOW='' QUERY=0
 SYSNET=${GT_BE98_SYSNET:-/sys/class/net}
-usage() { sed -n '/^#   gt-be98-wifi-gen -n/,/^#   -N/p' "$0" | sed 's/^# \{0,1\}//' >&2; exit 2; }
-while getopts n:o:s:m:d:C:x:cR:K:N o; do
+usage() { sed -n '/^#   gt-be98-wifi-gen -n/,/^#   -F  /p' "$0" | sed 's/^# \{0,1\}//' >&2; exit 2; }
+# what this generator supports (-F): keep it in line with the checks below
+features() {
+	cat <<-'EOF'
+	# gt-be98-wifi-gen features: <what> <values>
+	security open owe open-owe psk2 psk2sae sae wpa2-eap wpa3-eap wpa2-wpa3-eap
+	max_clients 1 2007
+	width 2g 20 40
+	width 5gl 20 40 80
+	width 5gh 20 40 80
+	width 6g 20
+	feature country 1
+	feature hidden 1
+	feature isolate 1
+	feature max_clients 1
+	feature schedule 1
+	feature enterprise 1
+	feature width320 0
+	feature twt 0
+	feature wds 0
+	EOF
+}
+while getopts n:o:s:m:d:C:x:cR:K:NT:QF o; do
 	case $o in
 	n) NETS=$OPTARG ;; o) OUT=$OPTARG ;; s) SLOTS=$OPTARG ;; m) MACS=$OPTARG ;;
 	d) DEVS=$OPTARG ;; C) CAP=$OPTARG ;; x) CTRL=$OPTARG ;; c) CC=1 ;;
-	R) RNR=$OPTARG ;; K) KEEP=$OPTARG ;; N) DRY=1 ;; *) usage ;;
+	R) RNR=$OPTARG ;; K) KEEP=$OPTARG ;; N) DRY=1 ;;
+	T) NOW=$OPTARG ;; Q) QUERY=1 ;; F) features; exit 0 ;; *) usage ;;
 	esac
 done
+[ "$QUERY" = 1 ] && [ -z "$OUT" ] && OUT=/dev/null
 [ -n "$NETS" ] && [ -n "$OUT" ] || usage
 [ -f "$NETS" ] || { echo "gt-be98-wifi-gen: $NETS: no such file" >&2; exit 1; }
+case "$NOW" in
+''|[1-7]\ [01][0-9]:[0-5][0-9]|[1-7]\ 2[0-3]:[0-5][0-9]) ;;
+*) echo "gt-be98-wifi-gen: -T $NOW: \"D HH:MM\", D = 1 (Monday) .. 7" >&2; exit 1 ;;
+esac
 case "$CAP" in [1-8]) ;; *) echo "gt-be98-wifi-gen: -C $CAP: 1..8" >&2; exit 1 ;; esac
 case "$CTRL" in /*) ;; *) echo "gt-be98-wifi-gen: -x must be absolute" >&2; exit 1 ;; esac
 case "$CTRL" in *[!A-Za-z0-9/_.-]*) echo "gt-be98-wifi-gen: -x $CTRL refused" >&2; exit 1 ;; esac
@@ -120,14 +183,17 @@ if [ -z "$MACS" ]; then
 	done
 fi
 umask 077
-mkdir -p "$OUT" || exit 1
-rm -f "$OUT"/hostapd-*.conf "$OUT"/bss-*.conf "$OUT"/hdr-* "$OUT"/sec-* \
-	"$OUT"/plan "$OUT"/plan.raw "$OUT"/slots.new
+if [ "$QUERY" = 0 ]; then
+	mkdir -p "$OUT" || exit 1
+	rm -f "$OUT"/hostapd-*.conf "$OUT"/bss-*.conf "$OUT"/hdr-* "$OUT"/sec-* \
+		"$OUT"/plan "$OUT"/plan.raw "$OUT"/slots.new "$OUT"/sched
+fi
 S=${SLOTS:-/dev/null}
 [ -f "$S" ] || S=/dev/null
 
 LC_ALL=C awk -v cap="$CAP" -v ctrl="$CTRL" -v devlist="$DEVS" -v maclist="$MACS" \
-	-v ccok="$CC" -v rnr="$RNR" -v keep="$KEEP" -v out="$OUT" -v slotsf="$S" '
+	-v ccok="$CC" -v rnr="$RNR" -v keep="$KEEP" -v out="$OUT" -v slotsf="$S" \
+	-v now="$NOW" -v query="$QUERY" '
 function err(m) { print "gt-be98-wifi-gen: " m > "/dev/stderr"; nerr++ }
 function warn(m) { print "gt-be98-wifi-gen: warning: " m > "/dev/stderr" }
 function trim(s) { sub(/^[ \t]+/, "", s); sub(/[ \t]+$/, "", s); return s }
@@ -197,6 +263,62 @@ function vht80(ch,    i, n, bs) {
 	for (i = 1; i <= n; i++) if (ch >= bs[i] + 0 && ch <= bs[i] + 12) return bs[i] + 6
 	return 0
 }
+# ---- schedules (see the header) ----
+# mon..sun -> 1..7, else 0
+function dayno(s,    i) {
+	if (s !~ /^[a-z][a-z][a-z]$/) return 0
+	i = index("mon tue wed thu fri sat sun ", s " ")
+	return (i % 4 == 1) ? (i + 3) / 4 : 0
+}
+# "HH:MM" -> minutes 0..1440 (24:00 = 1440), -1 if malformed
+function hm(s,    m) {
+	if (s !~ /^[0-2][0-9]:[0-5][0-9]$/) return -1
+	m = substr(s, 1, 2) * 60 + substr(s, 4, 2)
+	return m <= 1440 ? m : -1
+}
+# one window DAYS@HH:MM-HH:MM -> wd[1..7] (its days), WS, WE; 1 if valid
+function win(w, wd,    at, d, t, p, n, a, b, i) {
+	for (i = 1; i <= 7; i++) wd[i] = 0
+	at = index(w, "@")
+	if (!at) return 0
+	d = substr(w, 1, at - 1); t = substr(w, at + 1)
+	if (d == "daily") { for (i = 1; i <= 7; i++) wd[i] = 1 }
+	else if (d == "weekdays") { for (i = 1; i <= 5; i++) wd[i] = 1 }
+	else if (d == "weekend") { wd[6] = 1; wd[7] = 1 }
+	else {
+		n = split(d, p, "-")
+		if (n == 1) { a = dayno(p[1]); if (!a) return 0; wd[a] = 1 }
+		else if (n == 2) {
+			a = dayno(p[1]); b = dayno(p[2])
+			if (!a || !b || a == b) return 0
+			i = a
+			while (1) { wd[i] = 1; if (i == b) break; i = i % 7 + 1 }
+		} else return 0
+	}
+	if (split(t, p, "-") != 2) return 0
+	WS = hm(p[1]); WE = hm(p[2])
+	return WS >= 0 && WE >= 0 && WS < 1440 && WS != WE
+}
+function schedok(s,    w, n, i, k, wd) {
+	n = split(s, w, /[ \t,]+/); k = 0
+	for (i = 1; i <= n; i++) {
+		if (w[i] == "") continue
+		if (!win(w[i], wd)) return 0
+		k++
+	}
+	return k >= 1 && k <= 32
+}
+# is schedule s on at weekday dow (1..7), minute mn?
+function schedon(s, dow, mn,    w, n, i, wd, prev) {
+	prev = (dow == 1) ? 7 : dow - 1
+	n = split(s, w, /[ \t,]+/)
+	for (i = 1; i <= n; i++) {
+		if (w[i] == "" || !win(w[i], wd)) continue
+		if (WS < WE) { if (wd[dow] && mn >= WS && mn < WE) return 1 }
+		else if ((wd[dow] && mn >= WS) || (wd[prev] && mn < WE)) return 1
+	}
+	return 0
+}
 function ssidline(s,    i, h) {
 	if (printable(s) && s !~ /^ / && s !~ / $/) return "ssid=" s
 	h = ""
@@ -220,6 +342,9 @@ BEGIN {
 		bmac[b] = tolower(kv[2])
 	}
 	nnet = 0; cur = ""; country = ""
+	# -T "D HH:MM" (checked by the shell): the time the schedules are read at
+	havenow = (now != "")
+	if (havenow) { split(now, t, " "); tdow = t[1] + 0; tmin = hm(t[2]) }
 }
 # ---- slot state: "<band> <slot> <net> <index>" ----
 FILENAME == slotsf {
@@ -244,6 +369,7 @@ k == "network" {
 	if (v in nid) { err("network " v " listed twice"); cur = "x"; next }
 	nnet++; net[nnet] = v; nid[v] = nnet; cur = "n"; ci = nnet
 	sec[ci] = ""; ssid[ci] = ""; pass[ci] = ""; vlan[ci] = ""; hid[ci] = 0; iso[ci] = 0; maxc[ci] = ""
+	nsch[ci] = ""
 	nb[ci] = 0; nra[ci] = 0
 	rs[ci] = ""; rp[ci] = ""; rk[ci] = ""; as[ci] = ""; ap[ci] = ""; ak[ci] = ""
 	next
@@ -266,6 +392,7 @@ cur == "r" {
 	if (k == "enabled" && (v == "0" || v == "1")) renab[cr] = v
 	else if (k == "channel" && isnum(v)) rch[cr] = v + 0
 	else if (k == "width" && (v == "20" || v == "40" || v == "80")) rw[cr] = v + 0
+	else if (k == "schedule" && (v == "" || schedok(v))) rsch[cr] = v
 	else err("radio " cr ": " k "=" v " refused")
 	next
 }
@@ -292,9 +419,10 @@ cur == "n" {
 	else if (k == "hidden" && (v == "0" || v == "1")) hid[ci] = v + 0
 	else if (k == "isolate" && (v == "0" || v == "1")) iso[ci] = v + 0
 	else if (k == "max_clients" && isnum(v) && v + 0 >= 1 && v + 0 <= 2007) maxc[ci] = v + 0
+	else if (k == "schedule" && (v == "" || schedok(v))) nsch[ci] = v
 	else if (k ~ /^slot\./ && validband(substr(k, 6)) && isnum(v)) ex_slot[substr(k, 6), net[ci]] = v + 0
 	else if (k ~ /^mac\./ && validband(substr(k, 5)) && isnum(v) && v + 0 <= 7) ex_mac[substr(k, 5), net[ci]] = v + 0
-	else if (k ~ /^(hidden|isolate|max_clients|slot\.[0-9a-z]+|mac\.[0-9a-z]+)$/) err("network " net[ci] ": " k "=" v " refused")
+	else if (k ~ /^(hidden|isolate|max_clients|schedule|slot\.[0-9a-z]+|mac\.[0-9a-z]+)$/) err("network " net[ci] ": " k "=" v " refused")
 	else err("network " net[ci] ": unknown key " k)	# never echo a value that may be a secret
 	next
 }
@@ -351,19 +479,36 @@ END {
 	}
 	if (nerr) exit 1
 
+	# ---- schedules: what is off now (nothing without -T) ----
+	for (i = 1; i <= nnet; i++) noff[i] = (havenow && nsch[i] != "" && !schedon(nsch[i], tdow, tmin)) ? 1 : 0
+	for (bi = 1; bi <= nbands; bi++) {
+		b = BANDS[bi]
+		roff[b] = (havenow && rsch[b] != "" && !schedon(rsch[b], tdow, tmin)) ? 1 : 0
+	}
+	sch = ""
+	for (i = 1; i <= nnet; i++) if (nsch[i] != "") sch = sch "net " net[i] " " (noff[i] ? "off" : "on") "\n"
+	for (bi = 1; bi <= nbands; bi++) { b = BANDS[bi]; if (rsch[b] != "") sch = sch "radio " b " " (roff[b] ? "off" : "on") "\n" }
+	if (query) { printf "%s", sch; exit 0 }
+
 	# ---- slots, per radio: sticky, slot 0 = anchor ----
 	for (bi = 1; bi <= nbands; bi++) {
 		b = BANDS[bi]
-		live[b] = (renab[b] != "0") && (b in bmac)
+		live[b] = (renab[b] != "0") && (b in bmac) && !roff[b]
 		if (renab[b] != "0" && !(b in bmac)) {
 			for (i = 1; i <= nnet; i++) if ((i, b) in hasb) { warn("radio " b " (" dev[b] "): no MAC address (radio absent?): its networks are not rendered"); break }
 		}
+		# the limit counts every network of the radio, scheduled off or not
+		m = 0
+		for (i = 1; i <= nnet; i++) if ((i, b) in hasb) m++
+		if ((renab[b] != "0") && (b in bmac) && m > cap) { err("radio " b ": " m " networks, at most " cap " per radio"); continue }
 		if (!live[b]) continue
 		for (k = 0; k < cap; k++) used[b, k] = ""
-		m = 0
-		for (i = 1; i <= nnet; i++) if ((i, b) in hasb) mem[b, ++m] = i
-		nmem[b] = m
-		if (m > cap) { err("radio " b ": " m " networks, at most " cap " per radio"); continue }
+		m = 0; mo = 0
+		for (i = 1; i <= nnet; i++) if ((i, b) in hasb) {
+			if (noff[i]) offm[b, ++mo] = i
+			else mem[b, ++m] = i
+		}
+		nmem[b] = m; noffm[b] = mo
 		# explicit slots first, then the remembered ones
 		for (j = 1; j <= m; j++) {
 			i = mem[b, j]; id = net[i]; sl[b, id] = -1
@@ -381,6 +526,16 @@ END {
 			if (k < cap && used[b, k] == "") { used[b, k] = i; sl[b, id] = k }
 			else warn("network " id ": remembered slot " k " on " b " not available: reallocated")
 		}
+		# a network scheduled off keeps its slot for when it comes back;
+		# slot 0 only while no network runs on the radio (else the radio
+		# needs an anchor: the next network is promoted below)
+		for (j = 1; j <= mo; j++) {
+			i = offm[b, j]; id = net[i]
+			if ((b, id) in ex_slot) k = ex_slot[b, id]
+			else if ((b, id) in st_slot) k = st_slot[b, id]
+			else continue
+			if ((k > 0 || m == 0) && k < cap && used[b, k] == "" && !((b, k) in rsv)) { rsv[b, k] = id; kept[b, id] = k }
+		}
 		# the anchor left: the lowest slot becomes the anchor (one radio restart)
 		if (m && used[b, 0] == "") {
 			best = -1
@@ -394,7 +549,7 @@ END {
 		for (j = 1; j <= m; j++) {
 			i = mem[b, j]; id = net[i]
 			if (sl[b, id] >= 0) continue
-			for (k = 0; k < cap; k++) if (used[b, k] == "") break
+			for (k = 0; k < cap; k++) if (used[b, k] == "" && !((b, k) in rsv)) break
 			if (k >= cap) { err("radio " b ": no free slot for network " id); continue }
 			used[b, k] = i; sl[b, id] = k
 		}
@@ -403,6 +558,18 @@ END {
 
 	# ---- BSSID indices: sticky, unique per radio, no BSSID twice anywhere ----
 	for (bi = 1; bi <= nbands; bi++) { b = BANDS[bi]; if (b in bmac) owner[bmac[b]] = "radio " b }
+	# the BSSID indices of the networks scheduled off that kept their slot
+	for (bi = 1; bi <= nbands; bi++) {
+		b = BANDS[bi]
+		if (!live[b]) continue
+		for (j = 1; j <= noffm[b]; j++) {
+			i = offm[b, j]; id = net[i]
+			if (!((b, id) in kept)) continue
+			s = ((b, id) in ex_mac) ? ex_mac[b, id] : ((b, id) in st_mac) ? st_mac[b, id] : 0
+			if (s < 1 || s > 7 || ((b, s) in idxused) || (bssid(b, s) in owner)) continue
+			idxused[b, s] = 1; owner[bssid(b, s)] = "network " id " on " b " (scheduled off)"; offmi[b, id] = s
+		}
+	}
 	for (bi = 1; bi <= nbands; bi++) {
 		b = BANDS[bi]
 		if (!live[b]) continue
@@ -530,6 +697,8 @@ END {
 	for (i = 1; i <= nnet; i++) if (net[i] in onradio)
 		print "net " net[i] " brwifi" net[i] " " vlan[i] " " iso[i] > plan
 	close(plan)
+	printf "%s", sch > (out "/sched")
+	close(out "/sched")
 	# ---- slot state ----
 	sf = out "/slots.new"
 	print "# gt-be98-wifi-gen: sticky slot and BSSID index per (network, radio): <band> <slot> <network> <index>" > sf
@@ -538,13 +707,15 @@ END {
 		for (i = 1; i <= nnet; i++) {
 			id = net[i]
 			if (!((i, b) in hasb)) continue
-			if (live[b]) print b " " sl[b, id] " " id " " mi[b, id] > sf
+			if (live[b] && !noff[i]) print b " " sl[b, id] " " id " " mi[b, id] > sf
+			else if (live[b]) { if ((b, id) in kept) print b " " kept[b, id] " " id " " ((b, id) in offmi ? offmi[b, id] : 0) > sf }
 			else if ((b, id) in st_slot) print b " " st_slot[b, id] " " id " " st_mac[b, id] > sf
 		}
 	}
 	close(sf)
 }
 ' "$S" "$NETS" || exit 1
+[ "$QUERY" = 1 ] && exit 0
 
 # assemble the configs; the section/header checksums drive per-BSS changes
 H="# generated by gt-be98-wifi-gen - do not edit, regenerated on every change"
