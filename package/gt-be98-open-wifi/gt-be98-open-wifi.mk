@@ -4,8 +4,9 @@
 #
 ################################################################################
 
-# main 2026-10-27 a8f91ab9 (box-verified: zero-copy-only TX + AQM + HBQD fix, max_clients 128, plus d89e6364 set)
-GT_BE98_OPEN_WIFI_VERSION = a8f91ab9e1f4e4848984cd5f104166914b541f07
+# main 2026-10-29 7680d62f (box-verified: country follows hostapd incl. EU override, 320 MHz width read-back,
+#  TWT responder follows hostapd, refactor waves 1-3; on top of a8f91ab9's zero-copy TX + AQM + max_clients 128)
+GT_BE98_OPEN_WIFI_VERSION = 7680d62f62f296584bee485ebc5a5f3a4af48e3d
 GT_BE98_OPEN_WIFI_SITE = git@github.com:nebuloss/gt-be98-open-wifi.git
 GT_BE98_OPEN_WIFI_SITE_METHOD = git
 GT_BE98_OPEN_WIFI_LICENSE = GPL-2.0-only
