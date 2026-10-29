@@ -80,6 +80,9 @@
 #     schedule=WINDOWS              optional: the network runs only inside
 #                                   these windows (its BSSes are removed
 #                                   outside them, keeping their slots)
+#     twt=0|1  wds=0|1              reserved for TWT and 4-address (WDS)
+#                                   clients: refused (-F: feature twt 0,
+#                                   feature wds 0) until implemented here
 #     slot.<band>=K  mac.<band>=S   optional explicit sticky slot / BSSID
 #                                   index S = 1..7 (0: the anchor's)
 #
