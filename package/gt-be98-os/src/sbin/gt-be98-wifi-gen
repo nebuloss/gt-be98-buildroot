@@ -62,6 +62,11 @@
 #     schedule=WINDOWS              optional: the radio runs only inside
 #                                   these windows (all its BSSes stop
 #                                   outside them; format below)
+#     airtime=0|1|2|3               hostapd airtime_mode: 0 off (default),
+#                                   1 static weights, 2 dynamic (per-BSS
+#                                   shares), 3 limit (airtime_limit BSSes
+#                                   capped at their share). With 2|3 a
+#                                   network without airtime_weight gets 1
 #   network=ID                      1..99999, the bridge is brwifiID
 #     ssid=...                      1-32 bytes
 #     security=open|owe|open-owe|psk2|psk2sae|sae|wpa2-eap|wpa3-eap|wpa2-wpa3-eap
@@ -89,6 +94,14 @@
 #     schedule=WINDOWS              optional: the network runs only inside
 #                                   these windows (its BSSes are removed
 #                                   outside them, keeping their slots)
+#     airtime_weight=1..1000        hostapd airtime_bss_weight: radio
+#                                   airtime=1, the weight of its stations
+#                                   (mac80211 default 256); 2|3, the BSS's
+#                                   relative share
+#     airtime_limit=0|1             hostapd airtime_bss_limit (airtime=3)
+#     airtime_sta_weight=MAC W      one station's weight, W = 1..65535
+#                                   (airtime=1); the key repeats, at most
+#                                   64 per network
 #     twt=0|1  wds=0|1              reserved for TWT and 4-address (WDS)
 #                                   clients: refused (-F: feature twt 0,
 #                                   feature wds 0) until implemented here
@@ -164,6 +177,7 @@ features() {
 	feature schedule 1
 	feature enterprise 1
 	feature width320 1
+	feature airtime 1
 	feature twt 0
 	feature wds 0
 	EOF
@@ -257,6 +271,13 @@ function isip(s,    p, n, i, c) {
 	return c ? n <= 9 : n == 8
 }
 function secretok(s) { return printable(s) && length(s) >= 1 && length(s) <= 128 && s !~ /^ / && s !~ / $/ }
+# "aa:bb:cc:dd:ee:ff W" (a unicast MAC, W = 1..65535) -> AMAC (lower case), AW (a number); 1 if valid
+function airsta(s,    p, o) {
+	if (split(s, p, /[ \t]+/) != 2 || !parsemac(p[1], o) || o[0] % 2) return 0
+	if (!isnum(p[2]) || p[2] + 0 < 1 || p[2] + 0 > 65535) return 0
+	AMAC = tolower(p[1]); AW = p[2] + 0
+	return 1
+}
 function chans(b, ch) {
 	if (b == "2g") return isnum(ch) && ch >= 1 && ch <= 13
 	if (b == "5gl") return isnum(ch) && ch >= 36 && ch <= 64 && ch % 4 == 0
@@ -397,6 +418,7 @@ k == "network" {
 	nnet++; net[nnet] = v; nid[v] = nnet; cur = "n"; ci = nnet
 	sec[ci] = ""; ssid[ci] = ""; pass[ci] = ""; vlan[ci] = ""; hid[ci] = 0; iso[ci] = 0; maxc[ci] = ""
 	nsch[ci] = ""
+	aw[ci] = ""; alim[ci] = 0; nasw[ci] = 0
 	nb[ci] = 0; nra[ci] = 0
 	rs[ci] = ""; rp[ci] = ""; rk[ci] = ""; as[ci] = ""; ap[ci] = ""; ak[ci] = ""
 	next
@@ -420,6 +442,8 @@ cur == "r" {
 	else if (k == "channel" && isnum(v)) rch[cr] = v + 0
 	else if (k == "width" && (v == "20" || v == "40" || v == "80" || v == "160" || v == "320")) rw[cr] = v + 0
 	else if (k == "schedule" && (v == "" || schedok(v))) rsch[cr] = v
+	# v is a STRING: store the number ("0" is TRUE in awk)
+	else if (k == "airtime" && v ~ /^[0-3]$/) rair[cr] = v + 0
 	else err("radio " cr ": " k "=" v " refused")
 	next
 }
@@ -447,9 +471,15 @@ cur == "n" {
 	else if (k == "isolate" && (v == "0" || v == "1")) iso[ci] = v + 0
 	else if (k == "max_clients" && isnum(v) && v + 0 >= 1 && v + 0 <= 2007) maxc[ci] = v + 0
 	else if (k == "schedule" && (v == "" || schedok(v))) nsch[ci] = v
+	else if (k == "airtime_weight" && isnum(v) && v + 0 >= 1 && v + 0 <= 1000) aw[ci] = v + 0
+	else if (k == "airtime_limit" && (v == "0" || v == "1")) alim[ci] = v + 0
+	else if (k == "airtime_sta_weight" && airsta(v) && nasw[ci] < 64) {
+		if ((ci, AMAC) in aswseen) err("network " net[ci] ": airtime_sta_weight " AMAC " listed twice")
+		else { aswseen[ci, AMAC] = 1; asw[ci, ++nasw[ci]] = AMAC " " AW }
+	}
 	else if (k ~ /^slot\./ && validband(substr(k, 6)) && isnum(v)) ex_slot[substr(k, 6), net[ci]] = v + 0
 	else if (k ~ /^mac\./ && validband(substr(k, 5)) && isnum(v) && v + 0 <= 7) ex_mac[substr(k, 5), net[ci]] = v + 0
-	else if (k ~ /^(hidden|isolate|max_clients|schedule|slot\.[0-9a-z]+|mac\.[0-9a-z]+)$/) err("network " net[ci] ": " k "=" v " refused")
+	else if (k ~ /^(hidden|isolate|max_clients|schedule|airtime_weight|airtime_limit|airtime_sta_weight|slot\.[0-9a-z]+|mac\.[0-9a-z]+)$/) err("network " net[ci] ": " k "=" v " refused")
 	else err("network " net[ci] ": unknown key " k)	# never echo a value that may be a secret
 	next
 }
@@ -678,6 +708,8 @@ END {
 			print "country_code=" country > hdr; print "ieee80211d=1" > hdr
 			if (b != "2g" && b != "6g") print "ieee80211h=1" > hdr
 		}
+		# hostapd airtime policy (CONFIG_AIRTIME_POLICY): radio-wide mode; rair[] holds numbers
+		if (rair[b]) print "airtime_mode=" rair[b] > hdr
 		close(hdr)
 		print "radio " b " " d " " out "/hostapd-" d ".conf" > plan
 		for (k = 0; k < cap; k++) {
@@ -698,6 +730,13 @@ END {
 			if (hid[i]) print "ignore_broadcast_ssid=1" > f
 			if (iso[i]) print "ap_isolate=1" > f
 			if (maxc[i] != "") print "max_num_sta=" maxc[i] > f
+			# airtime: only on a radio whose airtime mode is on (hostapd ignores them at 0)
+			if (rair[b]) {
+				if (aw[i] != "") print "airtime_bss_weight=" aw[i] > f
+				else if (rair[b] >= 2) print "airtime_bss_weight=1" > f
+				if (alim[i]) print "airtime_bss_limit=1" > f
+				for (aj = 1; aj <= nasw[i]; aj++) print "airtime_sta_weight=" asw[i, aj] > f
+			}
 			if (rnr && b != "6g") print "rnr=1" > f
 			s = sec[i]
 			if (b == "6g") { if (s == "psk2sae") s = "sae"; else if (s == "open-owe") s = "owe"; else if (s == "wpa2-wpa3-eap") s = "wpa3-eap" }

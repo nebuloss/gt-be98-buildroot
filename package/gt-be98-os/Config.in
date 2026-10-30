@@ -51,4 +51,16 @@ config BR2_PACKAGE_GT_BE98_OS_HOSTAPD_MBO
 	  then requires PMF. WNM (BSS transition management) is not
 	  enabled by this option.
 
+config BR2_PACKAGE_GT_BE98_OS_HOSTAPD_AIRTIME_POLICY
+	bool "hostapd: airtime policy (airtime_mode)"
+	depends on BR2_PACKAGE_HOSTAPD
+	help
+	  Build Buildroot's hostapd with CONFIG_AIRTIME_POLICY, which
+	  Buildroot's hostapd package has no option for. It adds the
+	  airtime_mode, airtime_bss_weight, airtime_bss_limit and
+	  airtime_sta_weight keys; hostapd then hands per-station airtime
+	  weights to the driver (bca_pcie_ipc maps them onto the
+	  firmware's airtime management). Nothing changes unless a config
+	  sets airtime_mode (default 0).
+
 endif

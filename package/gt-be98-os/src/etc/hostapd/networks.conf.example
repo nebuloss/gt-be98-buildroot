@@ -20,6 +20,11 @@
 # (WIFI_SCHED_TZ in /etc/conf.d/gt-be98-wifi, a POSIX TZ string; UTC if
 # empty), e.g. weekdays@07:00-23:00 weekend@09:00-24:00 or daily@22:00-06:00;
 # applied only while the clock is synchronised (NTP).
+# Airtime: radio airtime=1 (static weights) with airtime_sta_weight=MAC W
+# per station (mac80211 default 256: W=512 asks for twice the airtime of a
+# default station) or airtime_weight=W for every station of a network;
+# airtime=2|3 share the radio between networks by airtime_weight (3 caps the
+# networks with airtime_limit=1). Off (airtime=0) by default.
 # This file holds secrets: keep it mode 0600.
 # country= is written only once the regulatory database is loaded.
 #country=XX

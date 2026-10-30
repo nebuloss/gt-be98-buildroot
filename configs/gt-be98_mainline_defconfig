@@ -130,6 +130,9 @@ BR2_PACKAGE_HOSTAPD_WPS=y
 BR2_PACKAGE_GT_BE98_OS_HOSTAPD_MBO=y
 # FILS discovery frames for 6 GHz (CONFIG_FILS; package/gt-be98-os/Config.in).
 BR2_PACKAGE_GT_BE98_OS_HOSTAPD_FILS=y
+# airtime policy (CONFIG_AIRTIME_POLICY: airtime_mode, per-station weights the
+# driver maps onto the firmware's airtime management; off unless a config sets it).
+BR2_PACKAGE_GT_BE98_OS_HOSTAPD_AIRTIME_POLICY=y
 BR2_PACKAGE_WPA_SUPPLICANT=y
 BR2_PACKAGE_WPA_SUPPLICANT_NL80211=y
 BR2_PACKAGE_WPA_SUPPLICANT_CLI=y

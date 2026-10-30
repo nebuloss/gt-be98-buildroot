@@ -138,6 +138,12 @@ HOSTAPD_CONFIG_ENABLE += CONFIG_FILS
 HOSTAPD_CONFIG_DISABLE += CONFIG_FILS_SK_PFS
 endif
 
+# hostapd: CONFIG_AIRTIME_POLICY (airtime_mode and the per-station airtime
+# weights), same mechanism as MBO. No other option shares the prefix.
+ifeq ($(BR2_PACKAGE_GT_BE98_OS_HOSTAPD_AIRTIME_POLICY),y)
+HOSTAPD_CONFIG_ENABLE += CONFIG_AIRTIME_POLICY
+endif
+
 # hostapd WPS: Buildroot enables CONFIG_WPS with a prefix-matching sed, which
 # also uncomments #CONFIG_WPS_UPNP=y and #CONFIG_WPS_NFC=y. Only the WPS
 # element / push-button is wanted: comment those two back out (the DISABLE

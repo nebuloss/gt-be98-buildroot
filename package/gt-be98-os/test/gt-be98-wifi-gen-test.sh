@@ -371,11 +371,54 @@ for v in 0 2008 012 x -1; do
 	{ net 1 a sae password1 2g 1; printf 'max_clients=%s\n' "$v"; } > "$T/r"; refuse "max_clients=$v" "$T/r"
 done
 
+# ---- 10b. airtime policy (hostapd CONFIG_AIRTIME_POLICY) ----
+hdr_has() { grep -qx "$2" "$T/o/hdr-$1" && echo yes || echo no; }
+{ printf 'radio=2g\nairtime=1\n'; net 1 a sae password1 "2g 5gl" 1
+  printf 'airtime_sta_weight=02:00:5E:00:53:01 768\nairtime_sta_weight=02:00:5e:00:53:02 256\n'; } > "$T/a1"
+rm -f "$T/slots"; gen "$T/a1"; check "airtime=1 + two station weights: accepted" 0 $?
+check "airtime=1 -> airtime_mode=1 on that radio only" "yes no" "$(hdr_has bcawl3 airtime_mode=1) $(grep -q '^airtime_mode' "$T/o/hdr-bcawl0" && echo yes || echo no)"
+check "station weights rendered (MAC lower case), in order" "airtime_sta_weight=02:00:5e:00:53:01 768|airtime_sta_weight=02:00:5e:00:53:02 256" \
+	"$(grep '^airtime_sta_weight=' "$T/o/sec-bcawl3" | tr '\n' '|' | sed 's/|$//')"
+check "no airtime line on the radio whose airtime is off" "" "$(grep '^airtime' "$T/o/sec-bcawl0")"
+check "airtime=1 without airtime_weight: no airtime_bss_weight" "no" "$(grep -q '^airtime_bss_weight' "$T/o/sec-bcawl3" && echo yes || echo no)"
+check "the single-BSS config carries the mode and the weights" "1 2" \
+	"$(grep -c '^airtime_mode=1$' "$T/o/bss-bcawl3.conf") $(grep -c '^airtime_sta_weight=' "$T/o/bss-bcawl3.conf")"
+conf_ok "airtime static"
+# the string-truth trap, both ways: airtime=0 and airtime_limit=0 must render NOTHING
+{ printf 'radio=2g\nairtime=0\n'; net 1 a sae password1 2g 1; printf 'airtime_weight=5\nairtime_limit=0\n'; } > "$T/a0"
+rm -f "$T/slots"; gen "$T/a0"; check "airtime=0: accepted" 0 $?
+check "airtime=0 -> no airtime_mode, no airtime_* in the section" "no " \
+	"$(hdr_has bcawl3 airtime_mode=0) $(grep '^airtime' "$T/o/sec-bcawl3" "$T/o/hdr-bcawl3")"
+{ printf 'radio=2g\nairtime=3\n'; net 1 a sae password1 2g 1; printf 'airtime_weight=3\nairtime_limit=1\n'
+  net 2 b sae password2 2g 2; printf 'airtime_limit=0\n'; } > "$T/a3"
+rm -f "$T/slots"; gen "$T/a3"; check "airtime=3, two networks: accepted" 0 $?
+check "airtime=3 -> airtime_mode=3" "yes" "$(hdr_has bcawl3 airtime_mode=3)"
+check "airtime_weight=3 airtime_limit=1 -> bss weight 3, limited" "yes yes" "$(has bcawl3 airtime_bss_weight=3) $(has bcawl3 airtime_bss_limit=1)"
+check "airtime_limit=0 -> not limited; no weight given -> airtime_bss_weight=1 (needed in 2|3)" "no yes" \
+	"$(has bcawl3-1 airtime_bss_limit=1) $(has bcawl3-1 airtime_bss_weight=1)"
+conf_ok "airtime limit"
+rm -f "$T/slots"; gen "$T/a0"	# the refusals below compare the slot file with this one-network state
+for v in 4 -1 x 01; do
+	{ printf 'radio=2g\nairtime=%s\n' "$v"; net 1 a sae password1 2g 1; } > "$T/r"; refuse "airtime=$v" "$T/r"
+done
+for v in 0 1001 x 07; do
+	{ net 1 a sae password1 2g 1; printf 'airtime_weight=%s\n' "$v"; } > "$T/r"; refuse "airtime_weight=$v" "$T/r"
+done
+{ net 1 a sae password1 2g 1; printf 'airtime_limit=2\n'; } > "$T/r"; refuse "airtime_limit=2" "$T/r"
+for v in "02:00:5e:00:53:01" "02:00:5e:00:53:01 0" "02:00:5e:00:53:01 65536" "03:00:5e:00:53:01 5" "02:00:5e:00:53 5" "02:00:5e:00:53:01 5 6"; do
+	{ net 1 a sae password1 2g 1; printf 'airtime_sta_weight=%s\n' "$v"; } > "$T/r"; refuse "airtime_sta_weight=$v" "$T/r"
+done
+{ net 1 a sae password1 2g 1; printf 'airtime_sta_weight=02:00:5e:00:53:01 5\nairtime_sta_weight=02:00:5E:00:53:01 6\n'; } > "$T/r"
+refuse "one station weighted twice" "$T/r"
+{ net 1 a sae password1 2g 1; i=0; while [ $i -lt 65 ]; do printf 'airtime_sta_weight=02:00:5e:00:%02x:%02x 5\n' $((i / 256)) $((i % 256)); i=$((i + 1)); done; } > "$T/r"
+refuse "65 station weights in one network" "$T/r"
+
 # ---- 11. -F: what the generator supports ----
 check "-F: exit 0 without -n/-o" 0 "$($SH "$G" -F > "$T/feat" 2>&1; echo $?)"
 check "-F: schedule and max_clients on, 6g up to 320 MHz, twt/wds not yet" \
 	"feature schedule 1|feature max_clients 1|width 6g 20 40 80 160 320|width 5gl 20 40 80|feature twt 0|feature wds 0|feature width320 1" \
 	"$(for k in 'feature schedule' 'feature max_clients' 'width 6g' 'width 5gl' 'feature twt' 'feature wds' 'feature width320'; do grep "^$k" "$T/feat"; done | tr '\n' '|' | sed 's/|$//')"
+check "-F: feature airtime 1" "feature airtime 1" "$(grep '^feature airtime' "$T/feat")"
 check "-F: the security list is the one the checks take" "open owe open-owe psk2 psk2sae sae wpa2-eap wpa3-eap wpa2-wpa3-eap" \
 	"$(sed -n 's/^security //p' "$T/feat")"
 # the manifest both ways: every band x width the generator accepts on the
