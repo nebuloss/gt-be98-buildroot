@@ -4,9 +4,9 @@
 #
 ################################################################################
 
-# main 2026-10-30 e20ddc09 (box-verified: WPA3-SAE station, AP on a radio that just ran a station (AP start owns
-#  carrier); on top of 29896812's WPA2 station / AP+STA)
-GT_BE98_OPEN_WIFI_VERSION = e20ddc0979d2127fddde9958db5dde4a3b9d3e81
+# main 2026-10-30 0106a075 (box-verified: AP+STA no longer traps the firmware - the AP client flowid pool skips the
+#  station's rings; on top of e20ddc09's WPA2/WPA3 station and AP-after-station)
+GT_BE98_OPEN_WIFI_VERSION = 0106a075ac75fca83054a507380123d9809fbd75
 GT_BE98_OPEN_WIFI_SITE = git@github.com:nebuloss/gt-be98-open-wifi.git
 GT_BE98_OPEN_WIFI_SITE_METHOD = git
 GT_BE98_OPEN_WIFI_LICENSE = GPL-2.0-only
