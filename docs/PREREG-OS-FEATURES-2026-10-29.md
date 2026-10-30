@@ -138,6 +138,9 @@ inventory is in the log.
 - **SoC LEDs** (power 50, LAN 1, 10G 47, WAN 17/43, AFC 48, active low):
   these need `gpio-leds` nodes in the board DT (open-ethernet `dts/`), with
   the pinmux checked on silicon first.
-- **TWT / WDS / 320 MHz**: the UI and API hooks exist, but the generator's
-  `-F` reports them as 0. They have no arm until a lane implements the
-  generator keys.
+- **TWT / WDS**: the UI and API hooks exist, but the generator's `-F`
+  reports them as 0. They have no arm until a lane implements the generator
+  keys.
+- **6 GHz 40/80/160/320 MHz**: implemented by lane `os-6gwidth-2026-10-30`
+  (`width 6g 20 40 80 160 320`, `feature width320 1`); its box arm is
+  pre-registered with that lane's report, outside this repo.

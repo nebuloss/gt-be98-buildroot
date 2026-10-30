@@ -49,7 +49,16 @@
 # never quoted; '#' comment lines; a block starts at network= or radio=):
 #   country=XX                      global, before the first block
 #   radio=2g|5gl|5gh|6g             radio-wide settings of one radio
-#     enabled=1  channel=N  width=20|40|80
+#     enabled=1  channel=N  width=20|40|80|160|320
+#                                   2g: 20, 40; 5gl/5gh: 20, 40, 80;
+#                                   6g: 20, 40, 80, 160, 320 (HE, op_class
+#                                   131-134; 320 is EHT, op_class 137,
+#                                   rendered with ieee80211be=1). The
+#                                   channel must have a block of that width
+#                                   (6g: none at 40 for 233, none at 80/160/
+#                                   320 for 225-233); 320 takes the 320-1
+#                                   block (centre 31/95/159), else 320-2
+#                                   (centre 191: channels 193-221)
 #     schedule=WINDOWS              optional: the radio runs only inside
 #                                   these windows (all its BSSes stop
 #                                   outside them; format below)
@@ -147,14 +156,14 @@ features() {
 	width 2g 20 40
 	width 5gl 20 40 80
 	width 5gh 20 40 80
-	width 6g 20
+	width 6g 20 40 80 160 320
 	feature country 1
 	feature hidden 1
 	feature isolate 1
 	feature max_clients 1
 	feature schedule 1
 	feature enterprise 1
-	feature width320 0
+	feature width320 1
 	feature twt 0
 	feature wds 0
 	EOF
@@ -266,6 +275,21 @@ function vht80(ch,    i, n, bs) {
 	for (i = 1; i <= n; i++) if (ch >= bs[i] + 0 && ch <= bs[i] + 12) return bs[i] + 6
 	return 0
 }
+# 6 GHz (802.11ax-2021 Annex E, op_class 131-134/137): the centre channel
+# index of the w MHz block that holds channel ch, 0 if the band has none (its
+# top channels). 40/80/160: blocks of 2/4/8 channels from channel 1 (centres
+# 3, 7, 15 + k * 8/16/32). 320: the 320-1 blocks (centres 31, 95, 159) first,
+# else the 320-2 block that holds it (centre 191, channels 193-221).
+function c6(ch, w,    n, c) {
+	if (w == 20) return ch + 0
+	n = w / 5	# the span of the block, in channel numbers
+	if (w == 320) {
+		c = int((ch - 1) / 64) * 64 + 31
+		if (c + 30 > 233 && ch >= 33) c = int((ch - 33) / 64) * 64 + 63
+	} else c = int((ch - 1) / n) * n + n / 2 - 1
+	return (c + n / 2 - 2 <= 233) ? c : 0	# its top channel exists
+}
+function opclass6(w) { return w == 20 ? 131 : w == 40 ? 132 : w == 80 ? 133 : w == 160 ? 134 : 137 }
 # ---- schedules (see the header) ----
 # mon..sun -> 1..7, else 0
 function dayno(s,    i) {
@@ -394,7 +418,7 @@ cur == "x" { next }
 cur == "r" {
 	if (k == "enabled" && (v == "0" || v == "1")) renab[cr] = v
 	else if (k == "channel" && isnum(v)) rch[cr] = v + 0
-	else if (k == "width" && (v == "20" || v == "40" || v == "80")) rw[cr] = v + 0
+	else if (k == "width" && (v == "20" || v == "40" || v == "80" || v == "160" || v == "320")) rw[cr] = v + 0
 	else if (k == "schedule" && (v == "" || schedok(v))) rsch[cr] = v
 	else err("radio " cr ": " k "=" v " refused")
 	next
@@ -472,11 +496,12 @@ END {
 		b = BANDS[bi]
 		if (!(b in dev)) { err("no netdev for radio " b " (-d)"); continue }
 		if (b in rch) {
-			if (!chans(b, rch[b])) err("radio " b ": channel " rch[b] " is not a channel of this radio")
+			if (!chans(b, rch[b])) { err("radio " b ": channel " rch[b] " is not a channel of this radio"); continue }
 		} else rch[b] = (b == "2g") ? 6 : (b == "5gl") ? 36 : (b == "5gh") ? 100 : 37
 		if (!(b in rw)) rw[b] = 20
-		if (b == "6g" && rw[b] != 20) err("radio 6g: 20 MHz only")
-		if (b == "2g" && rw[b] == 80) err("radio 2g: 80 MHz is 5 GHz only")
+		if (b == "6g" && c6(rch[b], rw[b]) == 0) err("radio 6g: channel " rch[b] " has no " rw[b] " MHz block (the 6 GHz band ends at channel 233)")
+		if (b != "6g" && rw[b] >= 160) err("radio " b ": " rw[b] " MHz is 6 GHz only (this radio: " (b == "2g" ? "20, 40" : "20, 40, 80") " MHz)")
+		if (b == "2g" && rw[b] == 80) err("radio 2g: 80 MHz is 5/6 GHz only")
 		if ((b == "5gl" || b == "5gh") && rw[b] == 40 && ht40(b, rch[b]) == "") err("radio " b ": channel " rch[b] " has no 40 MHz pair")
 		if ((b == "5gl" || b == "5gh") && rw[b] == 80 && vht80(rch[b]) == 0) err("radio " b ": channel " rch[b] " has no 80 MHz block")
 	}
@@ -628,8 +653,20 @@ END {
 			print "hw_mode=g" > hdr; print "channel=" ch > hdr; print "ieee80211n=1" > hdr
 			if (w == 40) print "ht_capab=[HT40" ht40(b, ch) "]" > hdr
 		} else if (b == "6g") {
-			print "hw_mode=a" > hdr; print "op_class=131" > hdr; print "channel=" ch > hdr
+			# the op_class sets the width (hostapd derives he/eht_oper_chwidth
+			# and the secondary channel from it on 6 GHz); the centre indices
+			# go into the HE (and EHT) Operation elements. 320 MHz: HE runs
+			# the 160 MHz half that holds the primary, EHT the whole block
+			print "hw_mode=a" > hdr; print "op_class=" opclass6(w) > hdr; print "channel=" ch > hdr
 			print "ieee80211ax=1" > hdr
+			if (w > 20) {
+				print "he_oper_chwidth=" (w == 40 ? 0 : w == 80 ? 1 : 2) > hdr
+				print "he_oper_centr_freq_seg0_idx=" c6(ch, w == 320 ? 160 : w) > hdr
+			}
+			if (w == 320) {
+				print "ieee80211be=1" > hdr; print "eht_oper_chwidth=9" > hdr
+				print "eht_oper_centr_freq_seg0_idx=" c6(ch, 320) > hdr
+			}
 		} else {
 			print "hw_mode=a" > hdr; print "channel=" ch > hdr
 			print "ieee80211n=1" > hdr; print "ieee80211ac=1" > hdr
