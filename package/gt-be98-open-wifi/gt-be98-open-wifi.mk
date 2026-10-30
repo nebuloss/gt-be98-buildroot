@@ -4,9 +4,9 @@
 #
 ################################################################################
 
-# main 2026-10-30 0106a075 (box-verified: AP+STA no longer traps the firmware - the AP client flowid pool skips the
-#  station's rings; on top of e20ddc09's WPA2/WPA3 station and AP-after-station)
-GT_BE98_OPEN_WIFI_VERSION = 0106a075ac75fca83054a507380123d9809fbd75
+# main 2026-10-30 b151aa96 (box-verified: AP client flowid pool always reserves the station's ids 2-5 (AP-first
+#  radio + later station no longer steals a client ring), Multi-AP backhaul map/dwds re-applied per connect)
+GT_BE98_OPEN_WIFI_VERSION = b151aa96263fab30b5b9ec6a16657f28ba544543
 GT_BE98_OPEN_WIFI_SITE = git@github.com:nebuloss/gt-be98-open-wifi.git
 GT_BE98_OPEN_WIFI_SITE_METHOD = git
 GT_BE98_OPEN_WIFI_LICENSE = GPL-2.0-only
