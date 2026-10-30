@@ -4,9 +4,9 @@
 #
 ################################################################################
 
-# main 2026-10-30 b151aa96 (box-verified: AP client flowid pool always reserves the station's ids 2-5 (AP-first
+# main 2026-10-30 9079dde9 (box-verified: RMDOWN unload no longer polls pcie2+0x48 during remove; on top of b151aa96)
 #  radio + later station no longer steals a client ring), Multi-AP backhaul map/dwds re-applied per connect)
-GT_BE98_OPEN_WIFI_VERSION = b151aa96263fab30b5b9ec6a16657f28ba544543
+GT_BE98_OPEN_WIFI_VERSION = 9079dde9defbde9d33dacf16436ef8f9a67a33ac
 GT_BE98_OPEN_WIFI_SITE = git@github.com:nebuloss/gt-be98-open-wifi.git
 GT_BE98_OPEN_WIFI_SITE_METHOD = git
 GT_BE98_OPEN_WIFI_LICENSE = GPL-2.0-only
