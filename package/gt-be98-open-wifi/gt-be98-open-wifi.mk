@@ -4,9 +4,9 @@
 #
 ################################################################################
 
-# main 2026-10-30 4d6520e9 (box-verified: Wi-Fi LED per radio driven by the firmware's ledbh, monitor mode as an
-#  nl80211 MONITOR interface with radiotap, Runner rebind after a Runner reload; on top of 7680d62f's country/320/TWT)
-GT_BE98_OPEN_WIFI_VERSION = 4d6520e9b601cfcad65580794ca0697c9eaef398
+# main 2026-10-30 29896812 (box-verified: station mode WPA2 + reconnect + AP+STA traffic - the link-up WDSLIST(124)
+#  leftover that freed the station's SCB is gone; on top of 4d6520e9's LED/monitor/Runner rebind)
+GT_BE98_OPEN_WIFI_VERSION = 298968123458a4e06698c70f1304800af85d09f9
 GT_BE98_OPEN_WIFI_SITE = git@github.com:nebuloss/gt-be98-open-wifi.git
 GT_BE98_OPEN_WIFI_SITE_METHOD = git
 GT_BE98_OPEN_WIFI_LICENSE = GPL-2.0-only
