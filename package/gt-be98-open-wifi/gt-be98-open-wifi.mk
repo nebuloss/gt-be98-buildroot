@@ -4,9 +4,9 @@
 #
 ################################################################################
 
-# main 2026-10-30 9079dde9 (box-verified: RMDOWN unload no longer polls pcie2+0x48 during remove; on top of b151aa96)
+# main 2026-10-30 09fbee8b (box-verified: airtime fairness follows hostapd (fw ATM percentages), bridged Wi-Fi->trunk frames offered to an ABI-3 Runner; on top of 9079dde9)
 #  radio + later station no longer steals a client ring), Multi-AP backhaul map/dwds re-applied per connect)
-GT_BE98_OPEN_WIFI_VERSION = 9079dde9defbde9d33dacf16436ef8f9a67a33ac
+GT_BE98_OPEN_WIFI_VERSION = 09fbee8bc7030595891083a9475f2336567c6a9f
 GT_BE98_OPEN_WIFI_SITE = git@github.com:nebuloss/gt-be98-open-wifi.git
 GT_BE98_OPEN_WIFI_SITE_METHOD = git
 GT_BE98_OPEN_WIFI_LICENSE = GPL-2.0-only

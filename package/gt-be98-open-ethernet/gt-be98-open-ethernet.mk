@@ -7,7 +7,7 @@
 # branch console-stall-2026-10-26 (netconsole: be98pc bootcon handover 0510,
 # panic nbcon flush 0511, Runner netpoll-safe TX lock; PCIe: 0906 acknowledges
 # an MSI whose vector was freed, the rmmod RCU-stall/watchdog-reset root cause)
-GT_BE98_OPEN_ETHERNET_VERSION = 6e0a65335277b3a9d8f7f162bcf3a7de10c87ed2
+GT_BE98_OPEN_ETHERNET_VERSION = 95657d5ca8ebcbe33c9810ebbeaad3a82a4dada9
 GT_BE98_OPEN_ETHERNET_SITE = git@github.com:nebuloss/gt-be98-open-ethernet.git
 GT_BE98_OPEN_ETHERNET_SITE_METHOD = git
 GT_BE98_OPEN_ETHERNET_LICENSE = GPL-2.0
