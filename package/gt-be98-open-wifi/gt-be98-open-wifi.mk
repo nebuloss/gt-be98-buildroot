@@ -4,9 +4,9 @@
 #
 ################################################################################
 
-# main 2026-10-29 7680d62f (box-verified: country follows hostapd incl. EU override, 320 MHz width read-back,
-#  TWT responder follows hostapd, refactor waves 1-3; on top of a8f91ab9's zero-copy TX + AQM + max_clients 128)
-GT_BE98_OPEN_WIFI_VERSION = 7680d62f62f296584bee485ebc5a5f3a4af48e3d
+# main 2026-10-30 4d6520e9 (box-verified: Wi-Fi LED per radio driven by the firmware's ledbh, monitor mode as an
+#  nl80211 MONITOR interface with radiotap, Runner rebind after a Runner reload; on top of 7680d62f's country/320/TWT)
+GT_BE98_OPEN_WIFI_VERSION = 4d6520e9b601cfcad65580794ca0697c9eaef398
 GT_BE98_OPEN_WIFI_SITE = git@github.com:nebuloss/gt-be98-open-wifi.git
 GT_BE98_OPEN_WIFI_SITE_METHOD = git
 GT_BE98_OPEN_WIFI_LICENSE = GPL-2.0-only
