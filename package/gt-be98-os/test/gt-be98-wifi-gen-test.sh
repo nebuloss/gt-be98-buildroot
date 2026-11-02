@@ -7,11 +7,14 @@
 # gawk; SH="busybox sh" runs the generator with the box's shell). With
 # HOSTAPD_CONFCHECK (test/build-hostapd-confcheck.sh: hostapd's
 # own parser and checks, from the OS's hostapd source), every generated
-# config must also parse with hostapd.
+# config must also parse with hostapd. With WPA_CONFCHECK=
+# (test/build-wpa-confcheck.sh: wpa_supplicant's own parser), every
+# station config must parse with wpa_supplicant.
 set -u
 here=$(cd "$(dirname "$0")" && pwd)
 G="$here/../src/sbin/gt-be98-wifi-gen"
 CONFCHECK=${1:-${HOSTAPD_CONFCHECK:-}}
+WPA_CONFCHECK=${WPA_CONFCHECK:-}
 SH=${SH:-sh}
 T=$(mktemp -d)
 trap 'rm -rf "$T"' EXIT
@@ -500,6 +503,8 @@ check "-F: the radio features he, twt_responder, zwdfs, monitor, led" \
 	"feature he 1|feature twt_responder 1|feature zwdfs 1|feature monitor 1|feature led 1" \
 	"$(for k in he twt_responder zwdfs monitor led; do grep "^feature $k " "$T/feat"; done | tr '\n' '|' | sed 's/|$//')"
 check "-F: feature airtime 1" "feature airtime 1" "$(grep '^feature airtime' "$T/feat")"
+check "-F: station and routed networks, the station security modes" "feature station 1|feature routed 1|station_security psk2 sae" \
+	"$(grep -E '^(feature (station|routed)|station_security) ' "$T/feat" | tr '\n' '|' | sed 's/|$//')"
 check "-F: the security list is the one the checks take" "open owe open-owe psk2 psk2sae sae wpa2-eap wpa3-eap wpa2-wpa3-eap" \
 	"$(sed -n 's/^security //p' "$T/feat")"
 # the manifest both ways: every band x width the generator accepts on the
@@ -661,6 +666,116 @@ check "anchor off at night: b promoted to slot 0 (radio address)" "bcawl3 0 2 0"
 # the limit counts the networks that are off
 for i in 1 2 3 4 5; do net $i n$i sae password$i 2g $i; [ $i = 5 ] && printf 'schedule=mon@08:00-09:00\n'; done > "$T/r"
 gen "$T/r" -T '2 12:00'; check "5 networks on a 4-BSS radio, one scheduled off: still refused" "1 yes" "$? $(grep -q 'at most 4 per radio' "$T/err" && echo yes || echo no)"
+
+# ---- 12. station (Wi-Fi uplink) and routed networks ----
+sta_ok() {	# every station config parses with wpa_supplicant (when available)
+	[ -n "$WPA_CONFCHECK" ] || { echo "skip $1 (no wpa_supplicant-confcheck)"; return 0; }
+	if "$WPA_CONFCHECK" "$T"/o/sta-*.conf > "$T/wc" 2>&1; then
+		check "$1: wpa_supplicant parses: $2" "$2" "$(sed 's#^OK [^ ]* ##' "$T/wc" | tr '\n' '|' | sed 's/|$//')"
+	else
+		check "$1: wpa_supplicant parses every config" ok "$(tr '\n' ' ' < "$T/wc")"
+	fi
+}
+stab() { printf 'station=%s\n' "$1"; shift; for kv in "$@"; do printf '%s\n' "$kv"; done; }
+rm -f "$T/slots"
+{ net 1 a sae password1 "2g 5gl" 1; } > "$T/st0"
+gen "$T/st0"
+check "station control: AP-only, network 1 is the 5gl anchor" "bcawl0 0 1 0" "$(plan_bss | grep '^bcawl0 ' | cut -d' ' -f1-4)"
+{ printf 'radio=5gl\nchannel=36\nwidth=80\n'; stab 5gl ssid=up-link security=psk2 'passphrase=pass"word with space'
+  net 1 a sae password1 "2g 5gl" 1
+  printf 'network=50\nssid=rep\nsecurity=sae\npassphrase=password5\nbands=5gl\nrouted=192.168.50.1/24\n'; } > "$T/st1"
+gen "$T/st1"; check "station + routed: accepted" 0 $?
+check "station: network 1 leaves slot 0 (warned), slot 1, index 1" "bcawl0-1 1 1 1 yes" \
+	"$(plan_bss | grep '^bcawl0-1 ' | cut -d' ' -f1-4) $(grep -q 'remembered slot 0 on 5gl not available' "$T/err" && echo yes || echo no)"
+check "station: no BSS on the radio netdev, routed network on slot 2" "bcawl0-2 2 50 2|" \
+	"$(plan_bss | grep '^bcawl0-2 ' | cut -d' ' -f1-4)|$(plan_bss | grep '^bcawl0 ')"
+check "station: radio line names the first BSS, the config starts there" "bcawl0-1 interface=bcawl0-1 no" \
+	"$(awk '$1 == "radio" && $3 == "bcawl0" { print $6 }' "$T/o/plan") $(grep '^interface=' "$T/o/hostapd-bcawl0.conf") $(grep -q '^bss=bcawl0-1$' "$T/o/hostapd-bcawl0.conf" && echo yes || echo no)"
+check "station: plan line (band dev conf sum first)" "5gl bcawl0 $T/o/sta-bcawl0.conf 64 bcawl0-1" \
+	"$(awk '$1 == "station" { print $2, $3, $4, length($5), $6 }' "$T/o/plan")"
+check "routed: a routed line, no net line, the VLAN network unchanged" "routed 50 brwifi50 192.168.50.1/24 0|net 1 brwifi1 1 0" \
+	"$(grep -E '^(routed|net) ' "$T/o/plan" | sort -r | tr '\n' '|' | sed 's/|$//')"
+check "station config: 0600, hex ssid, the passphrase quoted, WPA2-PSK CCMP" \
+	"-rw-------|	ssid=75702d6c696e6b|	psk=\"pass\"word with space\"|	key_mgmt=WPA-PSK|	pairwise=CCMP|	scan_ssid=1|ctrl_interface=/run/wpa_supplicant" \
+	"$(ls -l "$T/o/sta-bcawl0.conf" | cut -c1-10)|$(grep '^	ssid=' "$T/o/sta-bcawl0.conf")|$(grep '^	psk=' "$T/o/sta-bcawl0.conf")|$(grep '^	key_mgmt=' "$T/o/sta-bcawl0.conf")|$(grep '^	pairwise=' "$T/o/sta-bcawl0.conf")|$(grep '^	scan_ssid=' "$T/o/sta-bcawl0.conf")|$(grep '^ctrl_interface=' "$T/o/sta-bcawl0.conf")"
+bssid_rules "station"
+conf_ok "station"
+sta_ok "station psk2" "ctrl=/run/wpa_supplicant networks=1 up-link key_mgmt=0x2 pmf=0 sae_pwe=0 psk=20 sae_password=- bssid=- scan_ssid=1"
+# -U: the radio follows the uplink, the width only as far as a block holds it
+gen "$T/st1" -U "5gl=5260"
+check "-U 5260: channel 52, 80 MHz kept (centre 58), warned" "channel=52 vht_oper_centr_freq_seg0_idx=58 yes" \
+	"$(grep -E '^(channel|vht_oper_centr_freq_seg0_idx)=' "$T/o/hostapd-bcawl0.conf" | tr '\n' ' ')$(grep -q 'channel 52 (the station uplink, 5260 MHz) instead of 36' "$T/err" && echo yes || echo no)"
+gen "$T/st1" -U "5gl=5500"
+check "-U 5500 (not a 5gl channel): ignored, warned" "channel=36 yes" \
+	"$(grep '^channel=' "$T/o/hostapd-bcawl0.conf") $(grep -q '5500 MHz, not a channel of this radio' "$T/err" && echo yes || echo no)"
+gen "$T/st1" -U "2g=2437"
+check "-U on a radio without a station: ignored" "channel=6" "$(grep '^channel=' "$T/o/hostapd-bcawl3.conf")"
+gen "$T/st1" -U "5gl=5258"
+check "-U 5258 (between channels): ignored" "channel=36" "$(grep '^channel=' "$T/o/hostapd-bcawl0.conf")"
+{ printf 'radio=2g\nwidth=40\n'; stab 2g ssid=up security=sae passphrase=saepassword1 bssid=02:00:5E:00:53:01; net 1 a sae password1 2g 1; } > "$T/st2"
+rm -f "$T/slots"; gen "$T/st2" -U "2g=2462"
+check "2g station, -U 2462: channel 11, HT40-" "channel=11 ht_capab=[HT40-]" "$(grep -E '^(channel|ht_capab)=' "$T/o/hostapd-bcawl3.conf" | tr '\n' ' ' | sed 's/ $//')"
+check "SAE station: SAE, PMF required, H2E/HnP, hex password, bssid lower-cased" \
+	"	bssid=02:00:5e:00:53:01|	key_mgmt=SAE|	ieee80211w=2|	sae_pwe=2|	sae_password=73616570617373776f726431|no-psk" \
+	"$(grep -E '^	(key_mgmt|ieee80211w|sae_pwe|sae_password|bssid)=' "$T/o/sta-bcawl3.conf" | tr '\n' '|')$(grep -q 'psk=' "$T/o/sta-bcawl3.conf" && echo psk || echo no-psk)"
+sta_ok "station sae" "ctrl=/run/wpa_supplicant networks=1 up key_mgmt=0x400 pmf=2 sae_pwe=2 psk=- sae_password=12 bssid=set scan_ssid=1"
+conf_ok "station 2g"
+# a station with no network: no network block (it only scans); no AP on its radio
+{ stab 6g; net 1 a sae password1 2g 1; } > "$T/st3"
+rm -f "$T/slots"; gen "$T/st3"; check "6g station, no ssid: accepted" 0 $?
+check "6g station, no ssid: no network block, no AP on 6g, first = -" "0 - none" \
+	"$(grep -c 'network=' "$T/o/sta-bcawl2.conf") $(awk '$1 == "station" { print $6 }' "$T/o/plan") $(ls "$T/o/hostapd-bcawl2.conf" 2>/dev/null || echo none)"
+sta_ok "station scan-only" "ctrl=/run/wpa_supplicant networks=0"
+# -X: the control directory
+gen "$T/st3" -X /run/wpa-x
+check "-X: ctrl_interface" "ctrl_interface=/run/wpa-x" "$(grep '^ctrl_interface=' "$T/o/sta-bcawl2.conf")"
+gen "$T/st3" -X relative; check "-X relative: refused" 1 $?
+# enabled=0: settings kept, the radio is AP-only again (network 1 back to the anchor)
+rm -f "$T/slots"; gen "$T/st1"
+{ printf 'radio=5gl\nchannel=36\nwidth=80\n'; stab 5gl enabled=0 ssid=up-link security=psk2 passphrase=password1
+  net 1 a sae password1 "2g 5gl" 1
+  printf 'network=50\nssid=rep\nsecurity=sae\npassphrase=password5\nbands=5gl\nrouted=192.168.50.1/24\n'; } > "$T/st4"
+gen "$T/st4"
+check "enabled=0: no station line, no config, network 1 promoted to the anchor" "0 none bcawl0 0 1 0" \
+	"$(grep -c '^station ' "$T/o/plan") $(ls "$T/o/sta-bcawl0.conf" 2>/dev/null || echo none) $(plan_bss | grep '^bcawl0 ' | cut -d' ' -f1-4)"
+# the limit: a station radio carries one network less
+rm -f "$T/slots"
+{ stab 2g; for i in 1 2 3 4; do net $i n$i sae password$i 2g $i; done; } > "$T/r"
+gen "$T/r"; check "station radio, 4 networks, -C 4: refused (at most 3)" "1 yes" "$? $(grep -q 'at most 3 per radio (its station takes one of 4)' "$T/err" && echo yes || echo no)"
+gen "$T/r" -C 5; check "station radio, 4 networks, -C 5: accepted, slots 1-4" "0 bcawl3-1 bcawl3-2 bcawl3-3 bcawl3-4" "$? $(plan_bss | cut -d' ' -f1 | tr '\n' ' ' | sed 's/ $//')"
+bssid_rules "station 4 networks"
+{ stab 2g; net 1 a sae password1 2g 1; printf 'slot.2g=0\n'; } > "$T/r"
+rm -f "$T/slots"; gen "$T/r"; check "slot.2g=0 on a station radio: refused" "1 yes" "$? $(grep -q 'slot.2g=0 is the station' "$T/err" && echo yes || echo no)"
+# refusals (the slot file never rewritten); no secret in any message
+gen "$T/st1"; cp "$T/slots" "$T/slots.st"
+stref() {	# name expected-message list-lines...
+	nm=$1; msg=$2; shift 2
+	printf '%s\n' "$@" > "$T/r"
+	gen "$T/r"
+	check "refused: $nm" "1 yes no" "$? $(grep -qF "$msg" "$T/err" && echo yes || echo no) $(grep -qE 'SECRETpass|sec"r#et' "$T/err" && echo leak || echo no)"
+}
+N1='network=1|ssid=a|security=sae|passphrase=password1|bands=2g|vlan=1'
+nl() { echo "$1" | tr '|' '\n'; }
+stref "two station blocks" "one station= block only" station=2g station=5gl $(nl "$N1")
+stref "psk2 with both a quote and #" 'both a double quote and #' station=2g ssid=x security=psk2 'passphrase=sec"r#et-1' $(nl "$N1")
+stref "6g station psk2" "6 GHz needs WPA3 (security=sae)" station=6g ssid=x security=psk2 passphrase=SECRETpass $(nl "$N1")
+stref "station security owe" "security must be psk2 or sae" station=2g ssid=x security=owe $(nl "$N1")
+stref "short station passphrase" "8-63 printable" station=2g ssid=x security=sae passphrase=short $(nl "$N1")
+stref "passphrase without ssid" "without an ssid" station=2g passphrase=SECRETpass $(nl "$N1")
+stref "multicast bssid" "a unicast MAC address" station=2g ssid=x security=sae passphrase=SECRETpass bssid=01:00:5e:00:00:01 $(nl "$N1")
+stref "station unknown key (value not echoed)" "station 2g: unknown key psk" station=2g ssid=x psk=SECRETpass $(nl "$N1")
+stref "routed without a station" "routed= needs a station= uplink" network=1 ssid=a security=sae passphrase=password1 bands=2g routed=192.168.50.1/24
+stref "routed and vlan" "exclude each other" station=2g network=1 ssid=a security=sae passphrase=password1 bands=2g vlan=5 routed=192.168.50.1/24
+stref "routed not the first host" "the first host of a private subnet" station=2g network=1 ssid=a security=sae passphrase=password1 bands=2g routed=192.168.50.254/24
+stref "routed public" "the first host of a private subnet" station=2g network=1 ssid=a security=sae passphrase=password1 bands=2g routed=8.8.8.1/24
+stref "routed /12 (prefix 16..30)" "the first host of a private subnet" station=2g network=1 ssid=a security=sae passphrase=password1 bands=2g routed=172.16.0.1/12
+stref "routed /31" "the first host of a private subnet" station=2g network=1 ssid=a security=sae passphrase=password1 bands=2g routed=192.168.50.1/31
+stref "routed overlap" "overlaps network 1" station=2g network=1 ssid=a security=sae passphrase=password1 bands=2g routed=10.1.0.1/16 \
+	network=2 ssid=b security=sae passphrase=password2 bands=2g routed=10.1.4.1/24
+stref "neither vlan nor routed" "vlan 1..4094 is required (or routed=)" station=2g network=1 ssid=a security=sae passphrase=password1 bands=2g
+check "refusals: the slot file untouched" "" "$(cmp "$T/slots" "$T/slots.st" 2>&1)"
+{ stab 2g; nl 'network=1|ssid=a|security=sae|passphrase=password1|bands=2g|routed=172.31.0.1/16'; } > "$T/r"
+gen "$T/r"; check "routed 172.31.0.1/16: accepted" "0 routed 1 brwifi1 172.31.0.1/16 0" "$? $(grep '^routed ' "$T/o/plan")"
 }
 
 for a in "busybox awk" mawk gawk; do

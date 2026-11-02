@@ -13,7 +13,11 @@
 #      anything else is detached;
 #   2. no bridge port ever has hairpin mode on;
 #   3. the Wi-Fi ports (bcawl*) of the WIFI_ISOLATE bridges are isolated,
-#      those of other brwifi bridges and the trunk VLANs are not.
+#      those of other brwifi bridges and the trunk VLANs are not;
+#   4. a Wi-Fi STATION (the uplink of gt-be98-wifi, listed in
+#      $GT_BE98_WIFI_STATIONS) is never a bridge port: a 3-address station
+#      cannot be bridged (cfg80211 refuses it too, IFF_DONT_BRIDGE); its
+#      networks are routed (gt-be98-wifi-sta).
 # Reacts to every link event (ip monitor) and sweeps every NETGUARD_SWEEP s.
 # Settings: /etc/conf.d/gt-be98-netguard.
 set -u
@@ -23,6 +27,7 @@ NETGUARD_SWEEP=${NETGUARD_SWEEP:-5}
 WIFI_AP=/etc/conf.d/gt-be98-wifi-ap
 WIFI_DEF=/etc/conf.d/gt-be98-wifi
 WIFI_L2=${GT_BE98_WIFI_L2:-/run/gt-be98-wifi/l2.conf}
+WIFI_STATIONS=${GT_BE98_WIFI_STATIONS:-/run/gt-be98-wifi/stations}
 
 log() { logger -t gt-be98-netguard -- "$*" 2>/dev/null; echo "gt-be98-netguard: $*" > /dev/kmsg 2>/dev/null; }
 # the patterns are matched, never expanded as file names (set -f)
@@ -36,6 +41,8 @@ protected() {
 	set +f
 	return $r
 }
+# is $1 a Wi-Fi station of gt-be98-wifi?
+station() { grep -qx "$1" "$WIFI_STATIONS" 2>/dev/null; }
 # Wi-Fi network settings as gt-be98-wifi applies them: its effective file
 # while it runs (it adds the VLANs and isolation of its network list,
 # WIFI_NETWORKS), else the web UI's file when present, else the defaults
@@ -79,6 +86,11 @@ sweep() {
 			*)	if protected "$i"; then
 					ip link set "$i" nomaster &&
 						log "detached $i from bridge $m (protected port: never bridged)"
+					continue
+				fi
+				if station "$i"; then
+					ip link set "$i" nomaster &&
+						log "detached $i from bridge $m (a Wi-Fi station: never bridged)"
 					continue
 				fi ;;
 			esac

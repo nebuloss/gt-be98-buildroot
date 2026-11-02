@@ -341,11 +341,84 @@ nftables, dnsmasq): no driver internals or module parameters.
   path). `stop` removes the addresses and rules it set, both tables, and
   turns forwarding off. hostapd always runs under `gt-be98-wifi` (`-B -P
   /run/hostapd-wifi.pid`), never by hand.
+- Station (Wi-Fi uplink, client mode; design below).
 - Persistence: `etc/hostapd`, `etc/conf.d/gt-be98-wifi-ap`,
   `etc/gt-be98-router` and the two runlevel links
   (`etc/runlevels/default/gt-be98-{wifi,router}`) are in `ALLOW_PATHS` and
   `AUTOSAVE_WATCH` (`/etc/conf.d/gt-be98-jffs`): restored by `gt-be98-jffs`
   in the boot runlevel, before the default runlevel starts the services.
+
+### Wi-Fi station (uplink / client / repeater uplink)
+
+Design (lane os-sta, 2026-11-02). The driver's station is box-verified with
+hand-written configs (open-wifi `docs/STA-WDS-2026-10-29.md`; stawds arms
+S1 WPA2, S2 WPA3-SAE, S3 reconnect, A1-A3 AP+STA on one radio); this is the
+OS side. Nothing here touches the driver.
+
+- **Configuration** is the network list, one block, at most one per list:
+  `station=<band>` with `enabled=0|1`, `ssid=`, `security=psk2|sae` (6 GHz:
+  sae), `passphrase=` (stored like the AP passphrases: the 0600 list and a
+  0600 generated config, never echoed in an error), optional `bssid=`. No
+  ssid = the station runs with no network and only scans (the web UI scans
+  through it). `gt-be98-wifi-gen` renders `sta-<dev>.conf` (wpa_supplicant:
+  ssid and SAE password in hex form, so no quoting rule applies; a WPA2
+  passphrase quoted, refused only when it holds both `"` and `#`, which
+  wpa_supplicant's comment rule would cut) and a plan line `station`.
+- **Which netdev**: the station is the radio netdev `bcawlN` itself
+  (bsscfg 0: the firmware's AP+STA model, apsta/mbss); the radio's networks
+  move to virtual interfaces `bcawlN-k` (k >= 1: slot 0 and the radio
+  address are the station's), so a station radio carries one network less
+  (`-C` - 1). A network remembered at slot 0 is reallocated (warning); it is
+  promoted back to the anchor when the station goes.
+- **Order** (the one measured on silicon, stawds A1; the AP-start arming
+  window with a live station is the path that trapped the firmware,
+  STA-WDS §24): `gt-be98-wifi` (1) has hostapd release the radio netdev,
+  (2) creates the first AP's virtual interface (`iw ... type __ap`),
+  (3) starts the station (`gt-be98-wifi-sta up`: wpa_supplicant, waits up to
+  `STA_WAIT` s for the association), (4) starts the APs. A virtual
+  interface that appears under a running station makes the station
+  reconnect, so (2) always precedes (3). Removing a station reverses it:
+  APs off the virtual interfaces, station down, APs on the radio netdev.
+- **Channel**: one per radio; the driver refuses an AP on another channel
+  than an associated station (`-EBUSY`). The generator's `-U band=MHz`
+  (from the associated station) puts the radio's APs on the uplink's
+  channel, the width lowered to the widest block that holds it. When the
+  uplink moves the radio later (the firmware follows the uplink; hostapd is
+  not told), the monitor daemon (`gt-be98-wifi-sta monitor`, started and
+  stopped with `gt-be98-wifi`, like the schedule daemon) sees the station's
+  frequency differ from its APs' and reloads the service (at most once per
+  `STA_FOLLOW_MIN` s per radio). It also restarts a dead wpa_supplicant or
+  DHCP client. A DFS uplink channel makes hostapd run its CAC on that
+  channel first (the APs are silent for it) [not measured].
+- **Address**: DHCP on the station netdev, dhcpcd (the OS's only client)
+  in a private mount namespace (`unshare -m`, its own `/var/run/dhcpcd`):
+  the OS's dhcpcd manager refuses `bcawl*` by design and would take over a
+  second instance through its control socket. `nogateway`: the script
+  installs the box's default route through the uplink at metric
+  `STA_METRIC` (3000, below every management route: the USB lifeline and
+  rnr0 keep the box's default; `STA_DEFAULT_ROUTE=0` for none).
+- **Routed, never bridged**: a 3-address station cannot be bridged (cfg80211
+  refuses it; 4-address/WDS is parked, STA-WDS §31), so clients reach the
+  uplink only through a ROUTED network: `routed=A.B.C.1/P` instead of
+  `vlan=` (a private subnet, the box its first host). Its bridge brwifiN
+  holds only its BSSes; `gt-be98-wifi-sta route` puts the address on it,
+  runs a dnsmasq (DHCP from the second host, DNS forwarded to the uplink's
+  servers, bound to the routed bridges only), policy-routes it
+  (`ip rule iif brwifiN table STA_TABLE` = 181: default via the uplink's
+  gateway, `unreachable` without a lease, never another default) and
+  loads `table ip gt_be98_sta` (forward only routed network <-> station,
+  replies back; masquerade out of the station). VLAN networks on the same
+  radios stay bridged to their trunk VLANs (they do not reach the uplink).
+- **netguard / router**: `gt-be98-netguard` detaches a station netdev
+  (`/run/gt-be98-wifi/stations`) from any bridge; `gt-be98-router` refuses
+  one as a LAN and leaves forwarding on while routed networks run.
+- Tests (offline, dev-build): `test/gt-be98-wifi-gen-test.sh` (station
+  and routed rendering and refusals, every awk; with `WPA_CONFCHECK=` every
+  station config parsed by wpa_supplicant's own parser,
+  `test/build-wpa-confcheck.sh`; with the hostapd confcheck every hostapd
+  config), `test/gt-be98-wifi-service-test.sh` (the order above against a
+  fake hostapd), `test/gt-be98-wifi-sta-test.sh` (the helper against fake
+  tools). Box arms: `os-sta-arms.sh` (lab, not in git).
 
 ### Web UI
 

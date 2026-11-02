@@ -14,7 +14,7 @@
 #   gt-be98-wifi-gen -n NETWORKS -o OUTDIR [-s SLOTS] [-m "2g=MAC 5gl=MAC ..."]
 #                    [-d "2g=bcawl3 5gl=bcawl0 5gh=bcawl1 6g=bcawl2"]
 #                    [-C MAX_BSS] [-x CTRL_DIR] [-c] [-R 0|1] [-K 0|1] [-N]
-#                    [-T "D HH:MM"] [-Q]
+#                    [-T "D HH:MM"] [-Q] [-U "2g=MHz ..."] [-X STA_CTRL_DIR]
 #   gt-be98-wifi-gen -F
 #
 #   -n  the network list (format below)          -o  output dir (created)
@@ -40,12 +40,20 @@
 #       when the clock is synchronised: gt-be98-wifi-sched now)
 #   -Q  query: check the list, print the schedule state (OUTDIR/sched
 #       format, below) on stdout and write nothing; -o is not needed
+#   -U  the frequency (MHz) each ASSOCIATED station is on, "band=MHz ...":
+#       the APs of a station radio take the uplink's channel (one channel per
+#       radio: the driver refuses an AP on another one, -EBUSY), the width
+#       lowered to the widest block that holds it (a warning says so). The
+#       service passes what wpa_supplicant reports (gt-be98-wifi-sta freq)
+#   -X  ctrl_interface of the station's wpa_supplicant (default
+#       /run/wpa_supplicant)
 #   -F  print what this generator supports (one "<what> <values>" per
 #       line: feature <name> 0|1, width <band> <MHz...>, security <modes>,
-#       max_clients <min> <max>) and exit. The web UI reads it: a feature
-#       another change adds to the generator shows up there by itself.
-#       Radio keys: feature he (ax=), twt_responder (twt=), zwdfs, monitor,
-#       led.
+#       station_security <modes>, max_clients <min> <max>) and exit. The web
+#       UI reads it: a feature another change adds to the generator shows up
+#       there by itself. Radio keys: feature he (ax=), twt_responder (twt=),
+#       zwdfs, monitor, led; feature station (station= blocks), routed
+#       (routed= networks).
 #
 # Network list (hostapd-like: key=value, the value is the rest of the line,
 # never quoted; '#' comment lines; a block starts at network= or radio=):
@@ -112,7 +120,20 @@
 #     radius_acct_secret=...        optional RADIUS accounting (default secret:
 #                                   radius_secret)
 #     bands=2g 5gl 5gh 6g           any non-empty subset
-#     vlan=1..4094                  required, one VLAN per network
+#     vlan=1..4094                  one VLAN per network: required, unless
+#                                   the network is routed=
+#     routed=A.B.C.1/P              instead of vlan=: the network is ROUTED
+#                                   behind the station uplink (station=): its
+#                                   bridge brwifiID holds only its BSSes and
+#                                   gets the address A.B.C.1/P (the first host
+#                                   of a private subnet, RFC 1918, P = 16..30,
+#                                   no overlap with another routed network);
+#                                   the service serves DHCP/DNS on it and NATs
+#                                   it out of the station (gt-be98-wifi-sta).
+#                                   A 3-address station cannot be bridged (no
+#                                   4-address/WDS uplink): routed is the only
+#                                   way a network reaches a Wi-Fi uplink.
+#                                   Needs a station= block in the list
 #     hidden=0|1  isolate=0|1  max_clients=1..2007
 #                                   max_clients: hostapd max_num_sta, per
 #                                   BSS (a client beyond it is
@@ -135,6 +156,26 @@
 #                                   4-address clients
 #     slot.<band>=K  mac.<band>=S   optional explicit sticky slot / BSSID
 #                                   index S = 1..7 (0: the anchor's)
+#   station=2g|5gl|5gh|6g           the radio's STATION (Wi-Fi uplink, client
+#                                   mode): wpa_supplicant on the radio netdev
+#                                   bcawlN itself (bsscfg 0, the firmware's
+#                                   AP+STA model). At most one station= block.
+#                                   The radio's networks then run on virtual
+#                                   interfaces only (slots 1.., at most -C - 1
+#                                   of them: slot 0 and the radio's own
+#                                   address are the station's), on the
+#                                   uplink's channel once associated (-U)
+#     enabled=0|1                   default 1; 0 keeps the settings, the
+#                                   radio is AP-only (no station)
+#     ssid=...                      1-32 bytes; empty or absent: the station
+#                                   runs with no network (it only scans)
+#     security=psk2|sae             psk2: WPA2-PSK (CCMP); sae: WPA3-SAE (H2E
+#                                   or hunting-and-pecking, PMF required);
+#                                   6g: sae only
+#     passphrase=...                psk2: 8-63 printable ASCII (not both '"'
+#                                   and '#': wpa_supplicant's comment rule)
+#                                   or 64 hex; sae: 8-63 printable ASCII
+#     bssid=aa:bb:cc:dd:ee:ff       optional: join this AP only
 #
 # Schedules (radio= and network= blocks): WINDOWS is 1-32 windows
 # separated by blanks or commas, each DAYS@HH:MM-HH:MM in local time; DAYS
@@ -176,9 +217,16 @@
 #
 # OUTDIR: hostapd-<dev>.conf, bss-<ifname>.conf, hdr-<dev>, sec-<ifname>
 # (mode 0600: they hold the passphrases and RADIUS secrets) and plan:
-#   radio <band> <dev> <conf> <sha256 of the radio-wide lines>
+#   radio <band> <dev> <conf> <sha256 of the radio-wide lines> <first BSS ifname>
+#     (the first BSS is the config's interface=: the radio netdev, or on a
+#     station radio the virtual interface of its lowest slot, which the
+#     service creates before hostapd starts it)
 #   bss <dev> <ifname> <slot> <net> <index> <bssid> <bridge> <conf> <sha256 of the section>
 #   net <id> <bridge> <vlan> <isolate 0|1>     (networks on >= 1 radio)
+#   routed <id> <bridge> <A.B.C.1/P> <isolate 0|1>   (routed= networks on >= 1 radio)
+#   station <band> <dev> <conf> <sha256 of conf> <first AP ifname or ->
+#                                              (an enabled station on a live radio;
+#                                               conf: sta-<dev>.conf, wpa_supplicant)
 #   monitor <band> <dev> <MHz> <width> <centre MHz>   (monitor=1 radios)
 #   led <band> <dev> 0|1                       (every radio of -d)
 # and sched (also -Q's output), one line per network/radio that has a
@@ -187,7 +235,7 @@
 # but OUTDIR is written.
 set -u
 NETS='' OUT='' SLOTS='' MACS='' DEVS='' CAP=4 CTRL=/run/hostapd CC=0 RNR=1 KEEP=0 DRY=0
-NOW='' QUERY=0
+NOW='' QUERY=0 UPF='' STACTRL=/run/wpa_supplicant
 SYSNET=${GT_BE98_SYSNET:-/sys/class/net}
 usage() { sed -n '/^#   gt-be98-wifi-gen -n/,/^#   -F  /p' "$0" | sed 's/^# \{0,1\}//' >&2; exit 2; }
 # what this generator supports (-F): keep it in line with the checks below
@@ -215,14 +263,18 @@ features() {
 	feature led 1
 	feature twt 0
 	feature wds 0
+	feature station 1
+	feature routed 1
+	station_security psk2 sae
 	EOF
 }
-while getopts n:o:s:m:d:C:x:cR:K:NT:QF o; do
+while getopts n:o:s:m:d:C:x:cR:K:NT:QFU:X: o; do
 	case $o in
 	n) NETS=$OPTARG ;; o) OUT=$OPTARG ;; s) SLOTS=$OPTARG ;; m) MACS=$OPTARG ;;
 	d) DEVS=$OPTARG ;; C) CAP=$OPTARG ;; x) CTRL=$OPTARG ;; c) CC=1 ;;
 	R) RNR=$OPTARG ;; K) KEEP=$OPTARG ;; N) DRY=1 ;;
-	T) NOW=$OPTARG ;; Q) QUERY=1 ;; F) features; exit 0 ;; *) usage ;;
+	T) NOW=$OPTARG ;; Q) QUERY=1 ;; F) features; exit 0 ;;
+	U) UPF=$OPTARG ;; X) STACTRL=$OPTARG ;; *) usage ;;
 	esac
 done
 [ "$QUERY" = 1 ] && [ -z "$OUT" ] && OUT=/dev/null
@@ -235,6 +287,8 @@ esac
 case "$CAP" in [1-8]) ;; *) echo "gt-be98-wifi-gen: -C $CAP: 1..8" >&2; exit 1 ;; esac
 case "$CTRL" in /*) ;; *) echo "gt-be98-wifi-gen: -x must be absolute" >&2; exit 1 ;; esac
 case "$CTRL" in *[!A-Za-z0-9/_.-]*) echo "gt-be98-wifi-gen: -x $CTRL refused" >&2; exit 1 ;; esac
+case "$STACTRL" in /*) ;; *) echo "gt-be98-wifi-gen: -X must be absolute" >&2; exit 1 ;; esac
+case "$STACTRL" in *[!A-Za-z0-9/_.-]*) echo "gt-be98-wifi-gen: -X $STACTRL refused" >&2; exit 1 ;; esac
 DEVS=${DEVS:-"2g=bcawl3 5gl=bcawl0 5gh=bcawl1 6g=bcawl2"}
 # default radio MACs: the radio netdevs' current addresses
 if [ -z "$MACS" ]; then
@@ -246,7 +300,7 @@ fi
 umask 077
 if [ "$QUERY" = 0 ]; then
 	mkdir -p "$OUT" || exit 1
-	rm -f "$OUT"/hostapd-*.conf "$OUT"/bss-*.conf "$OUT"/hdr-* "$OUT"/sec-* \
+	rm -f "$OUT"/hostapd-*.conf "$OUT"/bss-*.conf "$OUT"/hdr-* "$OUT"/sec-* "$OUT"/sta-*.conf \
 		"$OUT"/plan "$OUT"/plan.raw "$OUT"/slots.new "$OUT"/sched
 fi
 S=${SLOTS:-/dev/null}
@@ -254,7 +308,7 @@ S=${SLOTS:-/dev/null}
 
 LC_ALL=C awk -v cap="$CAP" -v ctrl="$CTRL" -v devlist="$DEVS" -v maclist="$MACS" \
 	-v ccok="$CC" -v rnr="$RNR" -v keep="$KEEP" -v out="$OUT" -v slotsf="$S" \
-	-v now="$NOW" -v query="$QUERY" '
+	-v now="$NOW" -v query="$QUERY" -v upf="$UPF" -v stactrl="$STACTRL" '
 function err(m) { print "gt-be98-wifi-gen: " m > "/dev/stderr"; nerr++ }
 function warn(m) { print "gt-be98-wifi-gen: warning: " m > "/dev/stderr" }
 function trim(s) { sub(/^[ \t]+/, "", s); sub(/[ \t]+$/, "", s); return s }
@@ -304,6 +358,45 @@ function isip(s,    p, n, i, c) {
 	n = split(s, p, ":")
 	for (i = 1; i <= n; i++) if (length(p[i]) > 4 || (!c && p[i] == "")) return 0
 	return c ? n <= 9 : n == 8
+}
+# "A.B.C.D" -> its 32-bit value, -1 if not a dotted quad (never printed:
+# mawk would print a value above 2^31 in exponent form)
+function ip2n(s,    p, i, n) {
+	if (s !~ /^[0-9.]+$/ || split(s, p, ".") != 4) return -1
+	n = 0
+	for (i = 1; i <= 4; i++) { if (!isnum(p[i]) || p[i] + 0 > 255) return -1; n = n * 256 + p[i] }
+	return n
+}
+# routed=A.B.C.1/P: 1 if A.B.C.1 is the first host of a private (RFC 1918)
+# subnet of prefix 16..30; sets RNET (its network) and RSZ (its size)
+function routedok(s,    a, p, n) {
+	if (split(s, a, "/") != 2 || !isnum(a[2])) return 0
+	p = a[2] + 0
+	if (p < 16 || p > 30) return 0
+	n = ip2n(a[1])
+	if (n < 0) return 0
+	RSZ = 2 ^ (32 - p); RNET = n - n % RSZ
+	if (n != RNET + 1) return 0
+	return (RNET >= ip2n("10.0.0.0") && RNET + RSZ <= ip2n("11.0.0.0")) ||
+	    (RNET >= ip2n("172.16.0.0") && RNET + RSZ <= ip2n("172.32.0.0")) ||
+	    (RNET >= ip2n("192.168.0.0") && RNET + RSZ <= ip2n("192.169.0.0"))
+}
+# the hex form of a string (wpa_supplicant ssid=, sae_password=: no quoting rule)
+function hexs(s,    i, h) {
+	h = ""
+	for (i = 1; i <= length(s); i++) h = h hex2(ord[substr(s, i, 1)])
+	return h
+}
+# the channel of frequency f (MHz) on band b (may be fractional: not a channel)
+function f2ch(b, f) { return b == "2g" ? (f - 2407) / 5 : b == "6g" ? (f - 5950) / 5 : (f - 5000) / 5 }
+# has channel ch a w MHz block on band b?
+function widthok(b, ch, w) {
+	if (w == 20) return 1
+	if (b == "6g") return c6(ch, w) != 0
+	if (b == "2g") return w == 40
+	if (w == 40) return ht40(b, ch) != ""
+	if (w == 80) return vht80(ch) != 0
+	return 0
 }
 function secretok(s) { return printable(s) && length(s) >= 1 && length(s) <= 128 && s !~ /^ / && s !~ / $/ }
 # "aa:bb:cc:dd:ee:ff W" (a unicast MAC, W = 1..65535) -> AMAC (lower case), AW (a number); 1 if valid
@@ -436,6 +529,14 @@ BEGIN {
 	nnet = 0; cur = ""; country = ""
 	# -T "D HH:MM" (checked by the shell): the time the schedules are read at
 	havenow = (now != "")
+	# -U "band=MHz ...": the frequencies of the associated stations
+	n = split(upf, t, " ")
+	for (i = 1; i <= n; i++) {
+		split(t[i], kv, "=")
+		if (!validband(kv[1]) || !isnum(kv[2])) { err("-U " t[i] ": band=MHz"); continue }
+		ufreq[kv[1]] = kv[2] + 0
+	}
+	nsta = 0
 	if (havenow) { split(now, t, " "); tdow = t[1] + 0; tmin = hm(t[2]) }
 }
 # ---- slot state: "<band> <slot> <net> <index>" ----
@@ -465,6 +566,7 @@ k == "network" {
 	aw[ci] = ""; alim[ci] = 0; nasw[ci] = 0
 	nb[ci] = 0; nra[ci] = 0
 	rs[ci] = ""; rp[ci] = ""; rk[ci] = ""; as[ci] = ""; ap[ci] = ""; ak[ci] = ""
+	rtd[ci] = ""
 	next
 }
 k == "radio" {
@@ -473,14 +575,29 @@ k == "radio" {
 	rseen[v] = 1; cur = "r"; cr = v
 	next
 }
+k == "station" {
+	if (!validband(v)) { err("line " FNR ": station 2g|5gl|5gh|6g"); cur = "x"; next }
+	if (nsta) { err("station " v ": one station= block only (station " stab " is listed)"); cur = "x"; next }
+	nsta = 1; stab = v; cur = "s"; stenab = 1; stssid = ""; stsec = ""; stpass = ""; stbssid = ""
+	next
+}
 cur == "" {
 	if (k == "country") {
 		if (v !~ /^[A-Z][A-Z]$/) err("country " v ": two upper-case letters")
 		else country = v
-	} else err("line " FNR ": " k " before the first network=/radio=")
+	} else err("line " FNR ": " k " before the first network=/radio=/station=")
 	next
 }
 cur == "x" { next }
+cur == "s" {
+	if (k == "enabled" && (v == "0" || v == "1")) stenab = v + 0
+	else if (k == "ssid") stssid = v
+	else if (k == "security") stsec = v
+	else if (k == "passphrase") stpass = v
+	else if (k == "bssid") stbssid = v
+	else err("station " stab ": unknown key " k)	# never echo a value that may be a secret
+	next
+}
 cur == "r" {
 	if (k == "enabled" && (v == "0" || v == "1")) renab[cr] = v
 	else if (k == "channel" && isnum(v)) rch[cr] = v + 0
@@ -515,6 +632,7 @@ cur == "n" {
 		}
 	}
 	else if (k == "vlan") vlan[ci] = v
+	else if (k == "routed") rtd[ci] = v
 	# v is a substr() result, a STRING: "0" is non-empty and so TRUE in awk; store the number
 	else if (k == "hidden" && (v == "0" || v == "1")) hid[ci] = v + 0
 	else if (k == "isolate" && (v == "0" || v == "1")) iso[ci] = v + 0
@@ -567,9 +685,39 @@ END {
 		if (nb[i] == 0) err(tag ": no band")
 		if (((i, "6g") in hasb) && (s == "open" || s == "psk2" || s == "wpa2-eap"))
 			err(tag ": 6 GHz needs WPA3: SAE (sae, psk2sae), OWE (owe, open-owe) or WPA3-Enterprise (wpa3-eap, wpa2-wpa3-eap)")
-		if (!isnum(vlan[i]) || vlan[i] + 0 < 1 || vlan[i] + 0 > 4094) err(tag ": vlan 1..4094 is required")
+		if (rtd[i] != "") {
+			if (vlan[i] != "") err(tag ": vlan= and routed= exclude each other (a routed network has no VLAN)")
+			if (!routedok(rtd[i])) err(tag ": routed=" rtd[i] ": the first host of a private subnet, A.B.C.1/P, P = 16..30 (10/8, 172.16/12, 192.168/16)")
+			else {
+				for (j = 1; j < i; j++)
+					if ((j in rnetv) && RNET < rnetv[j] + rszv[j] && rnetv[j] < RNET + RSZ) err(tag ": routed=" rtd[i] " overlaps network " net[j])
+				rnetv[i] = RNET; rszv[i] = RSZ
+			}
+			if (!nsta) err(tag ": routed= needs a station= uplink in the list")
+		} else if (!isnum(vlan[i]) || vlan[i] + 0 < 1 || vlan[i] + 0 > 4094) err(tag ": vlan 1..4094 is required (or routed=)")
 		else if (vlan[i] in vseen) err(tag ": vlan " vlan[i] " also used by network " vseen[vlan[i]])
 		else vseen[vlan[i]] = id
+	}
+	# the station (uplink): never echo its passphrase
+	if (nsta) {
+		tag = "station " stab
+		if (stssid != "") {
+			if (length(stssid) > 32 || stssid ~ /[\001-\037\177]/) err(tag ": ssid must be 1-32 bytes, no control characters")
+			if (stsec == "psk2") {
+				if (!((printable(stpass) && length(stpass) >= 8 && length(stpass) <= 63) || ishex64(stpass)))
+					err(tag ": the WPA2 passphrase must be 8-63 printable ASCII characters, or 64 hex digits")
+				else if (index(stpass, "\"") && index(stpass, "#"))
+					err(tag ": a WPA2 passphrase with both a double quote and # cannot be given to wpa_supplicant (its comment rule): give the 64-hex-digit PSK instead")
+			} else if (stsec == "sae") {
+				if (!(printable(stpass) && length(stpass) >= 8 && length(stpass) <= 63))
+					err(tag ": the WPA3 (SAE) passphrase must be 8-63 printable ASCII characters")
+			} else err(tag ": security must be psk2 or sae")
+			if (stab == "6g" && stsec != "sae") err(tag ": 6 GHz needs WPA3 (security=sae)")
+		} else if (stsec != "" || stpass != "") err(tag ": security/passphrase given without an ssid")
+		if (stbssid != "") {
+			if (!parsemac(stbssid, o) || o[0] % 2) err(tag ": bssid " stbssid ": a unicast MAC address")
+			else stbssid = tolower(stbssid)
+		}
 	}
 	for (bi = 1; bi <= nbands; bi++) {
 		b = BANDS[bi]
@@ -606,6 +754,10 @@ END {
 	for (bi = 1; bi <= nbands; bi++) {
 		b = BANDS[bi]
 		live[b] = (renab[b] != "0") && (b in bmac) && !roff[b] && !rmon[b]
+		# an enabled station takes slot 0 (the radio netdev) and the radio address:
+		# stw (whatever the time: the limit) and ista (now)
+		stw[b] = (nsta && stab == b && stenab && renab[b] != "0" && (b in bmac) && !rmon[b]) ? 1 : 0
+		ista[b] = (stw[b] && live[b]) ? 1 : 0
 		# a monitor radio carries no BSS (the driver refuses a monitor while
 		# the primary netdev of the radio is up); its networks keep their slots
 		ismon[b] = rmon[b] && (renab[b] != "0") && (b in bmac) && !roff[b]
@@ -618,7 +770,7 @@ END {
 		# the limit counts every network of the radio, scheduled off or not
 		m = 0
 		for (i = 1; i <= nnet; i++) if ((i, b) in hasb) m++
-		if ((renab[b] != "0") && (b in bmac) && m > cap) { err("radio " b ": " m " networks, at most " cap " per radio"); continue }
+		if ((renab[b] != "0") && (b in bmac) && m > cap - stw[b]) { err("radio " b ": " m " networks, at most " (cap - stw[b]) " per radio" (stw[b] ? " (its station takes one of " cap ")" : "")); continue }
 		if (!live[b]) continue
 		for (k = 0; k < cap; k++) used[b, k] = ""
 		m = 0; mo = 0
@@ -633,6 +785,7 @@ END {
 			if ((b, id) in ex_slot) {
 				k = ex_slot[b, id]
 				if (k >= cap) err("network " id ": slot." b "=" k ": at most " cap " BSS per radio (slots 0.." cap - 1 ")")
+				else if (k == 0 && ista[b]) err("network " id ": slot." b "=0 is the station (the radio netdev)")
 				else if (used[b, k] != "") err("network " id ": slot." b "=" k " also network " net[used[b, k]])
 				else { used[b, k] = i; sl[b, id] = k }
 			}
@@ -641,7 +794,7 @@ END {
 			i = mem[b, j]; id = net[i]
 			if (sl[b, id] >= 0 || !((b, id) in st_slot)) continue
 			k = st_slot[b, id]
-			if (k < cap && used[b, k] == "") { used[b, k] = i; sl[b, id] = k }
+			if (k < cap && used[b, k] == "" && !(k == 0 && ista[b])) { used[b, k] = i; sl[b, id] = k }
 			else warn("network " id ": remembered slot " k " on " b " not available: reallocated")
 		}
 		# a network scheduled off keeps its slot for when it comes back;
@@ -652,10 +805,10 @@ END {
 			if ((b, id) in ex_slot) k = ex_slot[b, id]
 			else if ((b, id) in st_slot) k = st_slot[b, id]
 			else continue
-			if ((k > 0 || m == 0) && k < cap && used[b, k] == "" && !((b, k) in rsv)) { rsv[b, k] = id; kept[b, id] = k }
+			if ((k > 0 || (m == 0 && !ista[b])) && k < cap && used[b, k] == "" && !((b, k) in rsv)) { rsv[b, k] = id; kept[b, id] = k }
 		}
 		# the anchor left: the lowest slot becomes the anchor (one radio restart)
-		if (m && used[b, 0] == "") {
+		if (m && !ista[b] && used[b, 0] == "") {
 			best = -1
 			for (k = 1; k < cap; k++) if (used[b, k] != "") { best = k; break }
 			if (best > 0) {
@@ -667,7 +820,7 @@ END {
 		for (j = 1; j <= m; j++) {
 			i = mem[b, j]; id = net[i]
 			if (sl[b, id] >= 0) continue
-			for (k = 0; k < cap; k++) if (used[b, k] == "" && !((b, k) in rsv)) break
+			for (k = ista[b]; k < cap; k++) if (used[b, k] == "" && !((b, k) in rsv)) break
 			if (k >= cap) { err("radio " b ": no free slot for network " id); continue }
 			used[b, k] = i; sl[b, id] = k
 		}
@@ -730,6 +883,19 @@ END {
 	}
 	if (nerr) exit 1
 
+	# ---- a station radio takes the channel of its uplink (-U) ----
+	for (bi = 1; bi <= nbands; bi++) {
+		b = BANDS[bi]
+		if (!ista[b] || !(b in ufreq)) continue
+		ch = f2ch(b, ufreq[b])
+		if (ch != int(ch) || !chans(b, ch)) { warn("radio " b ": the station is on " ufreq[b] " MHz, not a channel of this radio: ignored"); continue }
+		if (ch != rch[b]) warn("radio " b ": channel " ch " (the station uplink, " ufreq[b] " MHz) instead of " rch[b])
+		rch[b] = ch; w = rw[b]
+		while (w > 20 && !widthok(b, ch, w)) w = (w == 320) ? 160 : w / 2
+		if (w != rw[b]) warn("radio " b ": " w " MHz instead of " rw[b] " (no " rw[b] " MHz block holds channel " ch ")")
+		rw[b] = w
+	}
+
 	# ---- render ----
 	plan = out "/plan.raw"
 	printf "" > plan	# exists even for an empty list
@@ -782,7 +948,10 @@ END {
 		# hostapd airtime policy (CONFIG_AIRTIME_POLICY): radio-wide mode; rair[] holds numbers
 		if (rair[b]) print "airtime_mode=" rair[b] > hdr
 		close(hdr)
-		print "radio " b " " d " " out "/hostapd-" d ".conf" > plan
+		# the first BSS (interface= of the radio config): slot 0, else the
+		# lowest slot (a station radio: a virtual interface)
+		for (k = 0; k < cap; k++) if (used[b, k] != "") break
+		print "radio " b " " d " " out "/hostapd-" d ".conf " (k == 0 ? d : d "-" k) > plan
 		for (k = 0; k < cap; k++) {
 			i = used[b, k]; if (i == "") continue
 			id = net[i]; ifn = (k == 0) ? d : d "-" k
@@ -851,8 +1020,40 @@ END {
 			onradio[id] = 1
 		}
 	}
-	for (i = 1; i <= nnet; i++) if (net[i] in onradio)
-		print "net " net[i] " brwifi" net[i] " " vlan[i] " " iso[i] > plan
+	for (i = 1; i <= nnet; i++) if (net[i] in onradio) {
+		if (rtd[i] != "") print "routed " net[i] " brwifi" net[i] " " rtd[i] " " iso[i] > plan
+		else print "net " net[i] " brwifi" net[i] " " vlan[i] " " iso[i] > plan
+	}
+	# the station: its wpa_supplicant config (0600, umask) and plan line
+	for (bi = 1; bi <= nbands; bi++) {
+		b = BANDS[bi]
+		if (!ista[b]) continue
+		d = dev[b]; f = out "/sta-" d ".conf"
+		print "# generated by gt-be98-wifi-gen - do not edit: the station (uplink) of radio " b > f
+		print "ctrl_interface=" stactrl > f
+		print "update_config=0" > f
+		print "ap_scan=1" > f
+		if (stssid != "") {
+			print "network={" > f
+			print "\tssid=" hexs(stssid) > f
+			print "\tscan_ssid=1" > f
+			if (stbssid != "") print "\tbssid=" stbssid > f
+			if (stsec == "psk2") {
+				print "\tkey_mgmt=WPA-PSK" > f; print "\tproto=RSN" > f; print "\tpairwise=CCMP" > f
+				print "\tieee80211w=0" > f
+				if (ishex64(stpass)) print "\tpsk=" tolower(stpass) > f
+				else print "\tpsk=\"" stpass "\"" > f
+			} else {
+				# SAE: H2E or hunting-and-pecking, PMF required (the box-verified set)
+				print "\tkey_mgmt=SAE" > f; print "\tieee80211w=2" > f; print "\tsae_pwe=2" > f
+				print "\tsae_password=" hexs(stpass) > f
+			}
+			print "}" > f
+		}
+		close(f)
+		for (k = 1; k < cap; k++) if (used[b, k] != "") break
+		print "station " b " " d " " f " " ((k < cap && live[b]) ? d "-" k : "-") > plan
+	}
 	for (bi = 1; bi <= nbands; bi++) {
 		b = BANDS[bi]
 		if (ismon[b]) print "monitor " b " " dev[b] " " freq(b, rch[b]) " " rw[b] " " cfreq(b, rch[b], rw[b]) > plan
@@ -883,20 +1084,24 @@ END {
 H="# generated by gt-be98-wifi-gen - do not edit, regenerated on every change"
 sum() { sha256sum "$1" | cut -d' ' -f1; }
 : > "$OUT/plan"
+first=
 while read -r t a b c d e f g h; do
 	case $t in
-	radio)	# radio <band> <dev> <conf>
-		{ echo "$H"; echo "interface=$b"; cat "$OUT/hdr-$b"; } > "$c"
-		echo "radio $a $b $c $(sum "$OUT/hdr-$b")" >> "$OUT/plan" ;;
+	radio)	# radio <band> <dev> <conf> <first BSS ifname>
+		first=$d
+		{ echo "$H"; echo "interface=$first"; cat "$OUT/hdr-$b"; } > "$c"
+		echo "radio $a $b $c $(sum "$OUT/hdr-$b") $first" >> "$OUT/plan" ;;
 	bss)	# bss <dev> <ifname> <slot> <net> <index> <bssid> <bridge> <conf>
-		if [ "$c" = 0 ]; then
+		if [ "$b" = "$first" ]; then
 			{ echo; cat "$OUT/sec-$b"; } >> "$OUT/hostapd-$a.conf"
 		else
 			{ echo; echo "bss=$b"; cat "$OUT/sec-$b"; } >> "$OUT/hostapd-$a.conf"
 		fi
 		{ echo "$H"; echo "interface=$b"; cat "$OUT/hdr-$a"; echo; cat "$OUT/sec-$b"; } > "$h"
 		echo "bss $a $b $c $d $e $f $g $h $(sum "$OUT/sec-$b")" >> "$OUT/plan" ;;
-	net)	echo "$t $a $b $c $d" >> "$OUT/plan" ;;
+	net|routed) echo "$t $a $b $c $d" >> "$OUT/plan" ;;
+	station) # station <band> <dev> <conf> <first AP ifname or ->
+		echo "station $a $b $c $(sum "$c") $d" >> "$OUT/plan" ;;
 	monitor) echo "$t $a $b $c $d $e" >> "$OUT/plan" ;;
 	led)	echo "$t $a $b $c" >> "$OUT/plan" ;;
 	esac

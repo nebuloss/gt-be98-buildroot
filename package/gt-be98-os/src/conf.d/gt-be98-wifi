@@ -44,4 +44,22 @@ HOSTAPD_ARGS=
 HOSTAPD_GLOBAL=/run/hostapd-global
 HOSTAPD_CTRL=/run/hostapd
 IFACE_WAIT=20
+# Station (Wi-Fi uplink: a station= block in WIFI_NETWORKS; gt-be98-wifi-sta).
+# STA_WAIT: s a new station may take to associate before the radio's APs
+# start (on the configured channel; they follow the uplink's later);
+# STA_POLL: the monitor's period (dead processes, channel follow);
+# STA_METRIC: the metric of the box's own default route through the uplink
+# (above every management route, so the lifeline keeps the box's default);
+# STA_DEFAULT_ROUTE=0: no such route (only the routed networks use it);
+# STA_TABLE: the routing table of the routed networks (gt-be98-router: 180);
+# STA_DHCP=0: no DHCP client on the station; WPA_CTRL: wpa_supplicant's
+# control directory (wpa_cli -p).
+STA_WAIT=30
+STA_POLL=10
+STA_METRIC=3000
+STA_DEFAULT_ROUTE=1
+STA_TABLE=181
+STA_DHCP=1
+STA_FOLLOW_MIN=120
+WPA_CTRL=/run/wpa_supplicant
 WIFI_UNLOAD_ON_STOP=yes

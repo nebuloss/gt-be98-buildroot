@@ -1,0 +1,440 @@
+#!/bin/sh
+# shellcheck shell=busybox
+# SPDX-License-Identifier: GPL-2.0
+# gt-be98-wifi-sta: the Wi-Fi station (uplink, client mode) of gt-be98-wifi,
+# and the routed networks behind it. Run by the service, never by hand on a
+# running system (the service owns the order: stations before APs).
+#
+#   gt-be98-wifi-sta up DEV CONF SUM [restart]
+#       wpa_supplicant on the radio netdev DEV with CONF (the generator's
+#       sta-<dev>.conf, SUM its checksum): started when not running (then
+#       waits up to STA_WAIT s for the association), told to re-read CONF
+#       (wpa_cli reconfigure) when SUM changed, restarted with "restart"
+#       (an AP interface appeared on the radio: the station's connect must
+#       follow it). Then the DHCP client on DEV.
+#   gt-be98-wifi-sta down DEV       the DHCP client and wpa_supplicant stop,
+#                                   DEV's addresses and routes go
+#   gt-be98-wifi-sta freq DEV       the frequency (MHz) DEV is associated on
+#                                   (nothing, exit 1: not associated)
+#   gt-be98-wifi-sta route          the routed networks of $STATE/routed
+#                                   ("<bridge> <A.B.C.1/P>" per line): the
+#                                   bridge address, DHCP/DNS (dnsmasq), NAT
+#                                   and policy routing out of the station
+#   gt-be98-wifi-sta unroute        all of that undone
+#   gt-be98-wifi-sta status         one line per station
+#   gt-be98-wifi-sta monitor        the daemon (gt-be98-wifi starts it):
+#                                   every STA_POLL s, a dead wpa_supplicant
+#                                   or DHCP client is restarted, and when the
+#                                   station is associated on another
+#                                   frequency than its radio's APs (the
+#                                   firmware moved the radio with the
+#                                   uplink; hostapd is not told) the service
+#                                   is reloaded so that the APs follow
+#   (no argument, dhcpcd's environment) the DHCP client's script
+#
+# The DHCP client is dhcpcd (the OS has no other). The OS's dhcpcd manager
+# (the USB lifeline and rnr0) refuses bcawl* by design and would take over
+# any second instance through its control socket, so the station's dhcpcd
+# runs in a private mount namespace (unshare -m) whose dhcpcd run directory
+# is its own: same network namespace, separate process and socket. It
+# installs no default route itself (nogateway): this script does, with
+# metric STA_METRIC (below every management route: the lifeline keeps the
+# box's default) and into table STA_TABLE for the routed networks
+# (ip rule iif <bridge>). A 3-address station cannot be bridged, so a
+# network behind the uplink is routed and NATed (masquerade), never bridged.
+#
+# Settings (/etc/conf.d/gt-be98-wifi, parsed): STA_WAIT (30), STA_POLL (10),
+# STA_METRIC (3000), STA_DEFAULT_ROUTE (1), STA_TABLE (181), STA_DHCP (1),
+# STA_FOLLOW_MIN (120: s between two channel-follow reloads of one radio),
+# WPA_CTRL (/run/wpa_supplicant), HOSTAPD_CTRL (/run/hostapd).
+# State: /run/gt-be98-wifi/sta (0700). Logs: syslog, and
+# /var/log/wpa_supplicant-<dev>.log (cut at 1 MiB by the monitor).
+set -u
+RUNDIR=${GT_BE98_RUN:-/run}
+SYSNET=${GT_BE98_SYSNET:-/sys/class/net}
+CONFD=${GT_BE98_CONFD:-/etc/conf.d/gt-be98-wifi}
+LOGDIR=${GT_BE98_LOGDIR:-/var/log}
+STATE=$RUNDIR/gt-be98-wifi
+S=$STATE/sta
+SELF=$(command -v "$0" 2>/dev/null || echo "$0")
+case "$SELF" in /*) ;; *) SELF=$(pwd)/$SELF ;; esac
+
+log() { logger -t gt-be98-wifi-sta -- "$*" 2>/dev/null; echo "gt-be98-wifi-sta: $*" >&2; }
+die() { log "$*"; exit 1; }
+
+# one setting of the conf.d file (parsed, never sourced): $1 key, $2 default
+setting() {
+	local v
+	v=$(sed -n "s/^$1=\"\{0,1\}\([A-Za-z0-9/_.-]*\)\"\{0,1\}[[:space:]]*$/\1/p" "$CONFD" 2>/dev/null | tail -n1)
+	echo "${v:-$2}"
+}
+num() { case "$1" in ''|*[!0-9]*) echo "$2" ;; *) echo "$1" ;; esac; }
+
+WPA_CTRL=$(setting WPA_CTRL "$RUNDIR/wpa_supplicant")
+HCTRL=$(setting HOSTAPD_CTRL "$RUNDIR/hostapd")
+STA_WAIT=$(num "$(setting STA_WAIT 30)" 30)
+STA_POLL=$(num "$(setting STA_POLL 10)" 10)
+STA_METRIC=$(num "$(setting STA_METRIC 3000)" 3000)
+STA_TABLE=$(num "$(setting STA_TABLE 181)" 181)
+STA_FOLLOW_MIN=$(num "$(setting STA_FOLLOW_MIN 120)" 120)
+STA_DEFAULT_ROUTE=$(setting STA_DEFAULT_ROUTE 1)
+STA_DHCP=$(setting STA_DHCP 1)
+NFT_TABLE=gt_be98_sta
+
+valid_dev() { case "$1" in bcawl[0-9]|bcawl[0-9][0-9]) return 0 ;; esac; return 1; }
+need_dev() { valid_dev "$1" || die "station netdev '$1' refused (bcawlN)"; }
+state_dir() { mkdir -p "$S" && chmod 700 "$S"; }
+
+wcli() { local d=$1; shift; wpa_cli -p "$WPA_CTRL" -i "$d" "$@" 2>/dev/null; }
+wpa_state() { wcli "$1" status | sed -n 's/^wpa_state=//p' | head -n1; }
+pid_alive() {
+	local p
+	p=$(cat "$1" 2>/dev/null) || return 1
+	[ -n "$p" ] && kill -0 "$p" 2>/dev/null
+}
+wpa_running() { pid_alive "$S/$1.wpa.pid"; }
+dhcp_running() { pid_alive "$S/$1.dhcp.pid"; }
+
+stop_pid() {	# pidfile
+	[ -f "$1" ] || return 0
+	start-stop-daemon --stop --pidfile "$1" --retry TERM/5/KILL/2 > /dev/null 2>&1
+	rm -f "$1"
+}
+
+# the frequency the station is associated on
+freq() {
+	local d=$1 t
+	t=$(wcli "$d" status) || return 1
+	echo "$t" | grep -qx 'wpa_state=COMPLETED' || return 1
+	t=$(echo "$t" | sed -n 's/^freq=\([0-9][0-9]*\)$/\1/p' | head -n1)
+	[ -n "$t" ] || return 1
+	echo "$t"
+}
+
+# ---- DHCP client: dhcpcd in its own mount namespace ----
+
+dhcp_start() {
+	local d=$1 dir=$S/dhcpcd-$1 conf=$S/$1.dhcpcd.conf
+	[ "$STA_DHCP" = 1 ] || return 0
+	dhcp_running "$d" && return 0
+	state_dir
+	mkdir -p "$dir" /var/run/dhcpcd
+	{
+		echo "# generated by gt-be98-wifi-sta: DHCP on the station uplink $d"
+		echo "allowinterfaces $d"
+		echo "ipv4only"
+		echo "noipv4ll"
+		# the default routes are this script's (STA_METRIC, table STA_TABLE)
+		echo "nogateway"
+		echo "clientid"
+		echo "option domain_name_servers, routers, subnet_mask"
+		# never give up (0 = wait forever): the uplink may come later
+		echo "timeout 0"
+	} > "$conf"
+	# shellcheck disable=SC2016 # expanded by the inner shell
+	start-stop-daemon --start --background --make-pidfile --pidfile "$S/$d.dhcp.pid" \
+		--exec /usr/bin/unshare -- -m /bin/sh -c \
+		'mount --bind "$1" /var/run/dhcpcd && exec /sbin/dhcpcd -B -q -f "$2" -c "$3" -4 "$4"' \
+		sh "$dir" "$conf" "$SELF" "$d" ||
+		{ log "$d: DHCP client did not start"; return 1; }
+}
+
+dhcp_stop() {
+	stop_pid "$S/$1.dhcp.pid"
+	rm -rf "$S/dhcpcd-$1"
+}
+
+# dhcpcd's script (its environment: reason, interface, new_*)
+dhcp_event() {
+	local d=${interface:-} gw n
+	valid_dev "$d" || exit 0
+	grep -qx "$d" "$STATE/stations" 2>/dev/null || exit 0
+	state_dir
+	case "${reason:-}" in
+	BOUND|RENEW|REBIND|REBOOT|STATIC)
+		gw=${new_routers:-}; gw=${gw%% *}
+		{
+			echo "ip=${new_ip_address:-}/${new_subnet_cidr:-}"
+			echo "net=${new_network_number:-}/${new_subnet_cidr:-}"
+			echo "gw=$gw"
+			echo "dns=${new_domain_name_servers:-}"
+		} > "$S/$d.lease"
+		# the box's own default route through the uplink: below every
+		# other default (the management keeps its own)
+		if [ "$STA_DEFAULT_ROUTE" = 1 ] && [ -n "$gw" ]; then
+			ip route replace default via "$gw" dev "$d" metric "$STA_METRIC"
+		fi
+		for n in ${new_domain_name_servers:-}; do echo "nameserver $n"; done > "$S/resolv.conf.new"
+		mv -f "$S/resolv.conf.new" "$S/resolv.conf"
+		log "$d: lease ${new_ip_address:-?}/${new_subnet_cidr:-?} via ${gw:-none} (${reason})"
+		route ;;
+	EXPIRE|FAIL|NAK|NOCARRIER|RELEASE|STOP|STOPPED|DEPARTED|TIMEOUT|IPV4LL)
+		rm -f "$S/$d.lease"
+		ip route del default dev "$d" metric "$STA_METRIC" 2>/dev/null
+		log "$d: no lease (${reason})"
+		route ;;
+	esac
+	exit 0
+}
+
+# ---- the station ----
+
+up() {
+	local d=$1 c=$2 sum=$3 how=${4:-} started=0 i st
+	need_dev "$d"
+	[ -f "$c" ] || die "$d: $c: no such file"
+	[ -e "$SYSNET/$d" ] || die "$d: no such interface"
+	state_dir
+	if wpa_running "$d"; then
+		if [ "$how" = restart ]; then
+			log "$d: an AP interface appeared on the radio: the station reconnects after it"
+			stop_pid "$S/$d.wpa.pid"
+		elif [ "$(cat "$S/$d.sum" 2>/dev/null)" != "$sum" ]; then
+			log "$d: station settings changed: wpa_supplicant re-reads them"
+			wcli "$d" reconfigure | grep -qx OK || stop_pid "$S/$d.wpa.pid"
+		fi
+	fi
+	if ! wpa_running "$d"; then
+		iw dev "$d" set type managed 2>/dev/null
+		ip link set dev "$d" up || die "$d: up failed"
+		mkdir -p "$LOGDIR"
+		wpa_supplicant -B -i "$d" -c "$c" -P "$S/$d.wpa.pid" -f "$LOGDIR/wpa_supplicant-$d.log" ||
+			die "$d: wpa_supplicant did not start"
+		started=1
+		log "$d: wpa_supplicant started"
+	fi
+	echo "$sum" > "$S/$d.sum"
+	dhcp_start "$d"
+	# a new station: wait for its association (the APs of the radio then
+	# start on its channel); a station with no network only scans
+	if [ $started = 1 ] && grep -q '^network={' "$c"; then
+		i=0
+		while [ $i -lt "$STA_WAIT" ]; do
+			st=$(wpa_state "$d")
+			[ "$st" = COMPLETED ] && break
+			sleep 1; i=$((i + 1))
+		done
+		log "$d: ${st:-no state} after ${i}s$( [ "${st:-}" = COMPLETED ] && echo " on $(freq "$d") MHz")"
+	fi
+	return 0
+}
+
+down() {
+	local d=$1
+	need_dev "$d"
+	dhcp_stop "$d"
+	stop_pid "$S/$d.wpa.pid"
+	ip route del default dev "$d" metric "$STA_METRIC" 2>/dev/null
+	ip -4 addr flush dev "$d" scope global 2>/dev/null
+	rm -f "$S/$d.sum" "$S/$d.lease" "$S/$d.follow" "$S/$d.dhcpcd.conf"
+	log "$d: station stopped"
+	return 0
+}
+
+status() {
+	local d t
+	# shellcheck disable=SC2013 # one validated name per line
+	for d in $(cat "$STATE/stations" 2>/dev/null); do
+		valid_dev "$d" || continue
+		t=$(wcli "$d" status)
+		printf 'station %s: wpa_supplicant %s, %s ssid=%s bssid=%s freq=%s key_mgmt=%s, lease %s\n' "$d" \
+			"$(wpa_running "$d" && echo running || echo DOWN)" \
+			"$(echo "$t" | sed -n 's/^wpa_state=//p')" "$(echo "$t" | sed -n 's/^ssid=//p')" \
+			"$(echo "$t" | sed -n 's/^bssid=//p')" "$(echo "$t" | sed -n 's/^freq=//p')" \
+			"$(echo "$t" | sed -n 's/^key_mgmt=//p')" \
+			"$(sed -n 's/^ip=//p' "$S/$d.lease" 2>/dev/null | grep . || echo none)"
+	done
+}
+
+# ---- routed networks ----
+
+# "A.B.C.1/P" -> "<first host> <last host> <netmask> <network>/P": the DHCP
+# range (from the second host to the last one) and the subnet
+dhcp_range() {
+	echo "$1" | awk -F/ '
+	function n2ip(n) { return int(n / 16777216) "." int(n / 65536) % 256 "." int(n / 256) % 256 "." n % 256 }
+	{
+		split($1, o, "."); n = ((o[1] * 256 + o[2]) * 256 + o[3]) * 256 + o[4]
+		sz = 2 ^ (32 - $2); net = n - n % sz
+		printf "%s %s %s %s/%s\n", n2ip(net + 2), n2ip(net + sz - 2), n2ip(2 ^ 32 - sz), n2ip(net), $2
+	}'
+}
+valid_cidr() { echo "$1" | grep -qE '^[0-9]{1,3}(\.[0-9]{1,3}){3}/[0-9]{1,2}$'; }
+
+# the station that carries the routed networks (one station per list)
+wan_dev() { head -n1 "$STATE/stations" 2>/dev/null | grep -E '^bcawl[0-9]{1,2}$'; }
+
+unroute() {
+	local b c
+	if [ -f "$S/dnsmasq.pid" ]; then
+		stop_pid "$S/dnsmasq.pid"
+	fi
+	nft delete table ip "$NFT_TABLE" 2>/dev/null
+	if [ -f "$S/routed.applied" ]; then
+		while read -r b c; do
+			ip rule del iif "$b" table "$STA_TABLE" priority "$STA_TABLE" 2>/dev/null
+			ip addr del "$c" dev "$b" 2>/dev/null
+		done < "$S/routed.applied"
+		rm -f "$S/routed.applied"
+	fi
+	ip route flush table "$STA_TABLE" 2>/dev/null
+	# ip_forward back to what it was, unless router mode (gt-be98-router) runs
+	if [ -f "$S/ipfwd" ]; then
+		[ -f "$RUNDIR/gt-be98-router.applied" ] || sysctl -q -w "net.ipv4.ip_forward=$(cat "$S/ipfwd")"
+		rm -f "$S/ipfwd"
+	fi
+	rm -f "$S/dnsmasq.conf" "$S/$NFT_TABLE.nft"
+	return 0
+}
+
+route() {
+	local b c wan gw net rc=0 brs='' cidrs='' lst f r
+	if [ ! -s "$STATE/routed" ]; then
+		unroute
+		return 0
+	fi
+	state_dir
+	wan=$(wan_dev)
+	gw='' net=''
+	if [ -n "$wan" ] && [ -f "$S/$wan.lease" ]; then
+		gw=$(sed -n 's/^gw=//p' "$S/$wan.lease"); net=$(sed -n 's/^net=//p' "$S/$wan.lease")
+	fi
+	# addresses and policy rules: the ones no longer listed go first
+	if [ -f "$S/routed.applied" ]; then
+		while read -r b c; do
+			grep -qx "$b $c" "$STATE/routed" && continue
+			ip rule del iif "$b" table "$STA_TABLE" priority "$STA_TABLE" 2>/dev/null
+			ip addr del "$c" dev "$b" 2>/dev/null
+		done < "$S/routed.applied"
+	fi
+	: > "$S/routed.applied.new"
+	while read -r b c; do
+		case "$b" in brwifi[0-9]*) ;; *) log "routed bridge '$b' refused"; rc=1; continue ;; esac
+		valid_cidr "$c" || { log "routed address '$c' refused"; rc=1; continue; }
+		[ -d "$SYSNET/$b/bridge" ] || { log "$b: no such bridge"; rc=1; continue; }
+		ip addr replace "$c" dev "$b" || { rc=1; continue; }
+		ip rule del iif "$b" table "$STA_TABLE" priority "$STA_TABLE" 2>/dev/null
+		ip rule add iif "$b" table "$STA_TABLE" priority "$STA_TABLE"
+		echo "$b $c" >> "$S/routed.applied.new"
+		brs="$brs $b"; cidrs="$cidrs${cidrs:+, }$(dhcp_range "$c" | cut -d' ' -f4)"
+	done < "$STATE/routed"
+	mv -f "$S/routed.applied.new" "$S/routed.applied"
+	# the routing table of the routed networks: the uplink, else nothing
+	# (never leaked through another default route)
+	ip route flush table "$STA_TABLE" 2>/dev/null
+	if [ -n "$gw" ]; then
+		ip route replace default via "$gw" dev "$wan" table "$STA_TABLE"
+		[ -n "$net" ] && ip route replace "$net" dev "$wan" table "$STA_TABLE"
+	else
+		ip route replace unreachable default table "$STA_TABLE"
+	fi
+	# forwarding: routed networks <-> the station only; NAT out of it
+	f=$S/$NFT_TABLE.nft
+	{
+		echo "# generated by gt-be98-wifi-sta - do not edit"
+		echo "table ip $NFT_TABLE {}"
+		echo "delete table ip $NFT_TABLE"
+		echo "table ip $NFT_TABLE {"
+		echo "	chain forward {"
+		echo "		type filter hook forward priority filter; policy accept;"
+		for b in $brs; do
+			if [ -n "$wan" ]; then
+				echo "		iifname \"$b\" oifname \"$wan\" accept"
+				echo "		iifname \"$wan\" oifname \"$b\" ct state established,related accept"
+			fi
+			echo "		iifname \"$b\" drop"
+			echo "		oifname \"$b\" drop"
+		done
+		echo "	}"
+		echo "	chain postrouting {"
+		echo "		type nat hook postrouting priority srcnat; policy accept;"
+		[ -n "$wan" ] && [ -n "$cidrs" ] && echo "		oifname \"$wan\" ip saddr { $cidrs } masquerade"
+		echo "	}"
+		echo "}"
+	} > "$f"
+	if nft -c -f "$f" && nft -f "$f"; then :; else log "$f rejected"; rc=1; fi
+	if [ ! -f "$S/ipfwd" ]; then cat /proc/sys/net/ipv4/ip_forward > "$S/ipfwd" 2>/dev/null; fi
+	sysctl -q -w net.ipv4.ip_forward=1
+	# DHCP and DNS on the routed bridges (DNS forwarded to the uplink's)
+	[ -f "$S/resolv.conf" ] || : > "$S/resolv.conf"
+	{
+		echo "# generated by gt-be98-wifi-sta - do not edit"
+		echo "bind-dynamic"
+		echo "except-interface=lo"
+		echo "resolv-file=$S/resolv.conf"
+		echo "pid-file=$S/dnsmasq.pid"
+		echo "dhcp-leasefile=$S/dnsmasq.leases"
+		while read -r b c; do
+			r=$(dhcp_range "$c")
+			echo "interface=$b"
+			# shellcheck disable=SC2086 # three words
+			set -- $r
+			echo "dhcp-range=set:$b,$1,$2,$3,12h"
+			echo "dhcp-option=tag:$b,option:router,${c%/*}"
+			echo "dhcp-option=tag:$b,option:dns-server,${c%/*}"
+		done < "$S/routed.applied"
+	} > "$S/dnsmasq.conf.new"
+	lst=$(cat "$S/dnsmasq.conf" 2>/dev/null)
+	if [ "$lst" != "$(cat "$S/dnsmasq.conf.new")" ] || [ ! -f "$S/dnsmasq.pid" ] || ! pid_alive "$S/dnsmasq.pid"; then
+		stop_pid "$S/dnsmasq.pid"
+		mv -f "$S/dnsmasq.conf.new" "$S/dnsmasq.conf"
+		dnsmasq --conf-file="$S/dnsmasq.conf" || { log "dnsmasq did not start"; rc=1; }
+	else
+		rm -f "$S/dnsmasq.conf.new"
+	fi
+	return $rc
+}
+
+# ---- the monitor daemon ----
+
+monitor() {
+	local b d c s f fr af now last
+	trap 'exit 0' TERM INT
+	log "monitor: every ${STA_POLL}s (processes, channel follow)"
+	while :; do
+		sleep "$STA_POLL" &
+		wait $!
+		while read -r b d c s f; do
+			grep -qx "$d" "$STATE/stations" 2>/dev/null || continue
+			if ! wpa_running "$d"; then
+				log "$d: wpa_supplicant is not running: restarted"
+				up "$d" "$c" "$s" > /dev/null 2>&1
+				continue
+			fi
+			if [ "$STA_DHCP" = 1 ] && ! dhcp_running "$d"; then
+				log "$d: DHCP client is not running: restarted"
+				dhcp_start "$d"
+			fi
+			if [ -n "$(find "$LOGDIR/wpa_supplicant-$d.log" -size +1024k 2>/dev/null)" ]; then
+				: > "$LOGDIR/wpa_supplicant-$d.log"
+			fi
+			# the APs follow the uplink (one channel per radio)
+			[ "$f" != - ] || continue
+			fr=$(freq "$d") || continue
+			af=$(hostapd_cli -p "$HCTRL" -i "$f" status 2>/dev/null | sed -n 's/^freq=//p' | head -n1)
+			[ -n "$af" ] && [ "$af" != "$fr" ] || continue
+			now=$(date +%s); last=$(cat "$S/$d.follow" 2>/dev/null || echo 0)
+			[ $((now - last)) -ge "$STA_FOLLOW_MIN" ] || continue
+			echo "$now" > "$S/$d.follow"
+			log "$d: associated on $fr MHz, the APs of its radio on $af MHz: reloading gt-be98-wifi (the APs follow the uplink)"
+			rc-service gt-be98-wifi reload > /dev/null 2>&1
+		done <<-EOF
+		$(awk '$1 == "station" { print $2, $3, $4, $5, $6 }' "$STATE/gen/plan" 2>/dev/null)
+		EOF
+	done
+}
+
+# dhcpcd runs its script with no argument
+if [ $# = 0 ] && [ -n "${reason:-}" ]; then dhcp_event; fi
+cmd=${1:-}
+[ $# -gt 0 ] && shift
+case "$cmd" in
+up)	[ $# -ge 3 ] || die "up DEV CONF SUM [restart]"; up "$@" ;;
+down)	[ $# = 1 ] || die "down DEV"; down "$1" ;;
+freq)	[ $# = 1 ] || die "freq DEV"; need_dev "$1"; freq "$1" ;;
+route)	route ;;
+unroute) unroute ;;
+status)	status ;;
+monitor) monitor ;;
+*)	sed -n '/^#   gt-be98-wifi-sta up/,/^#   (no argument/p' "$0" | sed 's/^# \{0,1\}//' >&2; exit 2 ;;
+esac

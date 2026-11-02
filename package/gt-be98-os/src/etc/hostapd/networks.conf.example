@@ -31,6 +31,12 @@
 # radio starts at once on a non-DFS channel, the DFS channel's CAC runs in
 # the background, then hostapd moves there; monitor=1 makes the radio a
 # monitor (<dev>mon on its channel/width, no BSS); led=0 turns its LED off.
+# Station (Wi-Fi uplink, at most one): station=<band> with ssid=,
+# security=psk2|sae and passphrase= makes that radio a Wi-Fi client of
+# another AP (its networks then run on virtual interfaces, on the uplink's
+# channel). A network reaches the uplink only when routed: routed=A.B.C.1/P
+# instead of vlan= (DHCP/DNS and NAT by the box); a 3-address station cannot
+# be bridged. See the example at the end.
 # This file holds secrets: keep it mode 0600.
 # country= is written only once the regulatory database is loaded.
 #country=XX
@@ -84,3 +90,15 @@ radius_secret=CHANGE-ME-RADIUS
 #radius_acct_port=1813
 bands=2g 5gl 5gh 6g
 vlan=40
+
+# Repeater: 5 GHz-low joins an upstream AP; network 50 is routed behind it.
+#station=5gl
+#ssid=upstream
+#security=sae
+#passphrase=CHANGE-ME-UPLINK
+#network=50
+#ssid=repeater
+#security=psk2sae
+#passphrase=CHANGE-ME-REP
+#bands=2g 5gl
+#routed=192.168.50.1/24

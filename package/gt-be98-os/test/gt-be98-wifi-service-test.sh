@@ -19,9 +19,10 @@
 set -u
 here=$(cd "$(dirname "$0")" && pwd)
 T=$(mktemp -d)
-trap 'kill $(cat "$T/run/hostapd-wifi.pid" 2>/dev/null) 2>/dev/null; rm -rf "$T"' EXIT
+trap 'for f in $(find "$T" -name "*.pid"); do kill "$(cat "$f")" 2>/dev/null; done; rm -rf "$T"' EXIT
 export GT_BE98_RUN="$T/run" GT_BE98_SYSNET="$T/net" GT_BE98_HAP_LOG="$T/hostapd.log" \
-	GT_BE98_WIFI_GEN="$here/../src/sbin/gt-be98-wifi-gen" FAKE="$T"
+	GT_BE98_WIFI_GEN="$here/../src/sbin/gt-be98-wifi-gen" FAKE="$T" \
+	GT_BE98_WIFI_STA="$T/bin/gt-be98-wifi-sta"
 mkdir -p "$T/bin" "$T/run"
 for p in 0:a4 1:a8 2:ac 3:a0; do	# bcawl<i>: phy<i>, address
 	mkdir -p "$T/net/bcawl${p%%:*}/phy80211"
@@ -36,7 +37,7 @@ S=$FAKE/hapd
 p=$(cat "$FAKE/run/hostapd-wifi.pid" 2>/dev/null)
 [ -n "$p" ] && kill -0 "$p" 2>/dev/null || { echo "Failed to connect to hostapd"; exit 255; }
 touch "$S"
-case "$1" in PING|INTERFACES) ;; *) echo "$*" >> "$FAKE/cmds" ;; esac
+case "$1" in PING|INTERFACES) ;; *) echo "$*" >> "$FAKE/cmds"; echo "hapd $*" >> "$FAKE/seq" ;; esac
 if [ -f "$FAKE/fail" ] && echo "$*" | grep -q -f "$FAKE/fail"; then echo FAIL; exit 0; fi
 inuse() { tr ' ' '\n' < "$S" | grep -qx "$1"; }
 case "$1" in
@@ -63,10 +64,11 @@ cat > "$T/bin/ssd" <<'X'
 #!/bin/sh
 case " $* " in
 *" --start "*)	pf=; while [ $# -gt 0 ]; do [ "$1" = --pidfile ] && pf=$2; [ "$1" = -- ] && { shift; break; }; shift; done
-	sleep 1000 & echo $! > "$pf"; rm -f "$FAKE/hapd"
-	echo "start $*" >> "$FAKE/daemon" ;;
+	sleep 1000 & echo $! > "$pf"
+	case "$pf" in *hostapd*) rm -f "$FAKE/hapd"; echo "start $*" >> "$FAKE/daemon" ;; *) echo "start $pf" >> "$FAKE/stalog" ;; esac ;;
 *" --stop "*)	pf=; while [ $# -gt 0 ]; do [ "$1" = --pidfile ] && pf=$2; shift; done
-	kill "$(cat "$pf")" 2>/dev/null; rm -f "$FAKE/hapd"; echo stop >> "$FAKE/daemon" ;;
+	kill "$(cat "$pf")" 2>/dev/null
+	case "$pf" in *hostapd*) rm -f "$FAKE/hapd"; echo stop >> "$FAKE/daemon" ;; *) echo "stop $pf" >> "$FAKE/stalog" ;; esac ;;
 esac
 exit 0
 X
@@ -79,6 +81,7 @@ cat > "$T/bin/iw" <<'X'
 case "$*" in
 "phy "*" interface add "*" type monitor") mkdir -p "$FAKE/net/$5"; echo "$*" >> "$FAKE/iwlog" ;;
 "dev "*" del") rm -rf "${FAKE:?}/net/$2"; echo "$*" >> "$FAKE/iwlog" ;;
+"dev "*" interface add "*" type __ap") mkdir -p "$FAKE/net/$5"; echo "$*" >> "$FAKE/iwlog"; echo "iw add $5" >> "$FAKE/seq" ;;
 "dev "*" set freq "*) echo "$*" >> "$FAKE/iwlog" ;;
 esac
 exit 0
@@ -87,6 +90,20 @@ X
 cat > "$T/bin/ip" <<'X'
 #!/bin/sh
 echo "$*" >> "$FAKE/iplog"
+exit 0
+X
+# gt-be98-wifi-sta: logs its calls to $FAKE/stalog; freq DEV answers
+# $FAKE/freq-DEV (absent: not associated); "up" of a station makes it
+# associate at $FAKE/assoc-DEV when that file exists
+cat > "$T/bin/gt-be98-wifi-sta" <<'X'
+#!/bin/sh
+case "$1" in
+freq) [ -f "$FAKE/freq-$2" ] && cat "$FAKE/freq-$2" && exit 0; exit 1 ;;
+up) [ -f "$FAKE/assoc-$2" ] && cp "$FAKE/assoc-$2" "$FAKE/freq-$2"; echo "$*" >> "$FAKE/stalog"; echo "sta up $2${5:+ $5}" >> "$FAKE/seq" ;;
+down) rm -f "$FAKE/freq-$2"; echo "$*" >> "$FAKE/stalog"; echo "sta down $2" >> "$FAKE/seq" ;;
+route|unroute) echo "$1 $(cat "$FAKE/run/gt-be98-wifi/routed" 2>/dev/null | tr '\n' ',')" >> "$FAKE/stalog" ;;
+*) echo "$*" >> "$FAKE/stalog" ;;
+esac
 exit 0
 X
 chmod +x "$T/bin/"*
@@ -347,6 +364,57 @@ check "led default: none off" 'WIFI_LEDS_OFF=""' "$(grep -v '^#' "$T/run/gt-be98
 check "monitors only: hostapd stopped, two monitors" "0 stop 2" "$rc $(tail -n1 "$T/daemon") $(grep -c 'type monitor' "$T/iwlog")"
 ( stop_hostapd ) >> "$T/out" 2>&1
 check "stop: monitors deleted, leds file gone" "0 no" "$(grep -c . "$T/run/gt-be98-wifi/monitors") $([ -f "$T/run/gt-be98-wifi/leds" ] && echo yes || echo no)"
+: > "$T/nets"; apply
+
+# 17. a station (Wi-Fi uplink) on 5gl beside a network on 2g and 5gl
+WIFI_MAX_BSS=4
+rm -f "$T/slots" "$T/iwlog" "$T/stalog" "$T/seq" "$T"/freq-* "$T"/assoc-*
+sta() { printf 'station=5gl\nenabled=%s\nssid=uplink\nsecurity=psk2\npassphrase=uplinkpass1\n' "${1:-1}"; }
+{ printf 'radio=5gl\nchannel=36\nwidth=80\n'; net 1 a sae password1 "2g 5gl" 1; } > "$T/nets"
+apply
+check "station control: the network on bcawl3 and bcawl0" "0 phy3 bcawl3 phy0 bcawl0" "$rc $(hapd | tr '\n' ' ' | sed 's/ $//')"
+: > "$T/seq"; echo 5200 > "$T/assoc-bcawl0"
+{ printf 'radio=5gl\nchannel=36\nwidth=80\n'; sta; net 1 a sae password1 "2g 5gl" 1; } > "$T/nets"
+apply
+check "station added: hostapd releases bcawl0, the AP interface, the station, then the APs (A1 order)" \
+	"0 hapd REMOVE bcawl0|iw add bcawl0-1|sta up bcawl0 restart|hapd ADD bss_config=phy0:$G/hostapd-bcawl0.conf" \
+	"$rc $(tr '\n' '|' < "$T/seq" | sed 's/|$//')"
+check "station added: the network on the virtual interface, channel 40 (the uplink's 5200 MHz), 80 MHz kept" \
+	"phy3 bcawl3 phy0 bcawl0-1 interface=bcawl0-1 channel=40 vht_oper_centr_freq_seg0_idx=42" \
+	"$(hapd | tr '\n' ' ')$(grep -E '^(interface|channel|vht_oper_centr_freq_seg0_idx)=' "$G/hostapd-bcawl0.conf" | tr '\n' ' ' | sed 's/ $//')"
+check "station added: unit first, stations, vifs, the monitor started" \
+	"first bcawl0-1|bcawl0|bcawl0-1|start $T/run/gt-be98-wifi-sta.pid" \
+	"$(grep '^first' "$T/run/gt-be98-wifi/applied/bcawl0")|$(cat "$T/run/gt-be98-wifi/stations")|$(cat "$T/run/gt-be98-wifi/vifs")|$(grep "^start" "$T/stalog")"
+check "station added: the station config is 0600, its passphrase quoted" "-rw------- 1" \
+	"$(ls -l "$G/sta-bcawl0.conf" | cut -c1-10) $(grep -c '^	psk="uplinkpass1"$' "$G/sta-bcawl0.conf")"
+: > "$T/seq"; apply
+check "station unchanged: no hostapd command, the station kept (up, same config)" "0 - sta up bcawl0" "$rc -$cmds $(tr '\n' '|' < "$T/seq" | sed 's/|$//')"
+# the uplink moved the radio: the APs follow (radio restart on channel 36)
+rm -f "$T/assoc-bcawl0"; echo 5180 > "$T/freq-bcawl0"; : > "$T/seq"; apply
+check "uplink on 5180 MHz: the radio restarts on channel 36" \
+	"0 sta up bcawl0|hapd REMOVE bcawl0-1|hapd ADD bss_config=phy0:$G/hostapd-bcawl0.conf channel=36" \
+	"$rc $(tr '\n' '|' < "$T/seq" | sed 's/|$//') $(grep '^channel=' "$G/hostapd-bcawl0.conf")"
+# routed network behind the station
+{ printf 'radio=5gl\nchannel=36\nwidth=80\n'; sta; net 1 a sae password1 "2g 5gl" 1
+  printf 'network=50\nssid=rep\nsecurity=sae\npassphrase=password5\nbands=5gl\nrouted=192.168.50.1/24\n'; } > "$T/nets"
+: > "$T/stalog"; apply
+check "routed network: its BSS on bcawl0-2, the routed list, route applied" \
+	"0 phy3 bcawl3 phy0 bcawl0-1 bcawl0-2 brwifi50 192.168.50.1/24 route brwifi50 192.168.50.1/24," \
+	"$rc $(hapd | tr '\n' ' ')$(cat "$T/run/gt-be98-wifi/routed") $(grep '^route' "$T/stalog")"
+check "routed network: no VLAN for its bridge (l2.conf)" "no" "$(grep -q 'brwifi50:' "$T/run/gt-be98-wifi/l2.conf" && echo yes || echo no)"
+# station off: the APs leave the virtual interfaces first, the station goes,
+# the radio netdev is an AP again, the virtual interface is deleted
+{ printf 'radio=5gl\nchannel=36\nwidth=80\n'; sta 0; net 1 a sae password1 "2g 5gl" 1; } > "$T/nets"
+: > "$T/seq"; : > "$T/iwlog"; : > "$T/stalog"; apply
+check "station off: REMOVE the radio, station down, ADD on bcawl0, vif deleted, monitor stopped" \
+	"0 hapd REMOVE bcawl0-1|sta down bcawl0|hapd ADD bss_config=phy0:$G/hostapd-bcawl0.conf dev bcawl0-1 del phy3 bcawl3 phy0 bcawl0 stop $T/run/gt-be98-wifi-sta.pid" \
+	"$rc $(tr '\n' '|' < "$T/seq" | sed 's/|$//') $(cat "$T/iwlog") $(hapd | tr '\n' ' ')$(grep '^stop' "$T/stalog")"
+check "station off: no station, no vif" "|" "$(cat "$T/run/gt-be98-wifi/stations")|$(cat "$T/run/gt-be98-wifi/vifs")"
+# a station alone (no network on any radio): no hostapd, the station runs
+{ sta; } > "$T/nets"; : > "$T/seq"; apply
+check "station only: hostapd stopped, the station up" "0 stop sta up bcawl0" "$rc $(tail -n1 "$T/daemon") $(tr '\n' '|' < "$T/seq" | grep -o 'sta up bcawl0')"
+( stop_hostapd ) >> "$T/out" 2>&1
+check "stop: the station down, routing undone" "down bcawl0 unroute" "$(grep -E '^(down|unroute)' "$T/stalog" | tail -n2 | cut -d' ' -f1,2 | tr '\n' ' ' | sed 's/ *$//')"
 : > "$T/nets"; apply
 
 if [ $fail = 0 ]; then echo "ALL OK ($n checks)"; else echo "FAILED"; cat "$T/out"; fi

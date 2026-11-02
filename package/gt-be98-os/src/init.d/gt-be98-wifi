@@ -63,6 +63,27 @@
 # LED is off (WIFI_LEDS_OFF="bcawlN ..."); gt-be98-leds reads it, and is run
 # after every start and reload.
 #
+# Station (Wi-Fi uplink, client mode: a station= block of the list): the
+# radio's netdev bcawlN becomes a STATION run by wpa_supplicant (the
+# firmware's AP+STA model: the station is bsscfg 0, the APs are
+# secondaries), its networks run on virtual interfaces bcawlN-k only. The
+# ORDER is the one measured on silicon (open-wifi docs/STA-WDS-2026-10-29.md
+# §2/§24-28, stawds arm A1): (1) hostapd releases the radio netdev, (2) the
+# first AP's virtual interface is created (iw ... type __ap), (3) the station
+# connects (its connect arms apsta in its own core-down window because an AP
+# interface exists), (4) hostapd starts the APs, on the uplink's channel
+# (one channel per radio; the driver refuses another one, -EBUSY; the
+# generator's -U). A virtual interface created while the station runs makes
+# the station reconnect first, so (2) always precedes (3). The station's
+# processes (wpa_supplicant, a DHCP client) and the routed networks (routed=:
+# address, DHCP/DNS, NAT out of the station) are run by gt-be98-wifi-sta;
+# its monitor daemon (pid /run/gt-be98-wifi-sta.pid, started and stopped
+# with this service) restarts a dead process and reloads this service when
+# the uplink moved the radio to another channel. $STATE/stations lists the
+# station netdevs (gt-be98-netguard never lets one into a bridge: a
+# 3-address station cannot be bridged), $STATE/vifs the virtual interfaces
+# this service created, $STATE/routed the routed networks.
+#
 # Wi-Fi networks are pure L2: each network is a bridge brwifiN holding its
 # BSSes and the 802.1Q sub-interface <trunk>.<vid> of the wired trunk port;
 # no address on the box, no NAT. Besides the network list, settings (same
@@ -96,6 +117,8 @@ RUNDIR=${GT_BE98_RUN:-/run}
 SYSNET=${GT_BE98_SYSNET:-/sys/class/net}
 WIFI_GEN=${GT_BE98_WIFI_GEN:-/usr/sbin/gt-be98-wifi-gen}
 WIFI_SCHED=${GT_BE98_WIFI_SCHED:-/usr/sbin/gt-be98-wifi-sched}
+WIFI_STA=${GT_BE98_WIFI_STA:-/usr/sbin/gt-be98-wifi-sta}
+STA_MON_PID=$RUNDIR/gt-be98-wifi-sta.pid
 SCHED_PID=$RUNDIR/gt-be98-wifi-sched.pid
 STATE=$RUNDIR/gt-be98-wifi
 HAP_PID=$RUNDIR/hostapd-wifi.pid
@@ -387,15 +410,26 @@ radio_phy() {
 #   radio <key>            radio-wide lines + anchor BSS (or the whole
 #                          ready-made config): a change restarts the radio
 #   bss <ifname> <sum> <path>   a further BSS, added/removed alone
+#   first <ifname>         the config's interface= (hostapd's name of the
+#                          radio: REMOVE/INTERFACES); the radio netdev, or a
+#                          virtual interface on a station radio
 
 unit_line() { sed -n "s/^$2 //p" "$1" 2>/dev/null; }
 
+# the first interface of unit file $1 (a unit without one: radio netdev $2)
+unit_first() {
+	local f
+	f=$(unit_line "$1" first)
+	echo "${f:-$2}"
+}
+
 # remove radio $1 from hostapd (all its BSSes)
 unit_remove() {
-	local d=$1
+	local d=$1 f
 	if [ -f "$STATE/applied/$d" ]; then
-		ebegin "hostapd: removing radio $d"
-		hap_ok REMOVE "$d"
+		f=$(unit_first "$STATE/applied/$d" "$d")
+		ebegin "hostapd: removing radio $d ($f)"
+		hap_ok REMOVE "$f"
 		eend $?
 	fi
 	rm -f "$STATE/applied/$d"
@@ -415,15 +449,20 @@ hap_live() { echo " $(hap_cmd INTERFACES | tr '\n' ' ') "; }
 
 # (re)start radio $1 with all its BSSes
 unit_restart() {
-	local d=$1 w="$STATE/want/$1" c phy
+	local d=$1 w="$STATE/want/$1" c phy f o
 	c=$(unit_line "$w" conf)
-	if [ -f "$STATE/applied/$d" ] || in_list "$(hap_live)" "$d"; then
-		ebegin "hostapd: removing radio $d"
-		hap_ok REMOVE "$d"
+	f=$(unit_first "$w" "$d")
+	o=$(unit_first "$STATE/applied/$d" "$d")
+	if [ -f "$STATE/applied/$d" ] || in_list "$(hap_live)" "$o"; then
+		ebegin "hostapd: removing radio $d ($o)"
+		hap_ok REMOVE "$o"
 		eend $?
 		rm -f "$STATE/applied/$d"
 	fi
 	phy=$(radio_phy "$d") || return 1
+	# a station radio: hostapd starts its first AP on a virtual interface
+	# that must exist (gone with an earlier REMOVE when hostapd had made it)
+	if [ "$f" != "$d" ]; then vif_add "$d" "$f" || return 1; fi
 	ebegin "hostapd: starting radio $d ($c)"
 	hap_ok ADD "bss_config=$phy:$c"
 	eend $? || return 1
@@ -440,7 +479,7 @@ unit_apply() {
 	fi
 	# what hostapd really runs: a BSS it lost is added again
 	live=$(hap_live)
-	in_list "$live" "$d" || { ewarn "hostapd lost radio $d"; unit_restart "$d"; return; }
+	in_list "$live" "$(unit_first "$a" "$d")" || { ewarn "hostapd lost radio $d"; unit_restart "$d"; return; }
 	if cmp -s "$a" "$w"; then
 		while read -r i s p; do
 			[ -z "$i" ] || in_list "$live" "$i" || ok=0
@@ -528,8 +567,10 @@ wifi_max_bss() {
 
 # the network list -> $STATE/gen (configs + plan) and $STATE/slots; the
 # bridges/VLANs/isolation of its networks are added to WIFI_*
+# $1 = "again": the same list rendered once more with the stations'
+# frequencies (-U) that changed since; the bridges/VLANs are not re-read
 gen_networks() {
-	local n=$WIFI_NETWORKS t a b c d cc='' net_br='' net_vl='' net_iso='' macs now=''
+	local n=$WIFI_NETWORKS t a b c d cc='' net_br='' net_vl='' net_iso='' macs now='' up
 	rm -rf "$STATE/gen.new"
 	[ -n "$n" ] || { rm -rf "$STATE/gen"; return 0; }
 	[ -f "$n" ] || { eerror "WIFI_NETWORKS $n: missing"; return 1; }
@@ -541,19 +582,24 @@ gen_networks() {
 	fi
 	macs=$(radio_macs)
 	wifi_max_bss
+	up=$(sta_freqs)
 	# shellcheck disable=SC2086 # $cc: an option or nothing
 	"$WIFI_GEN" -n "$n" -o "$STATE/gen.new" -s "${WIFI_SLOTS:-/etc/hostapd/wifi-slots}" -m "$macs" \
 		-C "$MAX_BSS" -x "${HOSTAPD_CTRL:-$RUNDIR/hostapd}" -R "${WIFI_RNR:-1}" \
 		-K "${WIFI_ANCHOR_KEEP_BSSID:-0}" ${WIFI_RADIO_DEVS:+-d "$WIFI_RADIO_DEVS"} \
-		${now:+-T "$now"} $cc ||
+		-X "${WPA_CTRL:-$RUNDIR/wpa_supplicant}" ${up:+-U "$up"} ${now:+-T "$now"} $cc ||
 		{ eerror "$n refused: nothing changed"; rm -rf "$STATE/gen.new"; return 1; }
 	rm -rf "$STATE/gen"
 	mv "$STATE/gen.new" "$STATE/gen"
 	# the generator wrote the configs under gen.new: point the plan at gen
 	sed -i "s#$STATE/gen.new/#$STATE/gen/#g" "$STATE/gen/plan"
+	[ "${1:-}" = again ] && return 0
 	while read -r t a b c d; do
-		[ "$t" = net ] || continue
-		net_br="$net_br $b"; net_vl="$net_vl $b:$c"
+		case $t in
+		net)	net_br="$net_br $b"; net_vl="$net_vl $b:$c" ;;
+		routed) WIFI_ROUTED="${WIFI_ROUTED:-} $b=$c" ;;
+		*)	continue ;;
+		esac
 		[ "$d" = 1 ] && net_iso="$net_iso $b"
 	done < "$STATE/gen/plan"
 	WIFI_BRIDGES="${WIFI_BRIDGES:-}$net_br"
@@ -670,6 +716,123 @@ stop_legacy() {
 	rm -f "$STATE"/bcawl*.conf "$STATE"/bcawl*.sum
 }
 
+# ---- the station (uplink) of a radio (plan: station <band> <dev> <conf> <sum> <first>) ----
+
+sta_plan() { awk '$1 == "station" { print $2, $3, $4, $5, $6 }' "$STATE/gen/plan" 2>/dev/null; }
+
+# the frequencies of the associated stations, "band=MHz ..." (generator -U)
+sta_freqs() {
+	local b d f out=''
+	while read -r b d _; do
+		[ -n "$d" ] || continue
+		f=$("$WIFI_STA" freq "$d" 2>/dev/null) && [ -n "$f" ] && out="$out $b=$f"
+	done <<-EOF
+	$(sta_plan)
+	EOF
+	words $out
+}
+
+vif_owned() { grep -qx "$1" "$STATE/vifs" 2>/dev/null; }
+
+# virtual AP interface $2 on radio $1 (created, recorded; an existing one is kept)
+vif_add() {
+	local d=$1 v=$2
+	case "$v" in "$d"-[1-9]) ;; *) eerror "virtual interface $v refused"; return 1 ;; esac
+	[ -e "$SYSNET/$v" ] && return 0
+	ebegin "Creating AP interface $v on station radio $d"
+	iw dev "$d" interface add "$v" type __ap
+	eend $? || return 1
+	mkdir -p "$STATE"
+	vif_owned "$v" || echo "$v" >> "$STATE/vifs"
+}
+
+# delete the owned virtual interfaces that are neither in the list $1 nor
+# run by hostapd
+vif_prune() {
+	local v live
+	live=$(hap_live 2>/dev/null)
+	# shellcheck disable=SC2013 # one validated name per line
+	for v in $(cat "$STATE/vifs" 2>/dev/null); do
+		case "$v" in bcawl[0-9]*-[1-9]) ;; *) continue ;; esac
+		in_list " $1 " "$v" && continue
+		in_list "$live" "$v" && continue
+		if [ -e "$SYSNET/$v" ]; then
+			ebegin "Deleting AP interface $v"
+			iw dev "$v" del
+			eend $? || continue
+		fi
+		grep -vx "$v" "$STATE/vifs" > "$STATE/vifs.new" 2>/dev/null
+		mv -f "$STATE/vifs.new" "$STATE/vifs"
+	done
+}
+
+# Stations before APs (see the header): stations no longer planned go
+# first (their radio's hostapd leaves the virtual interfaces before the
+# radio netdev is free again), then each planned station: the radio netdev
+# released by hostapd, the first AP's virtual interface, the station.
+# Returns 2 when a station's frequency changed (the plan must be rendered
+# again with -U before the APs start).
+sta_prepare() {
+	local b d c s f a fr0 fr1 new keep='' firsts='' rc=0
+	# shellcheck disable=SC2013 # one validated name per line
+	for d in $(cat "$STATE/stations" 2>/dev/null); do
+		sta_plan | awk -v d="$d" '$2 == d { f = 1 } END { exit !f }' && continue
+		unit_remove "$d"
+		"$WIFI_STA" down "$d" || rc=1
+	done
+	while read -r b d c s f; do
+		[ -n "$d" ] || continue
+		keep="$keep $d"
+		[ "$f" = - ] || firsts="$firsts $f"
+		# an AP on the radio netdev itself leaves it to the station
+		if [ -f "$STATE/applied/$d" ] && [ "$(unit_first "$STATE/applied/$d" "$d")" = "$d" ]; then
+			unit_remove "$d"
+		fi
+		fr0=$("$WIFI_STA" freq "$d" 2>/dev/null)
+		new=
+		if [ "$f" != - ] && [ ! -e "$SYSNET/$f" ]; then
+			vif_add "$d" "$f" || { rc=1; continue; }
+			new=restart	# an AP interface appeared under a running station
+		fi
+		"$WIFI_STA" up "$d" "$c" "$s" $new || rc=1
+		fr1=$("$WIFI_STA" freq "$d" 2>/dev/null)
+		[ "$fr0" = "$fr1" ] || [ $rc != 0 ] || rc=2
+	done <<-EOF
+	$(sta_plan)
+	EOF
+	mkdir -p "$STATE"
+	words $keep | tr ' ' '\n' | grep . > "$STATE/stations.new"
+	mv -f "$STATE/stations.new" "$STATE/stations"
+	STA_FIRSTS=$firsts
+	return $rc
+}
+
+# the routed networks (plan: routed <id> <bridge> <cidr> <isolate>) for
+# gt-be98-wifi-sta route: "<bridge> <cidr>" per line
+write_routed() {
+	mkdir -p "$STATE"
+	awk '$1 == "routed" { print $3, $4 }' "$STATE/gen/plan" 2>/dev/null > "$STATE/routed.new"
+	mv -f "$STATE/routed.new" "$STATE/routed"
+}
+
+# the station monitor daemon (gt-be98-wifi-sta monitor), while a station is planned
+sta_mon_running() {
+	local p
+	p=$(cat "$STA_MON_PID" 2>/dev/null) || return 1
+	[ -n "$p" ] && kill -0 "$p" 2>/dev/null
+}
+
+sta_mon_apply() {
+	if [ -s "$STATE/stations" ]; then
+		sta_mon_running && return 0
+		start-stop-daemon --start --background --make-pidfile --pidfile "$STA_MON_PID" \
+			--exec "$WIFI_STA" -- monitor
+	elif [ -f "$STA_MON_PID" ]; then
+		start-stop-daemon --stop --pidfile "$STA_MON_PID" --retry TERM/5/KILL/2 > /dev/null 2>&1
+		rm -f "$STA_MON_PID"
+	fi
+}
+
 # bring hostapd in line with the settings: only what changed
 apply_hostapd() {
 	local c i b v want='' brs='' subs='' rc=0 t d p plan="$STATE/gen/plan"
@@ -702,21 +865,42 @@ apply_hostapd() {
 		vlan_attach "$t" "$v" "$b" || { rc=1; continue; }
 		brs="$brs $b"; subs="$subs $t.$v"
 	done
+	# the routed networks' bridges: no VLAN, no trunk (gt-be98-wifi-sta
+	# addresses and NATs them)
+	for p in ${WIFI_ROUTED:-}; do
+		b=${p%%=*}
+		valid_bridge "$b" || { eerror "routed bridge '$b' refused"; rc=1; continue; }
+		case " $brs " in *" $b "*) eerror "$b: routed and bridged to a VLAN"; rc=1; continue ;; esac
+		br_create "$b" || { rc=1; continue; }
+		brs="$brs $b"
+	done
+	write_routed
+	# the stations before the APs; a frequency that changed renders the
+	# plan once more (-U: the APs of a station radio follow its uplink)
+	sta_prepare
+	case $? in
+	0) ;;
+	2) gen_networks again || rc=1 ;;
+	*) rc=1 ;;
+	esac
 	# the units: generated radios, then ready-made configs
 	rm -rf "$STATE/want"; mkdir -p "$STATE/want"
 	if [ -f "$plan" ]; then
-		while read -r d c v; do
+		while read -r d c v f; do
 			[ -n "$d" ] || continue
+			f=${f:-$d}
 			conf_check "$c" "$brs" || { rc=1; continue; }
 			{
 				echo "conf $c"
-				# radio-wide lines + the anchor section
-				echo "radio $v $(awk -v d="$d" '$1 == "bss" && $2 == d && $4 == 0 { print $3 ":" $10 }' "$plan")"
-				awk -v d="$d" '$1 == "bss" && $2 == d && $4 != 0 { print "bss " $3 " " $10 " " $9 }' "$plan"
+				echo "first $f"
+				# radio-wide lines + the first section (the anchor, or a station
+				# radio's first virtual interface)
+				echo "radio $v $(awk -v d="$d" -v f="$f" '$1 == "bss" && $2 == d && $3 == f { print $3 ":" $10 }' "$plan")"
+				awk -v d="$d" -v f="$f" '$1 == "bss" && $2 == d && $3 != f { print "bss " $3 " " $10 " " $9 }' "$plan"
 			} > "$STATE/want/$d"
 			want="$want $d"
 		done <<-EOF
-		$(awk '$1 == "radio" { print $3, $4, $5 }' "$plan")
+		$(awk '$1 == "radio" { print $3, $4, $5, $6 }' "$plan")
 		EOF
 	fi
 	for c in ${HOSTAPD_CONFS:-}; do
@@ -727,13 +911,16 @@ apply_hostapd() {
 		case " $want " in
 		*" $i "*) eerror "$c: radio $i already configured (WIFI_NETWORKS or another config)"; rc=1; continue ;;
 		esac
-		{ echo "conf $c"; echo "radio $(conf_sum "$c")"; } > "$STATE/want/$i"
+		{ echo "conf $c"; echo "first $i"; echo "radio $(conf_sum "$c")"; } > "$STATE/want/$i"
 		want="$want $i"
 	done
 	if [ -z "$want" ]; then
 		einfo "no Wi-Fi network or HOSTAPD_CONFS: driver only"
 		hap_daemon_stop
+		vif_prune ""
 		vlan_prune "$subs"; br_prune "$brs"
+		"$WIFI_STA" route || rc=1
+		sta_mon_apply
 		mon_apply || rc=1
 		return $rc
 	fi
@@ -754,9 +941,14 @@ apply_hostapd() {
 		unit_apply "$d" || rc=1
 	done
 	isolate_ports "$brs"
-	# VLANs and bridges no longer listed, now that no BSS uses them
+	# virtual interfaces, VLANs and bridges no longer listed, now that no BSS
+	# uses them
+	vif_prune "${STA_FIRSTS:-}"
 	vlan_prune "$subs"
 	br_prune "$brs"
+	# the routed networks (address, DHCP/DNS, NAT out of the station)
+	"$WIFI_STA" route || rc=1
+	sta_mon_apply
 	# the monitors, now that hostapd released their radios
 	mon_apply || rc=1
 	return $rc
@@ -784,8 +976,16 @@ sched_stop() {
 }
 
 stop_hostapd() {
+	local d
 	stop_legacy
 	hap_daemon_stop
+	# the stations after the APs, then their routing and interfaces
+	# shellcheck disable=SC2013 # one validated name per line
+	for d in $(cat "$STATE/stations" 2>/dev/null); do "$WIFI_STA" down "$d"; done
+	rm -f "$STATE/stations" "$STATE/stations.new" "$STATE/routed"
+	sta_mon_apply
+	"$WIFI_STA" unroute
+	vif_prune ""
 	mon_prune ""
 	rm -f "$STATE/leds"
 	vlan_prune ""
@@ -863,6 +1063,7 @@ status() {
 	for i in $(cat "$STATE/monitors" 2>/dev/null); do
 		if [ -e "$SYSNET/$i" ]; then einfo "monitor $i"; else eerror "monitor $i: missing"; fi
 	done
+	[ -s "$STATE/stations" ] && "$WIFI_STA" status
 	if ! hap_running; then
 		[ -d "$STATE/applied" ] && eerror "hostapd: not running"
 		return $rc
@@ -873,8 +1074,9 @@ status() {
 	for p in "$STATE"/applied/*; do
 		[ -f "$p" ] || continue
 		d=${p##*/}
-		if in_list "$live" "$d"; then
-			einfo "radio $d: $(bss_state "$d"), $(unit_line "$p" conf)"
+		i=$(unit_first "$p" "$d")
+		if in_list "$live" "$i"; then
+			einfo "radio $d: $(bss_state "$i") ($i), $(unit_line "$p" conf)"
 		else
 			eerror "radio $d: not in hostapd ($(unit_line "$p" conf))"
 		fi
