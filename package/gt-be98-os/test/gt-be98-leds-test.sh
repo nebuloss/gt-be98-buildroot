@@ -71,6 +71,20 @@ printf 'WIFI_LEDS_OFF="bcawl3; reboot"\n' > "$T/wifi-leds"
 run apply > /dev/null
 check "a malformed WIFI_LEDS_OFF is ignored (LED stays on its netdev)" "netdev" "$(cat "$T/leds/wlan-2g/trigger")"
 rm -f "$T/wifi-leds"
+# the radio's LED by the driver's name (bca<PCI domain>::wlan) when the netdev's
+# device/leds does not list it; control: without uevent, not found
+mkled bca1::wlan netdev; mkdir -p "$T/net/bcawl1/device"
+printf 'DRIVER=bca_pcie_ipc\nPCI_SLOT_NAME=0003:01:00.0\n' > "$T/net/bcawl1/device/uevent"
+mkled bca3::wlan netdev
+: > "$T/conf"; run apply > "$T/out"
+check "bcawl1 (PCI domain 3): its LED found by name bca3::wlan, put on its netdev; bca1::wlan untouched" "netdev bcawl1 [none] netdev" \
+	"$(cat "$T/leds/bca3::wlan/trigger") $(cat "$T/leds/bca3::wlan/device_name") $(cat "$T/leds/bca1::wlan/trigger")"
+printf 'WIFI_LEDS_OFF="bcawl1"\n' > "$T/wifi-leds"; echo 1 > "$T/leds/bca3::wlan/brightness"
+run apply > /dev/null
+check "led=0 reaches the LED found by name" "none 0" "$(cat "$T/leds/bca3::wlan/trigger") $(cat "$T/leds/bca3::wlan/brightness")"
+rm -f "$T/wifi-leds" "$T/net/bcawl1/device/uevent"; mkled bca3::wlan netdev
+run apply > "$T/out"
+check "control: no uevent -> no LED found for bcawl1" "[none] netdev yes" "$(cat "$T/leds/bca3::wlan/trigger") $(grep -q 'bcawl1: no LED' "$T/out" && echo yes || echo no)"
 check "usage: exit 2" 2 "$(run bogus > /dev/null; echo $?)"
 
 if [ $fail = 0 ]; then echo "ALL OK ($n checks)"; else echo "FAILED"; fi
