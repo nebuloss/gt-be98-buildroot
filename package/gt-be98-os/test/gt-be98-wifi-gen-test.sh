@@ -700,7 +700,7 @@ check "station config: 0600, hex ssid, the passphrase quoted, WPA2-PSK CCMP" \
 	"$(ls -l "$T/o/sta-bcawl0.conf" | cut -c1-10)|$(grep '^	ssid=' "$T/o/sta-bcawl0.conf")|$(grep '^	psk=' "$T/o/sta-bcawl0.conf")|$(grep '^	key_mgmt=' "$T/o/sta-bcawl0.conf")|$(grep '^	pairwise=' "$T/o/sta-bcawl0.conf")|$(grep '^	scan_ssid=' "$T/o/sta-bcawl0.conf")|$(grep '^ctrl_interface=' "$T/o/sta-bcawl0.conf")"
 bssid_rules "station"
 conf_ok "station"
-sta_ok "station psk2" "ctrl=/run/wpa_supplicant networks=1 up-link key_mgmt=0x2 pmf=0 sae_pwe=0 psk=20 sae_password=- bssid=- scan_ssid=1"
+sta_ok "station psk2" "ctrl=/run/wpa_supplicant networks=1 up-link key_mgmt=0x2 pmf=0 sae_pwe=4 psk=20 sae_password=- bssid=- scan_ssid=1"
 # -U: the radio follows the uplink, the width only as far as a block holds it
 gen "$T/st1" -U "5gl=5260"
 check "-U 5260: channel 52, 80 MHz kept (centre 58), warned" "channel=52 vht_oper_centr_freq_seg0_idx=58 yes" \

@@ -369,13 +369,16 @@ function ip2n(s,    p, i, n) {
 }
 # routed=A.B.C.1/P: 1 if A.B.C.1 is the first host of a private (RFC 1918)
 # subnet of prefix 16..30; sets RNET (its network) and RSZ (its size)
-function routedok(s,    a, p, n) {
+function routedok(s,    a, p, n, i) {
 	if (split(s, a, "/") != 2 || !isnum(a[2])) return 0
 	p = a[2] + 0
 	if (p < 16 || p > 30) return 0
 	n = ip2n(a[1])
 	if (n < 0) return 0
-	RSZ = 2 ^ (32 - p); RNET = n - n % RSZ
+	# no "^": busybox awk may be built without math support
+	RSZ = 1
+	for (i = p; i < 32; i++) RSZ *= 2
+	RNET = n - n % RSZ
 	if (n != RNET + 1) return 0
 	return (RNET >= ip2n("10.0.0.0") && RNET + RSZ <= ip2n("11.0.0.0")) ||
 	    (RNET >= ip2n("172.16.0.0") && RNET + RSZ <= ip2n("172.32.0.0")) ||
