@@ -9,8 +9,10 @@
 # lock; PCIe 0906) + the RTL8372 read-only monitor (driver/rtl8372, off by
 # default), DT patch 0309 (the switch's SMI node at MDIO 29, no reset) and
 # 0602-0604 (BCM6813 pinctrl: MDC/MDIO on pins 54/55, so the BCM84891L at 21
-# and the switch's SMI answer; rnr3's PHY attach -19 root cause)
-GT_BE98_OPEN_ETHERNET_VERSION = 17c4c624e725353f95adc4b41aad1f32c182aa33
+# and the switch's SMI answer; rnr3's PHY attach -19 root cause), 0605 (the
+# RTL8372 RESET#, GPIO 14 active low, on the switch node: held in reset until
+# rtl8372 binds) and 0703 (a flashless BCM8489x no longer has autoneg off)
+GT_BE98_OPEN_ETHERNET_VERSION = 5ac1894e9b979d929c150ce6d81af7657f4c3aec
 GT_BE98_OPEN_ETHERNET_SITE = git@github.com:nebuloss/gt-be98-open-ethernet.git
 GT_BE98_OPEN_ETHERNET_SITE_METHOD = git
 GT_BE98_OPEN_ETHERNET_LICENSE = GPL-2.0
