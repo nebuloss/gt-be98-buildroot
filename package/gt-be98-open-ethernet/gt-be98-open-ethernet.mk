@@ -7,7 +7,9 @@
 # branch console-stall-2026-10-26 (netconsole: be98pc bootcon handover 0510,
 # panic nbcon flush 0511, Runner netpoll-safe TX lock; PCIe: 0906 acknowledges
 # an MSI whose vector was freed, the rmmod RCU-stall/watchdog-reset root cause)
-GT_BE98_OPEN_ETHERNET_VERSION = 95657d5ca8ebcbe33c9810ebbeaad3a82a4dada9
+# 2026-11-02: branch oe-mlo-rc-2026-11-02-s = the above + PCIe 0907 (BCM6813
+# peer-to-peer inbound windows for the MLO BRIDGE step, inert unless called)
+GT_BE98_OPEN_ETHERNET_VERSION = 582869b9a303d8fb51f6da81589c176086c184b5
 GT_BE98_OPEN_ETHERNET_SITE = git@github.com:nebuloss/gt-be98-open-ethernet.git
 GT_BE98_OPEN_ETHERNET_SITE_METHOD = git
 GT_BE98_OPEN_ETHERNET_LICENSE = GPL-2.0
