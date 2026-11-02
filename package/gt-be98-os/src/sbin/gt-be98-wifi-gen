@@ -231,6 +231,17 @@
 # index whose BSSID equals any radio's address or another BSS's BSSID (any
 # radio) is never handed out (another index of the block is). The same rule
 # holds unchanged under a 4-bit (mbss16) mask.
+# ★6 GHz: octet 0 is the radio's own (no LA prefix). On 6 GHz the firmware
+# advertises the radio's secondaries as NONTRANSMITTED BSSIDs in the
+# anchor's Multiple BSSID element, and a client derives each one from the
+# anchor's address by the 802.11 BSSID-index rule (the low bits + index,
+# every other bit the anchor's). A secondary whose own address differs (the
+# LA prefix) is advertised under one address and owned under another: the
+# client authenticates to an address nobody answers (release-soak
+# 1102-1500: OWE on bcawl2-1 = a2:..:09, the client tried 20:..:09 and timed
+# out). [HYP, measured for index 1 only: the derived index is the low
+# bits of the secondary's own address; mbss8 and mbss16 agree while the
+# radio address's low 3 bits are 0, as on this board.]
 #
 # OUTDIR: hostapd-<dev>.conf, bss-<ifname>.conf, hdr-<dev>, sec-<ifname>
 # (mode 0600: they hold the passphrases and RADIUS secrets) and plan:
@@ -352,6 +363,10 @@ function bssid(b, s,    o, i, r, adj, o0) {
 	adj = (o[0] == 96 && o[5] % 15 == 0) ? 1 : 0
 	o0 = 96 + ((o[5] + adj) % 15) * 8
 	if (int(o0 / 2) % 2 == 0) o0 += 2	# ETHER_SET_LOCALADDR
+	# 6 GHz: the firmware advertises the secondaries as nontransmitted
+	# BSSIDs of the anchor (802.11 Multiple BSSID): a client derives their
+	# address from the anchor address, octet 0 included (see the header)
+	if (b == "6g") o0 = o[0]
 	r = hex2(o0)
 	for (i = 1; i <= 4; i++) r = r ":" hex2(o[i])
 	return r ":" hex2(o[5] - o[5] % 8 + (o[5] + s) % 8)
