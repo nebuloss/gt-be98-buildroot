@@ -34,4 +34,14 @@ config BR2_PACKAGE_GT_BE98_OPEN_ETHERNET_RUNNER
 	  (/lib/modules/<kver>/updates/bcm4916-runner.ko). The gt-be98-drivers
 	  service loads it. Its firmware comes from gt-be98-vendor-firmware.
 
+config BR2_PACKAGE_GT_BE98_OPEN_ETHERNET_RTL8372
+	bool "rtl8372.ko (LAN switch read-only monitor)"
+	help
+	  Build and install driver/rtl8372: the read-only SMI monitor of
+	  the RTL8372 LAN switch behind eth1 (chip ID, uplink SerDes
+	  status, link of each LAN jack; it configures nothing). The
+	  gt-be98-lan service loads it when rnr1 is a LAN port. Off until
+	  it is verified on silicon (open-ethernet
+	  docs/eth-lan-2026-11-02.md).
+
 endif

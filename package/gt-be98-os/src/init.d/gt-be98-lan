@@ -1,0 +1,166 @@
+#!/sbin/openrc-run
+# SPDX-License-Identifier: GPL-2.0
+# The wired LAN (optional, NOT enabled by default): the LAN ports listed in
+# LAN_PORTS (rnr1 = the RTL8372's LAN jacks, rnr2, rnr3; never rnr0) become
+# ports of one bridge, LAN_BRIDGE (br-lan), with spanning tree on. Wi-Fi joins
+# it when a radio's hostapd config says bridge=br-lan. The bridge never holds
+# rnr0 or one of its VLANs (gt-be98-netguard detaches them, and detaches a LAN
+# port from any other bridge), so the wired LAN never shares a segment with
+# the uplink: traffic leaves it only routed, through gt-be98-router (list
+# LAN_BRIDGE in ROUTER_LANS), never bridged onto rnr0.
+#   - optional address (LAN_ADDR) and DHCP server (LAN_DHCP, own dnsmasq bound
+#     to the bridge only);
+#   - nft table inet gt_be98_lan: nothing is forwarded INTO the bridge but
+#     replies and DNATed flows (the router's NAT keeps the LAN unreachable
+#     from the uplink, whatever the web UI's own table says);
+#   - rtl8372.ko (read-only switch monitor) when rnr1 is a LAN port.
+# Settings: /etc/conf.d/gt-be98-lan (parsed, not sourced).
+description="Wired LAN: LAN ports (never rnr0) in one bridge, STP, optional DHCP"
+
+LAN_CONF=${LAN_CONF_FILE:-/etc/conf.d/gt-be98-lan}
+APPLIED=/run/gt-be98-lan.applied
+DNSMASQ_PID=/run/gt-be98-lan-dnsmasq.pid
+
+depend() {
+	need gt-be98-netguard
+	after gt-be98-drivers gt-be98-wifi
+	before gt-be98-router
+	use logger
+}
+
+# conf value $1 from LAN_CONF, restricted to the characters [$2]
+conf_get() {
+	sed -n "s/^$1=\"\\{0,1\\}\\([$2]*\\)\"\\{0,1\\}\$/\\1/p" "$LAN_CONF" 2>/dev/null | tail -n1
+}
+
+# the Wi-Fi trunk port (as gt-be98-netguard reads it)
+wifi_trunk() {
+	local f=/etc/conf.d/gt-be98-wifi t
+	[ -f /etc/conf.d/gt-be98-wifi-ap ] && f=/etc/conf.d/gt-be98-wifi-ap
+	[ -f /run/gt-be98-wifi/l2.conf ] && f=/run/gt-be98-wifi/l2.conf
+	t=$(sed -n 's/^WIFI_TRUNK="\{0,1\}\([A-Za-z0-9]*\)"\{0,1\}$/\1/p' "$f" 2>/dev/null | tail -n1)
+	echo "${t:-rnr0}"
+}
+
+load_conf() {
+	local p t
+	LAN_PORTS=$(conf_get LAN_PORTS 'A-Za-z0-9 ')
+	LAN_BRIDGE=$(conf_get LAN_BRIDGE 'A-Za-z0-9_-')
+	LAN_BRIDGE=${LAN_BRIDGE:-br-lan}
+	LAN_STP=$(conf_get LAN_STP '01')
+	LAN_ADDR=$(conf_get LAN_ADDR '0-9./')
+	LAN_DHCP=$(conf_get LAN_DHCP 'A-Za-z0-9.,:')
+	LAN_SWITCH_MONITOR=$(conf_get LAN_SWITCH_MONITOR 'a-z')
+	LAN_IFACE_WAIT=$(conf_get LAN_IFACE_WAIT '0-9')
+	[ -n "$LAN_PORTS" ] || { eerror "LAN_PORTS is empty: no wired LAN configured"; return 1; }
+	case "$LAN_BRIDGE" in
+	brwifi*|rnr*|eth*|bcawl*) eerror "LAN_BRIDGE '$LAN_BRIDGE' refused"; return 1 ;;
+	esac
+	t=$(wifi_trunk)
+	for p in $LAN_PORTS; do
+		case "$p" in
+		rnr0) eerror "rnr0 is the uplink and management port: never a LAN port"; return 1 ;;
+		rnr[1-3]) ;;
+		*) eerror "LAN port '$p' refused: rnr1, rnr2 or rnr3 only"; return 1 ;;
+		esac
+		[ "$p" != "$t" ] || { eerror "$p is the Wi-Fi trunk port (WIFI_TRUNK): refused"; return 1; }
+	done
+	[ -z "$LAN_ADDR" ] || echo "$LAN_ADDR" | grep -qE '^[0-9]{1,3}(\.[0-9]{1,3}){3}/[0-9]{1,2}$' ||
+		{ eerror "LAN_ADDR '$LAN_ADDR' refused"; return 1; }
+}
+
+# replies and DNATed flows only, into the bridge
+lan_nft() {
+	nft -f - <<-EOF
+	table inet gt_be98_lan
+	delete table inet gt_be98_lan
+	table inet gt_be98_lan {
+		chain forward {
+			type filter hook forward priority filter; policy accept;
+			oifname "$LAN_BRIDGE" iifname "$LAN_BRIDGE" accept
+			oifname "$LAN_BRIDGE" ct state established,related accept
+			oifname "$LAN_BRIDGE" ct status dnat accept
+			oifname "$LAN_BRIDGE" counter drop
+		}
+	}
+	EOF
+}
+
+start() {
+	local p n
+	load_conf || return 1
+	ebegin "Wired LAN: $LAN_PORTS in $LAN_BRIDGE (STP ${LAN_STP:-1})"
+	: > $APPLIED
+	if [ ! -e "/sys/class/net/$LAN_BRIDGE" ]; then
+		ip link add "$LAN_BRIDGE" type bridge stp_state "${LAN_STP:-1}" ||
+			{ eend 1 "cannot create $LAN_BRIDGE"; return 1; }
+		echo "bridge $LAN_BRIDGE" >> $APPLIED
+	else
+		ip link set "$LAN_BRIDGE" type bridge stp_state "${LAN_STP:-1}"
+	fi
+	lan_nft || { eend 1 "nft table rejected"; return 1; }
+	echo "nft" >> $APPLIED
+	ip link set "$LAN_BRIDGE" up
+	for p in $LAN_PORTS; do
+		n=0
+		while [ ! -e "/sys/class/net/$p" ] && [ $n -lt "${LAN_IFACE_WAIT:-20}" ]; do
+			sleep 1; n=$((n + 1))
+		done
+		if [ ! -e "/sys/class/net/$p" ]; then
+			ewarn "$p: no such interface, skipped"
+			continue
+		fi
+		# a LAN port carries no address of its own
+		ip -4 addr flush dev "$p" 2>/dev/null
+		if ! ip link set "$p" master "$LAN_BRIDGE"; then
+			ewarn "$p: refused as a bridge port (a looped port is refused by the driver)"
+			continue
+		fi
+		echo "port $p" >> $APPLIED
+		ip link set "$p" up
+	done
+	if [ -n "$LAN_ADDR" ]; then
+		ip addr replace "$LAN_ADDR" dev "$LAN_BRIDGE" &&
+			echo "addr $LAN_ADDR $LAN_BRIDGE" >> $APPLIED
+	fi
+	case " $LAN_PORTS " in
+	*" rnr1 "*)
+		if [ "${LAN_SWITCH_MONITOR:-yes}" = yes ] && ! grep -q '^rtl8372 ' /proc/modules &&
+			modprobe rtl8372 2>/dev/null; then
+			echo "module rtl8372" >> $APPLIED
+		fi ;;
+	esac
+	if [ -n "$LAN_DHCP" ]; then
+		start-stop-daemon --start --exec /usr/sbin/dnsmasq --pidfile $DNSMASQ_PID -- \
+			--conf-file=/dev/null --pid-file=$DNSMASQ_PID --bind-dynamic \
+			--interface="$LAN_BRIDGE" --except-interface=rnr0 \
+			--dhcp-range="$LAN_DHCP" --dhcp-leasefile=/run/gt-be98-lan.leases ||
+			{ eend 1 "dnsmasq failed"; return 1; }
+	fi
+	eend 0
+}
+
+stop() {
+	local k v w
+	ebegin "Stopping the wired LAN"
+	if [ -f $DNSMASQ_PID ]; then
+		start-stop-daemon --stop --exec /usr/sbin/dnsmasq --pidfile $DNSMASQ_PID --retry TERM/5/KILL/2
+		rm -f $DNSMASQ_PID
+	fi
+	if [ -f $APPLIED ]; then
+		while read -r k v w; do
+			case "$k" in
+			port)	ip link set "$v" nomaster 2>/dev/null; ip link set "$v" down 2>/dev/null ;;
+			addr)	ip addr del "$v" dev "$w" 2>/dev/null ;;
+			module)	rmmod "$v" 2>/dev/null ;;
+			nft)	nft delete table inet gt_be98_lan 2>/dev/null ;;
+			esac
+		done < $APPLIED
+		# the bridge last, and only when this service created it
+		while read -r k v w; do
+			[ "$k" = bridge ] && ip link del "$v" 2>/dev/null
+		done < $APPLIED
+		rm -f $APPLIED
+	fi
+	eend 0
+}

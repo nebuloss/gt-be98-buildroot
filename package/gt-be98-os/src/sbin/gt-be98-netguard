@@ -14,8 +14,17 @@
 #   2. no bridge port ever has hairpin mode on;
 #   3. the Wi-Fi ports (bcawl*) of the WIFI_ISOLATE bridges are isolated,
 #      those of other brwifi bridges and the trunk VLANs are not.
+# One exception to 1., the wired LAN (gt-be98-lan, off by default): a bare
+# port listed in LAN_PORTS may be a port of the bridge LAN_BRIDGE (br-lan),
+# and of no other bridge, when it is rnr1, rnr2 or rnr3 and not the Wi-Fi
+# trunk port. rnr0 never is, even when listed: it is the uplink and the
+# management port, on the owner's LAN, and br-lan holds no rnr0 member of
+# any kind (rnr0 is detached by 1., its sub-interfaces are allowed in
+# brwifiN only), so no bridge ever joins a LAN jack to rnr0's segment
+# (docs: open-ethernet docs/eth-lan-2026-11-02.md §3).
 # Reacts to every link event (ip monitor) and sweeps every NETGUARD_SWEEP s.
-# Settings: /etc/conf.d/gt-be98-netguard.
+# Settings: /etc/conf.d/gt-be98-netguard, /etc/conf.d/gt-be98-lan.
+# `gt-be98-netguard --selftest` checks the bridge-port verdicts on fixed cases.
 set -u
 NETGUARD_PROTECT=${NETGUARD_PROTECT:-"rnr* eth* usb* enx*"}
 NETGUARD_SWEEP=${NETGUARD_SWEEP:-5}
@@ -23,6 +32,7 @@ NETGUARD_SWEEP=${NETGUARD_SWEEP:-5}
 WIFI_AP=/etc/conf.d/gt-be98-wifi-ap
 WIFI_DEF=/etc/conf.d/gt-be98-wifi
 WIFI_L2=${GT_BE98_WIFI_L2:-/run/gt-be98-wifi/l2.conf}
+LAN_CONF=${GT_BE98_LAN_CONF:-/etc/conf.d/gt-be98-lan}
 
 log() { logger -t gt-be98-netguard -- "$*" 2>/dev/null; echo "gt-be98-netguard: $*" > /dev/kmsg 2>/dev/null; }
 # the patterns are matched, never expanded as file names (set -f)
@@ -62,26 +72,49 @@ wifi_vlan_ok() {
 	done
 	return 1
 }
+# wired LAN settings (gt-be98-lan): LAN_PORTS, LAN_BRIDGE, parsed not sourced
+lan_conf() {
+	LPORTS=$(sed -n 's/^LAN_PORTS="\{0,1\}\([A-Za-z0-9 ]*\)"\{0,1\}$/\1/p' "$LAN_CONF" 2>/dev/null | tail -n1)
+	LBRIDGE=$(sed -n 's/^LAN_BRIDGE="\{0,1\}\([A-Za-z0-9_-]*\)"\{0,1\}$/\1/p' "$LAN_CONF" 2>/dev/null | tail -n1)
+	LBRIDGE=${LBRIDGE:-br-lan}
+}
+# may bare port $1 be a port of bridge $2 as a wired LAN port?
+lan_port_ok() {
+	local p
+	case "$1" in rnr[1-3]) ;; *) return 1 ;; esac	# never rnr0, never another port
+	[ "$2" = "$LBRIDGE" ] || return 1
+	case "$LBRIDGE" in brwifi*|'') return 1 ;; esac
+	[ "$1" != "$TRUNK" ] || return 1		# the Wi-Fi trunk port stays a trunk
+	for p in $LPORTS; do [ "$p" = "$1" ] && return 0; done
+	return 1
+}
+# the verdict on bridge port $1 of bridge $2: keep, or why it is detached
+verdict() {
+	case "$1" in
+	*.*)	# 802.1Q sub-interface of a protected port: listed trunk VLANs only
+		if protected "${1%%.*}" && ! wifi_vlan_ok "$1" "$2"; then
+			echo "not a listed Wi-Fi VLAN of $2"; return
+		fi ;;
+	*)	if protected "$1" && ! lan_port_ok "$1" "$2"; then
+			echo "protected port: never bridged except a LAN_PORTS port in $LBRIDGE"; return
+		fi ;;
+	esac
+	echo keep
+}
 sweep() {
-	local n i m f
+	local n i m f v
 	wifi_conf
+	lan_conf
 	for n in /sys/class/net/*; do
 		i=${n##*/}
 		if [ -e "$n/brport" ]; then
 			m=$(readlink "$n/master" 2>/dev/null); m=${m##*/}
-			case "$i" in
-			*.*)	# 802.1Q sub-interface of a protected port: listed trunk VLANs only
-				if protected "${i%%.*}" && ! wifi_vlan_ok "$i" "$m"; then
-					ip link set "$i" nomaster &&
-						log "detached $i from bridge $m (not a listed Wi-Fi VLAN of $m)"
-					continue
-				fi ;;
-			*)	if protected "$i"; then
-					ip link set "$i" nomaster &&
-						log "detached $i from bridge $m (protected port: never bridged)"
-					continue
-				fi ;;
-			esac
+			v=$(verdict "$i" "$m")
+			if [ "$v" != keep ]; then
+				ip link set "$i" nomaster &&
+					log "detached $i from bridge $m ($v)"
+				continue
+			fi
 			if [ "$(cat "$n/brport/hairpin_mode" 2>/dev/null)" = 1 ]; then
 				echo 0 > "$n/brport/hairpin_mode" &&
 					log "hairpin turned off on $i (bridge $m)"
@@ -99,8 +132,39 @@ sweep() {
 	done
 }
 
+# fixed cases, each with its control (the same case with one input changed)
+selftest() {
+	local fail=0 n=0 c
+	NETGUARD_PROTECT="rnr* eth* usb* enx*"
+	check() {	# <expect keep|detach> <port> <bridge> <LAN_PORTS> <trunk> <vlans>
+		LPORTS=$4; LBRIDGE=br-lan; TRUNK=$5; VLANS=$6
+		c=$(verdict "$2" "$3"); [ "$c" = keep ] || c=detach
+		n=$((n + 1))
+		if [ "$c" = "$1" ]; then echo "ok   $1 $2 in $3 (LAN_PORTS='$4' trunk=$5)"
+		else echo "FAIL want $1, got $c: $2 in $3 (LAN_PORTS='$4' trunk=$5)"; fail=$((fail + 1)); fi
+	}
+	check keep   rnr1    br-lan  "rnr1"          rnr0 ""
+	check detach rnr1    br-lan  ""              rnr0 ""		# control: LAN off
+	check keep   rnr3    br-lan  "rnr1 rnr2 rnr3" rnr0 ""
+	check detach rnr0    br-lan  "rnr0 rnr1"     rnr0 ""		# the uplink, even listed
+	check detach rnr0    br-lan  "rnr0"          rnr1 ""		# ... even when not the trunk
+	check detach rnr1    brwifi1 "rnr1"          rnr0 "brwifi1:20"	# LAN port in a Wi-Fi bridge
+	check detach rnr1    brx     "rnr1"          rnr0 ""		# any other bridge
+	check detach rnr2    br-lan  "rnr1"          rnr0 ""		# not listed
+	check detach rnr1    br-lan  "rnr1"          rnr1 ""		# the Wi-Fi trunk port
+	check keep   rnr1    br-lan  "rnr1"          rnr2 ""		# control: trunk elsewhere
+	check detach eth0    br-lan  "eth0"          rnr0 ""		# USB lifeline, even listed
+	check keep   rnr0.20 brwifi1 ""              rnr0 "brwifi1:20"	# trunk VLAN (unchanged rule)
+	check detach rnr0.20 br-lan  "rnr1"          rnr0 "brwifi1:20"	# trunk VLAN into br-lan
+	check detach rnr1.20 br-lan  "rnr1"          rnr0 ""		# sub-interface of a LAN port
+	check keep   bcawl0  br-lan  "rnr1"          rnr0 ""		# Wi-Fi joins the wired LAN
+	echo "selftest: $((n - fail))/$n ok"
+	[ $fail -eq 0 ]
+}
+[ "${1:-}" = --selftest ] && { selftest; exit $?; }
+
 sweep
-log "guarding: never bridged: $NETGUARD_PROTECT (sub-interfaces: listed Wi-Fi VLANs in brwifi* only); hairpin never on"
+log "guarding: never bridged: $NETGUARD_PROTECT (sub-interfaces: listed Wi-Fi VLANs in brwifi* only; wired LAN: LAN_PORTS of rnr1-3 in ${LBRIDGE:-br-lan} only, never rnr0); hairpin never on"
 # one event stream: every link change from the kernel, plus a periodic tick
 {
 	ip -o monitor link &
