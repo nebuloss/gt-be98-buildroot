@@ -53,6 +53,11 @@ remote syslog target. `build.sh` records its path in the Buildroot `.config`
 (it reconfigures when the file is newer than `.config`) and
 `build.sh gt-be98-os-reinstall gt-be98-vendor-firmware-reinstall all`.
 
+A **release image** (for someone else's box: no lab host keys, no web UI
+password, no lab addresses) is built with `RELEASE=1` from
+`release.conf.example` into a separate output directory, checked with
+`release-check.sh`, and handed over privately only: `docs/RELEASE-BUILD.md`.
+
 Private repositories (open-ethernet, open-wifi) are fetched over SSH at the
 commits pinned in their `.mk` files. To build from a working tree instead
 (driver iteration), put in `$OUT/local.mk`:
@@ -430,8 +435,13 @@ provisioned** in the local configuration (`WEBUI_PASSWORD`, or
 `WEBUI_PASSWORD_HASH`): the build writes `/etc/webui/auth.conf` (`SALT=`,
 `HASH=sha256(SALT || password)`, the webui's own format, imported into its
 `webui.db` on the first start). Without one the service stays disabled, and
-`gt-be98-webui-guard` (required by `webui`) refuses a manual start, so the
-webui never serves its first-run "set password" page on the LAN.
+`gt-be98-webui-guard` (required by `webui`) refuses a manual start of an
+unprovisioned webui, so it never serves an open first-run page on the LAN.
+The guard does start a webui with the first-login setup token (`webui
+-features` prints `setup-token`): unprovisioned, it accepts only
+`set_password` with the root-only token in `/run/webui/setup-token`. A
+release image (`RELEASE=1`) enables the web UI that way, without a password
+(`docs/RELEASE-BUILD.md`).
 With `WAN_IF` (rnr0) also listed in `MGMT_IF`, the webui skips its WAN block
 on rnr0 (`WAN_BLOCK_PORTS` is not applied there), so the UI is reachable from
 the LAN rnr0 sits on: intended for this dev box (password-protected; needs a

@@ -80,8 +80,10 @@ FAILS=0
 fail() { FAILS=$((FAILS + 1)); echo "FAIL $*"; }
 note() { echo "ok   $*"; }
 
-# list up to 5 files of $@ (relative to $BASE)
-rel() { sed "s|^$BASE/||" | head -n 5 | tr '\n' ' '; }
+# file list on stdin -> "N file(s): the first 5" (relative to $BASE); empty in, empty out
+rel() {
+	sed "s|^$BASE/||" | awk '{ n++; if (n <= 5) l = l " " $0 } END { if (n) printf "%d file(s):%s%s", n, l, (n > 5 ? " ..." : "") }'
+}
 
 check_root() {	# rootfs dir
 	R=$1 BASE=$1
@@ -157,7 +159,7 @@ check_patterns() {	# dirs/files...
 	while IFS='	' read -r kind src pat; do
 		i=$((i + 1))
 		[ "$kind" = fixed ] && opt=-F || opt=-E
-		x=$(grep -rla $opt -e "$pat" "$@" 2>/dev/null | sed "s|^$BASE/||" | head -n 5 | tr '\n' ' ')
+		x=$(grep -rla $opt -e "$pat" "$@" 2>/dev/null | rel)
 		if [ -z "$x" ]; then
 			note "PATTERN #$i ($src) not found"
 		else
