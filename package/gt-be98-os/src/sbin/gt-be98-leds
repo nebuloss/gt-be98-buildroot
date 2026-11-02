@@ -32,6 +32,10 @@
 #                         implements the trigger's hardware offload hands it
 #                         to the firmware (stock's behaviour); `status`
 #                         shows offloaded=1 then
+#                         A radio the Wi-Fi network list turns off (led=0 of
+#                         its radio=; gt-be98-wifi writes them to
+#                         /run/gt-be98-wifi/leds, WIFI_LEDS_OFF="bcawlN ...")
+#                         gets its LEDs off (trigger none, brightness 0)
 #   LED_NETDEV="led=netdev ..."    further LEDs on a netdev (e.g. WAN on rnr0)
 #   LED_TRIGGER="led=trigger ..."  further LEDs on a named trigger
 #                         (default-on, heartbeat, timer, none, ...)
@@ -40,6 +44,7 @@ set -u
 CONF=${GT_BE98_LEDS_CONF:-/etc/conf.d/gt-be98-leds}
 LEDS=${GT_BE98_LEDS:-/sys/class/leds}
 SYSNET=${GT_BE98_SYSNET:-/sys/class/net}
+WIFI_STATE=${GT_BE98_WIFI_LEDS:-/run/gt-be98-wifi/leds}
 
 say() { echo "gt-be98-leds: $*"; }
 
@@ -56,6 +61,23 @@ settings() {
 	WIFI=$(conf_get WIFI_LEDS '[A-Za-z0-9 ]' 'bcawl3 bcawl0 bcawl1 bcawl2')
 	NETDEV=$(conf_get LED_NETDEV '[A-Za-z0-9:_.= -]' '')
 	TRIG=$(conf_get LED_TRIGGER '[A-Za-z0-9:_.= -]' '')
+	# the radios the Wi-Fi network list turns off (written by gt-be98-wifi)
+	WOFF=$(sed -n 's/^WIFI_LEDS_OFF="\([A-Za-z0-9 ]*\)"$/\1/p' "$WIFI_STATE" 2>/dev/null | tail -n1)
+}
+
+# the LEDs of radio $1 off
+radio_off() {
+	local d=$1 p l found=0
+	for p in "$SYSNET/$d/device/leds"/*; do
+		[ -e "$p" ] || continue
+		l=${p##*/}
+		valid_led "$l" || continue
+		found=1
+		echo none > "$LEDS/$l/trigger" 2>/dev/null
+		echo 0 > "$LEDS/$l/brightness" 2>/dev/null
+		say "$l: off ($d: led=0 in the Wi-Fi network list)"
+	done
+	[ $found = 1 ] || say "$d: no LED (the driver registers none for this radio yet)"
 }
 
 # a LED name: one path component under $LEDS
@@ -99,7 +121,11 @@ cmd_apply() {
 	local d p l e rc=0 found
 	settings
 	[ "$OFF" = 1 ] && { cmd_off; return 0; }
+	for d in $WOFF; do
+		radio_off "$d"
+	done
 	for d in $WIFI; do
+		case " $WOFF " in *" $d "*) continue ;; esac
 		found=0
 		for p in "$SYSNET/$d/device/leds"/*; do
 			[ -e "$p" ] || continue

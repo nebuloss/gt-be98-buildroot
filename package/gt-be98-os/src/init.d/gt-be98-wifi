@@ -51,6 +51,18 @@
 # every minute boundary and reloads when the schedule state changed.
 # WIFI_SCHED_TZ (same files): the schedules' POSIX TZ string, empty = UTC.
 #
+# Monitor radios (monitor=1 of a radio in the list): the radio carries no
+# BSS; once hostapd released it the radio netdev is set down (the driver
+# refuses a monitor while it is up) and <dev>mon is created on its wiphy
+# (iw phy <phy> interface add <dev>mon type monitor), set up and tuned to the
+# radio's channel/width. A monitor no longer listed is deleted before the
+# radio's BSSes start again; only what this service created ($STATE/monitors)
+# is ever deleted.
+#
+# LEDs (led=0|1 of a radio in the list): $STATE/leds lists the radios whose
+# LED is off (WIFI_LEDS_OFF="bcawlN ..."); gt-be98-leds reads it, and is run
+# after every start and reload.
+#
 # Wi-Fi networks are pure L2: each network is a bridge brwifiN holding its
 # BSSes and the 802.1Q sub-interface <trunk>.<vid> of the wired trunk port;
 # no address on the box, no NAT. Besides the network list, settings (same
@@ -552,6 +564,81 @@ gen_networks() {
 # the arguments, one space apart
 words() { echo "$*"; }
 
+# ---- monitor radios (plan: monitor <band> <dev> <MHz> <width> <centre MHz>) ----
+
+mon_owned() { grep -qx "$1" "$STATE/monitors" 2>/dev/null; }
+
+# the monitors the plan asks for, "<dev> <MHz> <width> <centre>" per line
+mon_want() { awk '$1 == "monitor" { print $3, $4, $5, $6 }' "$STATE/gen/plan" 2>/dev/null; }
+
+# delete monitor $1 (one this service created)
+mon_del() {
+	local m=$1
+	if [ -e "$SYSNET/$m" ]; then
+		ebegin "Deleting monitor $m"
+		ip link set dev "$m" down 2>/dev/null
+		iw dev "$m" del
+		eend $? || return 1
+	fi
+	grep -vx "$m" "$STATE/monitors" > "$STATE/monitors.new" 2>/dev/null
+	mv -f "$STATE/monitors.new" "$STATE/monitors"
+}
+
+# the owned monitors not in the list $1 (" bcawl0mon ... ")
+mon_prune() {
+	local m
+	# shellcheck disable=SC2013 # one validated name per line
+	for m in $(cat "$STATE/monitors" 2>/dev/null); do
+		case "$m" in bcawl[0-9]*mon) ;; *) continue ;; esac
+		in_list " $1 " "$m" || mon_del "$m"
+	done
+}
+
+# monitor <dev>mon on radio $1 at $2 MHz, width $3 MHz, centre $4 MHz
+mon_add() {
+	local d=$1 f=$2 w=$3 c=$4 m="$1mon" phy
+	case "$d$f$w$c" in *[!a-z0-9]*) eerror "monitor $d: refused"; return 1 ;; esac
+	phy=$(radio_phy "$d") || return 1
+	# the driver refuses a monitor while the radio's primary netdev is up
+	ip link set dev "$d" down 2>/dev/null
+	if [ ! -e "$SYSNET/$m" ]; then
+		ebegin "Creating monitor $m on $d"
+		iw phy "$phy" interface add "$m" type monitor
+		eend $? || return 1
+		mkdir -p "$STATE"
+		mon_owned "$m" || echo "$m" >> "$STATE/monitors"
+	fi
+	ip link set dev "$m" up || { eerror "$m: up failed"; return 1; }
+	if [ "$w" = 20 ]; then iw dev "$m" set freq "$f" HT20
+	else iw dev "$m" set freq "$f" "$w" "$c"; fi || { eerror "$m: set freq $f/$w failed"; return 1; }
+	einfo "monitor $m: $f MHz, $w MHz wide"
+}
+
+# every monitor of the plan (after hostapd released those radios)
+mon_apply() {
+	local d f w c rc=0
+	while read -r d f w c; do
+		[ -n "$d" ] || continue
+		mon_add "$d" "$f" "$w" "$c" || rc=1
+	done <<-EOF
+	$(mon_want)
+	EOF
+	return $rc
+}
+
+# the radios whose LED is off (led=0 in the list), for gt-be98-leds
+write_leds() {
+	local off
+	mkdir -p "$STATE"
+	off=$(awk '$1 == "led" && $4 == "0" { printf "%s%s", s, $3; s = " " }' "$STATE/gen/plan" 2>/dev/null)
+	{
+		echo "# written by gt-be98-wifi: the radios whose LED is off (led=0)"
+		echo "WIFI_LEDS_OFF=\"$off\""
+	} > "$STATE/leds.new" && mv -f "$STATE/leds.new" "$STATE/leds"
+}
+
+leds_apply() { [ -x /usr/sbin/gt-be98-leds ] && /usr/sbin/gt-be98-leds apply > /dev/null 2>&1; }
+
 # the effective L2 settings, for gt-be98-netguard
 write_l2() {
 	local vl is
@@ -593,6 +680,9 @@ apply_hostapd() {
 	valid_trunk "$t" || { eerror "trunk '$t' refused (rnr0..rnr3): no Wi-Fi network bridged"; t=; rc=1; }
 	check_vlans || rc=1
 	write_l2
+	write_leds
+	# monitors no longer listed first: their radios may start BSSes below
+	mon_prune " $(mon_want | awk '{ printf "%smon ", $1 }')"
 	# drop the sub-interfaces no longer wanted first (old trunk, changed
 	# VLAN): a bridge never holds the VLANs of two trunks, not even briefly
 	if [ -n "$t" ]; then
@@ -644,6 +734,7 @@ apply_hostapd() {
 		einfo "no Wi-Fi network or HOSTAPD_CONFS: driver only"
 		hap_daemon_stop
 		vlan_prune "$subs"; br_prune "$brs"
+		mon_apply || rc=1
 		return $rc
 	fi
 	# the process: (re)started when dead or started with other arguments
@@ -666,6 +757,8 @@ apply_hostapd() {
 	# VLANs and bridges no longer listed, now that no BSS uses them
 	vlan_prune "$subs"
 	br_prune "$brs"
+	# the monitors, now that hostapd released their radios
+	mon_apply || rc=1
 	return $rc
 }
 
@@ -693,6 +786,8 @@ sched_stop() {
 stop_hostapd() {
 	stop_legacy
 	hap_daemon_stop
+	mon_prune ""
+	rm -f "$STATE/leds"
 	vlan_prune ""
 	br_prune ""
 	rm -f "$STATE/l2.conf"
@@ -721,7 +816,7 @@ start() {
 	sched_stop
 	sched_start
 	# the radios' LEDs come with the driver (gt-be98-leds)
-	[ -x /usr/sbin/gt-be98-leds ] && /usr/sbin/gt-be98-leds apply > /dev/null 2>&1
+	leds_apply
 	return $rc
 }
 
@@ -732,6 +827,7 @@ reload() {
 	apply_hostapd
 	rc=$?
 	sched_start
+	leds_apply	# led= of the list may have changed
 	return $rc
 }
 
@@ -763,6 +859,9 @@ status() {
 		else
 			eerror "bridge $i: missing"
 		fi
+	done
+	for i in $(cat "$STATE/monitors" 2>/dev/null); do
+		if [ -e "$SYSNET/$i" ]; then einfo "monitor $i"; else eerror "monitor $i: missing"; fi
 	done
 	if ! hap_running; then
 		[ -d "$STATE/applied" ] && eerror "hostapd: not running"
