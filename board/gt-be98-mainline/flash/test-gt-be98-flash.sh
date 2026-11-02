@@ -9,7 +9,9 @@
 #   SH="busybox sh" sh board/gt-be98-mainline/flash/test-gt-be98-flash.sh
 #
 # SH: the shell that runs gt-be98-flash.sh (default sh; the box runs busybox
-# ash). Prints one line per case and "FLASH-TEST: PASS n/n" at the end.
+# ash). Prints one line per case and "FLASH-TEST: PASS n/n" at the end; a
+# shell that runs its own devmem applet whatever PATH says (Debian busybox)
+# skips the 4 register cases and says so.
 set -u
 HERE=$(cd "$(dirname "$0")" && pwd)
 SH=${SH:-sh}
@@ -103,7 +105,16 @@ mkroot() {
 	: > "$F/writes"
 }
 
-pass=0 fail=0
+pass=0 fail=0 skip=0
+# a shell that prefers its own applets (Debian's busybox) runs its real devmem,
+# not the fake: the cases that need the fake register are then skipped, loudly
+mkroot
+if [ "$(GT_BE98_FLASH_ROOT=$F PATH="$B:$PATH" $SH -c 'devmem 0xff802628 32' 2>/dev/null)" = 0xFB210034 ]; then
+	FAKE_DEVMEM=1
+else
+	FAKE_DEVMEM=0; echo "note: $SH runs its own devmem applet, not the fake: register cases skipped"
+fi
+skipped() { echo "skip $1 (devmem fake shadowed)"; skip=$((skip + 1)); }
 # run NAME WANT_RC WANT_TEXT -- args...   (output must contain WANT_TEXT)
 run() {
 	name=$1 want=$2 text=$3; shift 4
@@ -171,8 +182,12 @@ check boot-check-no-arm rr_is 34
 reflashed; run boot-ok 0 "BOOT-ARMED" -- boot
 check boot-armed rr_is 1
 check boot-no-register-write [ ! -e "$F/devmem-writes" ]
-reflashed; run boot-clear-postcode 0 "post-code byte cleared (0xFB210034 -> 0x00210034)" -- boot --clear-postcode
-check boot-clear-armed rr_is 1
+if [ $FAKE_DEVMEM = 1 ]; then
+	reflashed; run boot-clear-postcode 0 "post-code byte cleared (0xFB210034 -> 0x00210034)" -- boot --clear-postcode
+	check boot-clear-armed rr_is 1
+else
+	skipped boot-clear-postcode; skipped boot-clear-armed
+fi
 
 # ---- boot: refused (not armed) ----------------------------------------------------------------
 mkroot; run boot-not-flashed 1 "flash first" -- boot
@@ -184,9 +199,13 @@ check boot-marker-no-arm rr_is 34
 reflashed; echo "console=ttyAMA0 ubi.block=0,4" > "$F/proc/cmdline"; run boot-booted-slot1 1 "running from slot 1" -- boot
 reflashed; echo 1 > "$F/committed"; run boot-committed-1 1 "committed slot is '1'" -- boot
 reflashed; : > "$F/bootstate-noop"; run boot-arm-not-taken 1 "did not arm" -- boot
-reflashed; : > "$F/devmem-corrupt"; run boot-register-guard 1 "bits [23:0] changed" -- boot --clear-postcode
-check boot-register-guard-no-arm rr_is 34
+if [ $FAKE_DEVMEM = 1 ]; then
+	reflashed; : > "$F/devmem-corrupt"; run boot-register-guard 1 "bits [23:0] changed" -- boot --clear-postcode
+	check boot-register-guard-no-arm rr_is 34
+else
+	skipped boot-register-guard; skipped boot-register-guard-no-arm
+fi
 reflashed; run boot-usage 2 "boot [--check]" -- boot --bogus
 
-echo "FLASH-TEST: $([ $fail = 0 ] && echo PASS || echo FAIL) $pass/$((pass + fail)) (shell: $SH)"
+echo "FLASH-TEST: $([ $fail = 0 ] && echo PASS || echo FAIL) $pass/$((pass + fail))$([ $skip = 0 ] || echo ", $skip skipped") (shell: $SH)"
 [ $fail = 0 ]
