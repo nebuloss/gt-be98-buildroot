@@ -60,6 +60,11 @@
 #   country=XX                      global, before the first block
 #   radio=2g|5gl|5gh|6g             radio-wide settings of one radio
 #     enabled=1  channel=N  width=20|40|80|160|320
+#                                   (a 5 GHz DFS channel, 52-144, needs
+#                                   country= and -c: hostapd runs DFS only
+#                                   with ieee80211h, which needs the
+#                                   country; without it a warning, and
+#                                   the radio does not start)
 #                                   2g: 20, 40; 5gl/5gh: 20, 40, 80;
 #                                   6g: 20, 40, 80, 160, 320 (HE, op_class
 #                                   131-134; 320 is EHT, op_class 137,
@@ -758,6 +763,16 @@ END {
 		if (b == "2g" && rw[b] == 80) err("radio 2g: 80 MHz is 5/6 GHz only")
 		if ((b == "5gl" || b == "5gh") && rw[b] == 40 && ht40(b, rch[b]) == "") err("radio " b ": channel " rch[b] " has no 40 MHz pair")
 		if ((b == "5gl" || b == "5gh") && rw[b] == 80 && vht80(rch[b]) == 0) err("radio " b ": channel " rch[b] " has no 80 MHz block")
+		# a DFS channel (5 GHz 52-144; their 40/80 MHz blocks never straddle
+		# a non-DFS one) is usable only with IEEE 802.11h, which hostapd
+		# allows only with 11d and a country_code: without them hostapd marks
+		# every radar channel DISABLED itself (hw_features.c: "Hardware does
+		# not support configured channel"), and on 5gh (the firmware keeps
+		# 100-140 only) that is every channel. Said loudly; the web UI refuses
+		if ((b == "5gl" || b == "5gh") && rch[b] >= 52 && rch[b] <= 144 && renab[b] != "0" && !rmon[b] && !(ccok && country != "")) {
+			m = 0; for (i = 1; i <= nnet; i++) if ((i, b) in hasb) m++
+			if (m) warn("radio " b ": channel " rch[b] " is a DFS (radar) channel and " (country == "" ? "the list has no country=" : "the regulatory database is not loaded (no -c)") ": hostapd cannot run DFS without a country_code, so the BSSes of this radio will not start")
+		}
 	}
 	if (nerr) exit 1
 

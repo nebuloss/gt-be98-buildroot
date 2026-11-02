@@ -429,6 +429,27 @@ check "open-owe on 2.4 GHz (open), SAE, WPA2: no disable_pmksa_caching" "" \
 check "the single-BSS config of an OWE BSS carries it too" 1 "$(grep -c '^disable_pmksa_caching=1$' "$T/o/bss-$(ifo 1 bcawl2).conf")"
 conf_ok "owe pmksa"
 
+# ---- 10b3. DFS channels need the country (IEEE 802.11h); soak 1102-1259:
+# 5gh ch100 without a country never started ----
+{ printf 'radio=5gh\nchannel=100\nwidth=20\n'; net 1 a sae password1 "5gl 5gh" 1; } > "$T/d0"
+rm -f "$T/slots"; gen "$T/d0" -c; check "5gh ch100, no country: accepted, warned, no ieee80211h" "0 yes no" \
+	"$? $(grep -q '5gh: channel 100 is a DFS (radar) channel and the list has no country=' "$T/err" && echo yes || echo no) $(hdr_has bcawl1 ieee80211h=1)"
+check "5gl ch36 (not DFS): no warning" "no" "$(grep -q '5gl: channel 36 is a DFS' "$T/err" && echo yes || echo no)"
+{ printf 'country=DE\nradio=5gh\nchannel=100\nwidth=20\n'; net 1 a sae password1 "5gl 5gh" 1; } > "$T/d1"
+rm -f "$T/slots"; gen "$T/d1" -c; check "5gh ch100 + country=DE + -c: no warning; country_code, 11d, 11h on 5gh" "0 no yes yes yes" \
+	"$? $(grep -q 'DFS (radar)' "$T/err" && echo yes || echo no) $(hdr_has bcawl1 country_code=DE) $(hdr_has bcawl1 ieee80211d=1) $(hdr_has bcawl1 ieee80211h=1)"
+conf_ok "5gh ch100 DFS with country"
+if [ -n "$CONFCHECK" ]; then
+	sed '/^\(country_code\|ieee80211d\)=/d' "$T/o/hostapd-bcawl1.conf" > "$T/d1-no11d.conf"
+	"$CONFCHECK" "$T/d1-no11d.conf" > "$T/d1cc" 2>&1
+	check "control: hostapd refuses ieee80211h without 11d/country (why the country is required)" "1 yes" \
+		"$(grep -c '^FAIL ' "$T/d1cc") $(grep -q '802.11h without' "$T/d1cc" && echo yes || echo no)"
+fi
+rm -f "$T/slots"; gen "$T/d1"; check "country=DE without -c (no regdb): warned" "0 yes" \
+	"$? $(grep -q '5gh: channel 100 is a DFS (radar) channel and the regulatory database is not loaded' "$T/err" && echo yes || echo no)"
+{ printf 'radio=5gh\nchannel=100\nmonitor=1\n'; net 1 a sae password1 "5gl 5gh" 1; } > "$T/d2"
+rm -f "$T/slots"; gen "$T/d2" -c; check "a monitor on ch100: no DFS warning" "no" "$(grep -q 'DFS (radar)' "$T/err" && echo yes || echo no)"
+
 # ---- 10c. radio features: HE (ax=), TWT responder (twt=), zero-wait DFS
 # (zwdfs=), monitor (monitor=), LED (led=) ----
 # HE/EHT (ax=, be=): default both on, every radio; each off both ways
