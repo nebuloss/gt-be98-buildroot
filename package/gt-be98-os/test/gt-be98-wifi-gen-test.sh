@@ -452,6 +452,7 @@ if [ -n "$CONFCHECK" ]; then
 	check "hostapd reads 5gl ax=0 as HE/EHT off, 5gh as EHT 80 MHz centre 106" "be=0/ be=1/1/106" \
 		"$(grep 'hostapd-bcawl0.conf' "$T/ccb" | grep -o 'be=0/') $(grep 'hostapd-bcawl1.conf' "$T/ccb" | grep -o 'be=1/1/106')"
 fi
+rm -f "$T/slots"; gen "$T/x1"	# back to the default list
 check "5gl HE at 80 MHz: HE width/centre = the VHT ones (36 -> 42)" "yes yes" \
 	"$(hdr_has bcawl0 he_oper_chwidth=1) $(hdr_has bcawl0 he_oper_centr_freq_seg0_idx=42)"
 check "no he_twt_responder line by default (hostapd's own default: on)" "" "$(grep -h '^he_twt_responder' "$T"/o/hdr-*)"
