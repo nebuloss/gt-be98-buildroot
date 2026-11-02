@@ -6,8 +6,12 @@
 # Every tool it drives is a fake that logs its command line to $T/log
 # (wpa_cli answers from $T/wpa-state-<dev>, start-stop-daemon runs nothing);
 # the checks are on those commands and on the files the helper writes. Runs
-# with sh, and with SH="busybox sh" / bash / dash when present.
+# with SH=sh (default), dash or bash. Not with "busybox sh": it runs its own
+# ip/sysctl/start-stop-daemon applets before PATH, so the fakes would not be
+# reached (the helper is executed, not sourced: no function can stand in);
+# the image has no busybox at all (/bin/sh is bash), so nothing is lost.
 set -u
+case "${SH:-sh}" in *busybox*) echo "skip: SH=$SH (busybox applets shadow the fakes, see the header)"; exit 0 ;; esac
 here=$(cd "$(dirname "$0")" && pwd)
 H="$here/../src/sbin/gt-be98-wifi-sta"
 T=$(mktemp -d)
