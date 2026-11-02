@@ -25,6 +25,12 @@
 # default station) or airtime_weight=W for every station of a network;
 # airtime=2|3 share the radio between networks by airtime_weight (3 caps the
 # networks with airtime_limit=1). Off (airtime=0) by default.
+# Radio options: ax=1 turns HE (802.11ax) on for 2g/5gl/5gh (6g is always
+# HE); twt=0 turns hostapd's TWT responder off (on by default, HE radios
+# only); zwdfs=1 (5gl/5gh, a DFS channel, country set) is zero-wait DFS: the
+# radio starts at once on a non-DFS channel, the DFS channel's CAC runs in
+# the background, then hostapd moves there; monitor=1 makes the radio a
+# monitor (<dev>mon on its channel/width, no BSS); led=0 turns its LED off.
 # This file holds secrets: keep it mode 0600.
 # country= is written only once the regulatory database is loaded.
 #country=XX
@@ -35,6 +41,8 @@ width=20
 radio=5gl
 channel=36
 width=80
+#ax=1
+#zwdfs=1
 radio=5gh
 channel=100
 width=80
