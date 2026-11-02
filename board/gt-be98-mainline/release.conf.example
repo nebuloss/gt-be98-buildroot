@@ -9,7 +9,10 @@ RELEASE=1
 
 # --- build.sh: a SEPARATE output directory from the lab build ------------------
 BR2_SRC=$HOME/os-build/buildroot-2026.08
-OUT=$HOME/os-build/out-release
+# NOT under /home and not named after a person: absolute build paths end up
+# in binaries (compiler paths, __FILE__); build.sh refuses such an OUT.
+# Once, as root: install -d -o <build user> /srv/gt-be98-release
+OUT=/srv/gt-be98-release/out
 BR2_DL_DIR=$HOME/be98/buildroot/dl
 
 # --- FIT and vendor firmware (as local.conf.example; build-host paths only) -------

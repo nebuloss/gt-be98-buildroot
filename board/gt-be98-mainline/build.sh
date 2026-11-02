@@ -17,8 +17,8 @@
 # post-image.sh). Use a separate OUT for it, then check the result:
 #   RELEASE=1 GT_BE98_LOCAL_CONF=~/.config/gt-be98-os/release.conf rtk sh build.sh
 #   sh board/gt-be98-mainline/release-check.sh -f <lab patterns> $OUT/images
-# --print-config: only write the configuration fragment build.sh would merge
-# (to stdout) and exit; no Buildroot call.
+# --print-config: run the checks, write the configuration fragment build.sh
+# would merge (to stdout) and exit; no Buildroot call, nothing created.
 set -eu
 HERE=$(cd "$(dirname "$0")" && pwd)
 EXT=$(cd "$HERE/../.." && pwd)
@@ -42,11 +42,6 @@ fragment() {
 		echo "# BR2_PACKAGE_GT_BE98_OS_RELEASE is not set"
 	fi
 }
-if [ "${1:-}" = --print-config ]; then
-	fragment
-	exit 0
-fi
-
 if [ "$RELEASE" = 1 ]; then
 	# fail early (apply-local-conf.sh and post-image.sh check again)
 	bad=
@@ -56,7 +51,19 @@ if [ "$RELEASE" = 1 ]; then
 		[ -z "$v" ] || bad="$bad $k"
 	done
 	[ -z "$bad" ] || { echo "RELEASE=1: these keys of $CONF must be empty:$bad"; exit 1; }
-	echo "build.sh: RELEASE=1 (no host keys, no web UI password, no lab addresses) -> $OUT"
+	# absolute build paths end up in binaries (compiler paths, __FILE__):
+	# a release is built where the path names no person
+	o=$(realpath -m "$OUT" 2>/dev/null || echo "$OUT")
+	u=$(id -un 2>/dev/null || echo "${USER:-}")
+	case "$o/" in
+	/home/*|*"/$u/"*) echo "RELEASE=1: OUT=$o is under /home or carries the user name; build a release in a neutral directory (e.g. /srv/gt-be98-release, docs/RELEASE-BUILD.md)"; exit 1 ;;
+	esac
+	echo "build.sh: RELEASE=1 (no host keys, no web UI password, no lab addresses) -> $OUT" >&2
+fi
+
+if [ "${1:-}" = --print-config ]; then
+	fragment
+	exit 0
 fi
 
 # stable ssh host keys, outside git (lab builds only)

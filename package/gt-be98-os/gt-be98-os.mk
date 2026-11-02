@@ -119,6 +119,21 @@ endef
 LINUX_PRE_BUILD_HOOKS += GT_BE98_OS_LINUX_PREPARE_INITRAMFS
 endif
 
+# Release image (BR2_PACKAGE_GT_BE98_OS_RELEASE): the build host's identity
+# stays out of the binaries. Measured on a lab image (release-check.sh): the
+# kernel banner carries user@host of the builder (scripts/mkcompile_h), and
+# lsof's version.h the host name, login name, user and `uname -a` (lsof
+# Makefile: an empty LSOF_HOST/LSOF_LOGNAME/LSOF_SYSINFO/LSOF_USER means
+# "ask the build host", "none" means empty; the variables come from the
+# environment of lsof's make). The other leaks of that image are absolute
+# paths under the builder's home (compiler paths in lsof/procan/perf/gawkbug,
+# libstdc++'s gdb.py, __FILE__ of kernel headers in the external modules):
+# build.sh refuses a release OUT under /home or named after the user.
+ifeq ($(BR2_PACKAGE_GT_BE98_OS_RELEASE),y)
+LINUX_MAKE_ENV += KBUILD_BUILD_USER=gt-be98 KBUILD_BUILD_HOST=release
+TARGET_MAKE_ENV += LSOF_HOST=none LSOF_LOGNAME=none LSOF_SYSINFO=none LSOF_USER=none
+endif
+
 # perf: the build host has a host rustc, so perf's feature check enables the
 # Rust test workload and tries to cross-build it without a target std.
 ifeq ($(BR2_PACKAGE_GT_BE98_OS)$(BR2_PACKAGE_LINUX_TOOLS_PERF),yy)
