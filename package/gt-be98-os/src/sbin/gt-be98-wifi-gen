@@ -44,6 +44,8 @@
 #       line: feature <name> 0|1, width <band> <MHz...>, security <modes>,
 #       max_clients <min> <max>) and exit. The web UI reads it: a feature
 #       another change adds to the generator shows up there by itself.
+#       Radio keys: feature he (ax=), twt_responder (twt=), zwdfs, monitor,
+#       led.
 #
 # Network list (hostapd-like: key=value, the value is the rest of the line,
 # never quoted; '#' comment lines; a block starts at network= or radio=):
@@ -67,6 +69,30 @@
 #                                   shares), 3 limit (airtime_limit BSSes
 #                                   capped at their share). With 2|3 a
 #                                   network without airtime_weight gets 1
+#     ax=0|1                        2g/5gl/5gh: HE (802.11ax, ieee80211ax=1;
+#                                   5 GHz: he_oper_chwidth and the centre
+#                                   index follow the VHT ones). Default 0.
+#                                   6g is always HE: ax=0 there is refused
+#     twt=0|1                       hostapd he_twt_responder (radio-wide in
+#                                   hostapd): default 1, hostapd's own
+#                                   default; 0 writes he_twt_responder=0.
+#                                   Acts only on an HE radio (6g, or ax=1):
+#                                   hostapd advertises TWT with HE only
+#     zwdfs=0|1                     5gl/5gh: zero-wait DFS, hostapd
+#                                   enable_background_radar=1 (the driver
+#                                   runs the CAC of a DFS channel= in the
+#                                   background while the radio starts on a
+#                                   non-DFS channel, then hostapd moves to
+#                                   it). Acts on a DFS channel with the
+#                                   country written (-c: ieee80211h=1)
+#     monitor=0|1                   1: the radio is a monitor, no BSS: its
+#                                   networks are not rendered there (they
+#                                   keep their slots) and the plan gets a
+#                                   monitor line (its channel/width); the
+#                                   service creates <dev>mon on it
+#     led=0|1                       the radio's LED (gt-be98-leds): default
+#                                   1 (radio up + traffic), 0 off; a led
+#                                   line per radio in the plan
 #   network=ID                      1..99999, the bridge is brwifiID
 #     ssid=...                      1-32 bytes
 #     security=open|owe|open-owe|psk2|psk2sae|sae|wpa2-eap|wpa3-eap|wpa2-wpa3-eap
@@ -102,9 +128,11 @@
 #     airtime_sta_weight=MAC W      one station's weight, W = 1..65535
 #                                   (airtime=1); the key repeats, at most
 #                                   64 per network
-#     twt=0|1  wds=0|1              reserved for TWT and 4-address (WDS)
-#                                   clients: refused (-F: feature twt 0,
-#                                   feature wds 0) until implemented here
+#     twt=0|1  wds=0|1              network level: refused (-F: feature
+#                                   twt 0, feature wds 0). TWT is radio-wide
+#                                   in hostapd (radio twt=, feature
+#                                   twt_responder); wds is reserved for
+#                                   4-address clients
 #     slot.<band>=K  mac.<band>=S   optional explicit sticky slot / BSSID
 #                                   index S = 1..7 (0: the anchor's)
 #
@@ -151,6 +179,8 @@
 #   radio <band> <dev> <conf> <sha256 of the radio-wide lines>
 #   bss <dev> <ifname> <slot> <net> <index> <bssid> <bridge> <conf> <sha256 of the section>
 #   net <id> <bridge> <vlan> <isolate 0|1>     (networks on >= 1 radio)
+#   monitor <band> <dev> <MHz> <width> <centre MHz>   (monitor=1 radios)
+#   led <band> <dev> 0|1                       (every radio of -d)
 # and sched (also -Q's output), one line per network/radio that has a
 # schedule, in list/band order: net <id> on|off, radio <band> on|off
 # Exit 1 with the reasons on stderr when the list is refused: then nothing
@@ -178,6 +208,11 @@ features() {
 	feature enterprise 1
 	feature width320 1
 	feature airtime 1
+	feature he 1
+	feature twt_responder 1
+	feature zwdfs 1
+	feature monitor 1
+	feature led 1
 	feature twt 0
 	feature wds 0
 	EOF
@@ -311,6 +346,15 @@ function c6(ch, w,    n, c) {
 	return (c + n / 2 - 2 <= 233) ? c : 0	# its top channel exists
 }
 function opclass6(w) { return w == 20 ? 131 : w == 40 ? 132 : w == 80 ? 133 : w == 160 ? 134 : 137 }
+# the frequency (MHz) of channel ch on band b
+function freq(b, ch) { return b == "2g" ? 2407 + 5 * ch : b == "6g" ? 5950 + 5 * ch : 5000 + 5 * ch }
+# the centre frequency of the w MHz channel whose primary is ch (checked)
+function cfreq(b, ch, w) {
+	if (w == 20) return freq(b, ch)
+	if (b == "6g") return 5950 + 5 * c6(ch, w)
+	if (w == 40) return freq(b, ch) + (ht40(b, ch) == "+" ? 10 : -10)
+	return 5000 + 5 * vht80(ch)
+}
 # ---- schedules (see the header) ----
 # mon..sun -> 1..7, else 0
 function dayno(s,    i) {
@@ -444,6 +488,11 @@ cur == "r" {
 	else if (k == "schedule" && (v == "" || schedok(v))) rsch[cr] = v
 	# v is a STRING: store the number ("0" is TRUE in awk)
 	else if (k == "airtime" && v ~ /^[0-3]$/) rair[cr] = v + 0
+	else if (k == "ax" && (v == "0" || v == "1")) rax[cr] = v + 0
+	else if (k == "twt" && (v == "0" || v == "1")) rtwt[cr] = v + 0
+	else if (k == "zwdfs" && (v == "0" || v == "1")) rzw[cr] = v + 0
+	else if (k == "monitor" && (v == "0" || v == "1")) rmon[cr] = v + 0
+	else if (k == "led" && (v == "0" || v == "1")) rled[cr] = v + 0
 	else err("radio " cr ": " k "=" v " refused")
 	next
 }
@@ -525,6 +574,11 @@ END {
 	for (bi = 1; bi <= nbands; bi++) {
 		b = BANDS[bi]
 		if (!(b in dev)) { err("no netdev for radio " b " (-d)"); continue }
+		# rax/rtwt/rzw/rmon/rled hold numbers (the "0" string trap)
+		if (b == "6g" && (b in rax) && rax[b] == 0) err("radio 6g: ax=0 refused (6 GHz is HE/EHT only)")
+		if (rzw[b] && b != "5gl" && b != "5gh") err("radio " b ": zwdfs=1 refused (zero-wait DFS: 5gl, 5gh only)")
+		if (!(b in rtwt)) rtwt[b] = 1
+		if (!(b in rled)) rled[b] = 1
 		if (b in rch) {
 			if (!chans(b, rch[b])) { err("radio " b ": channel " rch[b] " is not a channel of this radio"); continue }
 		} else rch[b] = (b == "2g") ? 6 : (b == "5gl") ? 36 : (b == "5gh") ? 100 : 37
@@ -551,7 +605,13 @@ END {
 	# ---- slots, per radio: sticky, slot 0 = anchor ----
 	for (bi = 1; bi <= nbands; bi++) {
 		b = BANDS[bi]
-		live[b] = (renab[b] != "0") && (b in bmac) && !roff[b]
+		live[b] = (renab[b] != "0") && (b in bmac) && !roff[b] && !rmon[b]
+		# a monitor radio carries no BSS (the driver refuses a monitor while
+		# the radio's primary netdev is up); its networks keep their slots
+		ismon[b] = rmon[b] && (renab[b] != "0") && (b in bmac) && !roff[b]
+		if (ismon[b]) {
+			for (i = 1; i <= nnet; i++) if ((i, b) in hasb) { warn("radio " b " (" dev[b] ") is a monitor: its networks are not rendered there"); break }
+		}
 		if (renab[b] != "0" && !(b in bmac)) {
 			for (i = 1; i <= nnet; i++) if ((i, b) in hasb) { warn("radio " b " (" dev[b] "): no MAC address (radio absent?): its networks are not rendered"); break }
 		}
@@ -682,6 +742,7 @@ END {
 		if (b == "2g") {
 			print "hw_mode=g" > hdr; print "channel=" ch > hdr; print "ieee80211n=1" > hdr
 			if (w == 40) print "ht_capab=[HT40" ht40(b, ch) "]" > hdr
+			if (rax[b]) print "ieee80211ax=1" > hdr
 		} else if (b == "6g") {
 			# the op_class sets the width (hostapd derives he/eht_oper_chwidth
 			# and the secondary channel from it on 6 GHz); the centre indices
@@ -703,7 +764,17 @@ END {
 			if (w == 20) print "vht_oper_chwidth=0" > hdr
 			else if (w == 40) { print "ht_capab=[HT40" ht40(b, ch) "]" > hdr; print "vht_oper_chwidth=0" > hdr }
 			else { print "ht_capab=[HT40" ht40(b, ch) "]" > hdr; print "vht_oper_chwidth=1" > hdr; print "vht_oper_centr_freq_seg0_idx=" vht80(ch) > hdr }
+			# HE on 5 GHz: the HE operation width/centre are the VHT ones
+			if (rax[b]) {
+				print "ieee80211ax=1" > hdr
+				if (w == 80) { print "he_oper_chwidth=1" > hdr; print "he_oper_centr_freq_seg0_idx=" vht80(ch) > hdr }
+				else print "he_oper_chwidth=0" > hdr
+			}
+			# zero-wait DFS: hostapd's background radar (the driver's ZW-DFS)
+			if (rzw[b]) print "enable_background_radar=1" > hdr
 		}
+		# TWT responder: on by hostapd's default; rtwt[] holds numbers
+		if (!rtwt[b]) print "he_twt_responder=0" > hdr
 		if (ccok && country != "") {
 			print "country_code=" country > hdr; print "ieee80211d=1" > hdr
 			if (b != "2g" && b != "6g") print "ieee80211h=1" > hdr
@@ -775,6 +846,11 @@ END {
 	}
 	for (i = 1; i <= nnet; i++) if (net[i] in onradio)
 		print "net " net[i] " brwifi" net[i] " " vlan[i] " " iso[i] > plan
+	for (bi = 1; bi <= nbands; bi++) {
+		b = BANDS[bi]
+		if (ismon[b]) print "monitor " b " " dev[b] " " freq(b, rch[b]) " " rw[b] " " cfreq(b, rch[b], rw[b]) > plan
+	}
+	for (bi = 1; bi <= nbands; bi++) { b = BANDS[bi]; if (b in dev) print "led " b " " dev[b] " " rled[b] > plan }
 	close(plan)
 	printf "%s", sch > (out "/sched")
 	close(out "/sched")
@@ -814,6 +890,8 @@ while read -r t a b c d e f g h; do
 		{ echo "$H"; echo "interface=$b"; cat "$OUT/hdr-$a"; echo; cat "$OUT/sec-$b"; } > "$h"
 		echo "bss $a $b $c $d $e $f $g $h $(sum "$OUT/sec-$b")" >> "$OUT/plan" ;;
 	net)	echo "$t $a $b $c $d" >> "$OUT/plan" ;;
+	monitor) echo "$t $a $b $c $d $e" >> "$OUT/plan" ;;
+	led)	echo "$t $a $b $c" >> "$OUT/plan" ;;
 	esac
 done < "$OUT/plan.raw"
 rm -f "$OUT/plan.raw"

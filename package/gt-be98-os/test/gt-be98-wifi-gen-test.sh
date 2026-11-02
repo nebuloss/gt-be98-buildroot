@@ -413,11 +413,79 @@ refuse "one station weighted twice" "$T/r"
 { net 1 a sae password1 2g 1; i=0; while [ $i -lt 65 ]; do printf 'airtime_sta_weight=02:00:5e:00:%02x:%02x 5\n' $((i / 256)) $((i % 256)); i=$((i + 1)); done; } > "$T/r"
 refuse "65 station weights in one network" "$T/r"
 
+# ---- 10c. radio features: HE (ax=), TWT responder (twt=), zero-wait DFS
+# (zwdfs=), monitor (monitor=), LED (led=) ----
+{ printf 'radio=2g\nax=1\nradio=5gl\nax=1\nchannel=36\nwidth=80\nradio=5gh\nax=0\nchannel=100\nwidth=40\n'
+  net 1 a sae password1 "2g 5gl 5gh" 1; } > "$T/x1"
+rm -f "$T/slots"; gen "$T/x1"; check "ax=1 on 2g/5gl, ax=0 on 5gh: accepted" 0 $?
+check "ax=1 -> ieee80211ax=1 on 2g and 5gl; ax=0 (a string \"0\") -> none on 5gh" "yes yes no" \
+	"$(hdr_has bcawl3 ieee80211ax=1) $(hdr_has bcawl0 ieee80211ax=1) $(grep -q '^ieee80211ax' "$T/o/hdr-bcawl1" && echo yes || echo no)"
+check "5gl ax at 80 MHz: HE width/centre = the VHT ones (36 -> 42)" "yes yes" \
+	"$(hdr_has bcawl0 he_oper_chwidth=1) $(hdr_has bcawl0 he_oper_centr_freq_seg0_idx=42)"
+check "no he_twt_responder line by default (hostapd's own default: on)" "" "$(grep -h '^he_twt_responder' "$T"/o/hdr-*)"
+check "default led=1 on every radio of -d, in band order" "led 2g bcawl3 1|led 5gl bcawl0 1|led 5gh bcawl1 1|led 6g bcawl2 1" \
+	"$(grep '^led ' "$T/o/plan" | tr '\n' '|' | sed 's/|$//')"
+check "no monitor line without monitor=1" "" "$(grep '^monitor ' "$T/o/plan")"
+conf_ok "ax"
+{ printf 'radio=5gh\nax=1\nchannel=100\nwidth=40\n'; net 1 a sae password1 5gh 1; } > "$T/x2"
+rm -f "$T/slots"; gen "$T/x2"; check "5gh ax at 40 MHz: he_oper_chwidth=0, no HE centre" "yes no" \
+	"$(hdr_has bcawl1 he_oper_chwidth=0) $(grep -q '^he_oper_centr' "$T/o/hdr-bcawl1" && echo yes || echo no)"
+{ printf 'radio=6g\nax=1\ntwt=0\nradio=2g\ntwt=1\nradio=5gl\ntwt=0\n'; net 1 a sae password1 "2g 5gl 6g" 1; } > "$T/x3"
+rm -f "$T/slots"; gen "$T/x3"; check "6g ax=1 (implicit anyway) + twt on three radios: accepted" 0 $?
+check "6g: one ieee80211ax=1 line" 1 "$(grep -c '^ieee80211ax=1$' "$T/o/hdr-bcawl2")"
+check "twt=0 -> he_twt_responder=0 (6g, 5gl); twt=1 -> no line (2g)" "yes yes no" \
+	"$(hdr_has bcawl2 he_twt_responder=0) $(hdr_has bcawl0 he_twt_responder=0) $(grep -q '^he_twt_responder' "$T/o/hdr-bcawl3" && echo yes || echo no)"
+check "the single-BSS config carries he_twt_responder=0 too" 1 "$(grep -c '^he_twt_responder=0$' "$T/o/bss-bcawl2.conf")"
+conf_ok "twt"
+{ printf 'radio=5gl\nzwdfs=1\nchannel=52\nwidth=80\nradio=5gh\nzwdfs=0\n'; net 1 a sae password1 "5gl 5gh" 1; } > "$T/x4"
+rm -f "$T/slots"; gen "$T/x4"; check "zwdfs=1 on 5gl, zwdfs=0 on 5gh: accepted" 0 $?
+check "zwdfs=1 -> enable_background_radar=1 on 5gl only (zwdfs=0: none)" "yes no" \
+	"$(hdr_has bcawl0 enable_background_radar=1) $(grep -q '^enable_background_radar' "$T/o/hdr-bcawl1" && echo yes || echo no)"
+gen "$T/x4" -c; conf_ok "zwdfs"
+# monitor: the radio carries no BSS, its networks keep their slots
+{ net 1 a sae password1 "2g 5gh" 1; net 2 b sae password2 5gh 2; } > "$T/x5"
+rm -f "$T/slots"; gen "$T/x5"; check "monitor control: 5gh carries two BSSes" "bcawl1 bcawl1-1" \
+	"$(awk '$1 == "bss" && $2 == "bcawl1" { print $3 }' "$T/o/plan" | tr '\n' ' ' | sed 's/ $//')"
+{ printf 'radio=5gh\nmonitor=1\nchannel=149\nwidth=80\n'; cat "$T/x5"; } > "$T/x6"
+gen "$T/x6"; check "monitor=1 on 5gh: accepted, warned" "0 yes" "$? $(grep -q '5gh (bcawl1) is a monitor' "$T/err" && echo yes || echo no)"
+check "monitor=1: no BSS and no config on bcawl1, 2g untouched" "- none bcawl3" \
+	"-$(awk '$1 == "bss" && $2 == "bcawl1"' "$T/o/plan") $(ls "$T"/o/*bcawl1* 2>/dev/null || echo none) $(awk '$1 == "bss" { print $3 }' "$T/o/plan" | tr '\n' ' ' | sed 's/ $//')"
+check "monitor line: 5gh bcawl1 149 (5745 MHz) at 80, centre 155 (5775 MHz)" "monitor 5gh bcawl1 5745 80 5775" "$(grep '^monitor ' "$T/o/plan")"
+check "monitor=1: the 5gh slots are kept" "5gh 0 1 0|5gh 1 2 1" "$(grep '^5gh ' "$T/slots" | tr '\n' '|' | sed 's/|$//')"
+gen "$T/x5"; check "monitor off again: the same two BSSes" "bcawl1 bcawl1-1" \
+	"$(awk '$1 == "bss" && $2 == "bcawl1" { print $3 }' "$T/o/plan" | tr '\n' ' ' | sed 's/ $//')"
+{ printf 'radio=5gh\nmonitor=0\n'; cat "$T/x5"; } > "$T/x7"
+gen "$T/x7"; check "monitor=0 (a string \"0\"): BSSes rendered, no monitor line" "2 0" \
+	"$(awk '$1 == "bss" && $2 == "bcawl1"' "$T/o/plan" | wc -l | tr -d ' ') $(grep -c '^monitor ' "$T/o/plan")"
+mon() {	# band channel width -> the monitor line
+	printf 'radio=%s\nmonitor=1\nchannel=%s\nwidth=%s\n' "$1" "$2" "$3" > "$T/xm"; net 1 a sae password1 2g 1 >> "$T/xm"
+	rm -f "$T/slots"; [ "$1" = 2g ] && { printf 'radio=%s\nmonitor=1\nchannel=%s\nwidth=%s\n' "$1" "$2" "$3"; net 1 a sae password1 5gl 1; } > "$T/xm"
+	gen "$T/xm" && grep '^monitor ' "$T/o/plan"
+}
+check "monitor freq/centre: 2g 6/40, 2g 11/40, 5gl 40/40, 6g 37/320, 6g 5/20" \
+	"monitor 2g bcawl3 2437 40 2447|monitor 2g bcawl3 2462 40 2452|monitor 5gl bcawl0 5200 40 5190|monitor 6g bcawl2 6135 320 6105|monitor 6g bcawl2 5975 20 5975" \
+	"$(mon 2g 6 40; mon 2g 11 40; mon 5gl 40 40; mon 6g 37 320; mon 6g 5 20)" 
+{ printf 'radio=5gh\nmonitor=1\nenabled=0\n'; net 1 a sae password1 5gh 1; } > "$T/x8"
+rm -f "$T/slots"; gen "$T/x8"; check "monitor=1 with enabled=0: no monitor" "0 0" "$? $(grep -c '^monitor ' "$T/o/plan")"
+{ printf 'radio=2g\nled=0\nradio=6g\nled=1\n'; net 1 a sae password1 2g 1; } > "$T/x9"
+rm -f "$T/slots"; gen "$T/x9"; check "led=0 on 2g (a string \"0\"), led=1 on 6g" "led 2g bcawl3 0|led 6g bcawl2 1" \
+	"$(grep -E '^led (2g|6g) ' "$T/o/plan" | tr '\n' '|' | sed 's/|$//')"
+rm -f "$T/slots"; gen "$T/x9"; cp "$T/slots.keep" "$T/slots.keep0"; cp "$T/slots" "$T/slots.keep"	# refuse() compares with this state
+for kv in 'radio=6g ax=0' 'radio=2g ax=2' 'radio=5gl twt=x' 'radio=2g zwdfs=1' 'radio=6g zwdfs=1' 'radio=5gl zwdfs=01' \
+	'radio=5gh monitor=yes' 'radio=2g led=2'; do
+	{ printf '%s\n%s\n' "${kv%% *}" "${kv#* }"; net 1 a sae password1 2g 1; } > "$T/r"; refuse "$kv" "$T/r"
+done
+{ net 1 a sae password1 2g 1; printf 'twt=1\n'; } > "$T/r"; refuse "network twt=1 (TWT is radio-wide)" "$T/r"
+mv "$T/slots.keep0" "$T/slots.keep"
+
 # ---- 11. -F: what the generator supports ----
 check "-F: exit 0 without -n/-o" 0 "$($SH "$G" -F > "$T/feat" 2>&1; echo $?)"
 check "-F: schedule and max_clients on, 6g up to 320 MHz, twt/wds not yet" \
 	"feature schedule 1|feature max_clients 1|width 6g 20 40 80 160 320|width 5gl 20 40 80|feature twt 0|feature wds 0|feature width320 1" \
 	"$(for k in 'feature schedule' 'feature max_clients' 'width 6g' 'width 5gl' 'feature twt' 'feature wds' 'feature width320'; do grep "^$k" "$T/feat"; done | tr '\n' '|' | sed 's/|$//')"
+check "-F: the radio features he, twt_responder, zwdfs, monitor, led" \
+	"feature he 1|feature twt_responder 1|feature zwdfs 1|feature monitor 1|feature led 1" \
+	"$(for k in he twt_responder zwdfs monitor led; do grep "^feature $k " "$T/feat"; done | tr '\n' '|' | sed 's/|$//')"
 check "-F: feature airtime 1" "feature airtime 1" "$(grep '^feature airtime' "$T/feat")"
 check "-F: the security list is the one the checks take" "open owe open-owe psk2 psk2sae sae wpa2-eap wpa3-eap wpa2-wpa3-eap" \
 	"$(sed -n 's/^security //p' "$T/feat")"
