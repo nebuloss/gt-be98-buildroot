@@ -40,8 +40,11 @@ config BR2_PACKAGE_GT_BE98_OPEN_ETHERNET_RTL8372
 	  Build and install driver/rtl8372: the read-only SMI monitor of
 	  the RTL8372 LAN switch behind eth1 (chip ID, uplink SerDes
 	  status, link of each LAN jack; it configures nothing). The
-	  gt-be98-lan service loads it when rnr1 is a LAN port. Off until
-	  it is verified on silicon (open-ethernet
-	  docs/eth-lan-2026-11-02.md).
+	  gt-be98-lan service loads it when rnr1 is a LAN port; nothing
+	  else does (no modalias autoload in this OS), and while it is not
+	  loaded the switch stays in reset. Building it here keeps it in
+	  step with the image kernel (an out-of-image ko built against
+	  another config Oopsed: open-ethernet docs/eth-lan-2026-11-02.md
+	  §9b).
 
 endif

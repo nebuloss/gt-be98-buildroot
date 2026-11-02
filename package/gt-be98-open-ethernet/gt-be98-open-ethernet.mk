@@ -11,8 +11,9 @@
 # 0602-0604 (BCM6813 pinctrl: MDC/MDIO on pins 54/55, so the BCM84891L at 21
 # and the switch's SMI answer; rnr3's PHY attach -19 root cause), 0605 (the
 # RTL8372 RESET#, GPIO 14 active low, on the switch node: held in reset until
-# rtl8372 binds) and 0703 (a flashless BCM8489x no longer has autoneg off)
-GT_BE98_OPEN_ETHERNET_VERSION = 5ac1894e9b979d929c150ce6d81af7657f4c3aec
+# rtl8372 binds) and 0703 (a flashless BCM8489x no longer has autoneg off);
+# rtl8372.ko owns the switch's RESET# (the MDIO core resets PHY devices only)
+GT_BE98_OPEN_ETHERNET_VERSION = 3ce4816b90d87b426a2979a7e6803cc6a8b33096
 GT_BE98_OPEN_ETHERNET_SITE = git@github.com:nebuloss/gt-be98-open-ethernet.git
 GT_BE98_OPEN_ETHERNET_SITE_METHOD = git
 GT_BE98_OPEN_ETHERNET_LICENSE = GPL-2.0

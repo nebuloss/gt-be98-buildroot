@@ -43,6 +43,8 @@ BR2_LINUX_KERNEL_NEEDS_HOST_OPENSSL=y
 # --- GT-BE98 packages -----------------------------------------------------------
 BR2_PACKAGE_GT_BE98_OS=y
 BR2_PACKAGE_GT_BE98_OPEN_ETHERNET=y
+# the RTL8372 read-only monitor: installed, loaded only by gt-be98-lan
+BR2_PACKAGE_GT_BE98_OPEN_ETHERNET_RTL8372=y
 BR2_PACKAGE_GT_BE98_OPEN_WIFI=y
 # BR2_PACKAGE_GT_BE98_OPEN_WIFI_BENCH is not set
 BR2_PACKAGE_GT_BE98_VENDOR_FIRMWARE=y
