@@ -31,6 +31,22 @@ config BR2_PACKAGE_GT_BE98_OS_LOCAL_CONF
 	  passwordless USB telnet lifeline is then enabled), no firmware,
 	  and post-image.sh cannot build the FIT (it needs STOCK_BOOTFS).
 
+config BR2_PACKAGE_GT_BE98_OS_RELEASE
+	bool "release image (no lab secrets, no lab addresses)"
+	help
+	  Build a release image: board/gt-be98-mainline/build.sh sets it
+	  with RELEASE=1 (environment or local configuration; template
+	  board/gt-be98-mainline/release.conf.example). The build then
+	  refuses every local-configuration value that would put a lab
+	  secret or a lab address into the image (SSH_HOSTKEY_DIR,
+	  WEBUI_PASSWORD[_HASH], ROOTFS_URL, SYSLOG_REMOTE, NETCONSOLE,
+	  RNR0_FALLBACK, USB_FALLBACK), strips the comments of
+	  SSH_AUTHORIZED_KEYS, and enables the web UI with its first-login
+	  setup token instead of a baked password. SSH host keys are
+	  generated on the box at first boot (gt-be98-hostkeys) and kept
+	  in /jffs. Check the result with
+	  board/gt-be98-mainline/release-check.sh.
+
 config BR2_PACKAGE_GT_BE98_OS_HOSTAPD_FILS
 	bool "hostapd: Fast Initial Link Setup discovery (FILS)"
 	depends on BR2_PACKAGE_HOSTAPD
