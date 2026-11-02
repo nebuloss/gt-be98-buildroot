@@ -131,6 +131,12 @@ Before promotion is acceptable:
 
 ## Plan: secrets off the served rootfs (not implemented yet)
 
+Status 2026-11-02: a release image (`RELEASE=1`, `docs/RELEASE-BUILD.md`)
+carries no host keys and no web UI hash; the keys are generated on the box
+and kept in `/jffs` (`gt-be98-hostkeys`), the web UI password is set at the
+first login with a root-only setup token. Lab builds still bake both in as
+described below.
+
 Today `rootfs.squashfs`, served over HTTP to the box, contains the SSH host
 private keys (`SSH_HOSTKEY_DIR`, so that the box keeps its identity) and the
 web UI password hash (`/etc/webui/auth.conf`, a single salted SHA-256).

@@ -4,6 +4,9 @@
 # its path in the Buildroot .config (BR2_PACKAGE_GT_BE98_OS_LOCAL_CONF).
 # Shell syntax: KEY=VALUE, absolute paths.
 
+# A release image (no lab secrets or addresses): start from
+# release.conf.example instead (RELEASE=1, docs/RELEASE-BUILD.md).
+
 # --- build.sh ------------------------------------------------------------------
 # Buildroot source tree (release tarball, signature checked)
 BR2_SRC=$HOME/os-build/buildroot-2026.08
@@ -28,7 +31,9 @@ FW_WIFI_DIR=
 # --- access ----------------------------------------------------------------------
 # public keys allowed to log in as root over ssh
 SSH_AUTHORIZED_KEYS=
-# stable ssh host keys (build.sh generates them here if missing)
+# stable ssh host keys (build.sh generates them here if missing; they are
+# baked into the image). Empty: gt-be98-hostkeys makes them on the box at the
+# first boot and keeps them in /jffs.
 SSH_HOSTKEY_DIR=$HOME/.config/gt-be98-os/ssh-host-keys
 # auto (enabled only when there is no SSH key) | yes | no
 TELNET_LIFELINE=auto
