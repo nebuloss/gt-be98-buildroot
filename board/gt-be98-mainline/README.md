@@ -169,6 +169,12 @@ bcm_bootstate 3; reboot
 `qemu-slot1.sh` rehearses exactly this on the box's UBI device in nandsim
 (the kit script, then the slot-1 boot with no network device at all).
 
+For a release (an owner flashing from stock and going back), use
+`docs/FLASHING.md` and its helper `flash/gt-be98-flash.sh` (kit:
+`flash/build-flash-kit.sh`). It is the same procedure, with two additions:
+it refuses unless stock runs from slot 2 and slot 2 is committed, and it
+checks that the one-shot boot was armed.
+
 ## Boot, services, post-codes
 
 Post-codes are written to `0xff802628[31:24]` by the `be98pc` earlycon from
