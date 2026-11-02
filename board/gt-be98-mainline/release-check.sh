@@ -197,7 +197,9 @@ run_check() {	# target
 		check_extras "$extras"
 		BASE=$extras
 		files=
-		for f in rescue ml-bootfs.info Image gt-be98-initramfs.list; do
+		# what ships: the kernel Image (inside the FIT), the initramfs
+		# sources, the image description of the flash kit
+		for f in rescue ml-bootfs.info Image; do
 			[ -e "$extras/$f" ] && files="$files $extras/$f"
 		done
 		[ -z "$files" ] || check_patterns $files
