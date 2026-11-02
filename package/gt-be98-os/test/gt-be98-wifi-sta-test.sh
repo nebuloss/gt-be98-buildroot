@@ -75,7 +75,7 @@ export PATH="$T/bin:$PATH" FAKE="$T" GT_BE98_RUN="$T/run" GT_BE98_SYSNET="$T/net
 	GT_BE98_CONFD="$T/confd" GT_BE98_LOGDIR="$T/logs"
 mkdir -p "$T/run/gt-be98-wifi" "$T/net/bcawl0" "$T/net/brwifi50/bridge" "$T/net/brwifi60/bridge"
 : > "$T/confd"
-S="$T/run/gt-be98-wifi/sta"
+S="$T/run/gt-be98-wifi/sta"; D="$T/run/gt-be98-wifi/sta-dns"
 run() { : > "$T/log"; ${SH:-sh} "$H" "$@" > "$T/out" 2>&1; rc=$?; }
 log() { grep -E "$1" "$T/log" | tr '\n' '|' | sed 's/|$//'; }
 assoc() { printf 'bssid=02:00:5e:00:53:01\nfreq=%s\nssid=up\nwpa_state=COMPLETED\nkey_mgmt=WPA2-PSK\n' "$1"; }
@@ -129,7 +129,7 @@ dhcp() {	# reason [extra env]
 dhcp BOUND
 check "BOUND: lease, default via the first router at metric 3000, resolv for dnsmasq" \
 	"0 ip=192.0.2.20/24 net=192.0.2.0/24 gw=192.0.2.1|ip route replace default via 192.0.2.1 dev bcawl0 metric 3000|nameserver 192.0.2.53 nameserver 198.51.100.53" \
-	"$rc $(tr '\n' ' ' < "$S/bcawl0.lease" | sed 's/ dns=.*//')|$(log 'route replace default')|$(tr '\n' ' ' < "$S/resolv.conf" | sed 's/ $//')"
+	"$rc $(tr '\n' ' ' < "$S/bcawl0.lease" | sed 's/ dns=.*//')|$(log 'route replace default')|$(tr '\n' ' ' < "$D/resolv.conf" | sed 's/ $//')"
 printf 'STA_METRIC=4000\nSTA_DEFAULT_ROUTE=0\n' > "$T/confd"; dhcp BOUND
 check "BOUND, STA_DEFAULT_ROUTE=0: no default route of the box" "" "$(log 'route replace default via .* metric')"
 : > "$T/confd"
@@ -156,7 +156,15 @@ check "nft: NAT of both subnets out of the station only, forward station-only" \
 check "nft: checked (-c) before applied" "nft -c -f $S/gt_be98_sta.nft|nft -f $S/gt_be98_sta.nft" "$(log '^nft')"
 check "dnsmasq: both bridges, ranges from the second host, router/DNS = the bridge, no loopback" \
 	"dhcp-option=tag:brwifi50,option:router,192.168.50.1|dhcp-range=set:brwifi50,192.168.50.2,192.168.50.254,255.255.255.0,12h|dhcp-range=set:brwifi60,10.60.0.2,10.60.255.254,255.255.0.0,12h|interface=brwifi50|except-interface=lo" \
-	"$(grep -E '^(interface=brwifi50|dhcp-range|dhcp-option=tag:brwifi50,option:router|except-interface)' "$S/dnsmasq.conf" | sort -t= -k1,1 -s | grep -v '^except' | tr '\n' '|')$(grep '^except' "$S/dnsmasq.conf")"
+	"$(grep -E '^(interface=brwifi50|dhcp-range|dhcp-option=tag:brwifi50,option:router|except-interface)' "$D/dnsmasq.conf" | sort -t= -k1,1 -s | grep -v '^except' | tr '\n' '|')$(grep '^except' "$D/dnsmasq.conf")"
+# dnsmasq drops to nobody before it watches the resolv-file's directory
+# (1102-1143-os-sta U4): that directory and file must be readable by others,
+# and the station state (0700) must not hold them
+rf=$(sed -n 's/^resolv-file=//p' "$D/dnsmasq.conf")
+check "dnsmasq's resolv-file: outside the 0700 state, directory 0755, file 0644" "$D/resolv.conf drwxr-xr-x -rw-r--r-- drwx------" \
+	"$rf $(ls -ld "${rf%/*}" | cut -c1-10) $(ls -l "$rf" | cut -c1-10) $(ls -ld "$S" | cut -c1-10)"
+check "dnsmasq's pid and lease files beside it" "$D/dnsmasq.pid $D/dnsmasq.leases" \
+	"$(sed -n 's/^pid-file=//p' "$D/dnsmasq.conf") $(sed -n 's/^dhcp-leasefile=//p' "$D/dnsmasq.conf")"
 check "ip_forward on, the old value kept" "sysctl -q -w net.ipv4.ip_forward=1 yes" "$(log 'ip_forward') $([ -f "$S/ipfwd" ] && echo yes || echo no)"
 run route
 check "route again, same networks: dnsmasq not restarted" "" "$(log '^dnsmasq')"
@@ -177,7 +185,7 @@ check "control: nft -c refusing the ruleset makes route fail, nothing applied" "
 run unroute
 check "unroute: dnsmasq stopped, nft table, rule, address, table, ip_forward restored" \
 	"0 yes|nft delete table ip gt_be98_sta|ip rule del iif brwifi50 table 181 priority 181|ip addr del 192.168.50.1/24 dev brwifi50|ip route flush table 181|yes" \
-	"$rc $(log 'dnsmasq.pid' | grep -q stop && echo yes || echo no)|$(log '^nft delete')|$(log 'rule del')|$(log 'addr del')|$(log 'route flush')|$(log 'ip_forward' | grep -q . && echo yes || echo no)"
+	"$rc $(log 'sta-dns/dnsmasq.pid' | grep -q stop && echo yes || echo no)|$(log '^nft delete')|$(log 'rule del')|$(log 'addr del')|$(log 'route flush')|$(log 'ip_forward' | grep -q . && echo yes || echo no)"
 : > "$T/run/gt-be98-wifi/routed"; run route
 check "route with no routed network: unroute (no address, no nft table)" "0 " "$rc $(log 'addr replace')"
 
