@@ -431,12 +431,27 @@ conf_ok "owe pmksa"
 
 # ---- 10c. radio features: HE (ax=), TWT responder (twt=), zero-wait DFS
 # (zwdfs=), monitor (monitor=), LED (led=) ----
-# HE always (the firmware beacons it whatever hostapd says): with and without ax=1
+# HE/EHT (ax=, be=): default both on, every radio; each off both ways
 { printf 'radio=2g\nax=1\nradio=5gl\nchannel=36\nwidth=80\nradio=5gh\nchannel=100\nwidth=40\n'
   net 1 a sae password1 "2g 5gl 5gh" 1; } > "$T/x1"
 rm -f "$T/slots"; gen "$T/x1"; check "ax=1 on 2g, no ax key on 5gl/5gh: accepted" 0 $?
-check "ieee80211ax=1 on 2g (ax=1), 5gl and 5gh (no key), once each" "1 1 1" \
-	"$(grep -c '^ieee80211ax=1$' "$T/o/hdr-bcawl3") $(grep -c '^ieee80211ax=1$' "$T/o/hdr-bcawl0") $(grep -c '^ieee80211ax=1$' "$T/o/hdr-bcawl1")"
+check "default: ieee80211ax=1 and ieee80211be=1 on 2g, 5gl and 5gh, once each" "1 1 1 1 1 1" \
+	"$(for d in bcawl3 bcawl0 bcawl1; do grep -c '^ieee80211ax=1$' "$T/o/hdr-$d"; grep -c '^ieee80211be=1$' "$T/o/hdr-$d"; done | tr '\n' ' ' | sed 's/ $//')"
+check "5gl EHT at 80 MHz: eht_oper width/centre = the VHT ones (1/42); 5gh at 40: eht_oper_chwidth=0, no centre" "yes yes yes no" \
+	"$(hdr_has bcawl0 eht_oper_chwidth=1) $(hdr_has bcawl0 eht_oper_centr_freq_seg0_idx=42) $(hdr_has bcawl1 eht_oper_chwidth=0) $(grep -q '^eht_oper_centr' "$T/o/hdr-bcawl1" && echo yes || echo no)"
+check "2g EHT at 20 MHz: no operation width lines" "" "$(grep -E '^(he|eht)_oper' "$T/o/hdr-bcawl3")"
+{ printf 'radio=2g\nax=1\nbe=0\nwidth=40\nradio=5gl\nax=0\nchannel=36\nwidth=80\nradio=5gh\nax=1\nbe=1\nchannel=100\nwidth=80\n'
+  net 1 a sae password1 "2g 5gl 5gh" 1; } > "$T/xb"
+rm -f "$T/slots"; gen "$T/xb"; check "2g ax=1 be=0 (40 MHz), 5gl ax=0 (be follows), 5gh ax=1 be=1: accepted" 0 $?
+check "be=0 (a string \"0\"): 2g HE without EHT; ax=0: 5gl neither, nor any he/eht_oper line; 5gh both" "1 0 0 0 - 1 1" \
+	"$(grep -c '^ieee80211ax=1$' "$T/o/hdr-bcawl3") $(grep -c '^ieee80211be' "$T/o/hdr-bcawl3") $(grep -c '^ieee80211ax' "$T/o/hdr-bcawl0") $(grep -c '^ieee80211be' "$T/o/hdr-bcawl0") -$(grep -E '^(he|eht)_oper' "$T/o/hdr-bcawl0") $(grep -c '^ieee80211ax=1$' "$T/o/hdr-bcawl1") $(grep -c '^ieee80211be=1$' "$T/o/hdr-bcawl1")"
+check "ax=0: still VHT 80 (vht_oper_chwidth=1, centre 42)" "yes yes" "$(hdr_has bcawl0 vht_oper_chwidth=1) $(hdr_has bcawl0 vht_oper_centr_freq_seg0_idx=42)"
+conf_ok "ax/be off"
+if [ -n "$CONFCHECK" ]; then
+	"$CONFCHECK" "$T"/o/hostapd-*.conf > "$T/ccb" 2>/dev/null
+	check "hostapd reads 5gl ax=0 as HE/EHT off, 5gh as EHT 80 MHz centre 106" "be=0/ be=1/1/106" \
+		"$(grep 'hostapd-bcawl0.conf' "$T/ccb" | grep -o 'be=0/') $(grep 'hostapd-bcawl1.conf' "$T/ccb" | grep -o 'be=1/1/106')"
+fi
 check "5gl HE at 80 MHz: HE width/centre = the VHT ones (36 -> 42)" "yes yes" \
 	"$(hdr_has bcawl0 he_oper_chwidth=1) $(hdr_has bcawl0 he_oper_centr_freq_seg0_idx=42)"
 check "no he_twt_responder line by default (hostapd's own default: on)" "" "$(grep -h '^he_twt_responder' "$T"/o/hdr-*)"
@@ -488,11 +503,13 @@ rm -f "$T/slots"; gen "$T/x8"; check "monitor=1 with enabled=0: no monitor" "0 0
 rm -f "$T/slots"; gen "$T/x9"; check "led=0 on 2g (a string \"0\"), led=1 on 6g" "led 2g bcawl3 0|led 6g bcawl2 1" \
 	"$(grep -E '^led (2g|6g) ' "$T/o/plan" | tr '\n' '|' | sed 's/|$//')"
 rm -f "$T/slots"; gen "$T/x9"; cp "$T/slots.keep" "$T/slots.keep0"; cp "$T/slots" "$T/slots.keep"	# refuse() compares with this state
-for kv in 'radio=6g ax=0' 'radio=5gl ax=0' 'radio=2g ax=0' 'radio=2g ax=2' 'radio=5gl twt=x' 'radio=2g zwdfs=1' 'radio=6g zwdfs=1' 'radio=5gl zwdfs=01' \
+for kv in 'radio=6g ax=0' 'radio=2g ax=2' 'radio=5gl be=2' 'radio=5gl twt=x' 'radio=2g zwdfs=1' 'radio=6g zwdfs=1' 'radio=5gl zwdfs=01' \
 	'radio=5gh monitor=yes' 'radio=2g led=2'; do
 	{ printf '%s\n%s\n' "${kv%% *}" "${kv#* }"; net 1 a sae password1 2g 1; } > "$T/r"; refuse "$kv" "$T/r"
 done
 { net 1 a sae password1 2g 1; printf 'twt=1\n'; } > "$T/r"; refuse "network twt=1 (TWT is radio-wide)" "$T/r"
+{ printf 'radio=5gl\nax=0\nbe=1\n'; net 1 a sae password1 2g 1; } > "$T/r"; refuse "be=1 with ax=0 (EHT needs HE)" "$T/r"
+{ printf 'radio=6g\nbe=0\nchannel=37\nwidth=320\n'; net 1 a sae password1 6g 1; } > "$T/r"; refuse "6g be=0 at 320 MHz" "$T/r"
 mv "$T/slots.keep0" "$T/slots.keep"
 
 # ---- 11. -F: what the generator supports ----
@@ -500,9 +517,9 @@ check "-F: exit 0 without -n/-o" 0 "$($SH "$G" -F > "$T/feat" 2>&1; echo $?)"
 check "-F: schedule and max_clients on, 6g up to 320 MHz, twt/wds not yet" \
 	"feature schedule 1|feature max_clients 1|width 6g 20 40 80 160 320|width 5gl 20 40 80|feature twt 0|feature wds 0|feature width320 1" \
 	"$(for k in 'feature schedule ' 'feature max_clients ' 'width 6g ' 'width 5gl ' 'feature twt ' 'feature wds ' 'feature width320 '; do grep "^$k" "$T/feat"; done | tr '\n' '|' | sed 's/|$//')"
-check "-F: the radio features twt_responder, zwdfs, monitor, led; no he (HE cannot be turned off)" \
-	"feature twt_responder 1|feature zwdfs 1|feature monitor 1|feature led 1|" \
-	"$(for k in twt_responder zwdfs monitor led he; do grep "^feature $k " "$T/feat"; done | tr '\n' '|')"
+check "-F: the radio features he, eht, twt_responder, zwdfs, monitor, led" \
+	"feature he 1|feature eht 1|feature twt_responder 1|feature zwdfs 1|feature monitor 1|feature led 1|" \
+	"$(for k in he eht twt_responder zwdfs monitor led; do grep "^feature $k " "$T/feat"; done | tr '\n' '|')"
 check "-F: feature airtime 1" "feature airtime 1" "$(grep '^feature airtime' "$T/feat")"
 check "-F: station and routed networks, the station security modes" "feature station 1|feature routed 1|station_security psk2 sae" \
 	"$(grep -E '^(feature (station|routed)|station_security) ' "$T/feat" | tr '\n' '|' | sed 's/|$//')"
@@ -524,8 +541,9 @@ done
 # ---- 11b. 6 GHz widths: op_class + HE/EHT centre indices ----
 # expected values by hand from 802.11ax Annex E / 802.11be (op_class 131-134,
 # 137; blocks from channel 1; 320-1 centres 31/95/159 first, else 320-2 191)
-w6() {	# channel width -> the 6g radio lines after channel=
-	{ printf 'radio=6g\nchannel=%s\nwidth=%s\n' "$1" "$2"; net 1 a sae password1 6g 1; } > "$T/w6"
+w6() {	# channel width [be] -> the 6g radio lines after channel=
+	{ printf 'radio=6g\nchannel=%s\nwidth=%s\n%s' "$1" "$2" "${3:+be=$3
+}"; net 1 a sae password1 6g 1; } > "$T/w6"
 	rm -f "$T/slots"; gen "$T/w6" || { echo refused; return; }
 	grep -E '^(op_class|he_oper|ieee80211be|eht_oper)' "$T/o/hdr-bcawl2" | tr '\n' ' ' | sed 's/ $//'
 }
@@ -548,7 +566,17 @@ for t in \
 	"229 40|op_class=132 he_oper_chwidth=0 he_oper_centr_freq_seg0_idx=227" \
 	"233 20|op_class=131" \
 	"225 80|refused"; do
-	check "6g ch ${t%%|*} MHz" "${t#*|}" "$(w6 ${t%%|*})"
+	# the table is HE-only (be=0); by default (be=1) the EHT lines follow
+	# the HE ones below 320 MHz (the same centre), at 20 MHz only be=1
+	he=${t#*|}; cw=${t%%|*}
+	case "$he" in
+	refused|*ieee80211be*) eht=$he ;;
+	op_class=131) eht="$he ieee80211be=1" ;;
+	*) eht="$he ieee80211be=1 $(echo "$he" | sed 's/.*he_oper_chwidth=\([0-9]*\) he_oper_centr_freq_seg0_idx=\([0-9]*\).*/eht_oper_chwidth=\1 eht_oper_centr_freq_seg0_idx=\2/')" ;;
+	esac
+	check "6g ch $cw MHz (default be=1)" "$eht" "$(w6 $cw)"
+	case "$cw" in *320) check "6g ch $cw MHz be=0: refused" refused "$(w6 $cw 0)" ;;
+	*) check "6g ch $cw MHz be=0" "$he" "$(w6 $cw 0)" ;; esac
 done
 # every 6 GHz channel x width: accepted iff the band has the block
 # (59 channels; blocks: 29 x 40, 14 x 80, 7 x 160, 56 channels under 320);
@@ -568,8 +596,8 @@ for w in 20 40 80 160 320; do
 	acc="$acc $w:$k"
 done
 check "6g: channels accepted per width" "20:59 40:58 80:56 160:56 320:56" "${acc# }"
-check "6g: ieee80211be=1 at 320 MHz only (56 configs, 0 others)" "56 0" \
-	"$(grep -l '^ieee80211be=1$' "$T"/w6all/*.conf | grep -c 'w320\.conf$') $(grep -l '^ieee80211be=1$' "$T"/w6all/*.conf | grep -vc 'w320\.conf$')"
+check "6g: ieee80211be=1 in every config by default (285), eht_oper_chwidth=9 at 320 only (56)" "285 56 0" \
+	"$(grep -l '^ieee80211be=1$' "$T"/w6all/*.conf | wc -l | tr -d ' ') $(grep -l '^eht_oper_chwidth=9$' "$T"/w6all/*.conf | grep -c 'w320\.conf$') $(grep -l '^eht_oper_chwidth=9$' "$T"/w6all/*.conf | grep -vc 'w320\.conf$')"
 # hostapd reads the width from the op_class AND from the centre index it puts
 # on the air (bw6=<op_class MHz>/<centre index MHz>/<index>): both must be
 # the asked width, and the primary channel inside the block; at 320 the HE
@@ -597,9 +625,12 @@ if [ -n "$CONFCHECK" ]; then
 	# outside its block: each must be flagged
 	mkdir -p "$T/w6bad"; rm -f "$T"/w6bad/*
 	sed '/^ieee80211be=1$/d' "$T/w6all/c37-w320.conf" > "$T/w6bad/c37-w320.conf"
-	sed 's/^he_oper_centr_freq_seg0_idx=39$/he_oper_centr_freq_seg0_idx=47/' "$T/w6all/c37-w80.conf" > "$T/w6bad/c37-w80.conf"
+	# (be=1: hostapd reads the EHT centre, so both indices get the 160 one)
+	sed 's/^\(he\|eht\)_oper_centr_freq_seg0_idx=39$/\1_oper_centr_freq_seg0_idx=47/' "$T/w6all/c37-w80.conf" > "$T/w6bad/c37-w80.conf"
 	sed 's/^channel=37$/channel=53/' "$T/w6all/c37-w80.conf" > "$T/w6bad/c53-w80.conf"
-	check "negative controls: no EHT at 320, a 160 index at 80, a primary off its block: 3 flagged" 3 \
+	# only the EHT centre wrong: hostapd must read it (be=1 takes the width from it)
+	sed 's/^eht_oper_centr_freq_seg0_idx=39$/eht_oper_centr_freq_seg0_idx=47/' "$T/w6all/c37-w80.conf" > "$T/w6bad/c37-w80e.conf"
+	check "negative controls: no EHT at 320, a 160 index at 80 (HE+EHT, EHT alone), a primary off its block: 4 flagged" 4 \
 		"$("$CONFCHECK" "$T"/w6bad/*.conf 2>/dev/null | bw6_bad | wc -l | tr -d ' ')"
 else
 	echo "skip hostapd 6 GHz width reading (no hostapd-confcheck)"

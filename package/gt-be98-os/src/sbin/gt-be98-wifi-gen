@@ -51,8 +51,8 @@
 #       line: feature <name> 0|1, width <band> <MHz...>, security <modes>,
 #       station_security <modes>, max_clients <min> <max>) and exit. The web
 #       UI reads it: a feature another change adds to the generator shows up
-#       there by itself. Radio keys: feature twt_responder (twt=), zwdfs,
-#       monitor, led; feature station (station= blocks), routed
+#       there by itself. Radio keys: feature he (ax=), eht (be=),
+#       twt_responder (twt=), zwdfs, monitor, led; feature station (station= blocks), routed
 #       (routed= networks).
 #
 # Network list (hostapd-like: key=value, the value is the rest of the line,
@@ -77,17 +77,27 @@
 #                                   shares), 3 limit (airtime_limit BSSes
 #                                   capped at their share). With 2|3 a
 #                                   network without airtime_weight gets 1
-#     ax=1                          accepted, changes nothing: every radio is
-#                                   rendered HE (ieee80211ax=1; 5 GHz: the HE
-#                                   operation width/centre = the VHT ones),
-#                                   because the FullMAC firmware beacons HE
-#                                   whatever hostapd says (measured, image
-#                                   #18: ieee80211ax absent, HE on air), so
-#                                   the conf says what is on air and hostapd
-#                                   applies its HE knobs (TWT). ax=0 refused
+#     ax=0|1                        HE (802.11ax, Wi-Fi 6): default 1, writes
+#                                   ieee80211ax=1 (5 GHz: the HE operation
+#                                   width/centre = the VHT ones). The driver
+#                                   (open-wifi om-he-off 1341a24f, owner D18)
+#                                   turns the firmware's HE off when hostapd
+#                                   sends no HE element: ax=0 = no HE on air.
+#                                   6g is HE only: ax=0 there is refused
+#     be=0|1                        EHT (802.11be, Wi-Fi 7): default 1 when
+#                                   ax=1 (EHT on every radio, like stock),
+#                                   writes ieee80211be=1 and the EHT operation
+#                                   width/centre = the HE ones (hostapd takes
+#                                   the channel width from them when be=1);
+#                                   6g 320 MHz: eht_oper_chwidth=9. Needs HE:
+#                                   be=1 with ax=0 is refused (ax=0 alone
+#                                   means be=0); 320 MHz needs be=1. The
+#                                   driver turns EHT off without ieee80211be
 #     twt=0|1                       hostapd he_twt_responder (radio-wide in
 #                                   hostapd): default 1, hostapd's own
-#                                   default; 0 writes he_twt_responder=0
+#                                   default; 0 writes he_twt_responder=0.
+#                                   Acts only with HE (hostapd advertises
+#                                   TWT with HE only)
 #     zwdfs=0|1                     5gl/5gh: zero-wait DFS, hostapd
 #                                   enable_background_radar=1 (the driver
 #                                   runs the CAC of a DFS channel= in the
@@ -258,6 +268,8 @@ features() {
 	feature enterprise 1
 	feature width320 1
 	feature airtime 1
+	feature he 1
+	feature eht 1
 	feature twt_responder 1
 	feature zwdfs 1
 	feature monitor 1
@@ -609,9 +621,8 @@ cur == "r" {
 	else if (k == "schedule" && (v == "" || schedok(v))) rsch[cr] = v
 	# v is a STRING: store the number ("0" is TRUE in awk)
 	else if (k == "airtime" && v ~ /^[0-3]$/) rair[cr] = v + 0
-	# ax=1 only (legacy key: HE cannot be turned off, see the header)
-	else if (k == "ax" && v == "1") rax[cr] = 1
-	else if (k == "ax" && v == "0") err("radio " cr ": ax=0 refused: the firmware beacons HE (802.11ax) whatever hostapd says, so HE cannot be turned off")
+	else if (k == "ax" && (v == "0" || v == "1")) rax[cr] = v + 0
+	else if (k == "be" && (v == "0" || v == "1")) rbe[cr] = v + 0
 	else if (k == "twt" && (v == "0" || v == "1")) rtwt[cr] = v + 0
 	else if (k == "zwdfs" && (v == "0" || v == "1")) rzw[cr] = v + 0
 	else if (k == "monitor" && (v == "0" || v == "1")) rmon[cr] = v + 0
@@ -732,10 +743,16 @@ END {
 		if (rzw[b] && b != "5gl" && b != "5gh") err("radio " b ": zwdfs=1 refused (zero-wait DFS: 5gl, 5gh only)")
 		if (!(b in rtwt)) rtwt[b] = 1
 		if (!(b in rled)) rled[b] = 1
+		# HE / EHT: rax/rbe hold numbers; defaults ax=1, be=ax
+		if (b == "6g" && (b in rax) && rax[b] == 0) err("radio 6g: ax=0 refused (6 GHz is HE/EHT only)")
+		if (!(b in rax)) rax[b] = 1
+		if ((b in rbe) && rbe[b] == 1 && rax[b] == 0) err("radio " b ": be=1 refused with ax=0 (EHT needs HE)")
+		if (!(b in rbe)) rbe[b] = rax[b]
 		if (b in rch) {
 			if (!chans(b, rch[b])) { err("radio " b ": channel " rch[b] " is not a channel of this radio"); continue }
 		} else rch[b] = (b == "2g") ? 6 : (b == "5gl") ? 36 : (b == "5gh") ? 100 : 37
 		if (!(b in rw)) rw[b] = 20
+		if (b == "6g" && rw[b] == 320 && !rbe[b]) err("radio 6g: 320 MHz needs EHT (be=1)")
 		if (b == "6g" && c6(rch[b], rw[b]) == 0) err("radio 6g: channel " rch[b] " has no " rw[b] " MHz block (the 6 GHz band ends at channel 233)")
 		if (b != "6g" && rw[b] >= 160) err("radio " b ": " rw[b] " MHz is 6 GHz only (this radio: " (b == "2g" ? "20, 40" : "20, 40, 80") " MHz)")
 		if (b == "2g" && rw[b] == 80) err("radio 2g: 80 MHz is 5/6 GHz only")
@@ -913,8 +930,9 @@ END {
 		if (b == "2g") {
 			print "hw_mode=g" > hdr; print "channel=" ch > hdr; print "ieee80211n=1" > hdr
 			if (w == 40) print "ht_capab=[HT40" ht40(b, ch) "]" > hdr
-			# HE always: the firmware beacons it anyway (header, ax=)
-			print "ieee80211ax=1" > hdr
+			# HE/EHT (header: ax=, be=); 20/40 MHz: no operation width lines
+			if (rax[b]) print "ieee80211ax=1" > hdr
+			if (rbe[b]) print "ieee80211be=1" > hdr
 		} else if (b == "6g") {
 			# the op_class sets the width (hostapd derives he/eht_oper_chwidth
 			# and the secondary channel from it on 6 GHz); the centre indices
@@ -929,6 +947,13 @@ END {
 			if (w == 320) {
 				print "ieee80211be=1" > hdr; print "eht_oper_chwidth=9" > hdr
 				print "eht_oper_centr_freq_seg0_idx=" c6(ch, 320) > hdr
+			} else if (rbe[b]) {
+				# hostapd reads the centre index from the EHT lines once be=1
+				print "ieee80211be=1" > hdr
+				if (w > 20) {
+					print "eht_oper_chwidth=" (w == 40 ? 0 : w == 80 ? 1 : 2) > hdr
+					print "eht_oper_centr_freq_seg0_idx=" c6(ch, w) > hdr
+				}
 			}
 		} else {
 			print "hw_mode=a" > hdr; print "channel=" ch > hdr
@@ -936,10 +961,19 @@ END {
 			if (w == 20) print "vht_oper_chwidth=0" > hdr
 			else if (w == 40) { print "ht_capab=[HT40" ht40(b, ch) "]" > hdr; print "vht_oper_chwidth=0" > hdr }
 			else { print "ht_capab=[HT40" ht40(b, ch) "]" > hdr; print "vht_oper_chwidth=1" > hdr; print "vht_oper_centr_freq_seg0_idx=" vht80(ch) > hdr }
-			# HE always (header, ax=); its operation width/centre are the VHT ones
-			print "ieee80211ax=1" > hdr
-			if (w == 80) { print "he_oper_chwidth=1" > hdr; print "he_oper_centr_freq_seg0_idx=" vht80(ch) > hdr }
-			else print "he_oper_chwidth=0" > hdr
+			# HE/EHT (header: ax=, be=): their operation width/centre are the
+			# VHT ones (hostapd takes the channel width from the EHT lines
+			# when be=1, from the HE lines when ax=1)
+			if (rax[b]) {
+				print "ieee80211ax=1" > hdr
+				if (w == 80) { print "he_oper_chwidth=1" > hdr; print "he_oper_centr_freq_seg0_idx=" vht80(ch) > hdr }
+				else print "he_oper_chwidth=0" > hdr
+			}
+			if (rbe[b]) {
+				print "ieee80211be=1" > hdr
+				if (w == 80) { print "eht_oper_chwidth=1" > hdr; print "eht_oper_centr_freq_seg0_idx=" vht80(ch) > hdr }
+				else print "eht_oper_chwidth=0" > hdr
+			}
 			# zero-wait DFS: hostapd background radar (the ZW-DFS of the driver)
 			if (rzw[b]) print "enable_background_radar=1" > hdr
 		}
