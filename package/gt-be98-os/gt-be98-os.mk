@@ -14,6 +14,7 @@ GT_BE98_OS_LOCAL_CONF = $(call qstrip,$(BR2_PACKAGE_GT_BE98_OS_LOCAL_CONF))
 
 GT_BE98_OS_SERVICES = gt-be98-watchdog gt-be98-netguard gt-be98-jffs gt-be98-drivers gt-be98-wifi gt-be98-leds \
 	gt-be98-telnet gt-be98-boot-done gt-be98-persist gt-be98-autosave gt-be98-router gt-be98-lan gt-be98-netconsole \
+	gt-be98-hostkeys \
 	sshd dhcpcd chronyd \
 	syslogd dnsmasq
 
@@ -79,7 +80,7 @@ define GT_BE98_OS_FINALIZE
 	if [ -L $(TARGET_DIR)/var/log ]; then rm -f $(TARGET_DIR)/var/log; fi
 	mkdir -p $(TARGET_DIR)/var/log
 	mkdir -p $(TARGET_DIR)/etc/runlevels/boot $(TARGET_DIR)/etc/runlevels/default
-	for s in gt-be98-watchdog gt-be98-netguard gt-be98-persist gt-be98-jffs syslogd; do \
+	for s in gt-be98-watchdog gt-be98-netguard gt-be98-persist gt-be98-jffs gt-be98-hostkeys syslogd; do \
 		ln -sfn /etc/init.d/$$s $(TARGET_DIR)/etc/runlevels/boot/$$s; done
 	# gt-be98-netconsole does nothing until /etc/conf.d/gt-be98-netconsole
 	# names a target
@@ -88,12 +89,14 @@ define GT_BE98_OS_FINALIZE
 		gt-be98-boot-done gt-be98-leds; do \
 		ln -sfn /etc/init.d/$$s $(TARGET_DIR)/etc/runlevels/default/$$s; done
 	GT_BE98_LOCAL_CONF="$(GT_BE98_OS_LOCAL_CONF)" TARGET_DIR="$(TARGET_DIR)" \
+		GT_BE98_RELEASE="$(BR2_PACKAGE_GT_BE98_OS_RELEASE)" \
 		HOST_DIR="$(HOST_DIR)" \
 		$(BR2_EXTERNAL_GT_BE98_PATH)/package/gt-be98-os/apply-local-conf.sh
 	{ echo "GT-BE98 mainline OS $(GT_BE98_OS_VERSION) (Buildroot $(BR2_VERSION_FULL), Linux $(LINUX_VERSION))"; \
 	  echo "open-ethernet $(GT_BE98_OPEN_ETHERNET_VERSION)"; \
 	  echo "open-wifi $(GT_BE98_OPEN_WIFI_VERSION)"; \
-	  echo "built $$(date -u +%Y-%m-%dT%H:%MZ)"; } > $(TARGET_DIR)/etc/gt-be98-release
+	  echo "built $$(date -u +%Y-%m-%dT%H:%MZ)"; \
+	  echo "release-mode $(if $(BR2_PACKAGE_GT_BE98_OS_RELEASE),yes,no)"; } > $(TARGET_DIR)/etc/gt-be98-release
 endef
 GT_BE98_OS_TARGET_FINALIZE_HOOKS += GT_BE98_OS_FINALIZE
 

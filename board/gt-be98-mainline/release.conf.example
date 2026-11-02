@@ -1,0 +1,55 @@
+# GT-BE98 mainline OS - RELEASE local configuration (build host only).
+# Copy to e.g. ~/.config/gt-be98-os/release.conf and build with
+#   GT_BE98_LOCAL_CONF=~/.config/gt-be98-os/release.conf rtk sh board/gt-be98-mainline/build.sh
+# then check the images before handing them over:
+#   sh board/gt-be98-mainline/release-check.sh -f <lab patterns file> $OUT/images
+# (docs/RELEASE-BUILD.md). Same syntax and keys as local.conf.example; this
+# file holds NO secret and NO address, and the build refuses one if added.
+RELEASE=1
+
+# --- build.sh: a SEPARATE output directory from the lab build ------------------
+BR2_SRC=$HOME/os-build/buildroot-2026.08
+OUT=$HOME/os-build/out-release
+BR2_DL_DIR=$HOME/be98/buildroot/dl
+
+# --- FIT and vendor firmware (as local.conf.example; build-host paths only) -------
+STOCK_BOOTFS=
+FW_RUNNER_DIR=
+FW_PHY_DIR=
+FW_WIFI_DIR=
+
+# --- access -------------------------------------------------------------------------
+# the RECIPIENT's public keys (who may log in as root over ssh). Only
+# "type base64" is kept (the comment, user@host, is dropped). Never the
+# release maintainer's or the lab's keys. Empty: no ssh login; the
+# passwordless telnet lifeline on the USB NIC is then enabled (physical access).
+SSH_AUTHORIZED_KEYS=
+TELNET_LIFELINE=auto
+# MUST stay empty: host keys are generated on the box at first boot
+# (gt-be98-hostkeys) and kept in /jffs; never baked into an image
+SSH_HOSTKEY_DIR=
+
+# --- network: MUST stay empty in a release (lab addresses) ----------------------------
+RNR0_FALLBACK=
+USB_FALLBACK=
+SYSLOG_REMOTE=
+NETCONSOLE=
+
+# --- boot ---------------------------------------------------------------------------
+IMAGE=netroot
+# MUST stay empty: no HTTP rootfs fallback. The OS boots from slot 1's vol 4
+# (NAND != off) or a USB partition labelled GTBE98-ROOT.
+ROOTFS_URL=
+NAND=rw-jffs
+PAD_TOTAL_MB=30
+RESCUE=0
+WDT_MAX=600
+
+# --- web UI ---------------------------------------------------------------------------
+# webui-go build output with the first-login setup token (webui -features
+# prints "setup-token"); empty: no web UI
+WEBUI_DIR=
+# MUST stay empty: the first login sets the password with the one-time setup
+# token from /run/webui/setup-token (root only on the box)
+WEBUI_PASSWORD=
+WEBUI_PASSWORD_HASH=

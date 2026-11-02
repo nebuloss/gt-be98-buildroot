@@ -24,6 +24,15 @@
 #                        /etc/webui/auth.conf and ENABLES the webui service;
 #                        neither: the webui stays disabled (never first-run
 #                        open setup on the LAN).
+#
+# GT_BE98_RELEASE=y (BR2_PACKAGE_GT_BE98_OS_RELEASE, build.sh RELEASE=1): a
+# release image. Every key above that would put a lab secret or a lab
+# address into the image is refused (SSH_HOSTKEY_DIR, WEBUI_PASSWORD[_HASH],
+# SYSLOG_REMOTE, NETCONSOLE, RNR0_FALLBACK, USB_FALLBACK; ROOTFS_URL in
+# post-image.sh); SSH_AUTHORIZED_KEYS keeps only "type base64" (no comment,
+# no options); no host keys (gt-be98-hostkeys makes them on the box); the
+# web UI, when installed, is enabled without a password and asks for the
+# first-login setup token (gt-be98-webui-guard checks that the binary has it).
 set -eu
 : "${TARGET_DIR:?}"
 CONF=${GT_BE98_LOCAL_CONF:-}
@@ -41,6 +50,16 @@ if [ -n "$CONF" ]; then
 	. "$CONF"
 fi
 warn() { echo "gt-be98-os: WARNING: $*" >&2; }
+REL=${GT_BE98_RELEASE:-}
+if [ "$REL" = y ]; then
+	bad=
+	for k in SSH_HOSTKEY_DIR WEBUI_PASSWORD WEBUI_PASSWORD_HASH SYSLOG_REMOTE NETCONSOLE \
+		RNR0_FALLBACK USB_FALLBACK; do
+		eval "v=\${$k}"
+		[ -z "$v" ] || bad="$bad $k"
+	done
+	[ -z "$bad" ] || { echo "gt-be98-os: RELEASE=1: these local-configuration keys must be empty in a release image:$bad" >&2; exit 1; }
+fi
 
 # root: no password login at all (sshd keys only; "*" is not "locked" for sshd)
 if [ -f "$TARGET_DIR/etc/shadow" ]; then
@@ -54,7 +73,12 @@ rm -f "$AK"
 nkeys=0
 if [ -n "$SSH_AUTHORIZED_KEYS" ]; then
 	[ -f "$SSH_AUTHORIZED_KEYS" ] || { echo "gt-be98-os: $SSH_AUTHORIZED_KEYS missing" >&2; exit 1; }
-	grep -E '^(ssh-|ecdsa-|sk-)' "$SSH_AUTHORIZED_KEYS" > "$AK" || true
+	if [ "$REL" = y ]; then
+		# public keys only, without the comment (user@host of whoever made it)
+		grep -E '^(ssh-|ecdsa-|sk-)' "$SSH_AUTHORIZED_KEYS" | awk '{ print $1, $2 }' > "$AK" || true
+	else
+		grep -E '^(ssh-|ecdsa-|sk-)' "$SSH_AUTHORIZED_KEYS" > "$AK" || true
+	fi
 	nkeys=$(wc -l < "$AK")
 	chmod 0644 "$AK"
 fi
@@ -62,7 +86,9 @@ fi
 
 # --- SSH host keys ----------------------------------------------------------------
 rm -f "$TARGET_DIR"/etc/ssh/ssh_host_*
-if [ -n "$SSH_HOSTKEY_DIR" ]; then
+if [ "$REL" = y ]; then
+	echo "gt-be98-os: release: no SSH host keys in the image (gt-be98-hostkeys makes them at first boot, kept in /jffs)"
+elif [ -n "$SSH_HOSTKEY_DIR" ]; then
 	for t in ed25519 ecdsa rsa; do
 		k=$SSH_HOSTKEY_DIR/ssh_host_${t}_key
 		[ -f "$k" ] && [ -f "$k.pub" ] || { warn "$k missing"; continue; }
@@ -112,6 +138,10 @@ if [ -n "$SYSLOG_REMOTE" ]; then
 	echo "*.*	@$SYSLOG_REMOTE" > "$TARGET_DIR/etc/syslog.d/60-remote.conf"
 fi
 # --- netconsole target (gt-be98-netconsole) ---------------------------------------
+# always rewritten: a target left by an earlier build of the same output
+# directory must not survive into this one
+NCF=$TARGET_DIR/etc/conf.d/gt-be98-netconsole
+[ ! -f "$NCF" ] || sed -i 's|^NETCONSOLE=.*|NETCONSOLE=|' "$NCF"
 if [ -n "$NETCONSOLE" ]; then
 	case "$NETCONSOLE" in
 	*[!A-Za-z0-9.:/@,+\;_-]*) echo "NETCONSOLE: unexpected characters" >&2; exit 1 ;;
@@ -141,8 +171,16 @@ if [ -x "$TARGET_DIR/usr/sbin/webui" ]; then
 		ln -s /etc/init.d/gt-be98-webui-guard "$RL/gt-be98-webui-guard"
 		ln -s /etc/init.d/webui "$RL/webui"
 		webui=enabled
+	elif [ "$REL" = y ]; then
+		# first login with the setup token; the guard refuses a binary
+		# without it at boot (it would be open to the LAN)
+		grep -aq 'setup-token' "$TARGET_DIR/usr/sbin/webui" ||
+			warn "release: this webui binary has no first-login setup token: gt-be98-webui-guard will not start it"
+		ln -s /etc/init.d/gt-be98-webui-guard "$RL/gt-be98-webui-guard"
+		ln -s /etc/init.d/webui "$RL/webui"
+		webui="enabled, no password (first login: setup token in /run/webui/setup-token)"
 	else
 		webui="installed, disabled (no WEBUI_PASSWORD)"
 	fi
 fi
-echo "gt-be98-os: local configuration applied (keys: $nkeys, telnet: $en, webui: $webui)"
+echo "gt-be98-os: local configuration applied (release: ${REL:-n}, keys: $nkeys, telnet: $en, webui: $webui)"

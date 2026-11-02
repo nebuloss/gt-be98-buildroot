@@ -29,6 +29,8 @@ set -eu
 BR_CONFIG=${BR2_CONFIG:?run from Buildroot}
 . "$BUILD_DIR/gt-be98-linux.env"	# LINUX_DIR, LINUX_VERSION (pre-build hook)
 LOCAL_CONF=$(sed -n 's/^BR2_PACKAGE_GT_BE98_OS_LOCAL_CONF="\(.*\)"$/\1/p' "$BR_CONFIG")
+RELEASE_MODE=no
+grep -q '^BR2_PACKAGE_GT_BE98_OS_RELEASE=y' "$BR_CONFIG" && RELEASE_MODE=yes
 STOCK_BOOTFS=
 RESCUE=0
 WDT_MAX=600
@@ -54,6 +56,10 @@ case "$IMAGE" in netroot|initrd) ;; *) die "IMAGE must be netroot or initrd" ;; 
 case "$NAND" in off|ro|rw-jffs) ;; *) die "NAND must be off, ro or rw-jffs" ;; esac
 case "$ROOTFS_URL" in ''|http://*) ;; *) die "ROOTFS_URL: http:// only (BusyBox wget)" ;; esac
 case "$ROOTFS_URL" in *[!A-Za-z0-9:/._~%+@-]*) die "ROOTFS_URL: unexpected characters" ;; esac
+# a release image carries no lab address: no HTTP rootfs fallback (the
+# initramfs then boots a GTBE98-ROOT USB partition or slot 1's vol 4 only)
+[ "$RELEASE_MODE" = no ] || [ -z "$ROOTFS_URL" ] ||
+	die "RELEASE=1: ROOTFS_URL must be empty (it is written into the initramfs)"
 [ "$IMAGE" = netroot ] && [ -z "$ROOTFS_URL" ] &&
 	echo "post-image: WARNING: IMAGE=netroot without ROOTFS_URL: only a GTBE98-ROOT USB root can boot"
 
@@ -306,6 +312,7 @@ sha() { sha256sum "$1" | cut -d' ' -f1; }
 	echo "rootfs1-stub.squashfs: $(stat -c %s "$B/rootfs1-stub.squashfs") B sha256 $(sha "$B/rootfs1-stub.squashfs")"
 	echo "stock bootfs sha256: $(sha "$STOCK_BOOTFS")"
 	echo "boot: RESCUE=$RESCUE WDT_MAX=$WDT_MAX ROOTFS_URL=${ROOTFS_URL:-<none>} NAND=$NAND"
+	echo "release mode: $RELEASE_MODE"
 	echo "build id (DT): $BUILD_ID"
 	echo "cmdline: $CMDLINE"
 } > "$B/ml-bootfs.info"

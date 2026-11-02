@@ -1,0 +1,68 @@
+#!/sbin/openrc-run
+# SPDX-License-Identifier: GPL-2.0
+# SSH host keys generated on the box, never in the image.
+#
+# A release image (RELEASE=1) carries no ssh_host_*_key: this service makes
+# them at the first boot and saves them at once to the persistent store, so
+# the box keeps one identity from then on:
+#   - keys already in /etc/ssh (restored from /jffs/mainline-os by
+#     gt-be98-jffs, from /data/etc-overlay by gt-be98-persist, or baked in
+#     by a lab build with SSH_HOSTKEY_DIR): nothing to do;
+#   - a type missing: ssh-keygen -A makes it, then, when /jffs is read-write
+#     (NAND=rw-jffs, the default), gt-be98-save --local writes the state
+#     (ALLOW_PATHS of /etc/conf.d/gt-be98-jffs holds the host keys) through
+#     the UBI write fence;
+#   - /jffs not writable (NAND=off/ro, or the fenced setup failed): the keys
+#     live in RAM only and the next boot makes new ones (logged at warning
+#     level, and in /etc/motd).
+description="Generate the SSH host keys on the box and keep them in /jffs"
+
+depend() {
+	need localmount
+	after gt-be98-watchdog gt-be98-persist gt-be98-jffs
+	before sshd
+	use logger
+}
+
+TYPES="ed25519 ecdsa rsa"
+
+missing() {
+	local t m=
+	for t in $TYPES; do
+		[ -s /etc/ssh/ssh_host_${t}_key ] && [ -s /etc/ssh/ssh_host_${t}_key.pub ] || m="$m $t"
+	done
+	echo $m
+}
+
+start() {
+	local m fp
+	m=$(missing)
+	if [ -z "$m" ]; then
+		einfo "SSH host keys present"
+		return 0
+	fi
+	ebegin "Generating SSH host keys ($m)"
+	mkdir -p /etc/ssh
+	/usr/bin/ssh-keygen -A >/dev/null
+	eend $? || return 1
+	chmod 0600 /etc/ssh/ssh_host_*_key
+	m=$(missing)
+	[ -z "$m" ] || { eerror "ssh-keygen -A left$m missing"; return 1; }
+	fp=$(/usr/bin/ssh-keygen -l -f /etc/ssh/ssh_host_ed25519_key.pub 2>/dev/null | cut -d' ' -f2)
+	logger -t gt-be98-hostkeys "new SSH host keys generated on the box (ed25519 $fp)"
+	if grep -qE '^ubi0:[^ ]+ /jffs ubifs rw' /proc/mounts; then
+		if gt-be98-save --local >/dev/null 2>&1; then
+			einfo "SSH host keys saved to /jffs (ed25519 $fp)"
+			logger -t gt-be98-hostkeys "SSH host keys saved to /jffs/mainline-os"
+			return 0
+		fi
+		ewarn "gt-be98-save --local failed: the host keys are not persistent yet (gt-be98-autosave retries)"
+		logger -p daemon.warn -t gt-be98-hostkeys "saving the new host keys to /jffs failed"
+		return 0
+	fi
+	ewarn "/jffs is not read-write: these host keys live in RAM only, the next boot makes new ones"
+	logger -p daemon.warn -t gt-be98-hostkeys "host keys not persistent (/jffs not read-write)"
+	sed -i '/^WARNING: SSH host keys/d' /etc/motd 2>/dev/null
+	echo "WARNING: SSH host keys are not persistent (/jffs not read-write): new keys next boot" >> /etc/motd
+	return 0
+}

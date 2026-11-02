@@ -7,6 +7,13 @@
 #   - /etc/webui/auth.conf with SALT= and HASH= (written at build time from
 #     WEBUI_PASSWORD / WEBUI_PASSWORD_HASH of the local configuration; the
 #     webui imports it into webui.db on its first start), or
+#   - a webui with the first-login setup token (`webui -features` prints
+#     "setup-token", gt-be98-webui-go wu-first-login): unprovisioned, it
+#     accepts nothing but set_password with the one-time token it writes to
+#     /run/webui/setup-token (root only), so it is not open to the LAN. This
+#     is how a release image (RELEASE=1, no baked password) starts it; a
+#     password set in the UI lives in webui.db, so this path also covers
+#     every later boot of such an image;
 #   - WEBUI_ALLOW_UNPROVISIONED=yes in /etc/conf.d/gt-be98-webui-guard
 #     (an operator who knows what he does, e.g. on an isolated bench).
 description="Refuse to start the web UI without a provisioned password"
@@ -21,11 +28,15 @@ start() {
 		einfo "web UI password provisioned"
 		return 0
 	fi
+	if /usr/sbin/webui -features 2>/dev/null | grep -qx setup-token; then
+		einfo "web UI with first-login setup token (until a password is set: cat /run/webui/setup-token)"
+		return 0
+	fi
 	if [ "${WEBUI_ALLOW_UNPROVISIONED:-no}" = yes ]; then
 		ewarn "web UI starts WITHOUT a provisioned password (first-run setup open)"
 		return 0
 	fi
 	eerror "no provisioned web UI password (/etc/webui/auth.conf): not starting the web UI"
-	eerror "set WEBUI_PASSWORD in the build's local configuration"
+	eerror "set WEBUI_PASSWORD in the build's local configuration, or install a webui with the setup token"
 	return 1
 }
