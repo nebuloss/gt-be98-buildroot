@@ -94,35 +94,33 @@ directory produced by `board/gt-be98-mainline/flash/build-flash-kit.sh`.
 | `IMAGES.sha256` | the sha256 of the two images |
 | `SHA256SUMS` | the sha256 of every file in the kit |
 
-The kit contains proprietary vendor firmware, and an image built with SSH
-host keys or a web UI password contains those too. **Never publish a kit
-or an image.** Hand them over privately.
+The kit contains proprietary vendor firmware (inside the rootfs). **Never
+publish a kit or an image.** Hand them over privately, one recipient at a
+time: a release image also carries the recipient's SSH public keys.
 
 ### Building the kit (release maintainer)
 
-Build as in `board/gt-be98-mainline/README.md` ("Build"), with a release
-configuration in `local.conf`:
-
-- `SSH_AUTHORIZED_KEYS`: the owner's public keys. This decides who can log in.
-- `ROOTFS_URL`: empty, or the owner's own server. The OS boots from slot 1's
-  vol 4; the URL is only a fallback.
-- `NAND=rw-jffs`: needed for `/jffs` persistence; this is the default.
-- `WEBUI_DIR` and `WEBUI_PASSWORD` (or `_HASH`), if the web UI is part of
-  the release.
-- no lab addresses (`SYSLOG_REMOTE`, `NETCONSOLE`, fallbacks) unless the
-  owner wants them.
-
-Then run:
+The image is built in release mode, as `docs/RELEASE-BUILD.md` describes
+(branch `br-release-build-2026-11-02` until it lands on `mainline-os`):
+`RELEASE=1` with a `release.conf` that holds the recipient's
+`SSH_AUTHORIZED_KEYS` and no lab material, then
+`release-check.sh` must print `release-check: PASS`. A release image has no
+SSH host keys and no web UI password inside (both are made on the box at
+first boot, step 5) and no `ROOTFS_URL` (it boots only from slot 1's vol 4
+or a `GTBE98-ROOT` USB stick). `NAND=rw-jffs` (the default) is needed for
+the host keys and the settings to survive a reboot. Then:
 
 ```sh
-rtk sh board/gt-be98-mainline/build.sh
-sh board/gt-be98-mainline/flash/build-flash-kit.sh    # -> $OUT/images/flash-kit (KIT_DIR=... to change)
+GT_BE98_LOCAL_CONF=~/.config/gt-be98-os/release.conf \
+    sh board/gt-be98-mainline/flash/build-flash-kit.sh    # -> $OUT/images/flash-kit (KIT_DIR=... to change)
 ```
 
-The kit builder refuses to run when the rootfs or the itb is not the one
-`ml-bootfs.info` records. The itb's initramfs accepts from vol 4 only the
-rootfs it was built with. Copy the two values of `IMAGES.sha256` into the
-release notes.
+The kit builder refuses images whose rootfs or itb is not the one
+`ml-bootfs.info` records (the itb's initramfs accepts from vol 4 only the
+rootfs it was built with). It also refuses an image without
+`release mode: yes` in `ml-bootfs.info` when `RELEASE=1` is set in the
+configuration or the environment, and it warns `LAB IMAGE` otherwise. Copy
+the two values of `IMAGES.sha256` into the release notes.
 
 ## 1. Verify the images (on your PC)
 
@@ -223,9 +221,14 @@ whether a one-shot boot armed after a cold start works, so the helper does
 not try it.
 
 What to expect: the box is dark for 1 to 2 minutes. The mainline OS then
-gets an address by DHCP on the LAN port, and on the USB-Ethernet lifeline
-if an adapter is plugged in. Log in with the key that the release was built
-with:
+gets an address by DHCP on the 10 Gbit/s port (`rnr0`, the wired uplink of
+release 1), and on the USB-Ethernet lifeline if an adapter is plugged in.
+Log in with the key that the release was built with. On the first boot of
+a release image the box makes its own SSH host keys and saves them to
+`/jffs`, so ssh shows a new host key once; later boots keep it. The web UI
+(if the release has it) starts without a password and accepts only setting
+one with the one-time token from `ssh root@<mainline address> cat
+/run/webui/setup-token` (`docs/RELEASE-BUILD.md`, "First boot").
 
 ```sh
 ssh root@<mainline address>
