@@ -3,7 +3,9 @@
 # Wi-Fi router mode (optional, NOT enabled by default; the web UI's Wi-Fi AP
 # page enables it): each Wi-Fi radio is its own routed subnet, with DHCP + DNS
 # from a dnsmasq bound to the Wi-Fi interfaces only, and NAT out of the WAN.
-# Nothing is bridged; only bcawl* interfaces may be router LANs.
+# Nothing is bridged by this service; router LANs are bcawl* interfaces and
+# the wired LAN's bridge (gt-be98-lan's LAN_BRIDGE, br-lan: the LAN ports,
+# never rnr0, plus any radio whose hostapd config says bridge=br-lan).
 #   $ROUTER_DIR/router.conf   ROUTER_WAN="rnr0" ROUTER_LANS="bcawl3=192.168.83.1/24 ..."
 #   $ROUTER_DIR/router.nft    table ip gt_be98_router (forward + masquerade)
 #   $ROUTER_DIR/dnsmasq.conf  this instance's dnsmasq config
@@ -27,14 +29,22 @@ ROUTER_TABLE=${ROUTER_TABLE:-180}
 
 depend() {
 	need gt-be98-wifi
-	after gt-be98-drivers dhcpcd gt-be98-netguard
-	use logger
+	after gt-be98-drivers dhcpcd gt-be98-netguard gt-be98-lan
+	use logger gt-be98-lan
+}
+
+# the wired LAN bridge a router LAN may name (gt-be98-lan's LAN_BRIDGE)
+lan_bridge() {
+	local b
+	b=$(sed -n 's/^LAN_BRIDGE="\{0,1\}\([A-Za-z0-9_-]*\)"\{0,1\}$/\1/p' \
+		/etc/conf.d/gt-be98-lan 2>/dev/null | tail -n1)
+	echo "${b:-br-lan}"
 }
 
 # router.conf is parsed (not sourced) and re-checked: a wired port is never
 # a router LAN, the WAN is never a Wi-Fi interface or a bridge
 load_conf() {
-	local f=$ROUTER_DIR/router.conf l
+	local f=$ROUTER_DIR/router.conf l lb
 	[ -f "$f" ] || { eerror "no $f (configure router mode in the web UI)"; return 1; }
 	ROUTER_WAN=$(sed -n 's/^ROUTER_WAN="\([A-Za-z0-9_.-]*\)"$/\1/p' "$f" | tail -n1)
 	ROUTER_LANS=$(sed -n 's|^ROUTER_LANS="\([A-Za-z0-9_.=/ -]*\)"$|\1|p' "$f" | tail -n1)
@@ -42,6 +52,7 @@ load_conf() {
 	''|bcawl*|br*|-*) eerror "router WAN '$ROUTER_WAN' refused"; return 1 ;;
 	esac
 	[ -n "$ROUTER_LANS" ] || { eerror "no ROUTER_LANS"; return 1; }
+	lb=$(lan_bridge)
 	for l in $ROUTER_LANS; do
 		case "${l%%=*}" in
 		bcawl[0-9]|bcawl[0-9][0-9])
@@ -49,7 +60,8 @@ load_conf() {
 			if grep -qx "${l%%=*}" /run/gt-be98-wifi/stations 2>/dev/null; then
 				eerror "router LAN '${l%%=*}' refused: it is a Wi-Fi station (uplink)"; return 1
 			fi ;;
-		*) eerror "router LAN '${l%%=*}' refused: Wi-Fi radios (bcawl*) only"; return 1 ;;
+		"$lb")	case "$lb" in brwifi*|'') eerror "router LAN '$lb' refused"; return 1 ;; esac ;;
+		*) eerror "router LAN '${l%%=*}' refused: Wi-Fi radios (bcawl*) or the wired LAN bridge ($lb) only"; return 1 ;;
 		esac
 		echo "${l#*=}" | grep -qE '^[0-9]{1,3}(\.[0-9]{1,3}){3}/[0-9]{1,2}$' ||
 			{ eerror "router LAN address '${l#*=}' refused"; return 1; }
