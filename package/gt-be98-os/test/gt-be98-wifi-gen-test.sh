@@ -428,20 +428,21 @@ conf_ok "owe pmksa"
 
 # ---- 10c. radio features: HE (ax=), TWT responder (twt=), zero-wait DFS
 # (zwdfs=), monitor (monitor=), LED (led=) ----
-{ printf 'radio=2g\nax=1\nradio=5gl\nax=1\nchannel=36\nwidth=80\nradio=5gh\nax=0\nchannel=100\nwidth=40\n'
+# HE always (the firmware beacons it whatever hostapd says): with and without ax=1
+{ printf 'radio=2g\nax=1\nradio=5gl\nchannel=36\nwidth=80\nradio=5gh\nchannel=100\nwidth=40\n'
   net 1 a sae password1 "2g 5gl 5gh" 1; } > "$T/x1"
-rm -f "$T/slots"; gen "$T/x1"; check "ax=1 on 2g/5gl, ax=0 on 5gh: accepted" 0 $?
-check "ax=1 -> ieee80211ax=1 on 2g and 5gl; ax=0 (a string \"0\") -> none on 5gh" "yes yes no" \
-	"$(hdr_has bcawl3 ieee80211ax=1) $(hdr_has bcawl0 ieee80211ax=1) $(grep -q '^ieee80211ax' "$T/o/hdr-bcawl1" && echo yes || echo no)"
-check "5gl ax at 80 MHz: HE width/centre = the VHT ones (36 -> 42)" "yes yes" \
+rm -f "$T/slots"; gen "$T/x1"; check "ax=1 on 2g, no ax key on 5gl/5gh: accepted" 0 $?
+check "ieee80211ax=1 on 2g (ax=1), 5gl and 5gh (no key), once each" "1 1 1" \
+	"$(grep -c '^ieee80211ax=1$' "$T/o/hdr-bcawl3") $(grep -c '^ieee80211ax=1$' "$T/o/hdr-bcawl0") $(grep -c '^ieee80211ax=1$' "$T/o/hdr-bcawl1")"
+check "5gl HE at 80 MHz: HE width/centre = the VHT ones (36 -> 42)" "yes yes" \
 	"$(hdr_has bcawl0 he_oper_chwidth=1) $(hdr_has bcawl0 he_oper_centr_freq_seg0_idx=42)"
 check "no he_twt_responder line by default (hostapd's own default: on)" "" "$(grep -h '^he_twt_responder' "$T"/o/hdr-*)"
 check "default led=1 on every radio of -d, in band order" "led 2g bcawl3 1|led 5gl bcawl0 1|led 5gh bcawl1 1|led 6g bcawl2 1" \
 	"$(grep '^led ' "$T/o/plan" | tr '\n' '|' | sed 's/|$//')"
 check "no monitor line without monitor=1" "" "$(grep '^monitor ' "$T/o/plan")"
 conf_ok "ax"
-{ printf 'radio=5gh\nax=1\nchannel=100\nwidth=40\n'; net 1 a sae password1 5gh 1; } > "$T/x2"
-rm -f "$T/slots"; gen "$T/x2"; check "5gh ax at 40 MHz: he_oper_chwidth=0, no HE centre" "yes no" \
+{ printf 'radio=5gh\nchannel=100\nwidth=40\n'; net 1 a sae password1 5gh 1; } > "$T/x2"
+rm -f "$T/slots"; gen "$T/x2"; check "5gh HE at 40 MHz: he_oper_chwidth=0, no HE centre" "yes no" \
 	"$(hdr_has bcawl1 he_oper_chwidth=0) $(grep -q '^he_oper_centr' "$T/o/hdr-bcawl1" && echo yes || echo no)"
 { printf 'radio=6g\nax=1\ntwt=0\nradio=2g\ntwt=1\nradio=5gl\ntwt=0\n'; net 1 a sae password1 "2g 5gl 6g" 1; } > "$T/x3"
 rm -f "$T/slots"; gen "$T/x3"; check "6g ax=1 (implicit anyway) + twt on three radios: accepted" 0 $?
@@ -484,7 +485,7 @@ rm -f "$T/slots"; gen "$T/x8"; check "monitor=1 with enabled=0: no monitor" "0 0
 rm -f "$T/slots"; gen "$T/x9"; check "led=0 on 2g (a string \"0\"), led=1 on 6g" "led 2g bcawl3 0|led 6g bcawl2 1" \
 	"$(grep -E '^led (2g|6g) ' "$T/o/plan" | tr '\n' '|' | sed 's/|$//')"
 rm -f "$T/slots"; gen "$T/x9"; cp "$T/slots.keep" "$T/slots.keep0"; cp "$T/slots" "$T/slots.keep"	# refuse() compares with this state
-for kv in 'radio=6g ax=0' 'radio=2g ax=2' 'radio=5gl twt=x' 'radio=2g zwdfs=1' 'radio=6g zwdfs=1' 'radio=5gl zwdfs=01' \
+for kv in 'radio=6g ax=0' 'radio=5gl ax=0' 'radio=2g ax=0' 'radio=2g ax=2' 'radio=5gl twt=x' 'radio=2g zwdfs=1' 'radio=6g zwdfs=1' 'radio=5gl zwdfs=01' \
 	'radio=5gh monitor=yes' 'radio=2g led=2'; do
 	{ printf '%s\n%s\n' "${kv%% *}" "${kv#* }"; net 1 a sae password1 2g 1; } > "$T/r"; refuse "$kv" "$T/r"
 done
@@ -496,9 +497,9 @@ check "-F: exit 0 without -n/-o" 0 "$($SH "$G" -F > "$T/feat" 2>&1; echo $?)"
 check "-F: schedule and max_clients on, 6g up to 320 MHz, twt/wds not yet" \
 	"feature schedule 1|feature max_clients 1|width 6g 20 40 80 160 320|width 5gl 20 40 80|feature twt 0|feature wds 0|feature width320 1" \
 	"$(for k in 'feature schedule ' 'feature max_clients ' 'width 6g ' 'width 5gl ' 'feature twt ' 'feature wds ' 'feature width320 '; do grep "^$k" "$T/feat"; done | tr '\n' '|' | sed 's/|$//')"
-check "-F: the radio features he, twt_responder, zwdfs, monitor, led" \
-	"feature he 1|feature twt_responder 1|feature zwdfs 1|feature monitor 1|feature led 1" \
-	"$(for k in he twt_responder zwdfs monitor led; do grep "^feature $k " "$T/feat"; done | tr '\n' '|' | sed 's/|$//')"
+check "-F: the radio features twt_responder, zwdfs, monitor, led; no he (HE cannot be turned off)" \
+	"feature twt_responder 1|feature zwdfs 1|feature monitor 1|feature led 1|" \
+	"$(for k in twt_responder zwdfs monitor led he; do grep "^feature $k " "$T/feat"; done | tr '\n' '|')"
 check "-F: feature airtime 1" "feature airtime 1" "$(grep '^feature airtime' "$T/feat")"
 check "-F: the security list is the one the checks take" "open owe open-owe psk2 psk2sae sae wpa2-eap wpa3-eap wpa2-wpa3-eap" \
 	"$(sed -n 's/^security //p' "$T/feat")"
