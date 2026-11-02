@@ -27,7 +27,10 @@
 #   -e ERE      extended regex (repeatable), e.g. a lab IP range
 #   -s STRING   fixed string (repeatable), e.g. the lab ROOTFS_URL, a host name
 #   -u NAME     a user name, matched as a word (repeatable)
-#   -f FILE     one pattern per line: "re:ERE", "fixed:STRING", "user:NAME";
+#   -i ADDR     an IPv4 address, matched whole (10.1.1.2 does not match
+#               10.1.1.20) (repeatable)
+#   -f FILE     one pattern per line: "re:ERE", "fixed:STRING", "user:NAME",
+#               "ip:ADDR";
 #               a bare line is an ERE; "#" starts a comment
 #   -v          also print what matched (the output then contains the lab
 #               values: keep it out of commits and reports)
@@ -39,7 +42,7 @@
 # tool error. Needs unsquashfs ($UNSQUASHFS) for a squashfs target.
 set -u
 
-usage() { sed -n '3,40p' "$0" | sed 's/^# \{0,1\}//'; exit 2; }
+usage() { sed -n '3,/^set -u$/p' "$0" | sed -e '/^set -u$/d' -e 's/^# \{0,1\}//'; exit 2; }
 
 PATS=$(mktemp) || exit 2
 cleanup_list="$PATS"
@@ -51,6 +54,9 @@ addpat() {	# kind value [source]
 	case "$1" in
 	re|fixed) printf '%s\t%s\t%s\n' "$1" "${3:-arg}" "$2" >> "$PATS" ;;
 	user) printf 're\t%s\t%s\n' "${3:-arg}" "(^|[^A-Za-z0-9_.-])$2([^A-Za-z0-9_-]|\$)" >> "$PATS" ;;
+	ip)
+		echo "$2" | grep -qE '^[0-9]{1,3}(\.[0-9]{1,3}){3}$' || { echo "release-check: not an IPv4 address: ${3:-arg}" >&2; exit 2; }
+		printf 're\t%s\t%s\n' "${3:-arg}" "(^|[^0-9.])$(echo "$2" | sed 's/\./\\./g')([^0-9]|\$)" >> "$PATS" ;;
 	esac
 }
 
@@ -64,6 +70,7 @@ readpats() {	# file
 		re:*) addpat re "${line#re:}" "$1:$n" ;;
 		fixed:*) addpat fixed "${line#fixed:}" "$1:$n" ;;
 		user:*) addpat user "${line#user:}" "$1:$n" ;;
+		ip:*) addpat ip "${line#ip:}" "$1:$n" ;;
 		*) addpat re "$line" "$1:$n" ;;
 		esac
 	done < "$1"
@@ -126,7 +133,8 @@ check_root() {	# rootfs dir
 		fail "RELMODE /etc/gt-be98-release does not say \"release-mode yes\" (not a RELEASE=1 build)"
 	fi
 
-	x=$(grep -rlaE -e '/home/[A-Za-z0-9._-]+/' "$R" 2>/dev/null | rel)
+	# a path that starts at /home (not e.g. the stock /tmp/home/root)
+	x=$(grep -rlaE -e '(^|[^A-Za-z0-9._/-])/home/[A-Za-z0-9._-]+/' "$R" 2>/dev/null | rel)
 	[ -z "$x" ] && note "HOMEPATH no /home/<name>/ path" || fail "HOMEPATH build-host home path in: $x"
 }
 
@@ -218,13 +226,14 @@ selftest() {
 	printf 'hostname\n# static ip_address= is documented here only\n' > "$S/etc/dhcpcd.conf"
 	echo 'root:*:19000:0:99999:7:::' > "$S/etc/shadow"
 	# near misses that must NOT fail: a PEM marker inside a binary, a
-	# 63-hex HASH, an address outside the lab pattern, a bare /home
+	# 63-hex HASH, an address outside the lab pattern, a bare /home and the
+	# stock /tmp/home/root
 	printf '\000\001ELF\000-----BEGIN OPENSSH PRIVATE KEY-----\000\001' > "$S/usr/bin/ssh-keygen"
 	printf 'HASH=%s\n' 012345678901234567890123456789012345678901234567890123456789abc > "$S/etc/notes"
-	printf '\000version 203.0.114.3 home=/home\000' > "$S/usr/bin/tool"
-	echo 'alicedata not a user word: xalice' > "$S/root/readme"
+	printf '\000version 203.0.114.3 home=/home\000/tmp/home/root/.ssh\000' > "$S/usr/bin/tool"
+	echo 'alicedata not a user word: xalice; other host 198.51.100.70' > "$S/root/readme"
 	P=$T/patterns
-	printf '# lab patterns (selftest)\nre:203\\.0\\.113\\.[0-9]+\nfixed:labhost.example\nuser:alice\n' > "$P"
+	printf '# lab patterns (selftest)\nre:203\\.0\\.113\\.[0-9]+\nfixed:labhost.example\nuser:alice\nip:198.51.100.7\n' > "$P"
 
 	expect() {	# name rc-wanted check-word target [extra args]
 		local name=$1 want=$2 word=$3 tgt=$4
@@ -260,6 +269,7 @@ selftest() {
 	plant labip; printf '\000\001server=203.0.113.9\000' > "$D/usr/bin/tool3"; expect lab-ip-regex 1 PATTERN "$D"
 	plant labfixed; echo 'url http://labhost.example/x' > "$D/etc/notes2"; expect lab-fixed-string 1 PATTERN "$D"
 	plant user; echo 'owner alice' > "$D/etc/notes3"; expect lab-user-word 1 PATTERN "$D"
+	plant labaddr; printf '\000peer=198.51.100.7:8089\000' > "$D/usr/bin/tool4"; expect lab-ip-exact 1 PATTERN "$D"
 	# images directory: the initramfs source and the image description
 	if command -v "${MKSQUASHFS:-mksquashfs}" >/dev/null 2>&1 &&
 	   { [ -n "${UNSQUASHFS:-}" ] || command -v unsquashfs >/dev/null 2>&1; }; then
@@ -268,7 +278,7 @@ selftest() {
 		printf 'WDT_MAX=600\nRESCUE=0\nROOTFS_URL=\n' > "$I/rescue/ml-defaults"
 		echo 'boot: RESCUE=0 WDT_MAX=600 ROOTFS_URL=<none> NAND=rw-jffs' > "$I/ml-bootfs.info"
 		expect images-clean 0 '' "$I"
-		printf 'WDT_MAX=600\nRESCUE=0\nROOTFS_URL=http://198.51.100.7/r.squashfs\n' > "$I/rescue/ml-defaults"
+		printf 'WDT_MAX=600\nRESCUE=0\nROOTFS_URL=http://198.51.100.8/r.squashfs\n' > "$I/rescue/ml-defaults"
 		expect images-rootfsurl 1 ROOTFSURL "$I"
 		printf 'WDT_MAX=600\nRESCUE=0\nROOTFS_URL=\n' > "$I/rescue/ml-defaults"
 		printf 'cmdline ip=203.0.113.4\n' >> "$I/ml-bootfs.info"
@@ -290,6 +300,7 @@ main() {
 		-e) [ $# -ge 2 ] || usage; addpat re "$2"; shift 2 ;;
 		-s) [ $# -ge 2 ] || usage; addpat fixed "$2"; shift 2 ;;
 		-u) [ $# -ge 2 ] || usage; addpat user "$2"; shift 2 ;;
+		-i) [ $# -ge 2 ] || usage; addpat ip "$2"; shift 2 ;;
 		-f) [ $# -ge 2 ] || usage; readpats "$2"; shift 2 ;;
 		-v) VERBOSE=1; shift ;;
 		-h|--help) usage ;;
