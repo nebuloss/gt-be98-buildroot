@@ -59,9 +59,11 @@ bssid_rules() {
 				m = bdev[f[2]]; a = f[7]; s = f[6]
 				split(m, mo, ":"); split(a, ao, ":")
 				if (s == 0) { if (a != m) print f[3] ":anchor!=radio"; continue }
-				if (byte(ao[1]) % 4 != 2) print f[3] ":not-LA/unicast"
+				# 6 GHz: nontransmitted BSSIDs keep the anchor octet 0
+				if (f[2] == "bcawl2") { if (ao[1] != mo[1]) print f[3] ":6g-octet0" }
+				else if (byte(ao[1]) % 4 != 2) print f[3] ":not-LA/unicast"
 				adj = (byte(mo[1]) == 96 && byte(mo[6]) % 15 == 0) ? 1 : 0
-				if (byte(ao[1]) != (96 + ((byte(mo[6]) + adj) % 15) * 8) + 2) print f[3] ":octet0"
+				if (f[2] != "bcawl2" && byte(ao[1]) != (96 + ((byte(mo[6]) + adj) % 15) * 8) + 2) print f[3] ":octet0"
 				if (int(byte(ao[6]) / 8) != int(byte(mo[6]) / 8)) print f[3] ":block"
 				if (byte(ao[6]) % 8 != (byte(mo[6]) + s) % 8) print f[3] ":index"
 				if (byte(ao[6]) % 8 == byte(mo[6]) % 8) print f[3] ":anchor-index"
@@ -260,14 +262,21 @@ for i in $(seq 1 8); do
 		printf 'network=%s\nssid=net%s\nsecurity=%s\nbands=2g 5gl 5gh 6g\nvlan=%s\n' $((100 + i)) "$i" "$s" $((100 + i))
 	else net $((100 + i)) "net$i" "$s" "password$i" "2g 5gl 5gh 6g" $((100 + i)); fi >> "$T/s8x4"
 done
+# 6 GHz secondaries are nontransmitted BSSIDs of the anchor's block (10b4):
+# with the consecutive board MACs the 6g block (..:a8-af) holds the 5gh
+# radio's address (..:a8), so 8 on 6g cannot be: the 6g radio moves to its
+# own block here (the board shape is tested in 10b4)
+M0=$M; M="2g=00:00:5e:00:53:a0 5gl=00:00:5e:00:53:a4 5gh=00:00:5e:00:53:a8 6g=00:00:5e:00:53:b0"
 rm -f "$T/slots"; gen "$T/s8x4" -C 8; check "8x4: accepted with -C 8" 0 $?
 check "8x4: 32 BSSes" 32 "$(plan_bss | wc -l | tr -d ' ')"
 check "8x4: slots 0..7 on every radio" "8 8 8 8" "$(for d in bcawl3 bcawl0 bcawl1 bcawl2; do plan_bss | awk -v d="$d" '$1 == d || index($1, d "-") == 1 { print $2 }' | sort -un | wc -l | tr -d ' '; done | tr '\n' ' ' | sed 's/ $//')"
 check "8x4: ifnames bcawlN-1..7" "bcawl3-7" "$(plan_bss | awk '{ print $1 }' | grep -x 'bcawl3-7')"
-# by hand: radio ..:ac (index 4), prefix 0x60 + (0xac % 15) * 8 = 0x98, LA => 9a
-check "8x4: 6 GHz BSSIDs by hand (anchor index 4, 7 others)" \
-	"00:00:5e:00:53:ac 9a:00:5e:00:53:a8 9a:00:5e:00:53:a9 9a:00:5e:00:53:aa 9a:00:5e:00:53:ab 9a:00:5e:00:53:ad 9a:00:5e:00:53:ae 9a:00:5e:00:53:af" \
+# by hand: 6g radio ..:b0 (index 0), its nontransmitted BSSIDs ..:b1-b7, octet 0 kept
+check "8x4: 6 GHz BSSIDs by hand (anchor ..:b0, nontransmitted ..:b1-b7)" \
+	"00:00:5e:00:53:b0 00:00:5e:00:53:b1 00:00:5e:00:53:b2 00:00:5e:00:53:b3 00:00:5e:00:53:b4 00:00:5e:00:53:b5 00:00:5e:00:53:b6 00:00:5e:00:53:b7" \
 	"$(awk '$1 == "bss" && $2 == "bcawl2" { print $7 }' "$T/o/plan" | sort | tr '\n' ' ' | sed 's/ $//')"
+# by hand, 5gh radio ..:a8: prefix 0x60 + (0xa8 % 15) * 8 = 0x60 + 3 * 8 = 0x78, LA => 7a
+check "8x4: 5gh secondaries keep the LA prefix (control)" "7a:00:5e:00:53:a9" "$(bssid_of bcawl1-1)"
 bssid_rules "8x4"
 check "8x4: 6g never WPA2/open" "" "$(grep -lE '^(wpa=0|wpa_key_mgmt=WPA-PSK.*)$' "$T"/o/sec-bcawl2* | tr '\n' ' ')"
 conf_ok "8x4"
@@ -275,6 +284,13 @@ gen "$T/s8x4"; check "8 networks on a 4-BSS radio: refused" 1 $?
 { cat "$T/s8x4"; net 999 extra sae password9 2g 999; } > "$T/s9"
 gen "$T/s9" -C 8; check "9th network on an 8-BSS radio: refused" 1 $?
 gen "$T/s8x4" -C 9; check "-C 9 refused (mbss8)" 1 $?
+# the board shape (6g ..:ac, 5gh ..:a8 in its block): 7 on 6g fit, the 8th is refused
+M=$M0
+gen "$T/s8x4" -C 8; check "board MACs: 8 on 6g refused (no free BSSID: ..:a8 is the 5gh radio)" "1 yes" \
+	"$? $(grep -q 'radio 6g: no free BSSID' "$T/err" && echo yes || echo no)"
+awk '/^network=108$/ { exit } { print }' "$T/s8x4" > "$T/s7"
+rm -f "$T/slots"; gen "$T/s7" -C 8; check "board MACs: 7 on every radio: accepted, 7 on 6g" "0 7" "$? $(awk '$1 == "bss" && $2 == "bcawl2"' "$T/o/plan" | wc -l | tr -d ' ')"
+bssid_rules "board MACs, 7 per radio"
 
 # ---- 8. radios whose BSSIDs would collide under the rule ----
 # 2g 60:..:00 (adj 1) and 5gl 02:..:01 get the same prefix 6a and block ..:00;
@@ -449,6 +465,26 @@ rm -f "$T/slots"; gen "$T/d1"; check "country=DE without -c (no regdb): warned" 
 	"$? $(grep -q '5gh: channel 100 is a DFS (radar) channel and the regulatory database is not loaded' "$T/err" && echo yes || echo no)"
 { printf 'radio=5gh\nchannel=100\nmonitor=1\n'; net 1 a sae password1 "5gl 5gh" 1; } > "$T/d2"
 rm -f "$T/slots"; gen "$T/d2" -c; check "a monitor on ch100: no DFS warning" "no" "$(grep -q 'DFS (radar)' "$T/err" && echo yes || echo no)"
+
+# ---- 10b4. 6 GHz secondaries = the anchor's nontransmitted BSSIDs (soak
+# 1102-1500: OWE on bcawl2-1 unreachable) ----
+{ net 1 s sae password1 "5gl 6g" 1; printf 'network=2\nssid=o\nsecurity=owe\nbands=5gl 6g\nvlan=2\n'; } > "$T/m6"
+rm -f "$T/slots"; gen "$T/m6"; check "sae + owe on 5gl and 6g: accepted" 0 $?
+check "6g: anchor = radio address, the OWE secondary = radio octets 0-4, index 1 (00:00:5e:00:53:ad)" "00:00:5e:00:53:ac 00:00:5e:00:53:ad" \
+	"$(bssid_of bcawl2) $(bssid_of bcawl2-1)"
+check "5gl (control): the secondary keeps the LA-prefixed block (octet 0 != the radio's)" "yes" \
+	"$([ "$(bssid_of bcawl0-1 | cut -d: -f1)" != 00 ] && [ "$(bssid_of bcawl0-1 | cut -d: -f2-5)" = 00:5e:00:53 ] && echo yes || echo no)"
+check "6g: the secondary's section carries that bssid=" "yes" "$(has bcawl2-1 bssid=00:00:5e:00:53:ad)"
+bssid_rules "6g nontransmitted"
+# a 6g index that would land on another radio's address is skipped (5gl = :a4 is
+# in the 6g block only if the blocks overlap; here: 6g radio :a8, 5gl radio :ac)
+M0=$M; M="2g=00:00:5e:00:53:a0 5gl=00:00:5e:00:53:ac 5gh=00:00:5e:00:53:a4 6g=00:00:5e:00:53:a8"
+{ for i in 1 2 3 4 5; do net $i n$i sae password$i 6g $i; done; } > "$T/m6b"
+rm -f "$T/slots"; gen "$T/m6b" -C 8; check "6g radio :a8, 5gl radio :ac in its block: 5 BSSes, none on :ac" "0 5 no" \
+	"$? $(awk '$1 == "bss" && $2 == "bcawl2"' "$T/o/plan" | wc -l | tr -d ' ') $(awk '$1 == "bss" { print $7 }' "$T/o/plan" | grep -qx 00:00:5e:00:53:ac && echo yes || echo no)"
+bssid_rules "6g block shared with a radio"
+M=$M0
+conf_ok "6g nontransmitted"
 
 # ---- 10c. radio features: HE (ax=), TWT responder (twt=), zero-wait DFS
 # (zwdfs=), monitor (monitor=), LED (led=) ----
