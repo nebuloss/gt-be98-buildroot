@@ -226,7 +226,29 @@ the committed (stock) slot. `gt-be98-wdtd` opens `/dev/watchdog`
 interface matching `rnr* eth* usb* enx*` is detached the moment anything
 makes it a bridge port, and hairpin mode is turned off on every bridge port
 (link events + a 5 s sweep). A bridge with only Wi-Fi interfaces (bcawl*) is
-allowed.
+allowed. One exception, the wired LAN: a port listed in `LAN_PORTS`
+(`/etc/conf.d/gt-be98-lan`) may be a port of `LAN_BRIDGE` (br-lan) and of no
+other bridge, when it is `rnr1`, `rnr2` or `rnr3` and not the Wi-Fi trunk
+port; `rnr0` never is, even listed (the uplink and management port, on the
+owner's LAN: open-ethernet `docs/eth-lan-2026-11-02.md` §3). br-lan holds no
+rnr0 member of any kind, so a LAN jack never shares a segment with the
+uplink. `gt-be98-netguard --selftest` checks the verdicts (15 cases).
+
+`gt-be98-lan` (NOT enabled by default, owner decision D16) builds the wired
+LAN from `/etc/conf.d/gt-be98-lan`: `LAN_PORTS` (empty by default; `rnr1` =
+the RTL8372's four 2.5G jacks, `rnr2` 1G, `rnr3` 10G) in `LAN_BRIDGE` with
+STP on (`LAN_STP`), the ports' IPv4 addresses flushed, an optional
+`LAN_ADDR` and DHCP server (`LAN_DHCP`, its own dnsmasq bound to the bridge,
+never rnr0), the nft table `inet gt_be98_lan` (only replies, DNATed flows
+and bridge-to-bridge traffic are forwarded into the bridge), and the
+read-only switch monitor `rtl8372.ko` when rnr1 is a LAN port and the
+module is installed (`BR2_PACKAGE_GT_BE98_OPEN_ETHERNET_RTL8372`, off by
+default). The wired LAN leaves the box only routed: list the bridge in
+`ROUTER_LANS` (`br-lan=192.168.50.1/24`) and a radio joins it with
+`bridge=br-lan` in its hostapd config. Not verified on silicon: the bench
+has only rnr0 cabled, and the RTL8372 is not set up by anything on mainline
+yet (its uplink lane never locks; open-ethernet `docs/eth-lan-2026-11-02.md`
+§0, §2.3).
 
 #### Runner port MAC addresses
 
@@ -335,8 +357,9 @@ nftables, dnsmasq): no driver internals or module parameters.
   sets `net.ipv4.ip_forward=1` and runs its own
   dnsmasq (DHCP + DNS bound to the Wi-Fi interfaces, upstream from
   `/etc/resolv.conf`; leases in `/run/gt-be98-router.leases`). It refuses a
-  LAN that is not `bcawl*`, a Wi-Fi/bridge WAN, or a LAN that is a bridge
-  port; nothing is bridged, `gt-be98-netguard` still applies. The WAN's own
+  LAN that is not `bcawl*` or the wired LAN bridge (`gt-be98-lan`'s
+  `LAN_BRIDGE`), a Wi-Fi/bridge WAN, or a LAN that is a bridge port; it
+  bridges nothing itself, `gt-be98-netguard` still applies. The WAN's own
   link, address and routes are never touched (it may be the only management
   path). `stop` removes the addresses and rules it set, both tables, and
   turns forwarding off. hostapd always runs under `gt-be98-wifi` (`-B -P

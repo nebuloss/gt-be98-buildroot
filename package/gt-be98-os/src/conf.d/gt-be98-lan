@@ -1,0 +1,26 @@
+# /etc/conf.d/gt-be98-lan - the wired LAN (service gt-be98-lan, NOT enabled
+# by default: owner decision D16; nothing here acts until the service runs).
+# Parsed, not sourced. Saved to /jffs with the other network settings.
+#
+# LAN ports bridged into LAN_BRIDGE, from: rnr1 (the RTL8372 switch's four
+# 2.5G LAN jacks), rnr2 (1G jack), rnr3 (10G jack). Never rnr0: it is the
+# uplink and the management port, and the service and gt-be98-netguard both
+# refuse it. Never the Wi-Fi trunk port (WIFI_TRUNK). Empty = no wired LAN.
+LAN_PORTS=""
+# the bridge (netguard allows LAN ports in this bridge only; never brwifi*)
+LAN_BRIDGE="br-lan"
+# spanning tree on the bridge (1 = on): a jack cabled back into another LAN
+# port is blocked instead of looping. The RTL8372's own jacks are switched
+# inside the switch, which runs no STP of ours.
+LAN_STP="1"
+# the bridge's address (CIDR), empty = none. In router mode leave it empty
+# and list LAN_BRIDGE in ROUTER_LANS instead (the router owns the address).
+LAN_ADDR=""
+# DHCP on the bridge: dnsmasq --dhcp-range value, e.g.
+# "192.168.50.100,192.168.50.199,12h"; empty = no DHCP server
+LAN_DHCP=""
+# load the RTL8372 read-only monitor (rtl8372.ko: chip ID, link of each jack)
+# when rnr1 is a LAN port and the module is installed
+LAN_SWITCH_MONITOR="yes"
+# seconds to wait for each port at start (the Runner loads in gt-be98-drivers)
+LAN_IFACE_WAIT="20"

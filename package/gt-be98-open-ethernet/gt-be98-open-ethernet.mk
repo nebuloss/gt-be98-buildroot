@@ -4,10 +4,15 @@
 #
 ################################################################################
 
-# branch console-stall-2026-10-26 (netconsole: be98pc bootcon handover 0510,
-# panic nbcon flush 0511, Runner netpoll-safe TX lock; PCIe: 0906 acknowledges
-# an MSI whose vector was freed, the rmmod RCU-stall/watchdog-reset root cause)
-GT_BE98_OPEN_ETHERNET_VERSION = 95657d5ca8ebcbe33c9810ebbeaad3a82a4dada9
+# branch oe-eth-lan-2026-11-02 = console-stall-2026-10-26 (95657d5: netconsole
+# be98pc bootcon handover 0510, panic nbcon flush 0511, Runner netpoll-safe TX
+# lock; PCIe 0906) + the RTL8372 read-only monitor (driver/rtl8372, off by
+# default), DT patch 0309 (the switch's SMI node at MDIO 29, no reset) and
+# 0602-0604 (BCM6813 pinctrl: MDC/MDIO on pins 54/55, so the BCM84891L at 21
+# and the switch's SMI answer; rnr3's PHY attach -19 root cause), 0605 (the
+# RTL8372 RESET#, GPIO 14 active low, on the switch node: held in reset until
+# rtl8372 binds) and 0703 (a flashless BCM8489x no longer has autoneg off)
+GT_BE98_OPEN_ETHERNET_VERSION = 5ac1894e9b979d929c150ce6d81af7657f4c3aec
 GT_BE98_OPEN_ETHERNET_SITE = git@github.com:nebuloss/gt-be98-open-ethernet.git
 GT_BE98_OPEN_ETHERNET_SITE_METHOD = git
 GT_BE98_OPEN_ETHERNET_LICENSE = GPL-2.0
@@ -20,8 +25,15 @@ GT_BE98_OPEN_ETHERNET_SERIES = series.pmb series series.phy series.phylink \
 	series.postcode series.usb series.mdio series.mdio-debug series.rxfcs \
 	series.mpm series.pcie
 
+GT_BE98_OPEN_ETHERNET_MODULE_SUBDIRS =
 ifeq ($(BR2_PACKAGE_GT_BE98_OPEN_ETHERNET_RUNNER),y)
-GT_BE98_OPEN_ETHERNET_MODULE_SUBDIRS = driver/runner
+GT_BE98_OPEN_ETHERNET_MODULE_SUBDIRS += driver/runner
+endif
+# the RTL8372 LAN switch read-only monitor (off by default)
+ifeq ($(BR2_PACKAGE_GT_BE98_OPEN_ETHERNET_RTL8372),y)
+GT_BE98_OPEN_ETHERNET_MODULE_SUBDIRS += driver/rtl8372
+endif
+ifneq ($(strip $(GT_BE98_OPEN_ETHERNET_MODULE_SUBDIRS)),)
 $(eval $(kernel-module))
 endif
 
