@@ -607,7 +607,7 @@ END {
 		b = BANDS[bi]
 		live[b] = (renab[b] != "0") && (b in bmac) && !roff[b] && !rmon[b]
 		# a monitor radio carries no BSS (the driver refuses a monitor while
-		# the radio's primary netdev is up); its networks keep their slots
+		# the primary netdev of the radio is up); its networks keep their slots
 		ismon[b] = rmon[b] && (renab[b] != "0") && (b in bmac) && !roff[b]
 		if (ismon[b]) {
 			for (i = 1; i <= nnet; i++) if ((i, b) in hasb) { warn("radio " b " (" dev[b] ") is a monitor: its networks are not rendered there"); break }
@@ -770,10 +770,10 @@ END {
 				if (w == 80) { print "he_oper_chwidth=1" > hdr; print "he_oper_centr_freq_seg0_idx=" vht80(ch) > hdr }
 				else print "he_oper_chwidth=0" > hdr
 			}
-			# zero-wait DFS: hostapd's background radar (the driver's ZW-DFS)
+			# zero-wait DFS: hostapd background radar (the ZW-DFS of the driver)
 			if (rzw[b]) print "enable_background_radar=1" > hdr
 		}
-		# TWT responder: on by hostapd's default; rtwt[] holds numbers
+		# TWT responder: on by hostapd default; rtwt[] holds numbers
 		if (!rtwt[b]) print "he_twt_responder=0" > hdr
 		if (ccok && country != "") {
 			print "country_code=" country > hdr; print "ieee80211d=1" > hdr
