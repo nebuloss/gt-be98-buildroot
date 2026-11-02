@@ -77,7 +77,7 @@ cat > "$T/bin/iw" <<'X'
 #!/bin/sh
 [ "$1" = phy ] && [ "$3" = info ] && [ -f "$FAKE/iw-$2" ] && cat "$FAKE/iw-$2"
 case "$*" in
-"phy "*" interface add "*" type monitor") mkdir -p "$FAKE/net/$4"; echo "$*" >> "$FAKE/iwlog" ;;
+"phy "*" interface add "*" type monitor") mkdir -p "$FAKE/net/$5"; echo "$*" >> "$FAKE/iwlog" ;;
 "dev "*" del") rm -rf "${FAKE:?}/net/$2"; echo "$*" >> "$FAKE/iwlog" ;;
 "dev "*" set freq "*) echo "$*" >> "$FAKE/iwlog" ;;
 esac
@@ -104,6 +104,8 @@ einfo() { echo "  * $*" >> "$T/out"; }; ewarn() { echo "  ! $*" >> "$T/out"; }
 eerror() { echo "  E $*" >> "$T/out"; }
 # shellcheck disable=SC1091
 . "$here/../src/init.d/gt-be98-wifi"
+# busybox sh runs its ip applet before PATH: the fake as a function
+ip() { "$T/bin/ip" "$@"; }
 br_create() { return 0; }; vlan_attach() { return 0; }
 vlan_prune() { :; }; br_prune() { :; }; isolate_ports() { :; }
 ap_override() { :; }	# no web UI file: the settings below

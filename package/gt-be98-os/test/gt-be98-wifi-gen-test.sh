@@ -464,7 +464,7 @@ mon() {	# band channel width -> the monitor line
 }
 check "monitor freq/centre: 2g 6/40, 2g 11/40, 5gl 40/40, 6g 37/320, 6g 5/20" \
 	"monitor 2g bcawl3 2437 40 2447|monitor 2g bcawl3 2462 40 2452|monitor 5gl bcawl0 5200 40 5190|monitor 6g bcawl2 6135 320 6105|monitor 6g bcawl2 5975 20 5975" \
-	"$(mon 2g 6 40; mon 2g 11 40; mon 5gl 40 40; mon 6g 37 320; mon 6g 5 20)" 
+	"$({ mon 2g 6 40; mon 2g 11 40; mon 5gl 40 40; mon 6g 37 320; mon 6g 5 20; } | tr '\n' '|' | sed 's/|$//')"
 { printf 'radio=5gh\nmonitor=1\nenabled=0\n'; net 1 a sae password1 5gh 1; } > "$T/x8"
 rm -f "$T/slots"; gen "$T/x8"; check "monitor=1 with enabled=0: no monitor" "0 0" "$? $(grep -c '^monitor ' "$T/o/plan")"
 { printf 'radio=2g\nled=0\nradio=6g\nled=1\n'; net 1 a sae password1 2g 1; } > "$T/x9"
@@ -482,7 +482,7 @@ mv "$T/slots.keep0" "$T/slots.keep"
 check "-F: exit 0 without -n/-o" 0 "$($SH "$G" -F > "$T/feat" 2>&1; echo $?)"
 check "-F: schedule and max_clients on, 6g up to 320 MHz, twt/wds not yet" \
 	"feature schedule 1|feature max_clients 1|width 6g 20 40 80 160 320|width 5gl 20 40 80|feature twt 0|feature wds 0|feature width320 1" \
-	"$(for k in 'feature schedule' 'feature max_clients' 'width 6g' 'width 5gl' 'feature twt' 'feature wds' 'feature width320'; do grep "^$k" "$T/feat"; done | tr '\n' '|' | sed 's/|$//')"
+	"$(for k in 'feature schedule ' 'feature max_clients ' 'width 6g ' 'width 5gl ' 'feature twt ' 'feature wds ' 'feature width320 '; do grep "^$k" "$T/feat"; done | tr '\n' '|' | sed 's/|$//')"
 check "-F: the radio features he, twt_responder, zwdfs, monitor, led" \
 	"feature he 1|feature twt_responder 1|feature zwdfs 1|feature monitor 1|feature led 1" \
 	"$(for k in he twt_responder zwdfs monitor led; do grep "^feature $k " "$T/feat"; done | tr '\n' '|' | sed 's/|$//')"
