@@ -71,10 +71,22 @@ esac
 exit 0
 X
 # iw: "phy <phy> info" prints $FAKE/iw-<phy> when present (the interface
-# combination), nothing otherwise; every other command succeeds silently
+# combination), nothing otherwise; a monitor add/del creates/removes its
+# netdev (logged to $FAKE/iwlog with every set freq); the rest succeeds
 cat > "$T/bin/iw" <<'X'
 #!/bin/sh
 [ "$1" = phy ] && [ "$3" = info ] && [ -f "$FAKE/iw-$2" ] && cat "$FAKE/iw-$2"
+case "$*" in
+"phy "*" interface add "*" type monitor") mkdir -p "$FAKE/net/$5"; echo "$*" >> "$FAKE/iwlog" ;;
+"dev "*" del") rm -rf "${FAKE:?}/net/$2"; echo "$*" >> "$FAKE/iwlog" ;;
+"dev "*" set freq "*) echo "$*" >> "$FAKE/iwlog" ;;
+esac
+exit 0
+X
+# ip: logs "link set dev X up|down" (the monitor path); succeeds
+cat > "$T/bin/ip" <<'X'
+#!/bin/sh
+echo "$*" >> "$FAKE/iplog"
 exit 0
 X
 chmod +x "$T/bin/"*
@@ -92,6 +104,8 @@ einfo() { echo "  * $*" >> "$T/out"; }; ewarn() { echo "  ! $*" >> "$T/out"; }
 eerror() { echo "  E $*" >> "$T/out"; }
 # shellcheck disable=SC1091
 . "$here/../src/init.d/gt-be98-wifi"
+# busybox sh runs its ip applet before PATH: the fake as a function
+ip() { "$T/bin/ip" "$@"; }
 br_create() { return 0; }; vlan_attach() { return 0; }
 vlan_prune() { :; }; br_prune() { :; }; isolate_ports() { :; }
 ap_override() { :; }	# no web UI file: the settings below
@@ -294,6 +308,46 @@ rm -f "$T/now"; echo '6 09:00' > "$T/now.x"; apply
 check "schedule, clock not synchronised: every network runs, warned" "0 - net 2 on yes" \
 	"$rc -$cmds $(cat "$G/sched") $(grep -q 'schedules are not applied' "$T/out" && echo yes || echo no)"
 : > "$T/nets"; apply; WIFI_SCHED=/nonexistent
+
+# 16. a monitor radio: hostapd releases it, its primary goes down, <dev>mon
+# is created and tuned; back to AP: the monitor goes first, then the radio
+WIFI_MAX_BSS=4
+{ net 1 a sae password1 "2g 5gh" 1; } > "$T/nets"
+rm -f "$T/slots" "$T/iwlog" "$T/iplog"; apply
+check "monitor control: 2g and 5gh run" "0 phy3 bcawl3 phy1 bcawl1" "$rc $(hapd | tr '\n' ' ' | sed 's/ $//')"
+{ printf 'radio=5gh\nmonitor=1\nchannel=149\nwidth=80\n'; net 1 a sae password1 "2g 5gh" 1; } > "$T/nets"
+: > "$T/iplog"; apply
+check "monitor=1: bcawl1 removed from hostapd, nothing else" "0 REMOVE bcawl1 phy3 bcawl3" "$rc $cmds $(hapd)"
+check "monitor=1: primary down, then bcawl1mon created, up, tuned 5745/80/5775" \
+	"link set dev bcawl1 down|link set dev bcawl1mon up|phy phy1 interface add bcawl1mon type monitor|dev bcawl1mon set freq 5745 80 5775" \
+	"$(grep -E 'bcawl1' "$T/iplog" | tr '\n' '|')$(tr '\n' '|' < "$T/iwlog" | sed 's/|$//')"
+check "monitor=1: owned, netdev present" "bcawl1mon yes" "$(cat "$T/run/gt-be98-wifi/monitors") $([ -d "$T/net/bcawl1mon" ] && echo yes || echo no)"
+: > "$T/iwlog"; apply
+check "monitor unchanged: no hostapd command, re-tuned only" "- dev bcawl1mon set freq 5745 80 5775" "-$cmds $(cat "$T/iwlog")"
+{ printf 'radio=5gh\nmonitor=1\nchannel=36\nwidth=20\n'; net 1 a sae password1 "2g 5gh" 1; } > "$T/nets"
+apply
+check "a 5gh channel 5gh does not have: refused, the monitor kept" "1 yes" "$rc $([ -d "$T/net/bcawl1mon" ] && echo yes || echo no)"
+{ printf 'radio=5gh\nmonitor=1\nchannel=100\nwidth=20\n'; net 1 a sae password1 "2g 5gh" 1; } > "$T/nets"
+: > "$T/iwlog"; apply
+check "monitor on 100/20: HT20 form" "dev bcawl1mon set freq 5500 HT20" "$(cat "$T/iwlog")"
+{ net 1 a sae password1 "2g 5gh" 1; } > "$T/nets"
+: > "$T/iwlog"; apply
+check "monitor off: deleted, then bcawl1 back in hostapd" "0 dev bcawl1mon del ADD bss_config=phy1:$G/hostapd-bcawl1.conf no" \
+	"$rc $(cat "$T/iwlog") $cmds $([ -d "$T/net/bcawl1mon" ] && echo yes || echo no)"
+check "monitor off: none owned" "" "$(cat "$T/run/gt-be98-wifi/monitors")"
+# LEDs: led=0 -> $STATE/leds for gt-be98-leds
+{ printf 'radio=2g\nled=0\nradio=6g\nled=0\n'; net 1 a sae password1 "2g 5gh" 1; } > "$T/nets"
+apply
+check "led=0 on 2g and 6g: WIFI_LEDS_OFF in band order" 'WIFI_LEDS_OFF="bcawl3 bcawl2"' "$(grep -v '^#' "$T/run/gt-be98-wifi/leds")"
+{ net 1 a sae password1 "2g 5gh" 1; } > "$T/nets"; apply
+check "led default: none off" 'WIFI_LEDS_OFF=""' "$(grep -v '^#' "$T/run/gt-be98-wifi/leds")"
+# a monitor alone (no BSS anywhere): the process stops, the monitor is made
+{ printf 'radio=5gl\nmonitor=1\n'; printf 'radio=2g\nmonitor=1\n'; net 1 a sae password1 "2g 5gl" 1; } > "$T/nets"
+: > "$T/iwlog"; apply
+check "monitors only: hostapd stopped, two monitors" "0 stop 2" "$rc $(tail -n1 "$T/daemon") $(grep -c 'type monitor' "$T/iwlog")"
+( stop_hostapd ) >> "$T/out" 2>&1
+check "stop: monitors deleted, leds file gone" "0 no" "$(grep -c . "$T/run/gt-be98-wifi/monitors") $([ -f "$T/run/gt-be98-wifi/leds" ] && echo yes || echo no)"
+: > "$T/nets"; apply
 
 if [ $fail = 0 ]; then echo "ALL OK ($n checks)"; else echo "FAILED"; cat "$T/out"; fi
 exit $fail

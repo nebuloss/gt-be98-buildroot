@@ -14,7 +14,8 @@ check() {
 	n=$((n + 1))
 	if [ "$2" = "$3" ]; then echo "ok   $1"; else echo "FAIL $1: want [$2] got [$3]"; fail=1; fi
 }
-export GT_BE98_CONF="$T/conf" GT_BE98_LEDS_CONF="$T/conf" GT_BE98_LEDS="$T/leds" GT_BE98_SYSNET="$T/net"
+export GT_BE98_CONF="$T/conf" GT_BE98_LEDS_CONF="$T/conf" GT_BE98_LEDS="$T/leds" GT_BE98_SYSNET="$T/net" \
+	GT_BE98_WIFI_LEDS="$T/wifi-leds"
 # a LED class device as the kernel shows it; the netdev trigger's files
 # appear once the trigger is set, here from the start
 mkled() {	# name triggers...
@@ -53,6 +54,23 @@ check "LEDS_OFF=1: every LED off, trigger none" "none 0 none 0 none 0" \
 	"$(cat "$T/leds/wlan-2g/trigger") $(cat "$T/leds/wlan-2g/brightness") $(cat "$T/leds/power/trigger") $(cat "$T/leds/power/brightness") $(cat "$T/leds/wan/trigger") $(cat "$T/leds/wan/brightness")"
 printf 'LEDS_OFF=x\nWIFI_LEDS="bcawl3; reboot"\n' > "$T/conf"
 check "malformed settings: LEDS_OFF refused (not off), WIFI_LEDS refused (none)" "0 0" "$(run apply > "$T/out"; echo "$? $(grep -c 'no LED' "$T/out")")"
+# led=0 of a radio in the Wi-Fi network list (gt-be98-wifi's state file)
+# (the fake trigger file keeps only the last word written: fresh LEDs)
+mkled wlan-2g netdev timer default-on; mkled wlan-6g netdev
+: > "$T/conf"; run apply > /dev/null
+printf '# written by gt-be98-wifi\nWIFI_LEDS_OFF="bcawl3"\n' > "$T/wifi-leds"
+echo 1 > "$T/leds/wlan-2g/brightness"
+run apply > "$T/out"; rc=$?
+check "WIFI_LEDS_OFF=bcawl3: its LED off, bcawl2's still on its netdev" "0 none 0 netdev bcawl2 yes" \
+	"$rc $(cat "$T/leds/wlan-2g/trigger") $(cat "$T/leds/wlan-2g/brightness") $(cat "$T/leds/wlan-6g/trigger") $(cat "$T/leds/wlan-6g/device_name") $(grep -q 'wlan-2g: off (bcawl3: led=0' "$T/out" && echo yes || echo no)"
+printf 'WIFI_LEDS_OFF=""\n' > "$T/wifi-leds"
+mkled wlan-2g netdev timer default-on
+run apply > /dev/null
+check "WIFI_LEDS_OFF empty again: bcawl3's LED back on its netdev" "netdev bcawl3" "$(cat "$T/leds/wlan-2g/trigger") $(cat "$T/leds/wlan-2g/device_name")"
+printf 'WIFI_LEDS_OFF="bcawl3; reboot"\n' > "$T/wifi-leds"
+run apply > /dev/null
+check "a malformed WIFI_LEDS_OFF is ignored (LED stays on its netdev)" "netdev" "$(cat "$T/leds/wlan-2g/trigger")"
+rm -f "$T/wifi-leds"
 check "usage: exit 2" 2 "$(run bogus > /dev/null; echo $?)"
 
 if [ $fail = 0 ]; then echo "ALL OK ($n checks)"; else echo "FAILED"; fi
