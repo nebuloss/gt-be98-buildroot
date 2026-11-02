@@ -413,6 +413,19 @@ refuse "one station weighted twice" "$T/r"
 { net 1 a sae password1 2g 1; i=0; while [ $i -lt 65 ]; do printf 'airtime_sta_weight=02:00:5e:00:%02x:%02x 5\n' $((i / 256)) $((i % 256)); i=$((i + 1)); done; } > "$T/r"
 refuse "65 station weights in one network" "$T/r"
 
+# ---- 10b2. OWE: no PMKSA caching (open-wifi ledger FSEC-N2) ----
+{ printf 'network=1\nssid=o\nsecurity=owe\nbands=2g 6g\nvlan=1\n'
+  printf 'network=2\nssid=oo\nsecurity=open-owe\nbands=2g 6g\nvlan=2\n'
+  net 3 s sae password3 "2g 6g" 3; net 4 p psk2 password4 2g 4; } > "$T/ow"
+rm -f "$T/slots"; gen "$T/ow"; check "owe, open-owe, sae, psk2: accepted" 0 $?
+ifo() { awk -v n="$1" -v d="$2" '$1 == "bss" && $5 == n && $2 == d { print $3 }' "$T/o/plan"; }
+check "OWE (2g, 6g) and open-owe on 6 GHz (OWE there): disable_pmksa_caching=1" "yes yes yes" \
+	"$(has "$(ifo 1 bcawl3)" disable_pmksa_caching=1) $(has "$(ifo 1 bcawl2)" disable_pmksa_caching=1) $(has "$(ifo 2 bcawl2)" disable_pmksa_caching=1)"
+check "open-owe on 2.4 GHz (open), SAE, WPA2: no disable_pmksa_caching" "" \
+	"$(grep -l '^disable_pmksa_caching' "$T/o/sec-$(ifo 2 bcawl3)" "$T/o/sec-$(ifo 3 bcawl3)" "$T/o/sec-$(ifo 3 bcawl2)" "$T/o/sec-$(ifo 4 bcawl3)" 2>/dev/null)"
+check "the single-BSS config of an OWE BSS carries it too" 1 "$(grep -c '^disable_pmksa_caching=1$' "$T/o/bss-$(ifo 1 bcawl2).conf")"
+conf_ok "owe pmksa"
+
 # ---- 10c. radio features: HE (ax=), TWT responder (twt=), zero-wait DFS
 # (zwdfs=), monitor (monitor=), LED (led=) ----
 { printf 'radio=2g\nax=1\nradio=5gl\nax=1\nchannel=36\nwidth=80\nradio=5gh\nax=0\nchannel=100\nwidth=40\n'
