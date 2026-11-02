@@ -815,7 +815,14 @@ END {
 			if (s == "open") print "wpa=0" > f
 			else {
 				print "wpa=2" > f; print "rsn_pairwise=CCMP" > f
-				if (s == "owe") { print "wpa_key_mgmt=OWE" > f; print "ieee80211w=2" > f }
+				if (s == "owe") {
+					print "wpa_key_mgmt=OWE" > f; print "ieee80211w=2" > f
+					# no PMKSA caching on OWE: the firmware composes the association
+					# response without a PMKID, so the driver answers a cached OWE
+					# rejoin with status 53 (open-wifi ledger FSEC-N2); every join
+					# runs the full DH exchange instead
+					print "disable_pmksa_caching=1" > f
+				}
 				else if (s == "psk2") print "wpa_key_mgmt=WPA-PSK" > f
 				else if (s == "wpa2-eap") print "wpa_key_mgmt=WPA-EAP" > f
 				else if (s == "wpa2-wpa3-eap") { print "wpa_key_mgmt=WPA-EAP WPA-EAP-SHA256" > f; print "ieee80211w=1" > f }
