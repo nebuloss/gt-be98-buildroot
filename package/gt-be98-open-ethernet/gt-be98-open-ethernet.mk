@@ -7,8 +7,10 @@
 # branch oe-eth-lan-2026-11-02 = console-stall-2026-10-26 (95657d5: netconsole
 # be98pc bootcon handover 0510, panic nbcon flush 0511, Runner netpoll-safe TX
 # lock; PCIe 0906) + the RTL8372 read-only monitor (driver/rtl8372, off by
-# default) and DT patch 0309 (the switch's SMI node at MDIO 29, no reset)
-GT_BE98_OPEN_ETHERNET_VERSION = 11c126b35d270cd0b6a9dee35bacfd057f2fb231
+# default), DT patch 0309 (the switch's SMI node at MDIO 29, no reset) and
+# 0602-0604 (BCM6813 pinctrl: MDC/MDIO on pins 54/55, so the BCM84891L at 21
+# and the switch's SMI answer; rnr3's PHY attach -19 root cause)
+GT_BE98_OPEN_ETHERNET_VERSION = 17c4c624e725353f95adc4b41aad1f32c182aa33
 GT_BE98_OPEN_ETHERNET_SITE = git@github.com:nebuloss/gt-be98-open-ethernet.git
 GT_BE98_OPEN_ETHERNET_SITE_METHOD = git
 GT_BE98_OPEN_ETHERNET_LICENSE = GPL-2.0
