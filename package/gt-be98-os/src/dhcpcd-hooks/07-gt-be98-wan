@@ -1,0 +1,8 @@
+# dhcpcd hook (sourced): IPv6 events of the WAN (gt-be98-wan) rebuild the
+# policy routing of the delegated LANs. Does nothing without WAN_PD_LANS.
+case "$reason" in
+ROUTERADVERT|BOUND6|RENEW6|REBIND6|REBOOT6|INFORM6|DELEGATED6|EXPIRE6|NOCARRIER|CARRIER) ;;
+*) return 0 2>/dev/null || exit 0 ;;
+esac
+[ -x /usr/sbin/gt-be98-wan ] && reason="$reason" interface="$interface" \
+	/usr/sbin/gt-be98-wan hook dhcpcd >/dev/null 2>&1

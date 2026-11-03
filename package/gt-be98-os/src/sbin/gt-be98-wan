@@ -1,0 +1,647 @@
+#!/bin/sh
+# SPDX-License-Identifier: GPL-2.0
+# gt-be98-wan: the WAN (uplink) mode of the box: DHCP (the default, exactly
+# what the OS did before this tool: dhcpcd on untagged rnr0), static IPv4,
+# PPPoE (pppd + its pppoe.so plugin), each optionally on an 802.1Q VLAN of the
+# WAN port, plus DHCPv6 with prefix delegation to routed LANs.
+#
+#   gt-be98-wan check [FILE]       validate a WAN config (default: the active
+#                                  one), print it normalized (never a password)
+#   gt-be98-wan ifname             the WAN netdev: rnr0 | rnr0.<vid> | pppoe-wan
+#   gt-be98-wan dhcpcd-conf        render the dhcpcd config for the active WAN
+#                                  config and print its path (always succeeds:
+#                                  on any error it prints the image's own file)
+#   gt-be98-wan start | stop       bring the WAN mode's own pieces up / down
+#                                  (VLAN device, pppd, nft table, RA, sysctls)
+#   gt-be98-wan apply              stop + start + rebind dhcpcd: apply a change
+#   gt-be98-wan try SECONDS FILE   run FILE as a TRIAL config: applied now,
+#                                  reverted to the saved one after SECONDS
+#                                  unless confirmed (management safety)
+#   gt-be98-wan confirm            keep the trial config (it becomes the saved one)
+#   gt-be98-wan revert             drop the trial config now and re-apply
+#   gt-be98-wan status             key=value state of the WAN
+#   gt-be98-wan hook ...           called by dhcpcd (07-gt-be98-wan) and pppd
+#
+# Config: /etc/gt-be98-wan/wan.conf (0600, written by the web UI through
+# `try`, saved to /jffs), KEY=VALUE, parsed, never sourced. No file = DHCP on
+# rnr0: the tool then changes nothing at all. A trial config lives only in
+# /run/gt-be98-wan/ (never saved), so any reboot during a trial comes back
+# on the saved config: a WAN change can never lock the box out for good.
+#   WAN_PROTO=dhcp|static|pppoe   WAN_PORT=rnr0..rnr3   WAN_VLAN=1..4094
+#   WAN_ADDR=a.b.c.d/p WAN_GW= WAN_DNS="d1 d2"          (static)
+#   PPPOE_USER= PPPOE_PASS= PPPOE_SERVICE= PPPOE_AC= PPPOE_MTU=1492
+#   WAN_MTU=1280..1500 (dhcp/static)   WAN_METRIC=1..9999
+#   WAN_IPV6=0|1   WAN_PD_LANS="brwifi1 br-lan"   WAN_PD_LEN=48..64
+# Settings: /etc/conf.d/gt-be98-wan (paths, IFACE_WAIT, WAN_TABLE6).
+set -u
+PATH=$PATH:/usr/sbin:/usr/bin:/sbin:/bin
+CONF=${GT_BE98_WAN_CONF:-/etc/gt-be98-wan/wan.conf}
+RUN=${GT_BE98_WAN_RUN:-/run/gt-be98-wan}
+SYSNET=${GT_BE98_SYSNET:-/sys/class/net}
+DHCPCD_BASE=${DHCPCD_BASE:-/etc/dhcpcd.conf}
+DHCPCD_PID=${DHCPCD_PID:-/run/dhcpcd/pid}
+RESOLV_DIR=${DHCPCD_RESOLV_DIR:-/run/dhcpcd/resolv.conf}
+RESOLV_CONF=${RESOLV_CONF:-/etc/resolv.conf}
+WIFI_L2=${GT_BE98_WIFI_L2:-/run/gt-be98-wifi/l2.conf}
+WIFI_AP=${GT_BE98_WIFI_AP:-/etc/conf.d/gt-be98-wifi-ap}
+LAN_CONF=${GT_BE98_LAN_CONF:-/etc/conf.d/gt-be98-lan}
+SELF=${GT_BE98_WAN_SELF:-/usr/sbin/gt-be98-wan}
+IFACE_WAIT=${IFACE_WAIT:-20}
+WAN_TABLE6=${WAN_TABLE6:-182}
+PPP_IF=pppoe-wan
+TRIAL=$RUN/wan.trial.conf
+APPLIED=$RUN/applied
+NFT_TABLE=gt_be98_wan
+
+log() { logger -t gt-be98-wan -- "$*" 2>/dev/null; echo "gt-be98-wan: $*" >&2; }
+die() { echo "gt-be98-wan: $*" >&2; exit 1; }
+
+# the config in effect: the trial one while a trial runs, else the saved one
+active_conf() { if [ -f "$TRIAL" ]; then echo "$TRIAL"; else echo "$CONF"; fi; }
+
+# ---- parsing and validation -----------------------------------------------------
+# value of KEY in FILE: the last assignment, one level of quotes removed
+val() {
+	sed -n "s/^[[:space:]]*$1=//p" "$2" 2>/dev/null | tail -n1 |
+		sed 's/[[:space:]]*$//; s/^"\(.*\)"$/\1/; s/^'"'"'\(.*\)'"'"'$/\1/'
+}
+ipv4_ok() {
+	local IFS=. a b c d x
+	set -f; set -- $1; set +f
+	[ $# = 4 ] || return 1
+	for x in "$@"; do
+		case "$x" in ''|*[!0-9]*) return 1 ;; 0?*) return 1 ;; esac
+		[ "$x" -le 255 ] || return 1
+	done
+}
+ipv4_int() { local IFS=.; set -f; set -- $1; set +f; echo $((($1 << 24) + ($2 << 16) + ($3 << 8) + $4)); }
+num_in() { case "$1" in ''|*[!0-9]*|0?*) return 1 ;; esac; [ "$1" -ge "$2" ] && [ "$1" -le "$3" ]; }
+# printable ASCII, no quote, no backslash, 1..128 characters (pppd option strings)
+pppstr_ok() {
+	[ -n "$1" ] && [ ${#1} -le 128 ] || return 1
+	printf '%s' "$1" | LC_ALL=C grep -q '[^ -~]' && return 1
+	case "$1" in *'"'*|*\\*) return 1 ;; esac
+	return 0
+}
+lan_bridge() { local b; b=$(val LAN_BRIDGE "$LAN_CONF"); echo "${b:-br-lan}"; }
+# the Wi-Fi trunk VLANs gt-be98-wifi bridges (netguard's reading of them)
+wifi_trunk_vlans() {
+	local f=/dev/null t
+	[ -f "$WIFI_AP" ] && f=$WIFI_AP
+	[ -f "$WIFI_L2" ] && f=$WIFI_L2
+	t=$(val WIFI_TRUNK "$f"); TRUNK=${t:-rnr0}
+	TRUNK_VLANS=$(val WIFI_VLANS "$f" | tr ' ' '\n' | sed -n 's/^[^:]*://p' | tr '\n' ' ')
+}
+
+# load FILE into W_* (defaults for a missing file or key); 1 + reason if invalid
+load() {
+	local f=$1 v l n=0 lb
+	W_PROTO=$(val WAN_PROTO "$f"); W_PROTO=${W_PROTO:-dhcp}
+	W_PORT=$(val WAN_PORT "$f"); W_PORT=${W_PORT:-rnr0}
+	W_VLAN=$(val WAN_VLAN "$f")
+	W_ADDR=$(val WAN_ADDR "$f"); W_GW=$(val WAN_GW "$f"); W_DNS=$(val WAN_DNS "$f")
+	W_MTU=$(val WAN_MTU "$f"); W_METRIC=$(val WAN_METRIC "$f")
+	P_USER=$(val PPPOE_USER "$f"); P_PASS=$(val PPPOE_PASS "$f")
+	P_SERVICE=$(val PPPOE_SERVICE "$f"); P_AC=$(val PPPOE_AC "$f")
+	P_MTU=$(val PPPOE_MTU "$f"); P_MTU=${P_MTU:-1492}
+	W_IPV6=$(val WAN_IPV6 "$f"); W_IPV6=${W_IPV6:-0}
+	W_PD_LANS=$(val WAN_PD_LANS "$f"); W_PD_LEN=$(val WAN_PD_LEN "$f")
+	case "$W_PROTO" in dhcp|static|pppoe) ;; *) echo "WAN_PROTO '$W_PROTO': dhcp, static or pppoe"; return 1 ;; esac
+	case "$W_PORT" in rnr[0-3]) ;; *) echo "WAN_PORT '$W_PORT': rnr0..rnr3"; return 1 ;; esac
+	if [ -n "$W_VLAN" ]; then
+		num_in "$W_VLAN" 1 4094 || { echo "WAN_VLAN '$W_VLAN': 1..4094"; return 1; }
+		wifi_trunk_vlans
+		if [ "$TRUNK" = "$W_PORT" ]; then
+			for v in $TRUNK_VLANS; do
+				[ "$v" = "$W_VLAN" ] && { echo "WAN_VLAN $W_VLAN is a Wi-Fi network's trunk VLAN on $W_PORT"; return 1; }
+			done
+		fi
+	fi
+	if [ "$W_PROTO" = static ]; then
+		case "$W_ADDR" in */*) ;; *) echo "WAN_ADDR '$W_ADDR': a.b.c.d/prefix"; return 1 ;; esac
+		ipv4_ok "${W_ADDR%/*}" && num_in "${W_ADDR#*/}" 8 32 || { echo "WAN_ADDR '$W_ADDR': a.b.c.d/prefix (8..32)"; return 1; }
+		ipv4_ok "$W_GW" || { echo "WAN_GW '$W_GW': an IPv4 address"; return 1; }
+		[ "$W_GW" != "${W_ADDR%/*}" ] || { echo "WAN_GW is the WAN's own address"; return 1; }
+		l=${W_ADDR#*/}
+		if [ "$l" -lt 31 ]; then
+			v=$(( (0xffffffff << (32 - l)) & 0xffffffff ))
+			[ $(( $(ipv4_int "$W_GW") & v )) = $(( $(ipv4_int "${W_ADDR%/*}") & v )) ] ||
+				{ echo "WAN_GW $W_GW is not in $W_ADDR"; return 1; }
+		fi
+		for v in $W_DNS; do
+			ipv4_ok "$v" || { echo "WAN_DNS '$v': an IPv4 address"; return 1; }
+			n=$((n + 1))
+		done
+		[ $n -le 3 ] || { echo "WAN_DNS: at most 3 servers"; return 1; }
+	else
+		[ -z "$W_ADDR$W_GW$W_DNS" ] || { echo "WAN_ADDR/WAN_GW/WAN_DNS are for WAN_PROTO=static"; return 1; }
+	fi
+	if [ "$W_PROTO" = pppoe ]; then
+		pppstr_ok "$P_USER" || { echo "PPPOE_USER: 1..128 printable characters, no quote or backslash"; return 1; }
+		[ -z "$P_PASS" ] || pppstr_ok "$P_PASS" || { echo "PPPOE_PASS: up to 128 printable characters, no quote or backslash"; return 1; }
+		[ -z "$P_SERVICE" ] || pppstr_ok "$P_SERVICE" || { echo "PPPOE_SERVICE: printable, no quote or backslash"; return 1; }
+		[ -z "$P_AC" ] || pppstr_ok "$P_AC" || { echo "PPPOE_AC: printable, no quote or backslash"; return 1; }
+		num_in "$P_MTU" 1280 1492 || { echo "PPPOE_MTU '$P_MTU': 1280..1492"; return 1; }
+		[ -z "$W_MTU" ] || { echo "WAN_MTU is for dhcp/static (PPPoE: PPPOE_MTU)"; return 1; }
+	else
+		[ -z "$P_USER$P_PASS$P_SERVICE$P_AC" ] || { echo "PPPOE_* keys are for WAN_PROTO=pppoe"; return 1; }
+		[ -z "$W_MTU" ] || num_in "$W_MTU" 1280 1500 || { echo "WAN_MTU '$W_MTU': 1280..1500"; return 1; }
+	fi
+	[ -z "$W_METRIC" ] || num_in "$W_METRIC" 1 9999 || { echo "WAN_METRIC '$W_METRIC': 1..9999"; return 1; }
+	case "$W_IPV6" in 0|1) ;; *) echo "WAN_IPV6 '$W_IPV6': 0 or 1"; return 1 ;; esac
+	if [ "$W_IPV6" = 0 ]; then
+		[ -z "$W_PD_LANS$W_PD_LEN" ] || { echo "WAN_PD_LANS/WAN_PD_LEN need WAN_IPV6=1"; return 1; }
+	fi
+	[ -z "$W_PD_LEN" ] || num_in "$W_PD_LEN" 48 64 || { echo "WAN_PD_LEN '$W_PD_LEN': 48..64"; return 1; }
+	lb=$(lan_bridge); n=0
+	for l in $W_PD_LANS; do
+		case "$l" in
+		brwifi[0-9]|brwifi[0-9][0-9]|brwifi[0-9][0-9][0-9]) ;;
+		bcawl[0-9]|bcawl[0-9]-[0-9]) ;;
+		"$lb") case "$lb" in brwifi*|''|rnr*) echo "WAN_PD_LANS '$l' refused"; return 1 ;; esac ;;
+		*) echo "WAN_PD_LANS '$l': routed LANs only (brwifiN, bcawlN[-k], $lb)"; return 1 ;;
+		esac
+		n=$((n + 1))
+	done
+	[ $n -le 8 ] || { echo "WAN_PD_LANS: at most 8 LANs"; return 1; }
+	# the /64s are numbered 0..n-1 in the delegated prefix: it must hold them
+	if [ -n "$W_PD_LEN" ] && [ $n -gt 0 ] && [ $n -gt $((1 << (64 - W_PD_LEN))) ]; then
+		echo "WAN_PD_LEN /$W_PD_LEN holds $((1 << (64 - W_PD_LEN))) /64, $n LANs listed"; return 1
+	fi
+	W_LOWER=$W_PORT${W_VLAN:+.$W_VLAN}
+	if [ "$W_PROTO" = pppoe ]; then W_IF=$PPP_IF; else W_IF=$W_LOWER; fi
+	return 0
+}
+# load the active config or die with the reason
+load_active() {
+	local r
+	r=$(load "$(active_conf)") || die "$(active_conf): $r"
+	load "$(active_conf)" >/dev/null
+}
+# a config that needs nothing beyond dhcpcd on untagged rnr0: the default
+is_default() {
+	[ "$W_PROTO" = dhcp ] && [ "$W_PORT" = rnr0 ] && [ -z "$W_VLAN$W_MTU$W_METRIC" ] && [ "$W_IPV6" = 0 ]
+}
+
+cmd_check() {
+	local f=${1:-$(active_conf)} r
+	r=$(load "$f") || { echo "gt-be98-wan: $f: $r" >&2; return 1; }
+	load "$f" >/dev/null
+	echo "WAN_PROTO=$W_PROTO"; echo "WAN_PORT=$W_PORT"; echo "WAN_VLAN=$W_VLAN"
+	echo "WAN_ADDR=$W_ADDR"; echo "WAN_GW=$W_GW"; echo "WAN_DNS=\"$W_DNS\""
+	echo "WAN_MTU=$W_MTU"; echo "WAN_METRIC=$W_METRIC"
+	echo "PPPOE_USER=\"$P_USER\""; echo "PPPOE_PASS_SET=$([ -n "$P_PASS" ] && echo 1 || echo 0)"
+	echo "PPPOE_SERVICE=\"$P_SERVICE\""; echo "PPPOE_AC=\"$P_AC\""
+	[ "$W_PROTO" = pppoe ] && echo "PPPOE_MTU=$P_MTU" || echo "PPPOE_MTU="
+	echo "WAN_IPV6=$W_IPV6"; echo "WAN_PD_LANS=\"$W_PD_LANS\""; echo "WAN_PD_LEN=$W_PD_LEN"
+	echo "IFNAME=$W_IF"
+}
+
+# ---- dhcpcd ------------------------------------------------------------------------
+# the netdev dhcpcd runs on for this WAN ("" = none: PPPoE without IPv6)
+dhcpcd_if() {
+	if [ "$W_PROTO" = pppoe ]; then [ "$W_IPV6" = 1 ] && echo "$PPP_IF"; else echo "$W_LOWER"; fi
+}
+# does a dhcpcd pattern list (allow/deny line words) match $1?
+pat_match() {
+	local p n=$1; shift
+	set -f
+	for p in "$@"; do
+		# shellcheck disable=SC2254
+		case "$n" in $p) set +f; return 0 ;; esac
+	done
+	set +f; return 1
+}
+# render the dhcpcd config for the loaded W_* to stdout: the image's file,
+# its allow/deny lines adjusted, plus one block per WAN/LAN interface
+render_dhcpcd() {
+	local dif lans allow deny w i l m sla pd extra
+	is_default && { cat "$DHCPCD_BASE"; return; }
+	dif=$(dhcpcd_if)
+	lans=$W_PD_LANS
+	allow=$(sed -n 's/^allowinterfaces[[:space:]]\{1,\}//p' "$DHCPCD_BASE" | tail -n1)
+	deny=$(sed -n 's/^denyinterfaces[[:space:]]\{1,\}//p' "$DHCPCD_BASE" | tail -n1)
+	extra=
+	for i in $dif $lans; do
+		set -f; pat_match "$i" $allow || extra="$extra $i"; set +f
+	done
+	# a deny pattern wins over allow in dhcpcd: drop the ones that would hide
+	# the WAN or a delegated LAN (the allow list still excludes the others)
+	w=
+	set -f
+	for i in $deny; do
+		m=0
+		# shellcheck disable=SC2254 # $i is a pattern
+		for l in $dif $lans; do case "$l" in $i) m=1 ;; esac; done
+		[ $m = 1 ] || w="$w $i"
+	done
+	set +f
+	sed -e "s/^\(allowinterfaces[[:space:]].*\)$/\1$extra/" \
+	    -e "s/^denyinterfaces[[:space:]].*$/denyinterfaces${w}/" "$DHCPCD_BASE"
+	echo
+	echo "# --- gt-be98-wan: WAN_PROTO=$W_PROTO on $W_LOWER (generated, do not edit) ---"
+	if [ -n "$dif" ]; then
+		echo "interface $dif"
+		[ -n "$W_METRIC" ] && echo "metric $W_METRIC"
+		if [ "$W_PROTO" = static ]; then
+			echo "static ip_address=$W_ADDR"
+			echo "static routers=$W_GW"
+			[ -n "$W_DNS" ] && echo "static domain_name_servers=$W_DNS"
+		fi
+		[ "$W_PROTO" = pppoe ] && echo "ipv6only"
+		if [ "$W_IPV6" = 1 ]; then
+			echo "ipv6rs"
+			echo "ia_na 1"
+			pd="ia_pd 2${W_PD_LEN:+/::/$W_PD_LEN}"
+			sla=0
+			for i in $lans; do pd="$pd $i/$sla/64"; sla=$((sla + 1)); done
+			echo "$pd"
+		fi
+	fi
+	# a delegated LAN gets its /64 from the WAN's lease and nothing else
+	for i in $lans; do
+		printf 'interface %s\nnoipv4\nnoipv6rs\nnodhcp6\n' "$i"
+	done
+}
+cmd_dhcpcd_conf() {
+	local r out=$RUN/dhcpcd.conf
+	if ! r=$(load "$(active_conf)"); then
+		log "$(active_conf): $r: dhcpcd keeps the image's config"
+		echo "$DHCPCD_BASE"; return 0
+	fi
+	load "$(active_conf)" >/dev/null
+	mkdir -p "$RUN" 2>/dev/null
+	if render_dhcpcd > "$out.new" 2>/dev/null && mv -f "$out.new" "$out"; then
+		echo "$out"
+	else
+		rm -f "$out.new"; log "cannot write $out: dhcpcd keeps the image's config"
+		echo "$DHCPCD_BASE"
+	fi
+}
+dhcpcd_running() { [ -f "$DHCPCD_PID" ] && kill -0 "$(cat "$DHCPCD_PID" 2>/dev/null)" 2>/dev/null; }
+# reload dhcpcd's config and rebind the named interfaces that exist
+dhcpcd_rebind() {
+	local i l=
+	dhcpcd_running || return 0
+	for i in "$@"; do
+		[ -n "$i" ] && [ -e "$SYSNET/$i" ] || continue
+		case " $l " in *" $i "*) ;; *) l="$l $i" ;; esac
+	done
+	[ -n "$l" ] || return 0
+	# shellcheck disable=SC2086
+	dhcpcd -n $l >/dev/null 2>&1 || log "dhcpcd -n$l failed"
+}
+
+# ---- pppd --------------------------------------------------------------------------
+# pppd option file for the loaded W_* (0600: it holds the password)
+render_ppp() {
+	local m=${W_METRIC:-4000}
+	cat <<EOF
+# generated by gt-be98-wan (do not edit)
+plugin pppoe.so
+nic-$W_LOWER
+ifname $PPP_IF
+linkname wan
+ipparam wan
+user "$P_USER"
+EOF
+	[ -n "$P_PASS" ] && printf 'password "%s"\n' "$P_PASS"
+	[ -n "$P_SERVICE" ] && printf 'pppoe-service "%s"\n' "$P_SERVICE"
+	[ -n "$P_AC" ] && printf 'pppoe-ac "%s"\n' "$P_AC"
+	cat <<EOF
+noauth
+hide-password
+noipdefault
+defaultroute
+defaultroute-metric $m
+usepeerdns
+mtu $P_MTU
+mru $P_MTU
+persist
+maxfail 0
+holdoff 10
+lcp-echo-interval 20
+lcp-echo-failure 3
+ip-up-script $RUN/ppp-ip-up
+ip-down-script $RUN/ppp-ip-down
+EOF
+	if [ "$W_IPV6" = 1 ]; then echo "+ipv6"; else echo "noipv6"; fi
+}
+ppp_pidfile() { echo "${PPP_RUNDIR:-/run}/ppp-wan.pid"; }
+
+# ---- nftables ---------------------------------------------------------------------
+# table inet gt_be98_wan: MSS clamp on a reduced-MTU WAN, the IPv6 forward
+# filter of the delegated LANs, and the box's own input from a WAN that is
+# not the default one (only replies, ICMP, DHCP client replies)
+render_nft() {
+	local i=$W_IF
+	echo "table inet $NFT_TABLE {}"
+	echo "delete table inet $NFT_TABLE"
+	echo "table inet $NFT_TABLE {"
+	echo "	chain forward {"
+	echo "		type filter hook forward priority filter; policy accept;"
+	if [ "$W_PROTO" = pppoe ] || [ -n "$W_MTU" ]; then
+		echo "		oifname \"$i\" tcp flags syn tcp option maxseg size set rt mtu"
+		echo "		iifname \"$i\" tcp flags syn tcp option maxseg size set rt mtu"
+	fi
+	if [ -n "$W_PD_LANS" ]; then
+		echo "		iifname \"$i\" meta nfproto ipv6 ct state established,related accept"
+		echo "		iifname \"$i\" meta l4proto ipv6-icmp icmpv6 type { destination-unreachable, packet-too-big, time-exceeded, parameter-problem, echo-request } accept"
+		echo "		iifname \"$i\" meta nfproto ipv6 drop"
+	fi
+	echo "	}"
+	if [ "$W_IF" != "$W_PORT" ]; then
+		echo "	chain input {"
+		echo "		type filter hook input priority filter; policy accept;"
+		echo "		iifname \"$i\" ct state established,related accept"
+		echo "		iifname \"$i\" meta l4proto { icmp, ipv6-icmp } accept"
+		echo "		iifname \"$i\" udp dport { 68, 546 } accept"
+		echo "		iifname \"$i\" drop"
+		echo "	}"
+	fi
+	echo "}"
+}
+need_nft() { [ "$W_PROTO" = pppoe ] || [ -n "$W_MTU$W_PD_LANS" ] || [ "$W_IF" != "$W_PORT" ]; }
+
+# ---- RA on the delegated LANs (dnsmasq, RA only: no DHCP, no DNS) -------------------
+render_ra() {
+	local i
+	echo "# generated by gt-be98-wan: router advertisements only on the delegated LANs"
+	echo "port=0"; echo "no-resolv"; echo "no-hosts"; echo "bind-dynamic"
+	echo "enable-ra"; echo "pid-file=$RUN/dnsmasq-ra.pid"
+	for i in $W_PD_LANS; do
+		echo "interface=$i"
+		echo "dhcp-range=::,constructor:$i,ra-only,64,1h"
+	done
+	# RDNSS: the IPv6 servers the WAN handed out, when there are some
+	sed -n 's/^nameserver[[:space:]]\{1,\}\([0-9A-Fa-f:]*:[0-9A-Fa-f:]*\)$/\1/p' "$RESOLV_CONF" 2>/dev/null |
+		head -n2 | while read -r i; do echo "dhcp-option=option6:dns-server,[$i]"; done
+}
+
+# ---- start / stop -------------------------------------------------------------------
+put() { echo "$1=$2" >> "$APPLIED"; }
+got() { sed -n "s/^$1=//p" "$APPLIED" 2>/dev/null | tail -n1; }
+
+cmd_start() {
+	local n=0 r v
+	load_active
+	mkdir -p "$RUN"; chmod 700 "$RUN"
+	[ -f "$APPLIED" ] && cmd_stop
+	: > "$APPLIED"
+	put conf "$(active_conf)"; put ifname "$W_IF"; put proto "$W_PROTO"
+	if is_default; then
+		log "WAN: DHCP on $W_PORT (dhcpcd), nothing else to do"
+		return 0
+	fi
+	while [ ! -e "$SYSNET/$W_PORT" ] && [ $n -lt "$IFACE_WAIT" ]; do sleep 1; n=$((n + 1)); done
+	[ -e "$SYSNET/$W_PORT" ] || { log "$W_PORT: no such interface, WAN not started"; return 1; }
+	ip link set "$W_PORT" up
+	if [ -n "$W_VLAN" ]; then
+		if [ ! -e "$SYSNET/$W_LOWER" ]; then
+			ip link add link "$W_PORT" name "$W_LOWER" type vlan id "$W_VLAN" ||
+				{ log "cannot create $W_LOWER"; return 1; }
+			put vlan "$W_LOWER"
+		fi
+		ip link set "$W_LOWER" up
+	fi
+	if [ -n "$W_MTU" ]; then
+		put mtu "$W_LOWER $(cat "$SYSNET/$W_LOWER/mtu" 2>/dev/null)"
+		ip link set "$W_LOWER" mtu "$W_MTU"
+	fi
+	if need_nft; then
+		render_nft > "$RUN/wan.nft"
+		if nft -c -f "$RUN/wan.nft" && nft -f "$RUN/wan.nft"; then put nft 1
+		else log "wan.nft rejected (no MSS clamp / IPv6 filter / input filter)"; fi
+	fi
+	if [ -n "$W_PD_LANS" ]; then
+		v=$(sysctl -n net.ipv6.conf.all.forwarding 2>/dev/null)
+		put fwd6 "${v:-0}"
+		sysctl -q -w net.ipv6.conf.all.forwarding=1
+		render_ra > "$RUN/dnsmasq-ra.conf"
+		start-stop-daemon --start --exec /usr/sbin/dnsmasq --pidfile "$RUN/dnsmasq-ra.pid" -- \
+			--conf-file="$RUN/dnsmasq-ra.conf" </dev/null >/dev/null 2>&1 9>&- && put ra 1
+	fi
+	if [ "$W_PROTO" = pppoe ]; then
+		# pppd and dnsmasq daemonize: their std fds go to /dev/null so a
+		# caller reading our output (the web UI) is not held open by them;
+		# pppd logs to syslog
+		modprobe -q pppoe 2>/dev/null
+		for r in up down; do
+			printf '#!/bin/sh\nexec %s hook ip-%s "$@"\n' "$SELF" "$r" > "$RUN/ppp-ip-$r"
+			chmod 700 "$RUN/ppp-ip-$r"
+		done
+		( umask 077; render_ppp > "$RUN/pppd.conf" )
+		pppd file "$RUN/pppd.conf" </dev/null >/dev/null 2>&1 9>&- && put pppd 1 || { log "pppd did not start"; return 1; }
+	fi
+	log "WAN: $W_PROTO on $W_LOWER (netdev $W_IF)${W_PD_LANS:+, IPv6 prefix delegation to $W_PD_LANS}"
+	return 0
+}
+
+cmd_stop() {
+	local p v m i
+	[ -f "$APPLIED" ] || return 0
+	if [ "$(got pppd)" = 1 ]; then
+		p=$(head -n1 "$(ppp_pidfile)" 2>/dev/null)
+		[ -n "$p" ] && kill "$p" 2>/dev/null
+		i=0; while [ -n "$p" ] && kill -0 "$p" 2>/dev/null && [ $i -lt 10 ]; do sleep 1; i=$((i + 1)); done
+		[ -n "$p" ] && kill -9 "$p" 2>/dev/null
+		cmd_hook ip-down "$PPP_IF" >/dev/null 2>&1
+	fi
+	if [ "$(got ra)" = 1 ]; then
+		start-stop-daemon --stop --exec /usr/sbin/dnsmasq --pidfile "$RUN/dnsmasq-ra.pid" --retry TERM/5/KILL/2
+		rm -f "$RUN/dnsmasq-ra.pid"
+	fi
+	# forwarding back to what it was (the image's 0 when that was unreadable)
+	v=$(got fwd6); [ -n "$v" ] && sysctl -q -w "net.ipv6.conf.all.forwarding=$v"
+	[ "$(got nft)" = 1 ] && nft delete table inet $NFT_TABLE 2>/dev/null
+	ip -6 rule show 2>/dev/null | sed -n "s/^[0-9]*:.*iif \([^ ]*\) lookup $WAN_TABLE6.*/\1/p" |
+		while read -r i; do ip -6 rule del iif "$i" table "$WAN_TABLE6" 2>/dev/null; done
+	ip -6 route flush table "$WAN_TABLE6" 2>/dev/null
+	m=$(got mtu); [ -n "$m" ] && [ -n "${m#* }" ] && ip link set "${m%% *}" mtu "${m#* }" 2>/dev/null
+	v=$(got vlan); [ -n "$v" ] && ip link del "$v" 2>/dev/null
+	rm -f "$APPLIED"
+	return 0
+}
+
+# the router (gt-be98-router) follows the WAN when it runs
+router_reroute() {
+	[ -f "${ROUTER_APPLIED:-/run/gt-be98-router.applied}" ] || return 0
+	rc-service gt-be98-router reroute >/dev/null 2>&1 &
+}
+
+cmd_apply() {
+	local old new
+	old=$(got ifname)
+	cmd_dhcpcd_conf >/dev/null
+	cmd_stop
+	cmd_start; r=$?
+	load_active
+	new=$(dhcpcd_if)
+	dhcpcd_rebind "$W_PORT" "$new" "$old"
+	router_reroute
+	return $r
+}
+
+# ---- trial / confirm / revert -------------------------------------------------------
+trial_left() {
+	local d now
+	[ -f "$TRIAL" ] && [ -f "$RUN/trial.deadline" ] || { echo 0; return; }
+	d=$(cat "$RUN/trial.deadline"); now=$(cut -d. -f1 /proc/uptime 2>/dev/null || echo 0)
+	[ "$d" -gt "$now" ] 2>/dev/null && echo $((d - now)) || echo 1
+}
+kill_timer() {
+	local p
+	p=$(cat "$RUN/trial.pid" 2>/dev/null)
+	[ -n "$p" ] && kill "$p" 2>/dev/null
+	rm -f "$RUN/trial.pid" "$RUN/trial.deadline"
+}
+cmd_try() {
+	local secs=$1 f=$2 r now
+	num_in "$secs" 30 3600 || die "try: SECONDS 30..3600"
+	[ -f "$f" ] || die "try: no file $f"
+	r=$(load "$f") || die "$f: $r"
+	mkdir -p "$RUN"; chmod 700 "$RUN"
+	[ -f "$TRIAL" ] && kill_timer
+	( umask 077; cp "$f" "$TRIAL.new" ) && mv -f "$TRIAL.new" "$TRIAL" || die "cannot write $TRIAL"
+	now=$(cut -d. -f1 /proc/uptime 2>/dev/null || echo 0)
+	echo $((now + secs)) > "$RUN/trial.deadline"
+	# the timer outlives the caller (the web UI request): own session, no tty,
+	# and not the lock (fd 9), which confirm/revert need
+	if command -v setsid >/dev/null 2>&1; then
+		setsid sh -c "sleep $secs; exec $SELF revert --expired" </dev/null >/dev/null 2>&1 9>&- &
+	else
+		sh -c "sleep $secs; exec $SELF revert --expired" </dev/null >/dev/null 2>&1 9>&- &
+	fi
+	echo $! > "$RUN/trial.pid"
+	log "trial WAN config applied, reverted in ${secs}s unless confirmed"
+	cmd_apply
+}
+cmd_confirm() {
+	[ -f "$TRIAL" ] || die "no trial config to confirm"
+	kill_timer
+	mkdir -p "$(dirname "$CONF")"
+	( umask 077; cp "$TRIAL" "$CONF.new" ) && mv -f "$CONF.new" "$CONF" || die "cannot write $CONF"
+	rm -f "$TRIAL"
+	# the active file name changed (trial -> saved): same content, record it
+	[ -f "$APPLIED" ] && sed -i "s|^conf=.*|conf=$CONF|" "$APPLIED"
+	log "trial WAN config confirmed (saved)"
+}
+cmd_revert() {
+	[ "${1:-}" = --expired ] && rm -f "$RUN/trial.pid"
+	[ -f "$TRIAL" ] || { [ "${1:-}" = --expired ] && return 0; die "no trial config"; }
+	kill_timer
+	rm -f "$TRIAL"
+	log "trial WAN config reverted${1:+ (timer expired)}: back to the saved config"
+	cmd_apply
+}
+
+# ---- status ---------------------------------------------------------------------------
+cmd_status() {
+	local r a
+	if ! r=$(load "$(active_conf)"); then echo "error=$r"; return 1; fi
+	load "$(active_conf)" >/dev/null
+	echo "proto=$W_PROTO"; echo "port=$W_PORT"; echo "vlan=$W_VLAN"
+	echo "lower=$W_LOWER"; echo "ifname=$W_IF"
+	if [ -f "$TRIAL" ]; then echo "config=trial"; elif [ -f "$CONF" ]; then echo "config=saved"; else echo "config=default"; fi
+	echo "trial_left=$(trial_left)"
+	if [ -e "$SYSNET/$W_IF" ]; then
+		a=$(cat "$SYSNET/$W_IF/operstate" 2>/dev/null); echo "link=${a:-unknown}"
+	else
+		echo "link=absent"
+	fi
+	echo "addr4=$(ip -4 -o addr show dev "$W_IF" scope global 2>/dev/null | awk '{print $4; exit}')"
+	echo "gw4=$(ip -4 route show default dev "$W_IF" 2>/dev/null | awk '{for(i=1;i<NF;i++) if($i=="via"){print $(i+1); exit}; if($1=="default"){print "dev"; exit}}')"
+	echo "addr6=$(ip -6 -o addr show dev "$W_IF" scope global 2>/dev/null | awk '{print $4; exit}')"
+	echo "ipv6=$W_IPV6"
+	for a in $W_PD_LANS; do
+		echo "pd6_$a=$(ip -6 -o addr show dev "$a" scope global 2>/dev/null | awk '{print $4; exit}')"
+	done
+	echo "applied=$([ -f "$APPLIED" ] && echo 1 || echo 0)"
+}
+
+# ---- hooks (dhcpcd 07-gt-be98-wan, pppd ip-up/ip-down) ------------------------------
+# rebuild resolv.conf from dhcpcd's per-interface fragments (dhcpcd's own
+# 20-resolv.conf merges every file of that directory too, ours included)
+resolv_rebuild() {
+	local f s srv=
+	{
+		echo "# Generated by gt-be98-wan from $(ls "$RESOLV_DIR" 2>/dev/null | tr '\n' ' ')"
+		sed -n 's/^\(domain\|search\) .*/&/p' "$RESOLV_DIR"/* 2>/dev/null | head -n2
+		for f in "$RESOLV_DIR"/*; do
+			[ -f "$f" ] || continue
+			for s in $(sed -n 's/^nameserver[[:space:]]\{1,\}//p' "$f"); do
+				case " $srv " in *" $s "*) ;; *) srv="$srv $s"; echo "nameserver $s" ;; esac
+			done
+		done
+	} > "$RESOLV_CONF.gt-be98-wan" && mv -f "$RESOLV_CONF.gt-be98-wan" "$RESOLV_CONF"
+	chmod 644 "$RESOLV_CONF" 2>/dev/null
+}
+# IPv6 from the delegated LANs leaves through the WAN's own default route
+# (policy routing by input interface, as gt-be98-router does for IPv4)
+route6() {
+	local gw i
+	ip -6 route flush table "$WAN_TABLE6" 2>/dev/null
+	gw=$(ip -6 route show default dev "$W_IF" 2>/dev/null | sed -n 's/^default via \([0-9a-fA-F:]*\).*/\1/p' | head -n1)
+	if [ -n "$gw" ]; then
+		ip -6 route replace default via "$gw" dev "$W_IF" table "$WAN_TABLE6"
+	elif ip -6 route show default dev "$W_IF" 2>/dev/null | grep -q '^default'; then
+		ip -6 route replace default dev "$W_IF" table "$WAN_TABLE6"
+	else
+		ip -6 route replace unreachable default table "$WAN_TABLE6"
+	fi
+	ip -6 route replace throw fc00::/7 table "$WAN_TABLE6"
+	ip -6 route replace throw fe80::/10 table "$WAN_TABLE6"
+	for i in $W_PD_LANS; do
+		ip -6 rule del iif "$i" table "$WAN_TABLE6" 2>/dev/null
+		ip -6 rule add iif "$i" table "$WAN_TABLE6" priority "$WAN_TABLE6"
+	done
+}
+cmd_hook() {
+	local ev=${1:-} f
+	shift 2>/dev/null
+	case "$ev" in
+	ip-up)	# pppd: IFACE TTY SPEED LOCAL REMOTE IPPARAM; env DNS1 DNS2
+		mkdir -p "$RESOLV_DIR"
+		f=$RESOLV_DIR/$PPP_IF.ppp
+		: > "$f"
+		for s in ${DNS1:-} ${DNS2:-}; do ipv4_ok "$s" && echo "nameserver $s" >> "$f"; done
+		resolv_rebuild
+		log "PPPoE up: ${1:-?} local ${4:-?} peer ${5:-?}"
+		router_reroute ;;
+	ip-down)
+		rm -f "$RESOLV_DIR/$PPP_IF.ppp"
+		[ -d "$RESOLV_DIR" ] && resolv_rebuild
+		log "PPPoE down: ${1:-?}"
+		router_reroute ;;
+	dhcpcd)	# env: reason interface (dhcpcd hook)
+		load "$(active_conf)" >/dev/null 2>&1 || return 0
+		[ "${interface:-}" = "$W_IF" ] || return 0
+		[ -n "$W_PD_LANS" ] || return 0
+		case "${reason:-}" in
+		ROUTERADVERT|BOUND6|RENEW6|REBIND6|REBOOT6|INFORM6|DELEGATED6|EXPIRE6|NOCARRIER|CARRIER) route6 ;;
+		esac ;;
+	*) die "hook: ip-up | ip-down | dhcpcd" ;;
+	esac
+}
+
+# one mutating command at a time (the web UI, the trial timer, the service)
+lock() {
+	mkdir -p "$RUN" 2>/dev/null; chmod 700 "$RUN" 2>/dev/null
+	command -v flock >/dev/null 2>&1 || return 0
+	exec 9>"$RUN/lock" && flock -w 60 9 || die "another gt-be98-wan holds $RUN/lock"
+}
+
+case "${1:-}" in
+check)		shift; cmd_check "$@" ;;
+ifname)		load_active; echo "$W_IF" ;;
+dhcpcd-conf)	cmd_dhcpcd_conf ;;
+start)		lock; cmd_start ;;
+stop)		lock; cmd_stop ;;
+apply)		lock; cmd_apply ;;
+try)		[ $# = 3 ] || die "usage: try SECONDS FILE"; lock; cmd_try "$2" "$3" ;;
+confirm)	lock; cmd_confirm ;;
+revert)		shift; lock; cmd_revert "$@" ;;
+status)		cmd_status ;;
+hook)		shift; cmd_hook "$@" ;;
+*)		sed -n '3,22s/^# \{0,1\}//p' "$0"; exit 2 ;;
+esac
