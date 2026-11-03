@@ -137,10 +137,17 @@ check "bss conf: its own interface=, radio lines, one section" "interface=bcawl3
 	"$(grep -E '^(interface|bss)=' "$T/o/bss-bcawl3-2.conf") $(grep '^hw_mode' "$T/o/bss-bcawl3-2.conf") $(grep -c '^ssid=' "$T/o/bss-bcawl3-2.conf")"
 check "configs 0600" "600" "$(stat -c %a "$T/o/hostapd-bcawl3.conf")"
 conf_ok "3 nets"
-gen "$T/n1" -c; check "country only with -c: none set" "" "$(grep -l country_code "$T"/o/hdr-* | tr '\n' ' ')"
-sed -i '1i country=FR' "$T/n1"
-gen "$T/n1" -c; check "-c + country: 2.4 d, 5 d+h" "country_code=FR ieee80211d=1 | country_code=FR ieee80211d=1 ieee80211h=1" \
+gen "$T/n1"; check "no country_code without -c (no regdb), even by default" "" "$(grep -l country_code "$T"/o/hdr-* | tr '\n' ' ')"
+# owner D20: a list without country= is FR
+gen "$T/n1" -c; check "no country= + -c: FR (default): 2.4 d, 5 d+h" "country_code=FR ieee80211d=1 | country_code=FR ieee80211d=1 ieee80211h=1" \
 	"$(grep -E '^(country_code|ieee80211[dh])' "$T/o/hdr-bcawl3" | tr '\n' ' ')| $(grep -E '^(country_code|ieee80211[dh])' "$T/o/hdr-bcawl0" | tr '\n' ' ' | sed 's/ $//')"
+check "the default reaches every radio (4 x country_code=FR)" 4 "$(grep -l '^country_code=FR$' "$T"/o/hdr-* | wc -l | tr -d ' ')"
+conf_ok "country default"
+sed '1i country=DE' "$T/n1" > "$T/n1de"
+gen "$T/n1de" -c; check "explicit country=DE stays DE (no FR anywhere)" "4 0" \
+	"$(grep -l '^country_code=DE$' "$T"/o/hdr-* | wc -l | tr -d ' ') $(grep -l '^country_code=FR$' "$T"/o/hdr-* | wc -l | tr -d ' ')"
+sed -i '1i country=FR' "$T/n1"
+gen "$T/n1" -c; check "explicit country=FR: same as the default" 4 "$(grep -l '^country_code=FR$' "$T"/o/hdr-* | wc -l | tr -d ' ')"
 conf_ok "country"
 gen "$T/n1"
 check "slots remembered" "2g 0 30 0
@@ -448,8 +455,11 @@ conf_ok "owe pmksa"
 # ---- 10b3. DFS channels need the country (IEEE 802.11h); soak 1102-1259:
 # 5gh ch100 without a country never started ----
 { printf 'radio=5gh\nchannel=100\nwidth=20\n'; net 1 a sae password1 "5gl 5gh" 1; } > "$T/d0"
-rm -f "$T/slots"; gen "$T/d0" -c; check "5gh ch100, no country: accepted, warned, no ieee80211h" "0 yes no" \
-	"$? $(grep -q '5gh: channel 100 is a DFS (radar) channel and the list has no country=' "$T/err" && echo yes || echo no) $(hdr_has bcawl1 ieee80211h=1)"
+rm -f "$T/slots"; gen "$T/d0" -c; check "5gh ch100, no country= (D20 default FR) + -c: no warning, country_code=FR + 11d + 11h" "0 no yes yes yes" \
+	"$? $(grep -q 'DFS (radar)' "$T/err" && echo yes || echo no) $(hdr_has bcawl1 country_code=FR) $(hdr_has bcawl1 ieee80211d=1) $(hdr_has bcawl1 ieee80211h=1)"
+conf_ok "5gh ch100, default country"
+rm -f "$T/slots"; gen "$T/d0"; check "5gh ch100 without -c (no regdb): warned, no ieee80211h" "0 yes no" \
+	"$? $(grep -q '5gh: channel 100 is a DFS (radar) channel and the regulatory database is not loaded' "$T/err" && echo yes || echo no) $(hdr_has bcawl1 ieee80211h=1)"
 check "5gl ch36 (not DFS): no warning" "no" "$(grep -q '5gl: channel 36 is a DFS' "$T/err" && echo yes || echo no)"
 { printf 'country=DE\nradio=5gh\nchannel=100\nwidth=20\n'; net 1 a sae password1 "5gl 5gh" 1; } > "$T/d1"
 rm -f "$T/slots"; gen "$T/d1" -c; check "5gh ch100 + country=DE + -c: no warning; country_code, 11d, 11h on 5gh" "0 no yes yes yes" \
