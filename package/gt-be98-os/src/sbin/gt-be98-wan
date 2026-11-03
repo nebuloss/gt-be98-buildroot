@@ -419,16 +419,19 @@ cmd_start() {
 		sysctl -q -w net.ipv6.conf.all.forwarding=1
 		render_ra > "$RUN/dnsmasq-ra.conf"
 		start-stop-daemon --start --exec /usr/sbin/dnsmasq --pidfile "$RUN/dnsmasq-ra.pid" -- \
-			--conf-file="$RUN/dnsmasq-ra.conf" 9>&- && put ra 1
+			--conf-file="$RUN/dnsmasq-ra.conf" </dev/null >/dev/null 2>&1 9>&- && put ra 1
 	fi
 	if [ "$W_PROTO" = pppoe ]; then
+		# pppd and dnsmasq daemonize: their std fds go to /dev/null so a
+		# caller reading our output (the web UI) is not held open by them;
+		# pppd logs to syslog
 		modprobe -q pppoe 2>/dev/null
 		for r in up down; do
 			printf '#!/bin/sh\nexec %s hook ip-%s "$@"\n' "$SELF" "$r" > "$RUN/ppp-ip-$r"
 			chmod 700 "$RUN/ppp-ip-$r"
 		done
 		( umask 077; render_ppp > "$RUN/pppd.conf" )
-		pppd file "$RUN/pppd.conf" 9>&- && put pppd 1 || { log "pppd did not start"; return 1; }
+		pppd file "$RUN/pppd.conf" </dev/null >/dev/null 2>&1 9>&- && put pppd 1 || { log "pppd did not start"; return 1; }
 	fi
 	log "WAN: $W_PROTO on $W_LOWER (netdev $W_IF)${W_PD_LANS:+, IPv6 prefix delegation to $W_PD_LANS}"
 	return 0
