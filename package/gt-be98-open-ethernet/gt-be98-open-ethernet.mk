@@ -13,7 +13,8 @@
 # RTL8372 RESET#, GPIO 14 active low, on the switch node: held in reset until
 # rtl8372 binds) and 0703 (a flashless BCM8489x no longer has autoneg off);
 # rtl8372.ko owns the switch's RESET# (the MDIO core resets PHY devices only)
-GT_BE98_OPEN_ETHERNET_VERSION = 3ce4816b90d87b426a2979a7e6803cc6a8b33096
+# console-stall-2026-10-26 2026-11-03 b3ca337 (box-verified: W2 leak watch - per-radio injected-but-unaccounted counter + notice log; on top of 3ce4816)
+GT_BE98_OPEN_ETHERNET_VERSION = b3ca337dadf6dac9c6dbe8cf1920f71c69ca3279
 GT_BE98_OPEN_ETHERNET_SITE = git@github.com:nebuloss/gt-be98-open-ethernet.git
 GT_BE98_OPEN_ETHERNET_SITE_METHOD = git
 GT_BE98_OPEN_ETHERNET_LICENSE = GPL-2.0

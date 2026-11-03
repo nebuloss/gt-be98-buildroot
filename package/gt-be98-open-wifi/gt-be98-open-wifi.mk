@@ -9,7 +9,8 @@
 # main 2026-10-30 71e8f7ce (box-verified 300 cycles: RMDOWN fix A - a remove-time control timeout makes no device access, an unanswered radio-down takes the dead-firmware unwind; on top of 09fbee8b)
 # main 2026-10-30 09fbee8b (box-verified: airtime fairness follows hostapd (fw ATM percentages), bridged Wi-Fi->trunk frames offered to an ABI-3 Runner; on top of 9079dde9)
 #  radio + later station no longer steals a client ring), Multi-AP backhaul map/dwds re-applied per connect)
-GT_BE98_OPEN_WIFI_VERSION = 49d3137a6d441634395208a1aad861df2ad823b7
+# main 2026-11-03 18e96ed2 (box-verified: TX doorbells from a dirty-ring list instead of a full scan per run - 6 GHz Runner-offload CPU ratio 0.52; on top of 49d3137a)
+GT_BE98_OPEN_WIFI_VERSION = 18e96ed2ac15f09077212ae21f6a80b9ba0d96ec
 GT_BE98_OPEN_WIFI_SITE = git@github.com:nebuloss/gt-be98-open-wifi.git
 GT_BE98_OPEN_WIFI_SITE_METHOD = git
 GT_BE98_OPEN_WIFI_LICENSE = GPL-2.0-only
