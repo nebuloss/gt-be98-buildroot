@@ -304,7 +304,9 @@ factory" (remove the key, `--apply`) works after an override.
 
 dhcpcd (manager mode) on the USB lifeline (`eth*`, `usb*`, `enx*`) and on
 `rnr0` only; it picks up `rnr0` when the Runner module loads and a USB NIC
-when it re-enumerates. Nothing is bridged (no loops through cabled ports, no
+when it re-enumerates. The WAN mode (static, PPPoE, a VLAN, DHCPv6
+prefix delegation) is `gt-be98-wan`, below; by default it changes none of
+this. Nothing is bridged (no loops through cabled ports, no
 hairpin), IPv4 forwarding is off, and there is no firewall: sshd accepts
 public keys only (`PasswordAuthentication no`, root has no password). Static
 fallbacks for a bench without a DHCP server: `RNR0_FALLBACK`/`USB_FALLBACK`
@@ -453,6 +455,86 @@ OS side. Nothing here touches the driver.
   config), `test/gt-be98-wifi-service-test.sh` (the order above against a
   fake hostapd), `test/gt-be98-wifi-sta-test.sh` (the helper against fake
   tools). Box arms: `os-sta-arms.sh` (lab, not in git).
+
+### WAN modes (gt-be98-wan)
+
+Design (lane os-wan, 2026-11-03). Default: DHCP on untagged `rnr0` by
+dhcpcd, exactly as before; every other mode is opt-in.
+
+- **Configuration**: `/etc/gt-be98-wan/wan.conf` (0600, KEY=VALUE, parsed
+  never sourced; no file = the default; saved to `/jffs` with the other
+  network state). `WAN_PROTO=dhcp|static|pppoe`, `WAN_PORT=rnr0..rnr3`,
+  `WAN_VLAN=1..4094` (any proto: an 802.1Q sub-interface of the port, e.g.
+  an ISP's VLAN 6 or 835), static `WAN_ADDR=a.b.c.d/p WAN_GW= WAN_DNS=`,
+  `PPPOE_USER PPPOE_PASS PPPOE_SERVICE PPPOE_AC PPPOE_MTU` (1492),
+  `WAN_MTU` (dhcp/static), `WAN_METRIC`, `WAN_IPV6=1` with
+  `WAN_PD_LANS="brwifi1 br-lan"` and `WAN_PD_LEN` (hint). `gt-be98-wan
+  check FILE` validates (a VID that is a Wi-Fi trunk VLAN on the same port,
+  a gateway outside the subnet, PD LANs that are not routed LANs, ... are
+  refused) and never prints the password. The web UI's WAN card writes a
+  candidate and hands it to `gt-be98-wan try`.
+- **Daemons**: dhcpcd stays the only DHCP/static client. `init.d/dhcpcd`
+  starts it on the config `gt-be98-wan dhcpcd-conf` renders into
+  `/run/gt-be98-wan/` (a byte copy of `/etc/dhcpcd.conf` in the default
+  mode, the image's own file on any error): static = a dhcpcd `static`
+  profile, DHCPv6 = `ipv6rs` + `ia_na 1` + `ia_pd 2[/::/len] <lan>/<n>/64`
+  on the WAN netdev, the delegated LANs listed with `noipv4 noipv6rs
+  nodhcp6`. PPPoE = pppd (Buildroot `pppd` 2.5.3) with its `pppoe.so`
+  plugin over the kernel's PPPoE (`CONFIG_PPP=m`, `CONFIG_PPPOE=m`; the
+  other pppd plugins are removed from the image; rp-pppoe is only a
+  server's need): netdev `pppoe-wan`, `persist`, LCP echo 20 s x 3, the
+  options file 0600 in `/run/gt-be98-wan` (password inside), peer DNS
+  merged into `/etc/resolv.conf` through dhcpcd's per-interface fragment
+  directory (`/run/dhcpcd/resolv.conf/pppoe-wan.ppp`). Router
+  advertisements on the delegated LANs: a dnsmasq with `port=0` and
+  `ra-only` constructor ranges (no DHCP, no DNS socket), RDNSS = the WAN's
+  IPv6 servers.
+- **Routes**: the WAN's default route metric: dhcpcd's own (1000 +
+  ifindex) for dhcp/static, 4000 for PPPoE (`WAN_METRIC` overrides): on
+  the bench the management default via untagged `rnr0` keeps winning, so a
+  WAN on a VLAN or PPPoE never takes the box's own traffic. Routed LANs
+  reach the WAN by policy routing: IPv4 through gt-be98-router
+  (`ROUTER_WAN="wan"` follows the WAN netdev: `rnr0`, `rnr0.<vid>` or
+  `pppoe-wan`; a point-to-point default goes into table 180 as `default
+  dev pppoe-wan`; pppd's ip-up/ip-down and dhcpcd's hooks reroute it),
+  IPv6 through table 182 (`ip -6 rule iif <lan>`, default = the WAN's own
+  v6 default, `unreachable` without one; dhcpcd hook `07-gt-be98-wan`).
+  `net.ipv6.conf.all.forwarding=1` only while prefixes are delegated
+  (dhcpcd owns RA processing and sets `accept_ra=0`, so the box's own IPv6
+  routes do not depend on it).
+- **Firewall / NAT**: `table inet gt_be98_wan`: TCP MSS clamped to the
+  route MTU both ways on a PPPoE or reduced-MTU WAN (`tcp option maxseg
+  size set rt mtu`: nft_exthdr + nft_rt, built into nf_tables); from the
+  WAN into the delegated LANs only replies and ICMPv6; the box's own
+  input from a WAN netdev other than the bare port (a VLAN or `pppoe-wan`):
+  replies, ICMP, DHCP client replies only. The bare port gets no input
+  filter (on the bench it is the management path). Masquerade stays where
+  it was: gt-be98-router's `router.nft` (any non-Wi-Fi output) and the web
+  UI's `table ip webui`, whose WAN interface follows the OS's WAN netdev
+  when it is a VLAN or PPPoE of `WAN_IF`.
+- **MTU**: PPPoE MTU/MRU 1492 (8 bytes of PPPoE + PPP header in a 1500
+  frame), MSS clamped as above. `WAN_MTU` (1280..1500) for a dhcp/static
+  WAN that needs less. A VLAN WAN keeps 1500 (the tag is not counted).
+- **Management safety**: `gt-be98-wan try SECONDS FILE` (30..3600) applies a
+  TRIAL config that exists only in `/run/gt-be98-wan` (never saved, so any
+  reboot during a trial comes back on the saved config) and reverts by
+  itself after SECONDS unless `gt-be98-wan confirm` (then it is saved);
+  `revert` drops it at once. A VLAN WAN never touches untagged `rnr0`, a
+  PPPoE WAN on `rnr0` leaves its DHCP lease alone, only a static WAN on
+  the bare port replaces the management lease (bench: never; product:
+  through the trial).
+- **Runner offload**: the flow cache learns routed flows only between
+  Runner ports or bridges over them (open-ethernet `flowcache.c`
+  `fc_dev_candidate`, `fc_l3_resolve_devs` "ingress is not a Runner
+  port"), and the flowtable glue refuses actions it does not parse
+  (`flow_offload.c`: no `FLOW_ACTION_PPPOE_PUSH`). So **PPPoE and VLAN-WAN
+  routed traffic is forwarded by the CPU**; a DHCP/static WAN on the bare
+  port keeps the hardware offload. PPPoE offload needs Runner work (the
+  parser already knows PPP_IP, `parser.c`; the cmdlist would push/pop the
+  8-byte PPPoE header).
+- Tests (offline): `test/gt-be98-wan-test.sh` (dash, bash; fake ip, nft,
+  pppd, dhcpcd, sysctl, start-stop-daemon). Box arms: `wan-arms.sh` (lab,
+  not in git). Not measured on silicon yet.
 
 ### Web UI
 
