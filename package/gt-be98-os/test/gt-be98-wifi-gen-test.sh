@@ -122,8 +122,8 @@ check "6g guest = OWE, PMF required" "yes yes yes no" \
 check "2.4 guest = open" "yes" "$(has bcawl3 wpa=0)"
 check "rnr=1 on 2.4/5, not 6" "yes yes yes no" \
 	"$(has bcawl3 rnr=1) $(has bcawl0-1 rnr=1) $(has bcawl1 rnr=1) $(has bcawl2 rnr=1)"
-check "6 GHz discovery: unsolicited probe responses every 20 TU on 6 GHz only" "yes no no no" \
-	"$(has bcawl2 unsol_bcast_probe_resp_interval=20) $(has bcawl3 unsol_bcast_probe_resp_interval=20) $(has bcawl0-1 unsol_bcast_probe_resp_interval=20) $(has bcawl1 unsol_bcast_probe_resp_interval=20)"
+check "6 GHz discovery on a PSC channel (default 37): probe responses, 6 GHz only" "yes no no no no" \
+	"$(has bcawl2 unsol_bcast_probe_resp_interval=20) $(has bcawl2 fils_discovery_max_interval=20) $(has bcawl3 unsol_bcast_probe_resp_interval=20) $(has bcawl0-1 unsol_bcast_probe_resp_interval=20) $(has bcawl1 unsol_bcast_probe_resp_interval=20)"
 check "home transition: PSK+SAE, PMF optional, H2E+HnP" "yes yes yes" \
 	"$(has bcawl0-1 'wpa_key_mgmt=WPA-PSK SAE') $(has bcawl0-1 ieee80211w=1) $(has bcawl0-1 sae_pwe=2)"
 check "isolate -> ap_isolate=1 (guest only)" "yes no" "$(has bcawl3 ap_isolate=1) $(has bcawl3-1 ap_isolate=1)"
@@ -891,5 +891,12 @@ for a in "busybox awk" mawk gawk; do
 	PATH="$T/bin:$PATH" suite
 done
 [ $n -gt 0 ] || { echo "FAIL: no awk ran"; fail=1; }
+# 6 GHz discovery on a non-PSC channel: FILS discovery (the firmware sends no probe responses there)
+printf 'radio=6g\nchannel=1\nwidth=20\nnetwork=961\nssid=d6s\nsecurity=sae\npassphrase=password1\nbands=6g\nvlan=20\nnetwork=962\nssid=d6o\nsecurity=owe\nbands=6g\nvlan=30\n' > "$T/d6"
+rm -f "$T/slots"; gen "$T/d6"; check "6 GHz ch 1 (non-PSC): accepted" 0 $?
+check "6 GHz ch 1: FILS discovery on both BSSes, no probe responses" "yes yes no no" \
+	"$(has bcawl2 fils_discovery_max_interval=20) $(has bcawl2-1 fils_discovery_max_interval=20) $(has bcawl2 unsol_bcast_probe_resp_interval=20) $(has bcawl2-1 unsol_bcast_probe_resp_interval=20)"
+conf_ok "6 GHz ch 1 FILS discovery"
+
 if [ $fail = 0 ]; then echo "ALL OK ($n checks)"; else echo "FAILED"; fi
 exit $fail
