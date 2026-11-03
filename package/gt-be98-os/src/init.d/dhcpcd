@@ -3,7 +3,7 @@
 # dhcpcd in manager mode on the interfaces /etc/dhcpcd.conf allows (the USB
 # lifeline and rnr0 by default). It picks up interfaces that appear later
 # (USB re-enumeration, rnr0 after the Runner module loads).
-description="DHCP client (USB lifeline, rnr0)"
+description="DHCP client (USB lifeline, rnr0, the WAN of gt-be98-wan)"
 
 command="/sbin/dhcpcd"
 command_args="-q -B ${DHCPCD_OPTS}"
@@ -19,6 +19,14 @@ depend() {
 
 start_pre() {
 	checkpath -d -m 0755 /run/dhcpcd /var/lib/dhcpcd
+	# the WAN mode (gt-be98-wan) renders the config into /run/gt-be98-wan:
+	# a byte copy of /etc/dhcpcd.conf when the WAN is the default (DHCP on
+	# rnr0), else a copy with the WAN's interface blocks, so a WAN change is
+	# applied by `dhcpcd -n`; on any error it answers /etc/dhcpcd.conf
+	local f=/etc/dhcpcd.conf
+	[ -x /usr/sbin/gt-be98-wan ] && f=$(/usr/sbin/gt-be98-wan dhcpcd-conf 2>/dev/null)
+	[ -f "$f" ] || f=/etc/dhcpcd.conf
+	command_args="-q -B -f $f ${DHCPCD_OPTS}"
 }
 
 start_post() {

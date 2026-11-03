@@ -7,6 +7,9 @@
 # the wired LAN's bridge (gt-be98-lan's LAN_BRIDGE, br-lan: the LAN ports,
 # never rnr0, plus any radio whose hostapd config says bridge=br-lan).
 #   $ROUTER_DIR/router.conf   ROUTER_WAN="rnr0" ROUTER_LANS="bcawl3=192.168.83.1/24 ..."
+#                             (ROUTER_WAN="wan": the WAN netdev of gt-be98-wan,
+#                             rnr0 / rnr0.<vid> / pppoe-wan, resolved at each start
+#                             and reroute)
 #   $ROUTER_DIR/router.nft    table ip gt_be98_router (forward + masquerade)
 #   $ROUTER_DIR/dnsmasq.conf  this instance's dnsmasq config
 # Routing: the box often has two default routes (the USB management dongle
@@ -29,7 +32,7 @@ ROUTER_TABLE=${ROUTER_TABLE:-180}
 
 depend() {
 	need gt-be98-wifi
-	after gt-be98-drivers dhcpcd gt-be98-netguard gt-be98-lan
+	after gt-be98-drivers dhcpcd gt-be98-netguard gt-be98-lan gt-be98-wan
 	use logger gt-be98-lan
 }
 
@@ -48,6 +51,10 @@ load_conf() {
 	[ -f "$f" ] || { eerror "no $f (configure router mode in the web UI)"; return 1; }
 	ROUTER_WAN=$(sed -n 's/^ROUTER_WAN="\([A-Za-z0-9_.-]*\)"$/\1/p' "$f" | tail -n1)
 	ROUTER_LANS=$(sed -n 's|^ROUTER_LANS="\([A-Za-z0-9_.=/ -]*\)"$|\1|p' "$f" | tail -n1)
+	if [ "$ROUTER_WAN" = wan ]; then
+		ROUTER_WAN=$(${GT_BE98_WAN:-/usr/sbin/gt-be98-wan} ifname 2>/dev/null) ||
+			{ eerror "router WAN 'wan': gt-be98-wan has no valid WAN config"; return 1; }
+	fi
 	case "$ROUTER_WAN" in
 	''|bcawl*|br*|-*) eerror "router WAN '$ROUTER_WAN' refused"; return 1 ;;
 	esac
@@ -77,6 +84,9 @@ route_table() {
 	ip route flush table "$ROUTER_TABLE" 2>/dev/null
 	if [ -n "$gw" ]; then
 		ip route replace default via "$gw" dev "$ROUTER_WAN" table "$ROUTER_TABLE"
+	elif ip -4 route show default dev "$ROUTER_WAN" | grep -q '^default'; then
+		# a point-to-point WAN (PPPoE: "default dev pppoe-wan"): no gateway
+		ip route replace default dev "$ROUTER_WAN" table "$ROUTER_TABLE"
 	else
 		ewarn "$ROUTER_WAN has no default route yet: Wi-Fi internet unreachable until its lease"
 		ip route replace unreachable default table "$ROUTER_TABLE"
