@@ -57,14 +57,21 @@
 #
 # Network list (hostapd-like: key=value, the value is the rest of the line,
 # never quoted; '#' comment lines; a block starts at network= or radio=):
-#   country=XX                      global, before the first block
+#   country=XX                      global, before the first block; absent:
+#                                   FR (owner D20: the default country).
+#                                   With -c it is written as country_code
+#                                   (+ ieee80211d, and ieee80211h on 5 GHz);
+#                                   hostapd hints it to cfg80211 and the
+#                                   driver puts the firmware in that country
+#                                   at the radio's next start (open-wifi
+#                                   bca_reg.c: E0 locale + abbrev override)
 #   radio=2g|5gl|5gh|6g             radio-wide settings of one radio
 #     enabled=1  channel=N  width=20|40|80|160|320
 #                                   (a 5 GHz DFS channel, 52-144, needs
-#                                   country= and -c: hostapd runs DFS only
-#                                   with ieee80211h, which needs the
-#                                   country; without it a warning, and
-#                                   the radio does not start)
+#                                   -c: hostapd runs DFS only with
+#                                   ieee80211h, which needs the country_code;
+#                                   without -c a warning, and the radio
+#                                   does not start)
 #                                   2g: 20, 40; 5gl/5gh: 20, 40, 80;
 #                                   6g: 20, 40, 80, 160, 320 (HE, op_class
 #                                   131-134; 320 is EHT, op_class 137,
@@ -562,7 +569,7 @@ BEGIN {
 		if (o[0] % 2) { err("-m " t[i] ": a multicast address"); continue }
 		bmac[b] = tolower(kv[2])
 	}
-	nnet = 0; cur = ""; country = ""
+	nnet = 0; cur = ""; country = "FR"	# owner D20: the default country
 	# -T "D HH:MM" (checked by the shell): the time the schedules are read at
 	havenow = (now != "")
 	# -U "band=MHz ...": the frequencies of the associated stations
@@ -786,7 +793,7 @@ END {
 		# 100-140 only) that is every channel. Said loudly; the web UI refuses
 		if ((b == "5gl" || b == "5gh") && rch[b] >= 52 && rch[b] <= 144 && renab[b] != "0" && !rmon[b] && !(ccok && country != "")) {
 			m = 0; for (i = 1; i <= nnet; i++) if ((i, b) in hasb) m++
-			if (m) warn("radio " b ": channel " rch[b] " is a DFS (radar) channel and " (country == "" ? "the list has no country=" : "the regulatory database is not loaded (no -c)") ": hostapd cannot run DFS without a country_code, so the BSSes of this radio will not start")
+			if (m) warn("radio " b ": channel " rch[b] " is a DFS (radar) channel and the regulatory database is not loaded (no -c, so no country_code): hostapd cannot run DFS without a country_code, so the BSSes of this radio will not start")
 		}
 	}
 	if (nerr) exit 1

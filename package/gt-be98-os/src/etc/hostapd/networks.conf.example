@@ -38,11 +38,11 @@
 # instead of vlan= (DHCP/DNS and NAT by the box); a 3-address station cannot
 # be bridged. See the example at the end.
 # This file holds secrets: keep it mode 0600.
-# country= is written only once the regulatory database is loaded.
-# ⚠A 5 GHz DFS channel (52-144) runs only with a country (hostapd needs it
-# for IEEE 802.11h): every channel of the 5gh radio is one (the firmware
-# keeps 100-140), so without country= the 5gh BSSes below do not start.
-#country=XX
+# country= is written only once the regulatory database is loaded; absent,
+# it is FR (the default). A 5 GHz DFS channel (52-144) runs only with the
+# country (hostapd needs it for IEEE 802.11h): every channel of the 5gh
+# radio is one (the firmware keeps 100-140).
+country=FR
 
 radio=2g
 channel=6
