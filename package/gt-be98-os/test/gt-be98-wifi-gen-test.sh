@@ -876,6 +876,39 @@ stref "neither vlan nor routed" "vlan 1..4094 is required (or routed=)" station=
 check "refusals: the slot file untouched" "" "$(cmp "$T/slots" "$T/slots.st" 2>&1)"
 { stab 2g; nl 'network=1|ssid=a|security=sae|passphrase=password1|bands=2g|routed=172.31.0.1/16'; } > "$T/r"
 gen "$T/r"; check "routed 172.31.0.1/16: accepted" "0 routed 1 brwifi1 172.31.0.1/16 0" "$? $(grep '^routed ' "$T/o/plan")"
+# ---- 13. repeater: a 4-address station bridged with the repeated network ----
+check "-F: feature repeater 1" "feature repeater 1" "$(grep '^feature repeater ' "$T/feat")"
+{ stab 5gh ssid=up-link security=sae passphrase=saepassword1 repeater=multiap
+  net 1 a sae password1 "2g 5gl" 1
+  nl 'network=60|ssid=rep|security=sae|passphrase=password6|bands=2g 5gh|repeated=1|isolate=1'; } > "$T/rp1"
+rm -f "$T/slots"; gen "$T/rp1"; check "repeater multiap + repeated network: accepted" 0 $?
+check "repeated: a repeated line (no VLAN, no address), the VLAN network unchanged" "repeated 60 brwifi60 1|net 1 brwifi1 1 0|" \
+	"$(grep -E '^(repeated|net|routed) ' "$T/o/plan" | sort -r | tr '\n' '|')"
+check "repeater: plan line (dev mode bridge)" "repeater bcawl1 multiap brwifi60" "$(grep '^repeater ' "$T/o/plan")"
+check "repeated: its BSSes in its bridge (2g anchor, 5gh slot 1)" "bcawl3-1 brwifi60|bcawl1-1 brwifi60|" \
+	"$(awk '$1 == "bss" && $5 == 60 { print $3, $8 }' "$T/o/plan" | tr '\n' '|')"
+check "repeater multiap: multi_ap_backhaul_sta=1 in the network block" "	multi_ap_backhaul_sta=1" "$(grep 'multi_ap' "$T/o/sta-bcawl1.conf")"
+conf_ok "repeater"
+sta_ok "repeater multiap" "ctrl=/run/wpa_supplicant networks=1 up-link key_mgmt=0x400 pmf=2 sae_pwe=2 psk=- sae_password=12 bssid=- scan_ssid=1"
+# control: 4addr mode = the same plan, no Multi-AP line (the driver's 4addr comes from the service)
+sed 's/^repeater=multiap$/repeater=4addr/' "$T/rp1" > "$T/rp2"
+gen "$T/rp2"; check "repeater 4addr: plan line, no multi_ap line" "0 repeater bcawl1 4addr brwifi60 0" \
+	"$? $(grep '^repeater ' "$T/o/plan") $(grep -c 'multi_ap' "$T/o/sta-bcawl1.conf")"
+# control: repeater=0 (default) prints no repeater line
+{ stab 5gh ssid=up-link security=sae passphrase=saepassword1; net 1 a sae password1 "2g 5gl" 1; } > "$T/rp3"
+gen "$T/rp3"; check "repeater absent: no repeater line, no multi_ap" "0 0 0" "$? $(grep -c '^repeater ' "$T/o/plan") $(grep -c 'multi_ap' "$T/o/sta-bcawl1.conf")"
+# a repeater station with no repeated network rendered: bridge -
+{ stab 5gh ssid=up-link security=sae passphrase=saepassword1 repeater=4addr; net 1 a sae password1 "2g 5gl" 1; } > "$T/rp4"
+gen "$T/rp4"; check "repeater, no repeated network: bridge -" "0 repeater bcawl1 4addr -" "$? $(grep '^repeater ' "$T/o/plan")"
+N6='network=6|ssid=r|security=sae|passphrase=password6|bands=2g|repeated=1'
+stref "repeated without a station" "repeated=1 needs a station= uplink" $(nl "$N6")
+stref "repeated, station repeater=0" "needs the station repeater=4addr or repeater=multiap" station=2g $(nl "$N6")
+stref "repeated and vlan" "repeated=1 excludes vlan= and routed=" station=2g repeater=4addr $(nl "$N6") vlan=7
+stref "repeated and routed" "repeated=1 excludes vlan= and routed=" station=2g repeater=4addr $(nl "$N6") routed=192.168.60.1/24
+stref "two repeated networks" "network 6 is already repeated" station=2g repeater=4addr $(nl "$N6") network=7 ssid=s security=sae passphrase=password7 bands=2g repeated=1
+stref "routed beside a repeater station" "routed= needs the station repeater=0" station=2g repeater=multiap network=1 ssid=a security=sae passphrase=password1 bands=2g routed=192.168.50.1/24
+stref "repeater bad value" "repeater=yes refused (0, 4addr or multiap)" station=2g repeater=yes $(nl "$N1")
+stref "repeated=2" "network 1: repeated=2 refused" station=2g repeater=4addr $(nl "$N1") repeated=2
 }
 
 for a in "busybox awk" mawk gawk; do

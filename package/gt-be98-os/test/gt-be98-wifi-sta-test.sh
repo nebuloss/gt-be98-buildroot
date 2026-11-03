@@ -23,9 +23,29 @@ check() {
 	if [ "$2" = "$3" ]; then echo "ok   $1"; else echo "FAIL $1: want [$2] got [$3]"; fail=1; fi
 }
 mkdir -p "$T/bin"
-for t in ip nft sysctl iw logger rc-service hostapd_cli; do
+for t in nft sysctl logger rc-service hostapd_cli; do
 	printf '#!/bin/sh\necho "%s $*" >> "$FAKE/log"\nexit 0\n' "$t" > "$T/bin/$t"
 done
+# iw: keeps each netdev's 4-address mode (set 4addr on|off) and reports it (info)
+cat > "$T/bin/iw" <<'X'
+#!/bin/sh
+echo "iw $*" >> "$FAKE/log"
+[ "$1 $3 $4" = "dev set 4addr" ] && echo "$5" > "$FAKE/4addr-$2"
+[ "$1 $3" = "dev info" ] && [ "$(cat "$FAKE/4addr-$2" 2>/dev/null)" = on ] && printf '\t4addr: on\n'
+exit 0
+X
+# ip: a bridge port is the netdev's master link (link set dev X master B / nomaster)
+cat > "$T/bin/ip" <<'X'
+#!/bin/sh
+echo "ip $*" >> "$FAKE/log"
+if [ "$1 $2 $3" = "link set dev" ]; then
+	case "$5" in
+	master) mkdir -p "$FAKE/net/$4"; ln -sfn "../$6" "$FAKE/net/$4/master" ;;
+	nomaster) rm -f "$FAKE/net/$4/master" ;;
+	esac
+fi
+exit 0
+X
 # dnsmasq: daemonizes (a sleeper) and writes the pid-file= of its config
 cat > "$T/bin/dnsmasq" <<'X'
 #!/bin/sh
@@ -95,7 +115,8 @@ echo 'STA_WAIT=3' > "$T/confd"
 run up bcawl0 "$T/sta.conf" sum1
 check "up: managed, up, wpa_supplicant -B on bcawl0 with the config" \
 	"0 iw dev bcawl0 set type managed|ip link set dev bcawl0 up|wpa_supplicant -B -i bcawl0 -c $T/sta.conf -P $S/bcawl0.wpa.pid -f $T/logs/wpa_supplicant-bcawl0.log" \
-	"$rc $(log '^(iw|ip link|wpa_supplicant)')"
+	"$rc $(log '^(iw dev bcawl0 set|ip link|wpa_supplicant)')"
+cp "$T/log" "$T/log.first"
 check "up: the DHCP client in its own mount namespace, never through the manager" \
 	"/usr/bin/unshare -- -m /bin/sh -c|mount --bind \"\$1\" /var/run/dhcpcd|-c \"\$3\" -4 \"\$4\"|$S/dhcpcd-bcawl0 $S/bcawl0.dhcpcd.conf" \
 	"$(grep -o '/usr/bin/unshare -- -m /bin/sh -c' "$T/log")|$(grep -o 'mount --bind "$1" /var/run/dhcpcd' "$T/log")|$(grep -o '\-c "$3" -4 "$4"' "$T/log")|$(grep -o "$S/dhcpcd-bcawl0 $S/bcawl0.dhcpcd.conf" "$T/log")"
@@ -199,6 +220,49 @@ run down 'bcawl0;x'
 check "down 'bcawl0;x': refused" 1 "$rc"
 run nonsense
 check "unknown command: usage, rc 2" "2 yes" "$rc $(grep -q 'gt-be98-wifi-sta up DEV' "$T/out" && echo yes || echo no)"
+
+# ---- repeater: 4-address mode before the join, a port of the repeated bridge ----
+mkdir -p "$T/run/gt-be98-wifi/gen"; P="$T/run/gt-be98-wifi/gen/plan"
+echo 'repeater bcawl0 multiap brwifi60' > "$P"
+run repeater bcawl0
+check "repeater: mode and bridge from the plan" "0 multiap brwifi60" "$rc $(cat "$T/out")"
+rm -f "$T/4addr-bcawl0" "$T/net/bcawl0/master"; echo 'STA_WAIT=1' > "$T/confd"
+run up bcawl0 "$T/sta.conf" rs1
+check "up repeater: 4addr on and the bridge port BEFORE wpa_supplicant, once" \
+	"0 iw dev bcawl0 set type managed|iw dev bcawl0 set 4addr on|ip link set dev bcawl0 master brwifi60|ip link set dev bcawl0 up|wpa_supplicant" \
+	"$rc $(log '^(iw dev bcawl0 set|ip link set dev bcawl0|wpa_supplicant)' | sed 's/|wpa_supplicant [^|]*/|wpa_supplicant/')"
+check "up repeater: wpa_supplicant also on the bridge (-b: EAPOL to a bridge port)" "yes" \
+	"$(log '^wpa_supplicant' | grep -q -- '-i bcawl0 -b brwifi60 -c' && echo yes || echo no)"
+check "control: the first (3-address) station started without -b" "1 0" \
+	"$(grep -c '^wpa_supplicant -B -i bcawl0 -c ' "$T/log.first") $(grep -c '^wpa_supplicant .* -b ' "$T/log.first")"
+check "up repeater: no DHCP client (a bridge port is no IP host)" "no" \
+	"$(log 'ssd --start' | grep -q 'dhcp.pid' && echo yes || echo no)"
+run up bcawl0 "$T/sta.conf" rs1
+check "up repeater again: already a port, nothing restarted or re-bridged" "0 |" \
+	"$rc $(log '^wpa_supplicant')|$(log 'master brwifi')"
+# the mode changes under a running station: it rejoins in the new mode
+: > "$P"
+run up bcawl0 "$T/sta.conf" rs2
+check "repeater off under a running station: restarted, detached, 4addr off" "0 yes ip link set dev bcawl0 nomaster|iw dev bcawl0 set 4addr off" \
+	"$rc $(log '^wpa_supplicant' | grep -q . && echo yes || echo no) $(log '(nomaster|4addr off)')"
+check "control: a 3-address station gets its DHCP client again" "yes" \
+	"$(log 'ssd --start' | grep -q 'dhcp.pid' && echo yes || echo no)"
+echo 'repeater bcawl0 4addr brwifi60' > "$P"
+run up bcawl0 "$T/sta.conf" rs3
+check "repeater on under a running station: restarted in 4addr, bridged" "0 yes iw dev bcawl0 set 4addr on|ip link set dev bcawl0 master brwifi60" \
+	"$rc $(log '^wpa_supplicant' | grep -q . && echo yes || echo no) $(log '(4addr on|master brwifi)')"
+echo 'repeater bcawl0 4addr brwifi61' > "$P"
+run up bcawl0 "$T/sta.conf" rs4
+check "repeater bridge missing: reported, the old port left, rc 0" "0 ip link set dev bcawl0 nomaster yes" \
+	"$rc $(log 'nomaster') $(grep -q 'repeater bridge brwifi61 missing' "$T/out" && echo yes || echo no)"
+echo 'repeater bcawl0 4addr -' > "$P"
+run repeater bcawl0
+check "repeater with no repeated network: bridge -" "0 4addr -" "$rc $(cat "$T/out")"
+echo 'repeater bcawl0 4addr brwifi60' > "$P"; run up bcawl0 "$T/sta.conf" rs5
+run down bcawl0
+check "down repeater: detached, 4addr off" "0 ip link set dev bcawl0 nomaster|iw dev bcawl0 set 4addr off" "$rc $(log '(nomaster|4addr)')"
+: > "$P"; run repeater bcawl0
+check "control: no repeater line, exit 1" "1 " "$rc $(cat "$T/out")"
 
 if [ $fail = 0 ]; then echo "ALL OK ($n checks)"; else echo "FAILED"; fi
 exit $fail

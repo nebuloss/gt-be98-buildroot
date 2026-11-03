@@ -123,7 +123,7 @@ eerror() { echo "  E $*" >> "$T/out"; }
 . "$here/../src/init.d/gt-be98-wifi"
 # busybox sh runs its ip applet before PATH: the fake as a function
 ip() { "$T/bin/ip" "$@"; }
-br_create() { return 0; }; vlan_attach() { return 0; }
+br_create() { echo "$1" >> "$T/brlog"; return 0; }; vlan_attach() { return 0; }
 vlan_prune() { :; }; br_prune() { :; }; isolate_ports() { :; }
 ap_override() { :; }	# no web UI file: the settings below
 
@@ -402,6 +402,19 @@ check "routed network: its BSS on bcawl0-2, the routed list, route applied" \
 	"0 phy3 bcawl3 phy0 bcawl0-1 bcawl0-2 brwifi50 192.168.50.1/24 route brwifi50 192.168.50.1/24," \
 	"$rc $(hapd | tr '\n' ' ')$(cat "$T/run/gt-be98-wifi/routed") $(grep '^route' "$T/stalog")"
 check "routed network: no VLAN for its bridge (l2.conf)" "no" "$(grep -q 'brwifi50:' "$T/run/gt-be98-wifi/l2.conf" && echo yes || echo no)"
+# repeater: the station 4-address, the repeated network bridged to it (no VLAN, no route)
+{ printf 'radio=5gl\nchannel=36\nwidth=80\n'; sta; printf 'repeater=multiap\n'; net 1 a sae password1 "2g 5gl" 1
+  printf 'network=60\nssid=rpt\nsecurity=sae\npassphrase=password6\nbands=5gl\nrepeated=1\nisolate=1\n'; } > "$T/nets"
+: > "$T/stalog"; : > "$T/brlog"; apply
+check "repeated network: its bridge created, the repeaters list, nothing routed" \
+	"0 yes bcawl0 brwifi60|" \
+	"$rc $(grep -qx brwifi60 "$T/brlog" && echo yes || echo no) $(cat "$T/run/gt-be98-wifi/repeaters")|$(cat "$T/run/gt-be98-wifi/routed")"
+check "repeated network: no VLAN for its bridge, isolated (l2.conf)" "no yes" \
+	"$(grep -q 'brwifi60:' "$T/run/gt-be98-wifi/l2.conf" && echo yes || echo no) $(grep -q '^WIFI_ISOLATE=".*brwifi60' "$T/run/gt-be98-wifi/l2.conf" && echo yes || echo no)"
+# control: the same station without repeater= has no repeaters line (the network refused: no 4-address uplink)
+{ printf 'radio=5gl\nchannel=36\nwidth=80\n'; sta; net 1 a sae password1 "2g 5gl" 1; } > "$T/nets"
+apply
+check "control: no repeater, the repeaters list empty" "0 " "$rc $(cat "$T/run/gt-be98-wifi/repeaters")"
 # station off: the APs leave the virtual interfaces first, the station goes,
 # the radio netdev is an AP again, the virtual interface is deleted
 { printf 'radio=5gl\nchannel=36\nwidth=80\n'; sta 0; net 1 a sae password1 "2g 5gl" 1; } > "$T/nets"

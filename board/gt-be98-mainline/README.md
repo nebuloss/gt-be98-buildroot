@@ -243,7 +243,7 @@ other bridge, when it is `rnr1`, `rnr2` or `rnr3` and not the Wi-Fi trunk
 port; `rnr0` never is, even listed (the uplink and management port, on the
 owner's LAN: open-ethernet `docs/eth-lan-2026-11-02.md` §3). br-lan holds no
 rnr0 member of any kind, so a LAN jack never shares a segment with the
-uplink. `gt-be98-netguard --selftest` checks the verdicts (15 cases).
+uplink. `gt-be98-netguard --selftest` checks the verdicts (23 cases).
 
 `gt-be98-lan` (NOT enabled by default, owner decision D16) builds the wired
 LAN from `/etc/conf.d/gt-be98-lan`: `LAN_PORTS` (empty by default; `rnr1` =
@@ -443,8 +443,28 @@ OS side. Nothing here touches the driver.
   loads `table ip gt_be98_sta` (forward only routed network <-> station,
   replies back; masquerade out of the station). VLAN networks on the same
   radios stay bridged to their trunk VLANs (they do not reach the uplink).
+- **Repeater (bridged, layer 2; lane repeater 2026-11-03)**: `repeater=4addr`
+  or `repeater=multiap` on the station block and `repeated=1` on ONE network
+  (instead of `vlan=`/`routed=`). The station runs in nl80211 4-address
+  mode, set before wpa_supplicant joins (the driver writes the firmware's
+  `dwds`/`map` rows in the join's core-down window, STA-WDS §29-30;
+  `multiap` also writes `multi_ap_backhaul_sta=1`, so the join needs a
+  Multi-AP backhaul BSS), and `gt-be98-wifi-sta` makes it a port of the
+  repeated network's bridge brwifiN: its clients are on the uplink's LAN
+  (its DHCP, its router). The station then has no DHCP client and no
+  default route (a bridge port is no IP host), and `routed=` is refused
+  beside it. The repeated bridge holds no VLAN and no trunk port (the
+  generator, the service and netguard each refuse one: with a Wi-Fi uplink
+  in it, a trunk VLAN would loop the wired LAN into the uplink's segment).
+  The uplink must accept 4-address frames from a station (hostapd
+  `wds_sta=1`, a Multi-AP backhaul BSS, a Broadcom DWDS AP): the lab's
+  MT7925 cannot (its driver clears `WIPHY_FLAG_4ADDR_AP`/`_STATION`), so
+  this mode is box-verified only once a capable uplink is on the bench
+  (open-wifi `docs/REPEATER-2026-11-03.md`).
 - **netguard / router**: `gt-be98-netguard` detaches a station netdev
-  (`/run/gt-be98-wifi/stations`) from any bridge; `gt-be98-router` refuses
+  (`/run/gt-be98-wifi/stations`) from any bridge, except a repeater
+  (`/run/gt-be98-wifi/repeaters`, `<dev> <bridge>`) in its own repeated
+  bridge, never isolated; `gt-be98-router` refuses
   one as a LAN and leaves forwarding on while routed networks run.
 - Tests (offline, dev-build): `test/gt-be98-wifi-gen-test.sh` (station
   and routed rendering and refusals, every awk; with `WPA_CONFCHECK=` every
