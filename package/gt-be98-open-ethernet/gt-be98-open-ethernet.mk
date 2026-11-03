@@ -14,7 +14,11 @@
 # rtl8372 binds) and 0703 (a flashless BCM8489x no longer has autoneg off);
 # rtl8372.ko owns the switch's RESET# (the MDIO core resets PHY devices only)
 # console-stall-2026-10-26 2026-11-03 b3ca337 (box-verified: W2 leak watch - per-radio injected-but-unaccounted counter + notice log; on top of 3ce4816)
-GT_BE98_OPEN_ETHERNET_VERSION = b3ca337dadf6dac9c6dbe8cf1920f71c69ca3279
+# ⚠ BENCH IMAGE (branch br-mlo-img-2026-11-03): oe-mlo-rc-2026-11-03 = b3ca337 +
+# PCIe 0907 (BCM6813 peer-to-peer inbound windows, exported for the MLO BRIDGE
+# step, inert unless a driver calls them). For MLO arm M4 only: this pin does
+# NOT land on mainline-os until M4 passes on silicon.
+GT_BE98_OPEN_ETHERNET_VERSION = fe4a322c1de2b047730700d2a7c1af2627fb9eef
 GT_BE98_OPEN_ETHERNET_SITE = git@github.com:nebuloss/gt-be98-open-ethernet.git
 GT_BE98_OPEN_ETHERNET_SITE_METHOD = git
 GT_BE98_OPEN_ETHERNET_LICENSE = GPL-2.0
