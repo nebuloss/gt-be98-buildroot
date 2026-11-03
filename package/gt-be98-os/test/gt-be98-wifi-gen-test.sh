@@ -122,6 +122,8 @@ check "6g guest = OWE, PMF required" "yes yes yes no" \
 check "2.4 guest = open" "yes" "$(has bcawl3 wpa=0)"
 check "rnr=1 on 2.4/5, not 6" "yes yes yes no" \
 	"$(has bcawl3 rnr=1) $(has bcawl0-1 rnr=1) $(has bcawl1 rnr=1) $(has bcawl2 rnr=1)"
+check "6 GHz discovery: unsolicited probe responses every 20 TU on 6 GHz only" "yes no no no" \
+	"$(has bcawl2 unsol_bcast_probe_resp_interval=20) $(has bcawl3 unsol_bcast_probe_resp_interval=20) $(has bcawl0-1 unsol_bcast_probe_resp_interval=20) $(has bcawl1 unsol_bcast_probe_resp_interval=20)"
 check "home transition: PSK+SAE, PMF optional, H2E+HnP" "yes yes yes" \
 	"$(has bcawl0-1 'wpa_key_mgmt=WPA-PSK SAE') $(has bcawl0-1 ieee80211w=1) $(has bcawl0-1 sae_pwe=2)"
 check "isolate -> ap_isolate=1 (guest only)" "yes no" "$(has bcawl3 ap_isolate=1) $(has bcawl3-1 ap_isolate=1)"

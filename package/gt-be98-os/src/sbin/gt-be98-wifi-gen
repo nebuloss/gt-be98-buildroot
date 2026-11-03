@@ -1053,6 +1053,18 @@ END {
 				for (aj = 1; aj <= nasw[i]; aj++) print "airtime_sta_weight=" asw[i, aj] > f
 			}
 			if (rnr && b != "6g") print "rnr=1" > f
+			# 6 GHz in-band discovery: an unsolicited broadcast probe response every
+			# 20 TU (802.11ax 26.17.2.3: a 6 GHz AP sends one, or FILS discovery,
+			# at most every 20 TU). Without it a client passive-scanning a non-PSC
+			# channel sees only beacons (100 TU): one scan of 5955 MHz measured
+			# NOTHING on the air (owe6g 1103-1038), and a secondary (a Multiple-BSSID
+			# nontransmitted BSSID, only in the frames of the anchor) stayed unseen for
+			# 40 s while the anchor joined in 2 s (release soak 1103-0254). Radio
+			# scope in the driver (the own template of the firmware, nbr_discovery_cap
+			# 0x20 + fd_prb_rsp_period, open-wifi F-6G-DISC; on air 1027-1506: 273
+			# broadcast probe responses in 8 s); written on every 6 GHz BSS so a
+			# secondary asks what the anchor runs
+			if (b == "6g") print "unsol_bcast_probe_resp_interval=20" > f
 			s = sec[i]
 			if (b == "6g") { if (s == "psk2sae") s = "sae"; else if (s == "open-owe") s = "owe"; else if (s == "wpa2-wpa3-eap") s = "wpa3-eap" }
 			else if (s == "open-owe") s = "open"
