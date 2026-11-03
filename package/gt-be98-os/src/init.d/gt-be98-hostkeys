@@ -8,7 +8,10 @@
 #   - keys already in /etc/ssh (restored from /jffs/mainline-os by
 #     gt-be98-jffs, from /data/etc-overlay by gt-be98-persist, or baked in
 #     by a lab build with SSH_HOSTKEY_DIR): nothing to do;
-#   - a type missing: ssh-keygen -A makes it, then, when /jffs is read-write
+#   - a key missing: ssh-keygen makes exactly the keys the HostKey lines of
+#     /etc/ssh/sshd_config name (not "ssh-keygen -A": OpenSSH 10.5 -A also
+#     makes an mldsa44_ed25519 key that sshd does not serve and /jffs does
+#     not keep, so a new one appeared at every boot), then, when /jffs is read-write
 #     (NAND=rw-jffs, the default), gt-be98-save --local writes the state
 #     (ALLOW_PATHS of /etc/conf.d/gt-be98-jffs holds the host keys) through
 #     the UBI write fence;
@@ -24,18 +27,22 @@ depend() {
 	use logger
 }
 
-TYPES="ed25519 ecdsa rsa"
+# the host key files sshd serves (HostKey lines), e.g. /etc/ssh/ssh_host_ed25519_key
+hostkeys() { awk '$1 == "HostKey" { print $2 }' /etc/ssh/sshd_config; }
 
 missing() {
-	local t m=
-	for t in $TYPES; do
-		[ -s /etc/ssh/ssh_host_${t}_key ] && [ -s /etc/ssh/ssh_host_${t}_key.pub ] || m="$m $t"
+	local k m=
+	for k in $(hostkeys); do
+		[ -s "$k" ] && [ -s "$k.pub" ] || m="$m $k"
 	done
 	echo $m
 }
 
+# ssh_host_<type>_key -> <type>
+keytype() { basename "$1" | sed -n 's/^ssh_host_\(.*\)_key$/\1/p'; }
+
 start() {
-	local m fp
+	local m fp k t
 	m=$(missing)
 	if [ -z "$m" ]; then
 		einfo "SSH host keys present"
@@ -43,11 +50,16 @@ start() {
 	fi
 	ebegin "Generating SSH host keys ($m)"
 	mkdir -p /etc/ssh
-	/usr/bin/ssh-keygen -A >/dev/null
-	eend $? || return 1
-	chmod 0600 /etc/ssh/ssh_host_*_key
+	for k in $m; do
+		t=$(keytype "$k")
+		[ -n "$t" ] || { eend 1 "$k: no key type in the name"; return 1; }
+		rm -f "$k" "$k.pub"
+		/usr/bin/ssh-keygen -q -N '' -t "$t" -f "$k" >/dev/null </dev/null || { eend 1 "ssh-keygen -t $t failed"; return 1; }
+		chmod 0600 "$k"
+	done
+	eend 0
 	m=$(missing)
-	[ -z "$m" ] || { eerror "ssh-keygen -A left$m missing"; return 1; }
+	[ -z "$m" ] || { eerror "still missing:$m"; return 1; }
 	fp=$(/usr/bin/ssh-keygen -l -f /etc/ssh/ssh_host_ed25519_key.pub 2>/dev/null | cut -d' ' -f2)
 	logger -t gt-be98-hostkeys "new SSH host keys generated on the box (ed25519 $fp)"
 	if grep -qE '^ubi0:[^ ]+ /jffs ubifs rw' /proc/mounts; then

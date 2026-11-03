@@ -18,7 +18,17 @@ depend() {
 
 start_pre() {
 	checkpath -d -m 0755 /run/sshd /var/empty
-	/usr/bin/ssh-keygen -A >/dev/null || return 1
+	# only the keys sshd serves (HostKey lines; normally gt-be98-hostkeys has
+	# made them already). Not "ssh-keygen -A": it also makes an unused
+	# mldsa44_ed25519 key, a new one at every boot (it is not kept in /jffs).
+	local k t
+	for k in $(awk '$1 == "HostKey" { print $2 }' /etc/ssh/sshd_config); do
+		[ -s "$k" ] && continue
+		t=$(basename "$k" | sed -n 's/^ssh_host_\(.*\)_key$/\1/p')
+		[ -n "$t" ] || return 1
+		rm -f "$k" "$k.pub"
+		/usr/bin/ssh-keygen -q -N '' -t "$t" -f "$k" >/dev/null </dev/null || return 1
+	done
 	/usr/sbin/sshd -t || return 1
 }
 
