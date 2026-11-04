@@ -16,15 +16,24 @@ depend() {
 	use logger
 }
 
+WATCH_PID=/run/gt-be98-wan/watch.pid
+
 start() {
 	ebegin "WAN mode"
 	export IFACE_WAIT WAN_TABLE6
 	/usr/sbin/gt-be98-wan start
 	eend $?
+	# the trial deadline watcher: a WAN trial (web UI, shell) reverts by
+	# itself even if the process that started it, and its own timer, are gone
+	checkpath -d -m 0700 /run/gt-be98-wan
+	start-stop-daemon --start --background --pidfile "$WATCH_PID" \
+		--exec /usr/sbin/gt-be98-wan -- watch
 }
 
 stop() {
 	ebegin "Stopping the WAN mode"
+	start-stop-daemon --stop --pidfile "$WATCH_PID" --retry TERM/5/KILL/2 2>/dev/null
+	rm -f "$WATCH_PID"
 	/usr/sbin/gt-be98-wan stop
 	eend $?
 }

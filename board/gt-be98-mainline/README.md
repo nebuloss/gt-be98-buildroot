@@ -545,7 +545,13 @@ dhcpcd, exactly as before; every other mode is opt-in.
   TRIAL config that exists only in `/run/gt-be98-wan` (never saved, so any
   reboot during a trial comes back on the saved config) and reverts by
   itself after SECONDS unless `gt-be98-wan confirm` (then it is saved);
-  `revert` drops it at once. A VLAN WAN never touches untagged `rnr0`, a
+  `revert` drops it at once. Two independent enforcers of the deadline:
+  the service's watcher (`gt-be98-wan watch`, started by
+  `init.d/gt-be98-wan`, so no caller is in its ancestry) and a one-shot
+  timer in its own session; the deadline is the trial's token, so neither
+  can revert a later trial. Applying a WAN change rebinds in dhcpcd only
+  the interfaces whose block changed: a VLAN or PPPoE WAN never rebinds
+  untagged `rnr0` (a rebind restarts the interface's DHCP). A VLAN WAN never touches untagged `rnr0`, a
   PPPoE WAN on `rnr0` leaves its DHCP lease alone, only a static WAN on
   the bare port replaces the management lease (bench: never; product:
   through the trial).
