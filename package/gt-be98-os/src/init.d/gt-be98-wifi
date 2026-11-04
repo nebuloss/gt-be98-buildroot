@@ -588,7 +588,7 @@ gen_networks() {
 	# shellcheck disable=SC2086 # $cc: an option or nothing
 	"$WIFI_GEN" -n "$n" -o "$STATE/gen.new" -s "${WIFI_SLOTS:-/etc/hostapd/wifi-slots}" -m "$macs" \
 		-C "$MAX_BSS" -x "${HOSTAPD_CTRL:-$RUNDIR/hostapd}" -R "${WIFI_RNR:-1}" \
-		-K "${WIFI_ANCHOR_KEEP_BSSID:-0}" ${WIFI_RADIO_DEVS:+-d "$WIFI_RADIO_DEVS"} \
+		-K "${WIFI_ANCHOR_KEEP_BSSID:-1}" ${WIFI_RADIO_DEVS:+-d "$WIFI_RADIO_DEVS"} \
 		-X "${WPA_CTRL:-$RUNDIR/wpa_supplicant}" ${up:+-U "$up"} ${now:+-T "$now"} $cc ||
 		{ eerror "$n refused: nothing changed"; rm -rf "$STATE/gen.new"; return 1; }
 	rm -rf "$STATE/gen"

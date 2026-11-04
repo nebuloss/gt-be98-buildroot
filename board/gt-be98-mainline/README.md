@@ -330,7 +330,13 @@ nftables, dnsmasq): no driver internals or module parameters.
   (`/etc/hostapd/wifi-slots`), an explicit `bssid=` per BSS (the
   firmware's mbss8 rule: index = last byte & 7, one per BSS of a radio,
   the radio address's included, all of a radio's secondaries in one
-  block, per-radio locally administered prefix), `bridge=brwifi<id>`, the
+  block, per-radio locally administered prefix; on 6 GHz the secondaries
+  are the first network's nontransmitted BSSIDs, and with
+  `WIFI_ANCHOR_KEEP_BSSID=1` - the default since RC2 - that first network
+  takes a locally administered block of its own, so 6 GHz carries 8
+  networks; ⚠**upgrading to RC2 changes every existing 6 GHz network's
+  BSSID once**; a network's own MAC per band: `bssid.<band>=`),
+  `bridge=brwifi<id>`, the
   6 GHz rules (SAE-H2E, OWE or WPA3-Enterprise, PMF required) and `rnr=1`
   on 2.4/5 GHz; at most `WIFI_MAX_BSS` BSSes per radio, 1..8, unset = the
   count the driver advertises in `iw phy` (`#{ AP } <= N`, the firmware's

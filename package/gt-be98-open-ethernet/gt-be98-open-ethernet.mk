@@ -14,7 +14,10 @@
 # rtl8372 binds) and 0703 (a flashless BCM8489x no longer has autoneg off);
 # rtl8372.ko owns the switch's RESET# (the MDIO core resets PHY devices only)
 # console-stall-2026-10-26 2026-11-03 b3ca337 (box-verified: W2 leak watch - per-radio injected-but-unaccounted counter + notice log; on top of 3ce4816)
-GT_BE98_OPEN_ETHERNET_VERSION = b3ca337dadf6dac9c6dbe8cf1920f71c69ca3279
+# console-stall-2026-10-26 2026-11-04 816dc90 (RUNNER-G2: secondary BSS netdevs join the Runner WLAN radio,
+#  provider ABI 4 attach_bss/detach_bss - pairs with open-wifi e0f00e1a; flowcache: an IPv4/IPv6 L2 entry always
+#  gets the tcp_pure_ack key variant; on top of b3ca337)
+GT_BE98_OPEN_ETHERNET_VERSION = 816dc9086e771927ac3f1be45c99bdb59c67a9fd
 GT_BE98_OPEN_ETHERNET_SITE = git@github.com:nebuloss/gt-be98-open-ethernet.git
 GT_BE98_OPEN_ETHERNET_SITE_METHOD = git
 GT_BE98_OPEN_ETHERNET_LICENSE = GPL-2.0

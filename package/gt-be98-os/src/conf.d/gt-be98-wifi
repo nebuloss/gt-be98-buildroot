@@ -22,9 +22,14 @@ WIFI_MAX_BSS=
 # rnr=1 on the 2.4/5 GHz BSSes (hostapd adds the co-located 6 GHz BSSes to
 # the Reduced Neighbor Report on its own, since all radios share a process)
 WIFI_RNR=1
-# 1: a network promoted to slot 0 (the anchor left the radio) keeps its
-# BSSID; needs a driver that applies a non-default MAC to bsscfg 0
-WIFI_ANCHOR_KEEP_BSSID=0
+# 1 (default since RC2: the driver applies a non-default MAC to bsscfg 0,
+# open-wifi e0f00e1a BSS0-MAC): a network promoted to slot 0 (the anchor
+# left the radio) keeps its BSSID, a network's own MAC on a radio's first
+# network is applied, and the 6 GHz anchor takes a locally administered
+# block of its own (8 networks on 6 GHz). ⚠Existing 6 GHz networks change
+# BSSID once on the upgrade to it (clients re-scan and re-join).
+# 0: the radio's first network always has the radio address (RC1 behaviour)
+WIFI_ANCHOR_KEEP_BSSID=1
 # band -> radio netdev, default "2g=bcawl3 5gl=bcawl0 5gh=bcawl1 6g=bcawl2"
 WIFI_RADIO_DEVS=
 # ready-made hostapd configurations, one per radio (space separated; see
