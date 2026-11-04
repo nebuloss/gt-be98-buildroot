@@ -15,7 +15,7 @@ here=$(cd "$(dirname "$0")" && pwd)
 SRC="$here/../src"
 W="$SRC/sbin/gt-be98-wan"
 T=$(mktemp -d)
-trap 'for f in $(find "$T" -name "*.pid"); do kill "$(cat "$f")" 2>/dev/null; done; rm -rf "$T"' EXIT
+trap 'for f in $(find "$T" -name "*.pid"); do kill "$(head -n1 "$f")" 2>/dev/null; done; [ -n "${wp:-}" ] && kill "$wp" 2>/dev/null; rm -rf "$T"' EXIT
 FAKE=$T/fake; export FAKE
 mkdir -p "$FAKE" "$T/bin" "$T/net/rnr0" "$T/etc" "$T/run" "$T/resolv"
 echo up > "$T/net/rnr0/operstate"; echo 1500 > "$T/net/rnr0/mtu"
@@ -62,7 +62,7 @@ export GT_BE98_WAN_CONF="$T/etc/wan.conf" GT_BE98_WAN_RUN="$T/run" GT_BE98_SYSNE
 	ROUTER_APPLIED="$T/none"
 sleep 1000 & echo $! > "$T/dhcpcd.pid"
 wan() { $SH "$W" "$@"; }
-reset() { rm -rf "$T/run" "$T/etc/wan.conf" "$FAKE/log" "$FAKE"/pppd.* "$T/net/rnr0."*; mkdir -p "$T/run"; : > "$FAKE/log"; }
+reset() { [ -f "$T/run/trial.pid" ] && kill "$(cat "$T/run/trial.pid")" 2>/dev/null; rm -rf "$T/run" "$T/etc/wan.conf" "$FAKE/log" "$FAKE"/pppd.* "$T/net/rnr0."*; mkdir -p "$T/run"; : > "$FAKE/log"; }
 cfg() { printf '%s\n' "$@" > "$T/c.conf"; }
 # rc of check on the config given as lines
 ck() { cfg "$@"; wan check "$T/c.conf" >/dev/null 2>&1; echo $?; }
@@ -244,7 +244,8 @@ wan try 60 "$T/new.conf" 2>/dev/null
 check "try: trial active" "ifname=rnr0.835 config=trial" "$(wan status | grep -E '^(config|ifname)=' | tr '\n' ' ' | sed 's/ $//')"
 check "try: saved config untouched" no "$(yes_no test -f "$T/etc/wan.conf")"
 check "try: timer running" yes "$(yes_no kill -0 "$(cat "$T/run/trial.pid")" 2>/dev/null)"
-check "try: dhcpcd rebound on rnr0 + the VLAN" yes "$(yes_no has "$FAKE/log" "dhcpcd -n rnr0 rnr0.835")"
+check "try: dhcpcd rebinds the new VLAN only" "dhcpcd -n rnr0.835" "$(grep '^dhcpcd -n' "$FAKE/log")"
+check "try: the management port rnr0 is never rebound for a VLAN WAN" no "$(yes_no grep -qE '^dhcpcd -n( .*)? rnr0( |$)' "$FAKE/log")"
 left=$(wan status | sed -n 's/^trial_left=//p')
 check "try: trial_left in 1..60" yes "$(yes_no test "$left" -ge 1 -a "$left" -le 60)"
 tp=$(cat "$T/run/trial.pid")
@@ -262,6 +263,7 @@ check "revert: back on the saved config" "ifname=rnr0.835 config=saved" "$(wan s
 check "revert: pppd gone, VLAN back" yes "$(yes_no has "$FAKE/log" "ip link add link rnr0 name rnr0.835 type vlan id 835")"
 # the timer's own path (what fires after SECONDS)
 wan try 60 "$T/new2.conf" 2>/dev/null
+echo 1 > "$T/run/trial.deadline"	# the deadline has passed
 wan revert --expired 2>/dev/null
 check "expiry: reverted" config=saved "$(wan status | grep '^config=')"
 check "expiry with no trial: rc 0" 0 "$(wan revert --expired >/dev/null 2>&1; echo $?)"
@@ -270,6 +272,77 @@ wan try 60 "$T/new2.conf" 2>/dev/null
 kill "$(cat "$T/run/trial.pid")" 2>/dev/null; wan stop 2>/dev/null
 rm -rf "$T/run"; mkdir -p "$T/run"
 check "reboot mid-trial: saved config" "ifname=rnr0.835 config=saved" "$(wan status | grep -E '^(config|ifname)=' | tr '\n' ' ' | sed 's/ $//')"
+
+# ---- 5b. which interfaces dhcpcd rebinds (only a changed block) --------------
+reset
+printf 'WAN_VLAN=835\n' > "$T/v.conf"
+wan try 60 "$T/v.conf" 2>/dev/null
+: > "$FAKE/log"
+wan revert 2>/dev/null
+check "revert of a VLAN WAN: no dhcpcd rebind at all (rnr0 untouched)" "" "$(grep '^dhcpcd' "$FAKE/log")"
+printf 'WAN_PROTO=static\nWAN_ADDR=192.0.2.10/24\nWAN_GW=192.0.2.1\n' > "$T/s.conf"
+: > "$FAKE/log"
+wan try 60 "$T/s.conf" 2>/dev/null
+check "  control: a static WAN on bare rnr0 rebinds rnr0" "dhcpcd -n rnr0" "$(grep '^dhcpcd -n' "$FAKE/log")"
+: > "$FAKE/log"
+wan revert 2>/dev/null
+check "  control: and its revert rebinds rnr0 again" "dhcpcd -n rnr0" "$(grep '^dhcpcd -n' "$FAKE/log")"
+
+# ---- 5c. the deadline: token, watcher, a timer that outlives its caller ------
+reset
+printf 'WAN_VLAN=835\n' > "$T/v.conf"
+wan try 60 "$T/v.conf" 2>/dev/null
+d=$(cat "$T/run/trial.deadline")
+wan revert --expired 2>/dev/null
+check "revert --expired before the deadline: no-op" config=trial "$(wan status | grep '^config=')"
+echo 1 > "$T/run/trial.deadline"
+wan revert --expired "$d" 2>/dev/null
+check "revert --expired with another trial's token: no-op" config=trial "$(wan status | grep '^config=')"
+wan revert --expired 1 2>/dev/null
+check "  control: this trial's token, deadline passed: reverted" config=default "$(wan status | grep '^config=')"
+# the watcher alone (the trial's own timer killed, as if its caller's session took it)
+wan try 60 "$T/v.conf" 2>/dev/null
+kill "$(cat "$T/run/trial.pid")" 2>/dev/null
+WATCH_INTERVAL=1 $SH "$W" watch </dev/null >/dev/null 2>&1 &
+wp=$!
+sleep 3
+check "watcher: does nothing before the deadline" config=trial "$(wan status | grep '^config=')"
+echo 1 > "$T/run/trial.deadline"
+n2=0; while [ $n2 -lt 10 ] && { [ "$(wan status | grep '^config=')" = config=trial ] || [ -e "$T/net/rnr0.835" ]; }; do sleep 1; n2=$((n2 + 1)); done
+check "watcher: reverts a due trial whose timer is dead" config=default "$(wan status | grep '^config=')"
+check "  ... and its VLAN is gone" no "$(yes_no test -e "$T/net/rnr0.835")"
+kill $wp 2>/dev/null; wait $wp 2>/dev/null
+# the one-shot timer survives the end of its caller's process group (setsid)
+if command -v setsid >/dev/null 2>&1; then
+	printf 'WAN_VLAN=835\n' > "$T/v.conf"
+	setsid $SH -c "$SH '$W' try 30 '$T/v.conf' >/dev/null 2>&1" ; sleep 1
+	tp=$(cat "$T/run/trial.pid"); kill -0 "$tp" 2>/dev/null && pg=$(ps -o pgid= -p "$tp" | tr -d ' ')
+	check "timer: alive after its caller exited, in its own process group" yes "$(yes_no test -n "${pg:-}" -a "${pg:-0}" = "$tp")"
+	wan revert 2>/dev/null
+fi
+
+# ---- 5d. pppd: found by its pid file and by its option file ------------------
+reset
+printf 'WAN_PROTO=pppoe\nPPPOE_USER=u\n' > "$T/etc/wan.conf"
+wan start 2>/dev/null
+pp=$(head -n1 "$T/run/ppp-wan.pid")
+mkdir -p "$T/stray"; printf '#!/bin/sh\nwhile :; do sleep 1; done\n' > "$T/stray/pppd"; chmod +x "$T/stray/pppd"
+"$T/stray/pppd" file "$T/run/pppd.conf" </dev/null >/dev/null 2>&1 & sp=$!
+sleep 1
+rm -f "$T/run/applied"	# a lost record: stop must still find both
+wan stop 2>/dev/null
+check "stop: the recorded pppd is gone" no "$(yes_no kill -0 "$pp" 2>/dev/null)"
+check "stop: a stray pppd on our option file is gone" no "$(yes_no kill -0 "$sp" 2>/dev/null)"
+"$T/stray/pppd" file /elsewhere/pppd.conf </dev/null >/dev/null 2>&1 & op=$!
+sleep 1; wan stop 2>/dev/null
+check "  control: a pppd on another option file is left alone" yes "$(yes_no kill -0 "$op" 2>/dev/null)"
+kill $op 2>/dev/null
+# the default pid-file path is the one the image's pppd writes (PPPD_BIN=<target>/usr/sbin/pppd)
+if [ -n "${PPPD_BIN:-}" ]; then
+	rd=$(strings "$PPPD_BIN" | grep -x '/var/run/pppd\|/run/pppd' | head -n1)
+	td=$(env -u PPP_RUNDIR $SH -c ". /dev/null; sed -n 's/^ppp_pidfile() { echo \"\${PPP_RUNDIR:-\(.*\)}\/ppp-wan.pid\"; }$/\\1/p' '$W'")
+	check "pid dir: the tool's default = the built pppd's runtime dir (/var/run -> /run)" "$rd" "/var$td"
+fi
 
 # ---- 6. pppd hooks: DNS into resolv.conf, out again ---------------------------------------
 reset

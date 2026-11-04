@@ -279,6 +279,11 @@ cmd_dhcpcd_conf() {
 	fi
 }
 dhcpcd_running() { [ -f "$DHCPCD_PID" ] && kill -0 "$(cat "$DHCPCD_PID" 2>/dev/null)" 2>/dev/null; }
+# the interface block of $2 in dhcpcd config file $1 ("" = none)
+dhcpcd_block() {
+	[ -f "$1" ] || return 0
+	awk -v i="$2" '$1 == "interface" { on = ($2 == i) } on' "$1"
+}
 # reload dhcpcd's config and rebind the named interfaces that exist
 dhcpcd_rebind() {
 	local i l=
@@ -327,7 +332,23 @@ ip-down-script $RUN/ppp-ip-down
 EOF
 	if [ "$W_IPV6" = 1 ]; then echo "+ipv6"; else echo "noipv6"; fi
 }
-ppp_pidfile() { echo "${PPP_RUNDIR:-/run}/ppp-wan.pid"; }
+# pppd 2.5 writes ppp-<linkname>.pid in its runtime dir, configure's default
+# ${runstatedir}/pppd = /var/run/pppd (= /run/pppd here; the built binary's
+# strings say /var/run/pppd), NOT /run: the old /run/ppp-wan.pid was never
+# written, so stop never found pppd (a stray pppd after every PPPoE trial)
+ppp_pidfile() { echo "${PPP_RUNDIR:-/run/pppd}/ppp-wan.pid"; }
+# every pppd this tool started: the pid file, plus any process running our
+# option file (a pppd that never wrote one, or one left by an older tool)
+ppp_pids() {
+	local q c
+	{
+		head -n1 "$(ppp_pidfile)" 2>/dev/null
+		for q in /proc/[0-9]*; do
+			c=$(tr '\0' ' ' < "$q/cmdline" 2>/dev/null)
+			case "$c" in *pppd*" file $RUN/pppd.conf"*) echo "${q#/proc/}" ;; esac
+		done
+	} | grep -x '[0-9][0-9]*' | sort -u
+}
 
 # ---- nftables ---------------------------------------------------------------------
 # table inet gt_be98_wan: MSS clamp on a reduced-MTU WAN, the IPv6 forward
@@ -439,14 +460,21 @@ cmd_start() {
 
 cmd_stop() {
 	local p v m i
-	[ -f "$APPLIED" ] || return 0
-	if [ "$(got pppd)" = 1 ]; then
-		p=$(head -n1 "$(ppp_pidfile)" 2>/dev/null)
-		[ -n "$p" ] && kill "$p" 2>/dev/null
-		i=0; while [ -n "$p" ] && kill -0 "$p" 2>/dev/null && [ $i -lt 10 ]; do sleep 1; i=$((i + 1)); done
-		[ -n "$p" ] && kill -9 "$p" 2>/dev/null
+	# our pppd goes whatever APPLIED says (it may predate a lost record)
+	p=$(ppp_pids | tr '\n' ' ')
+	if [ -n "$p" ]; then
+		# shellcheck disable=SC2086
+		kill $p 2>/dev/null
+		i=0; while [ $i -lt 10 ]; do
+			m=; for v in $p; do kill -0 "$v" 2>/dev/null && m="$m $v"; done
+			[ -n "$m" ] || break; sleep 1; i=$((i + 1))
+		done
+		# shellcheck disable=SC2086
+		[ -n "$m" ] && kill -9 $m 2>/dev/null
+		rm -f "$(ppp_pidfile)"
 		cmd_hook ip-down "$PPP_IF" >/dev/null 2>&1
 	fi
+	[ -f "$APPLIED" ] || return 0
 	if [ "$(got ra)" = 1 ]; then
 		start-stop-daemon --stop --exec /usr/sbin/dnsmasq --pidfile "$RUN/dnsmasq-ra.pid" --retry TERM/5/KILL/2
 		rm -f "$RUN/dnsmasq-ra.pid"
@@ -469,15 +497,30 @@ router_reroute() {
 	rc-service gt-be98-router reroute >/dev/null 2>&1 &
 }
 
+# Only the interfaces whose dhcpcd block changed are rebound: `dhcpcd -n IF`
+# runs if_reboot on IF (dhcpcd.c: RECONFIGURE, then the interface restarts),
+# which on the bench dropped and re-added rnr0's management lease for ~5 s
+# at each trial start and revert (wan-arms W1 1104-2125: two 10-ping gaps,
+# rnr0's address order flipped) although a VLAN WAN never changes rnr0's own
+# block. `-n IF` reloads the whole config, so the new allow list comes with it;
+# when nothing changed that exists (a VLAN/PPPoE WAN removed), nothing is
+# rebound: the stale allow entry names an interface this tool just deleted.
 cmd_apply() {
-	local old new
+	local old new i l= o=$RUN/dhcpcd.conf.prev
 	old=$(got ifname)
+	[ -f "$RUN/dhcpcd.conf" ] && cp -f "$RUN/dhcpcd.conf" "$o" 2>/dev/null
 	cmd_dhcpcd_conf >/dev/null
 	cmd_stop
 	cmd_start; r=$?
 	load_active
 	new=$(dhcpcd_if)
-	dhcpcd_rebind "$W_PORT" "$new" "$old"
+	for i in "$W_PORT" "$new" "$old"; do
+		[ -n "$i" ] || continue
+		[ "$(dhcpcd_block "$o" "$i")" = "$(dhcpcd_block "$RUN/dhcpcd.conf" "$i")" ] || l="$l $i"
+	done
+	rm -f "$o"
+	# shellcheck disable=SC2086
+	dhcpcd_rebind $l
 	router_reroute
 	return $r
 }
@@ -496,7 +539,7 @@ kill_timer() {
 	rm -f "$RUN/trial.pid" "$RUN/trial.deadline"
 }
 cmd_try() {
-	local secs=$1 f=$2 r now
+	local secs=$1 f=$2 r now dl
 	num_in "$secs" 30 3600 || die "try: SECONDS 30..3600"
 	[ -f "$f" ] || die "try: no file $f"
 	r=$(load "$f") || die "$f: $r"
@@ -507,10 +550,16 @@ cmd_try() {
 	echo $((now + secs)) > "$RUN/trial.deadline"
 	# the timer outlives the caller (the web UI request): own session, no tty,
 	# and not the lock (fd 9), which confirm/revert need
+	# Two independent enforcers of the deadline: the service's watcher
+	# (`watch`, started by init.d/gt-be98-wan, in the service's own cgroup,
+	# no caller in its ancestry) and this one-shot timer (own session, no tty,
+	# not the lock fd 9), for a box where the service is not running. Either
+	# reverts only THIS trial (the deadline is its token) and only once due.
+	dl=$((now + secs))
 	if command -v setsid >/dev/null 2>&1; then
-		setsid sh -c "sleep $secs; exec $SELF revert --expired" </dev/null >/dev/null 2>&1 9>&- &
+		setsid sh -c "sleep $secs; exec $SELF revert --expired $dl" </dev/null >/dev/null 2>&1 9>&- &
 	else
-		sh -c "sleep $secs; exec $SELF revert --expired" </dev/null >/dev/null 2>&1 9>&- &
+		sh -c "sleep $secs; exec $SELF revert --expired $dl" </dev/null >/dev/null 2>&1 9>&- &
 	fi
 	echo $! > "$RUN/trial.pid"
 	log "trial WAN config applied, reverted in ${secs}s unless confirmed"
@@ -526,13 +575,40 @@ cmd_confirm() {
 	[ -f "$APPLIED" ] && sed -i "s|^conf=.*|conf=$CONF|" "$APPLIED"
 	log "trial WAN config confirmed (saved)"
 }
+# revert [--expired [DEADLINE]]: --expired (the timer, the watcher) acts only
+# when the trial's deadline has passed and, with DEADLINE, only on that trial
 cmd_revert() {
-	[ "${1:-}" = --expired ] && rm -f "$RUN/trial.pid"
-	[ -f "$TRIAL" ] || { [ "${1:-}" = --expired ] && return 0; die "no trial config"; }
+	local d now
+	if [ "${1:-}" = --expired ]; then
+		[ -f "$TRIAL" ] || return 0
+		d=$(cat "$RUN/trial.deadline" 2>/dev/null)
+		[ -z "${2:-}" ] || [ "$2" = "$d" ] || return 0
+		now=$(cut -d. -f1 /proc/uptime 2>/dev/null || echo 0)
+		[ -n "$d" ] && [ "$now" -lt "$d" ] 2>/dev/null && return 0
+		# the timer exec'd into this process: do not kill ourselves; any
+		# other (the watcher got there first) is killed by kill_timer
+		[ "$(cat "$RUN/trial.pid" 2>/dev/null)" = "$$" ] && rm -f "$RUN/trial.pid"
+	fi
+	[ -f "$TRIAL" ] || die "no trial config"
 	kill_timer
 	rm -f "$TRIAL"
 	log "trial WAN config reverted${1:+ (timer expired)}: back to the saved config"
 	cmd_apply
+}
+
+# the service's deadline watcher (init.d/gt-be98-wan starts it in the background)
+cmd_watch() {
+	local d now
+	echo $$ > "$RUN/watch.pid"
+	while :; do
+		sleep "${WATCH_INTERVAL:-5}"
+		[ -f "$TRIAL" ] || continue
+		d=$(cat "$RUN/trial.deadline" 2>/dev/null)
+		now=$(cut -d. -f1 /proc/uptime 2>/dev/null || echo 0)
+		[ -n "$d" ] && [ "$now" -ge "$d" ] 2>/dev/null || continue
+		log "trial deadline passed: the watcher reverts"
+		$SELF revert --expired </dev/null >/dev/null 2>&1
+	done
 }
 
 # ---- status ---------------------------------------------------------------------------
@@ -642,6 +718,7 @@ try)		[ $# = 3 ] || die "usage: try SECONDS FILE"; lock; cmd_try "$2" "$3" ;;
 confirm)	lock; cmd_confirm ;;
 revert)		shift; lock; cmd_revert "$@" ;;
 status)		cmd_status ;;
+watch)		mkdir -p "$RUN"; chmod 700 "$RUN"; cmd_watch ;;
 hook)		shift; cmd_hook "$@" ;;
 *)		sed -n '3,22s/^# \{0,1\}//p' "$0"; exit 2 ;;
 esac
