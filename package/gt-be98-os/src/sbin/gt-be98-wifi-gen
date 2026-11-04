@@ -1053,6 +1053,22 @@ END {
 				for (aj = 1; aj <= nasw[i]; aj++) print "airtime_sta_weight=" asw[i, aj] > f
 			}
 			if (rnr && b != "6g") print "rnr=1" > f
+			# 6 GHz in-band discovery, one frame every 20 TU (802.11ax: a 6 GHz AP
+			# sends unsolicited broadcast probe responses or FILS discovery frames),
+			# so a client need not wait for a 100 TU beacon. Radio scope in the
+			# driver (open-wifi F-6G-DISC: nbr_discovery_cap 0x20 / 0x40 +
+			# fd_prb_rsp_period; the firmware builds the frame). The FIRMWARE starts
+			# the probe-response timer ONLY ON A PSC CHANNEL (channel % 16 == 5:
+			# wlc_ap_start_upr_fd_timer, stock wl.ko 0x083ac404) and FILS discovery
+			# anywhere; measured on air: 273 probe responses in 8 s on ch 37 (one
+			# BSS, 1027-1506), none in 6 s on ch 1 (two BSSes, 1103-1507). So PSC:
+			# probe responses (a passive scan learns every BSS, the Multiple-BSSID
+			# secondaries included), else FILS discovery. Written on every 6 GHz BSS
+			# so a secondary asks what the anchor runs
+			if (b == "6g") {
+				if (ch % 16 == 5) print "unsol_bcast_probe_resp_interval=20" > f
+				else print "fils_discovery_max_interval=20" > f
+			}
 			s = sec[i]
 			if (b == "6g") { if (s == "psk2sae") s = "sae"; else if (s == "open-owe") s = "owe"; else if (s == "wpa2-wpa3-eap") s = "wpa3-eap" }
 			else if (s == "open-owe") s = "open"
