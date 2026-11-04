@@ -14,7 +14,7 @@ GT_BE98_OS_LOCAL_CONF = $(call qstrip,$(BR2_PACKAGE_GT_BE98_OS_LOCAL_CONF))
 
 GT_BE98_OS_SERVICES = gt-be98-watchdog gt-be98-netguard gt-be98-jffs gt-be98-drivers gt-be98-wifi gt-be98-leds \
 	gt-be98-telnet gt-be98-boot-done gt-be98-persist gt-be98-autosave gt-be98-router gt-be98-lan gt-be98-netconsole \
-	gt-be98-hostkeys \
+	gt-be98-hostkeys gt-be98-wan \
 	sshd dhcpcd chronyd \
 	syslogd dnsmasq
 
@@ -29,7 +29,7 @@ define GT_BE98_OS_INSTALL_TARGET_CMDS
 	for f in gt-be98-postcode gt-be98-health gt-be98-wdtd gt-be98-status \
 		gt-be98-macaddr gt-be98-netguard gt-be98-save gt-be98-nandcheck \
 		gt-be98-nandpage gt-be98-autosave gt-be98-wifi-gen gt-be98-wifi-sched \
-		gt-be98-leds gt-be98-wifi-sta; do \
+		gt-be98-leds gt-be98-wifi-sta gt-be98-wan; do \
 		$(INSTALL) -D -m 0755 $(@D)/sbin/$$f $(TARGET_DIR)/usr/sbin/$$f || exit 1; \
 	done
 	for s in $(GT_BE98_OS_SERVICES); do \
@@ -42,6 +42,9 @@ define GT_BE98_OS_INSTALL_TARGET_CMDS
 		$(TARGET_DIR)/lib/dhcpcd/dhcpcd-hooks/05-gt-be98-mac
 	$(INSTALL) -D -m 0644 $(@D)/dhcpcd-hooks/06-gt-be98-router \
 		$(TARGET_DIR)/lib/dhcpcd/dhcpcd-hooks/06-gt-be98-router
+	$(INSTALL) -D -m 0644 $(@D)/dhcpcd-hooks/07-gt-be98-wan \
+		$(TARGET_DIR)/lib/dhcpcd/dhcpcd-hooks/07-gt-be98-wan
+	mkdir -p $(TARGET_DIR)/etc/gt-be98-wan && chmod 0700 $(TARGET_DIR)/etc/gt-be98-wan
 	mkdir -p $(TARGET_DIR)/rom $(TARGET_DIR)/overlay $(TARGET_DIR)/data \
 		$(TARGET_DIR)/etc/ssh/authorized_keys $(TARGET_DIR)/etc/syslog.d
 endef
@@ -60,6 +63,9 @@ define GT_BE98_OS_FINALIZE
 	cd $(GT_BE98_OS_DIR)/etc && find . -type f | while read f; do \
 		$(INSTALL) -D -m 0644 $$f $(TARGET_DIR)/etc/$$f || exit 1; \
 	done
+	# pppd (the WAN's PPPoE): only the pppoe plugin is used
+	if [ -d $(TARGET_DIR)/usr/lib/pppd ]; then \
+		find $(TARGET_DIR)/usr/lib/pppd -name '*.so' ! -name pppoe.so -delete; fi
 	# the bench-only Wi-Fi RE module is never shipped
 	find $(TARGET_DIR)/lib/modules -name bca_barpeek.ko -delete
 	# no NAND writing tools in the image, whatever pulled them in
@@ -85,8 +91,9 @@ define GT_BE98_OS_FINALIZE
 	# gt-be98-netconsole does nothing until /etc/conf.d/gt-be98-netconsole
 	# names a target
 	# gt-be98-leds changes nothing until a LED exists (none yet)
+	# gt-be98-wan does nothing without /etc/gt-be98-wan/wan.conf (DHCP on rnr0)
 	for s in dhcpcd sshd chronyd gt-be98-drivers gt-be98-netconsole gt-be98-autosave \
-		gt-be98-boot-done gt-be98-leds; do \
+		gt-be98-boot-done gt-be98-leds gt-be98-wan; do \
 		ln -sfn /etc/init.d/$$s $(TARGET_DIR)/etc/runlevels/default/$$s; done
 	GT_BE98_LOCAL_CONF="$(GT_BE98_OS_LOCAL_CONF)" TARGET_DIR="$(TARGET_DIR)" \
 		GT_BE98_RELEASE="$(BR2_PACKAGE_GT_BE98_OS_RELEASE)" \

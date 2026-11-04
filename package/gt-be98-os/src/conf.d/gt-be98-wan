@@ -1,0 +1,7 @@
+# /etc/conf.d/gt-be98-wan - settings of the WAN mode service. The WAN config
+# itself is /etc/gt-be98-wan/wan.conf (absent = DHCP on rnr0, the default;
+# written by the web UI's WAN page through `gt-be98-wan try`).
+# seconds to wait for the WAN port at start
+IFACE_WAIT=20
+# IPv6 routing table + ip -6 rule priority of the delegated LANs
+WAN_TABLE6=182

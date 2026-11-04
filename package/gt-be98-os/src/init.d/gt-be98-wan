@@ -1,0 +1,37 @@
+#!/sbin/openrc-run
+# SPDX-License-Identifier: GPL-2.0
+# The WAN mode (gt-be98-wan): static IPv4, PPPoE (pppd), a VLAN of the WAN
+# port, DHCPv6 prefix delegation to routed LANs. With no
+# /etc/gt-be98-wan/wan.conf (the default) it does nothing: the WAN is DHCP
+# on rnr0 by dhcpcd, as before. dhcpcd itself reads the config this tool
+# renders (init.d/dhcpcd start_pre). A trial config (web UI) lives only in
+# /run/gt-be98-wan and reverts by itself unless confirmed.
+description="WAN mode: DHCP (default) / static / PPPoE, optional VLAN, DHCPv6-PD"
+extra_started_commands="reload"
+
+depend() {
+	need localmount
+	after gt-be98-drivers dhcpcd gt-be98-netguard gt-be98-lan
+	before gt-be98-router
+	use logger
+}
+
+start() {
+	ebegin "WAN mode"
+	export IFACE_WAIT WAN_TABLE6
+	/usr/sbin/gt-be98-wan start
+	eend $?
+}
+
+stop() {
+	ebegin "Stopping the WAN mode"
+	/usr/sbin/gt-be98-wan stop
+	eend $?
+}
+
+reload() {
+	ebegin "Applying the WAN config"
+	export IFACE_WAIT WAN_TABLE6
+	/usr/sbin/gt-be98-wan apply
+	eend $?
+}
