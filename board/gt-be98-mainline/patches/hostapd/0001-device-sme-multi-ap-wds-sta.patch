@@ -1,0 +1,153 @@
+hostapd 2.12: device SME (HAVE_AP_SME drivers) — Multi-AP backhaul and wds_sta reach the driver
+
+gt-be98 (lane repeater, 2026-11-04). On a driver with WIPHY_FLAG_HAVE_AP_SME (open-wifi bca_pcie_ipc)
+hostapd 2.12 never runs the own-MLME association handler, so:
+  - no station is ever flagged WLAN_STA_MULTI_AP (check_multi_ap() runs only there), and a backhaul
+    BSS (multi_ap=2, wds_sta=1) never creates its 4-address WDS interface (handle_assoc_cb);
+  - the Multi-AP element is never put in the association response (the firmware builds it from the
+    extra IEs), so a backhaul STA (multi_ap_backhaul_sta=1) disconnects;
+  - the unexpected-4addr / class-3 frame events are never registered (only nl80211_mgmt_subscribe_ap).
+This patch: (1) runs check_multi_ap() in hostapd_notif_assoc() and, for a Multi-AP backhaul STA on a
+backhaul BSS with wds_sta=1, calls hostapd_set_wds_sta() before the 4-way (what handle_assoc_cb does);
+(2) adds the Multi-AP element to the association-response extra IEs when multi_ap is set; (3) registers
+the spurious class-3 frames on the device-SME path too (best effort). check_multi_ap,
+hostapd_eid_multi_ap and hostapd_set_wds_encryption are exported for that. The driver arms the
+firmware's per-client 4-address link from the resulting SET_STATION vlan (open-wifi bca_wds; box arm A0b).
+
+diff -ruN a/src/ap/ap_drv_ops.c b/src/ap/ap_drv_ops.c
+--- a/src/ap/ap_drv_ops.c
++++ b/src/ap/ap_drv_ops.c
+@@ -98,6 +98,18 @@
+ 	pos = hostapd_eid_ext_capab(hapd, pos, false);
+ 	if (add_buf_data(&assocresp, buf, pos - buf) < 0)
+ 		goto fail;
++
++	/* gt-be98 (device SME): the Multi-AP element in the association response. On the
++	 * own-MLME path hostapd writes it into its own response per station; with a
++	 * HAVE_AP_SME driver the firmware builds the response from these extra IEs, so a
++	 * backhaul STA (wpa_supplicant multi_ap_backhaul_sta=1) that finds no element
++	 * disconnects. */
++	if (hapd->conf->multi_ap) {
++		pos = buf;
++		pos = hostapd_eid_multi_ap(hapd, pos, sizeof(buf));
++		if (add_buf_data(&assocresp, buf, pos - buf) < 0)
++			goto fail;
++	}
+ 	pos = hostapd_eid_interworking(hapd, pos);
+ 	pos = hostapd_eid_adv_proto(hapd, pos);
+ 	pos = hostapd_eid_roaming_consortium(hapd, pos);
+diff -ruN a/src/ap/drv_callbacks.c b/src/ap/drv_callbacks.c
+--- a/src/ap/drv_callbacks.c
++++ b/src/ap/drv_callbacks.c
+@@ -556,6 +556,21 @@
+ 
+ 	check_ext_capab(hapd, sta, elems.ext_capab, elems.ext_capab_len);
+ 
++	/* gt-be98 (device SME): the Multi-AP element of the association request. The own-MLME
++	 * path runs check_multi_ap() in its association handler; a HAVE_AP_SME driver reaches
++	 * only this function, so without it no station is ever WLAN_STA_MULTI_AP and a backhaul
++	 * BSS (multi_ap=2) never gets its 4-address WDS interface. */
++	if (hapd->conf->multi_ap) {
++		u16 mst = check_multi_ap(hapd, sta, elems.multi_ap,
++					 elems.multi_ap_len);
++
++		if (mst != WLAN_STATUS_SUCCESS) {
++			status = mst;
++			reason = WLAN_REASON_UNSPECIFIED;
++			goto fail;
++		}
++	}
++
+ #ifdef CONFIG_HS20
+ 	wpabuf_free(sta->hs20_ie);
+ 	if (elems.hs20 && elems.hs20_len > 4) {
+@@ -996,6 +1011,25 @@
+ 	if (updated)
+ 		ap_sta_set_authorized_event(hapd, sta, 1);
+ 
++	/* gt-be98 (device SME): what handle_assoc_cb() does on the own-MLME path — a Multi-AP
++	 * backhaul STA on a backhaul BSS with wds_sta=1 gets its 4-address WDS interface (an
++	 * AP_VLAN, nl80211 SET_STATION vlan), before the 4-way starts. The driver arms the
++	 * firmware's per-client 4-address link from that (open-wifi bca_wds). */
++	if ((sta->flags & WLAN_STA_MULTI_AP) &&
++	    (hapd->conf->multi_ap & BACKHAUL_BSS) && hapd->conf->wds_sta &&
++	    !(sta->flags & WLAN_STA_WPS)) {
++		char ifname_wds[IFNAMSIZ + 1];
++
++		wpa_printf(MSG_DEBUG,
++			   "Enable 4-address WDS mode for STA " MACSTR
++			   " (device SME, Multi-AP backhaul)", MAC2STR(sta->addr));
++		if (!hostapd_set_wds_sta(hapd, ifname_wds, sta->addr, sta->aid,
++					 1)) {
++			sta->flags |= WLAN_STA_WDS;
++			hostapd_set_wds_encryption(hapd, sta, ifname_wds);
++		}
++	}
++
+ 	if (reassoc && (sta->auth_alg == WLAN_AUTH_FT))
+ 		wpa_auth_sm_event(sta->wpa_sm, WPA_ASSOC_FT);
+ #ifdef CONFIG_FILS
+diff -ruN a/src/ap/ieee802_11.c b/src/ap/ieee802_11.c
+--- a/src/ap/ieee802_11.c
++++ b/src/ap/ieee802_11.c
+@@ -96,7 +96,7 @@
+ #endif /* CONFIG_IEEE8021X_AUTH */
+ 
+ 
+-static u8 * hostapd_eid_multi_ap(struct hostapd_data *hapd, u8 *eid, size_t len)
++u8 * hostapd_eid_multi_ap(struct hostapd_data *hapd, u8 *eid, size_t len)
+ {
+ 	struct multi_ap_params multi_ap = { 0 };
+ 
+@@ -4899,7 +4899,7 @@
+ 	return WLAN_STATUS_SUCCESS;
+ }
+ 
+-static u16 check_multi_ap(struct hostapd_data *hapd, struct sta_info *sta,
++u16 check_multi_ap(struct hostapd_data *hapd, struct sta_info *sta,
+ 			  const u8 *multi_ap_ie, size_t multi_ap_len)
+ {
+ 	struct multi_ap_params multi_ap;
+@@ -8359,7 +8359,7 @@
+ }
+ 
+ 
+-static void hostapd_set_wds_encryption(struct hostapd_data *hapd,
++void hostapd_set_wds_encryption(struct hostapd_data *hapd,
+ 				       struct sta_info *sta,
+ 				       char *ifname_wds)
+ {
+diff -ruN a/src/ap/ieee802_11.h b/src/ap/ieee802_11.h
+--- a/src/ap/ieee802_11.h
++++ b/src/ap/ieee802_11.h
+@@ -154,6 +154,13 @@
+ int update_ht_state(struct hostapd_data *hapd, struct sta_info *sta);
+ void ht40_intolerant_add(struct hostapd_iface *iface, struct sta_info *sta);
+ void ht40_intolerant_remove(struct hostapd_iface *iface, struct sta_info *sta);
++/* gt-be98: exported for the device-SME association path (drv_callbacks.c) and the
++ * AP's extra IEs (ap_drv_ops.c): a HAVE_AP_SME driver never runs the own-MLME callers */
++u8 * hostapd_eid_multi_ap(struct hostapd_data *hapd, u8 *eid, size_t len);
++u16 check_multi_ap(struct hostapd_data *hapd, struct sta_info *sta,
++		   const u8 *multi_ap_ie, size_t multi_ap_len);
++void hostapd_set_wds_encryption(struct hostapd_data *hapd,
++				struct sta_info *sta, char *ifname_wds);
+ u16 copy_sta_vht_capab(struct hostapd_data *hapd, struct sta_info *sta,
+ 		       const u8 *vht_capab);
+ u16 copy_sta_vht_oper(struct hostapd_data *hapd, struct sta_info *sta,
+diff -ruN a/src/drivers/driver_nl80211.c b/src/drivers/driver_nl80211.c
+--- a/src/drivers/driver_nl80211.c
++++ b/src/drivers/driver_nl80211.c
+@@ -3216,6 +3216,13 @@
+ 	if (nl80211_action_subscribe_ap(bss))
+ 		goto out_err;
+ 
++	/* gt-be98: the unexpected-4addr / class-3 frame events (wds_sta=1 for a plain
++	 * 4-address station) on a device-SME driver too; best effort (a driver that does
++	 * not report them answers with an error, which is not fatal here) */
++	if (nl80211_register_spurious_class3(bss))
++		wpa_printf(MSG_DEBUG,
++			   "nl80211: spurious class-3 frames not reported by this driver (device SME)");
++
+ 	if (bss->drv->device_ap_sme) {
+ 		u16 type = (WLAN_FC_TYPE_MGMT << 2) | (WLAN_FC_STYPE_AUTH << 4);
+ 
