@@ -498,6 +498,56 @@ bssid_rules "6g block shared with a radio"
 M=$M0
 conf_ok "6g nontransmitted"
 
+# ---- 10b5. custom BSS addresses (bssid=, bssid.<band>=) and the 6 GHz
+# LA anchor with -K ----
+# 5gl radio ..:a4 = anchor index 4
+{ net 1 a sae password1 5gl 1; net 2 b sae password2 5gl 2; printf 'bssid.5gl=06:11:22:33:44:51\n'; net 3 c sae password3 5gl 3; } > "$T/c1"
+rm -f "$T/slots"; gen "$T/c1"; check "custom 5gl secondary: accepted, no warning" "0 no" "$? $(grep -q warning "$T/err" && echo yes || echo no)"
+check "custom address honoured (plan + bssid= in the section)" "06:11:22:33:44:51 yes" "$(bssid_of bcawl0-1) $(has bcawl0-1 bssid=06:11:22:33:44:51)"
+check "the auto secondary moves into the custom block (06:11:22:33:44:5x, not index 4 or 1)" "yes" \
+	"$(a=$(bssid_of bcawl0-2); case $a in 06:11:22:33:44:5[0235-7]) echo yes ;; *) echo "no $a" ;; esac)"
+check "the anchor stays the radio address" "00:00:5e:00:53:a4" "$(bssid_of bcawl0)"
+conf_ok "custom 5gl"
+{ net 1 a sae password1 5gl 1; net 2 b sae password2 5gl 2; printf 'bssid=06:11:22:33:44:51\n'; } > "$T/c2"
+rm -f "$T/slots"; gen "$T/c2"; check "bssid= on a one-band network: the same" "0 06:11:22:33:44:51" "$? $(bssid_of bcawl0-1)"
+{ net 1 a sae password1 2g 1; net 2 b sae password2 2g 2; printf 'bssid.2g=00:11:22:33:44:51\n'; } > "$T/c3"
+rm -f "$T/slots"; gen "$T/c3"; check "a universal (not LA) address: accepted, warned" "0 yes" "$? $(grep -q 'is not locally administered' "$T/err" && echo yes || echo no)"
+{ net 1 a sae password1 "2g 5gl" 1; net 2 b sae password2 "2g 5gl" 2; printf 'bssid.2g=06:11:22:33:44:51\nbssid.5gl=06:11:22:33:55:51\n'; } > "$T/c4"
+rm -f "$T/slots"; gen "$T/c4"; check "one address per radio on a two-band network: both honoured" "0 06:11:22:33:44:51 06:11:22:33:55:51" "$? $(bssid_of bcawl3-1) $(bssid_of bcawl0-1)"
+rm -f "$T/slots"; gen "$T/c1"; cp "$T/slots" "$T/slots.keep0"; cp "$T/slots.keep" "$T/slots.keep1"; cp "$T/slots" "$T/slots.keep"
+for c in "multicast|net 1 a sae password1 5gl 1; net 2 b sae password2 5gl 2; printf 'bssid.5gl=07:11:22:33:44:51\\n'" \
+	"a radio address|net 1 a sae password1 5gl 1; net 2 b sae password2 5gl 2; printf 'bssid.5gl=00:00:5e:00:53:a0\\n'" \
+	"the anchor index|net 1 a sae password1 5gl 1; net 2 b sae password2 5gl 2; printf 'bssid.5gl=06:11:22:33:44:54\\n'" \
+	"twice on two radios|net 1 a sae password1 2g 1; net 2 b sae password2 2g 2; printf 'bssid.2g=06:11:22:33:44:51\\n'; net 3 c sae password3 5gl 3; net 4 d sae password4 5gl 4; printf 'bssid.5gl=06:11:22:33:44:51\\n'" \
+	"two blocks on one radio|net 1 a sae password1 5gl 1; net 2 b sae password2 5gl 2; printf 'bssid.5gl=06:11:22:33:44:51\\n'; net 3 c sae password3 5gl 3; printf 'bssid.5gl=06:11:22:33:66:52\\n'" \
+	"bssid= on two bands|net 1 a sae password1 2g 1; net 2 b sae password2 \"2g 5gl\" 2; printf 'bssid=06:11:22:33:44:51\\n'" \
+	"on the anchor without -K|net 1 a sae password1 5gl 1; printf 'bssid.5gl=06:11:22:33:44:51\\n'" \
+	"a 6 GHz secondary|net 1 a sae password1 6g 1; net 2 b sae password2 6g 2; printf 'bssid.6g=06:11:22:33:44:51\\n'" \
+	"a band the network is not on|net 1 a sae password1 2g 1; net 2 b sae password2 2g 2; printf 'bssid.5gl=06:11:22:33:44:51\\n'"; do
+	eval "{ ${c#*|}; }" > "$T/r"; refuse "bssid: ${c%%|*}" "$T/r"
+done
+{ net 1 a sae password1 6g 1; net 2 b sae password2 6g 2; printf 'bssid.6g=06:11:22:33:44:51\n'; } > "$T/r"
+gen "$T/r" -K 1; check "a 6 GHz secondary with -K too: refused, said why" "1 yes" "$? $(grep -q 'nontransmitted BSSIDs' "$T/err" && echo yes || echo no)"
+cp "$T/slots.keep1" "$T/slots.keep"
+# -K: a custom anchor; the 6 GHz LA anchor and 8 networks on board MACs
+{ net 1 a sae password1 5gl 1; printf 'bssid.5gl=06:11:22:33:44:50\n'; net 2 b sae password2 5gl 2; } > "$T/c5"
+rm -f "$T/slots"; gen "$T/c5" -K 1; check "-K: custom anchor honoured, the secondary avoids its index 0" "0 06:11:22:33:44:50 yes" \
+	"$? $(bssid_of bcawl0) $(a=$(bssid_of bcawl0-1); [ "${a##*:}" != 50 ] && [ "${a##*:}" != a4 ] && echo yes || echo "no $a")"
+conf_ok "custom anchor"
+: > "$T/k8"; for i in 1 2 3 4 5 6 7 8; do
+	if [ $i = 1 ]; then net $i n$i sae password$i 6g $i; else printf 'network=%s\nssid=n%s\nsecurity=owe\nbands=6g\nvlan=%s\n' $i $i $i; fi >> "$T/k8"
+done
+rm -f "$T/slots"; gen "$T/k8" -C 8; check "board MACs, no -K: 8 on 6g still refused (control)" 1 $?
+rm -f "$T/slots"; gen "$T/k8" -C 8 -K 1; check "board MACs, -K: 8 on 6g accepted" "0 8" "$? $(awk '$1 == "bss" && $2 == "bcawl2"' "$T/o/plan" | wc -l | tr -d ' ')"
+check "-K: 6 GHz anchor = the radio address with the LA bit, low 3 bits 0 (02:00:5e:00:53:a8)" "02:00:5e:00:53:a8" "$(bssid_of bcawl2)"
+check "-K: the 8 6 GHz BSSIDs are its block a8-af, none twice, none a radio address" "02:00:5e:00:53:a8 02:00:5e:00:53:a9 02:00:5e:00:53:aa 02:00:5e:00:53:ab 02:00:5e:00:53:ac 02:00:5e:00:53:ad 02:00:5e:00:53:ae 02:00:5e:00:53:af|" \
+	"$(awk '$1 == "bss" && $2 == "bcawl2" { print $7 }' "$T/o/plan" | sort | tr '\n' ' ' | sed 's/ $//')|$(awk '$1 == "bss" { print $7 }' "$T/o/plan" | grep -E '00:00:5e:00:53:(a0|a4|a8|ac)$')"
+conf_ok "6g 8 with -K"
+{ net 1 a sae password1 6g 1; printf 'bssid.6g=06:11:22:33:44:48\n'; net 2 b sae password2 6g 2; } > "$T/c6"
+rm -f "$T/slots"; gen "$T/c6" -K 1; check "-K: a custom 6 GHz anchor; the secondary = its nontransmitted BSSID (index 1)" "0 06:11:22:33:44:48 06:11:22:33:44:49" \
+	"$? $(bssid_of bcawl2) $(bssid_of bcawl2-1)"
+check "-F: feature bssid 1" "feature bssid 1" "$($SH "$G" -F | grep '^feature bssid ')"
+
 # ---- 10c. radio features: HE (ax=), TWT responder (twt=), zero-wait DFS
 # (zwdfs=), monitor (monitor=), LED (led=) ----
 # HE/EHT (ax=, be=): default both on, every radio; each off both ways

@@ -30,9 +30,13 @@
 #   -c  write country_code (only when the regulatory database is loaded:
 #       without it hostapd hangs in COUNTRY_UPDATE)
 #   -R  rnr=1 on the 2.4/5 GHz BSSes (default 1)
-#   -K  a network promoted to the anchor keeps its BSSID (default 0: the
-#       driver cannot yet apply a non-default MAC to bsscfg 0, so the anchor
-#       is always the radio's own address)
+#   -K  the driver applies a non-default address to the radio's FIRST BSS
+#       (bsscfg 0, the anchor). Then: a network promoted to the anchor keeps
+#       its BSSID, a bssid.<band>= on the anchor is applied, and the 6 GHz
+#       anchor takes a locally administered block of its own (radio address
+#       with the LA bit, low 3 bits 0) so 6 GHz carries 8 BSSes. Default 0:
+#       open-wifi's driver does not set bsscfg 0's address yet (its MBSS MAC
+#       set skips bsscfg 0), so the anchor is always the radio's own address
 #   -N  dry run: the slot file is not rewritten (OUTDIR/slots.new is)
 #   -T  the local time the schedules are evaluated at: D = ISO weekday
 #       (1 = Monday .. 7 = Sunday, `date +%u`), HH:MM. Without -T every
@@ -180,6 +184,21 @@
 #                                   4-address clients
 #     slot.<band>=K  mac.<band>=S   optional explicit sticky slot / BSSID
 #                                   index S = 1..7 (0: the anchor's)
+#     bssid.<band>=MAC              optional: this BSS's own address (default
+#                                   automatic, below); bssid=MAC for a
+#                                   one-band network. Unicast, never a
+#                                   radio's address or another BSS's;
+#                                   warned when not locally administered.
+#                                   2.4/5 GHz secondary: the radio's other
+#                                   secondaries move into its block (the
+#                                   firmware MBSS rule: one block, one index
+#                                   each, never the anchor's index; two
+#                                   custom addresses on one radio must share
+#                                   the block). The anchor (slot 0): only
+#                                   with -K. 6 GHz: only the anchor (with
+#                                   -K); the secondaries are its
+#                                   nontransmitted BSSIDs, derived, and a
+#                                   bssid.6g= on one is refused
 #   station=2g|5gl|5gh|6g           the radio's STATION (Wi-Fi uplink, client
 #                                   mode): wpa_supplicant on the radio netdev
 #                                   bcawlN itself (bsscfg 0, the firmware's
@@ -250,6 +269,14 @@
 # bits of the secondary's own address; mbss8 and mbss16 agree while the
 # radio address's low 3 bits are 0, as on this board.]
 #
+# The block in force per radio (anchor address A, index a = A & 7; the
+# secondaries' block B): by default A = the radio address, B as above
+# (6g: B = A); a custom anchor sets A (6g: B = A too); a custom 2.4/5 GHz
+# secondary sets B; with -K the 6 GHz A = B = the radio address with the LA
+# bit and the low 3 bits 0 (when no address of that block is in use, else
+# the radio address and a warning). Secondary S = B's octets 0-4 and the
+# bits of octet 5 above the index, index (a + S) & 7.
+#
 # OUTDIR: hostapd-<dev>.conf, bss-<ifname>.conf, hdr-<dev>, sec-<ifname>
 # (mode 0600: they hold the passphrases and RADIUS secrets) and plan:
 #   radio <band> <dev> <conf> <sha256 of the radio-wide lines> <first BSS ifname>
@@ -297,6 +324,7 @@ features() {
 	feature zwdfs 1
 	feature monitor 1
 	feature led 1
+	feature bssid 1
 	feature twt 0
 	feature wds 0
 	feature station 1
@@ -364,8 +392,10 @@ function parsemac(m, o,    i, p, n) {
 	return 1
 }
 # BSSID of index s (0..7) on radio b (the firmware mbss8 rule, see the header)
-function bssid(b, s,    o, i, r, adj, o0) {
-	if (s == 0) return bmac[b]
+# the default secondaries block of radio b (an address: its octets 0-4 and
+# the bits of octet 5 above the index count): 2.4/5 GHz the LA-prefixed
+# block, 6 GHz the radio address (nontransmitted BSSIDs, see the header)
+function defblk(b,    o, i, r, adj, o0) {
 	parsemac(bmac[b], o)
 	adj = (o[0] == 96 && o[5] % 15 == 0) ? 1 : 0
 	o0 = 96 + ((o[5] + adj) % 15) * 8
@@ -376,8 +406,19 @@ function bssid(b, s,    o, i, r, adj, o0) {
 	if (b == "6g") o0 = o[0]
 	r = hex2(o0)
 	for (i = 1; i <= 4; i++) r = r ":" hex2(o[i])
-	return r ":" hex2(o[5] - o[5] % 8 + (o[5] + s) % 8)
+	return r ":" hex2(o[5])
 }
+# address of BSSID index s (0..7) on radio b: anc/blk/aix (the block in force)
+function bssid(b, s,    o, i, r) {
+	if (s == 0) return anc[b]
+	parsemac(blk[b], o)
+	r = hex2(o[0])
+	for (i = 1; i <= 4; i++) r = r ":" hex2(o[i])
+	return r ":" hex2(o[5] - o[5] % 8 + (aix[b] + s) % 8)
+}
+# the block key of an address: octets 0-4 and octet 5 above the 3 index bits
+function blockof(a,    o) { parsemac(a, o); return substr(a, 1, 14) ":" int(o[5] / 8) }
+function lastbyte(a,    o) { parsemac(a, o); return o[5] }
 function printable(s) { return s ~ /^[ -~]*$/ }
 function ishex64(s) { return length(s) == 64 && s ~ /^[0-9A-Fa-f]+$/ }
 function iseap(s) { return s == "wpa2-eap" || s == "wpa3-eap" || s == "wpa2-wpa3-eap" }
@@ -690,7 +731,10 @@ cur == "n" {
 	}
 	else if (k ~ /^slot\./ && validband(substr(k, 6)) && isnum(v)) ex_slot[substr(k, 6), net[ci]] = v + 0
 	else if (k ~ /^mac\./ && validband(substr(k, 5)) && isnum(v) && v + 0 <= 7) ex_mac[substr(k, 5), net[ci]] = v + 0
-	else if (k ~ /^(hidden|isolate|max_clients|schedule|airtime_weight|airtime_limit|airtime_sta_weight|slot\.[0-9a-z]+|mac\.[0-9a-z]+)$/) err("network " net[ci] ": " k "=" v " refused")
+	# a custom address (checked in END): bssid= (one band) or bssid.<band>=
+	else if (k == "bssid" && parsemac(v, tmo)) cmac0[ci] = tolower(v)
+	else if (k ~ /^bssid\./ && validband(substr(k, 7)) && parsemac(v, tmo)) cmac[ci, substr(k, 7)] = tolower(v)
+	else if (k ~ /^(hidden|isolate|max_clients|schedule|airtime_weight|airtime_limit|airtime_sta_weight|slot\.[0-9a-z]+|mac\.[0-9a-z]+|bssid|bssid\.[0-9a-z]+)$/) err("network " net[ci] ": " k "=" v " refused")
 	else err("network " net[ci] ": unknown key " k)	# never echo a value that may be a secret
 	next
 }
@@ -727,6 +771,22 @@ END {
 		} else err(tag ": security must be open, owe, open-owe, psk2, psk2sae, sae, wpa2-eap, wpa3-eap or wpa2-wpa3-eap")
 		if (!iseap(s) && nra[i]) err(tag ": radius_* only with security wpa2-eap, wpa3-eap or wpa2-wpa3-eap")
 		if (nb[i] == 0) err(tag ": no band")
+		# custom addresses (bssid=, bssid.<band>=)
+		if (i in cmac0) {
+			if (nb[i] != 1) err(tag ": bssid= needs a one-band network (several bands: bssid.<band>=, one address per radio)")
+			else for (bi = 1; bi <= nbands; bi++) if ((i, BANDS[bi]) in hasb) cmac[i, BANDS[bi]] = cmac0[i]
+		}
+		for (bi = 1; bi <= nbands; bi++) {
+			b = BANDS[bi]
+			if (!((i, b) in cmac)) continue
+			a = cmac[i, b]; parsemac(a, tmo)
+			if (!((i, b) in hasb)) { err(tag ": bssid." b "=" a " but the network is not on " b); continue }
+			if (tmo[0] % 2) { err(tag ": bssid." b "=" a " is a multicast address (bit 0 of the first octet)"); continue }
+			if (int(tmo[0] / 2) % 2 == 0) warn(tag ": bssid." b "=" a " is not locally administered (bit 1 of the first octet): it may clash with a real device")
+			for (bj = 1; bj <= nbands; bj++) if ((BANDS[bj] in bmac) && bmac[BANDS[bj]] == a) err(tag ": bssid." b "=" a " is the address of radio " BANDS[bj])
+			if (a in cseen) err(tag ": bssid." b "=" a " is also " cseen[a])
+			else cseen[a] = "network " id " on " b
+		}
 		if (((i, "6g") in hasb) && (s == "open" || s == "psk2" || s == "wpa2-eap"))
 			err(tag ": 6 GHz needs WPA3: SAE (sae, psk2sae), OWE (owe, open-owe) or WPA3-Enterprise (wpa3-eap, wpa2-wpa3-eap)")
 		if (rtd[i] != "") {
@@ -886,8 +946,48 @@ END {
 	}
 	if (nerr) exit 1
 
+	# ---- the address block in force per radio (header: anc, blk, aix) ----
+	for (bi = 1; bi <= nbands; bi++) {
+		b = BANDS[bi]
+		if (!(b in bmac)) continue
+		anc[b] = bmac[b]; blk[b] = defblk(b); aix[b] = lastbyte(bmac[b]) % 8
+		if (!live[b]) continue
+		i0 = used[b, 0]
+		# 6 GHz with -K: an LA block of its own for the anchor (8 BSSes)
+		if (b == "6g" && keep && !(i0 != "" && ((i0, b) in cmac))) {
+			parsemac(bmac[b], tmo)
+			if (int(tmo[0] / 2) % 2 == 0) {
+				cand = hex2(tmo[0] + 2) substr(bmac[b], 3, 12) ":" hex2(tmo[5] - tmo[5] % 8)
+				ok6 = 1
+				for (s = 0; s <= 7; s++) {
+					x = substr(cand, 1, 15) hex2(tmo[5] - tmo[5] % 8 + s)
+					for (bj = 1; bj <= nbands; bj++) if ((BANDS[bj] in bmac) && bmac[BANDS[bj]] == x) ok6 = 0
+					if (x in cseen) ok6 = 0
+				}
+				if (ok6) { anc[b] = cand; blk[b] = cand; aix[b] = 0 }
+				else warn("radio 6g: the locally administered block of " cand " holds an address in use: the anchor stays the radio address")
+			}
+		}
+		# a custom anchor (slot 0)
+		if (i0 != "" && ((i0, b) in cmac)) {
+			if (!keep) err("network " net[i0] ": bssid." b "=" cmac[i0, b] " is on the first network of the radio (the anchor): the driver does not apply an address to it yet (-K)")
+			else { anc[b] = cmac[i0, b]; aix[b] = lastbyte(anc[b]) % 8; if (b == "6g") blk[b] = anc[b] }
+		}
+		# custom secondaries: 2.4/5 GHz only, one block per radio
+		cb = ""
+		for (k = 1; k < cap; k++) {
+			i = used[b, k]; if (i == "" || !((i, b) in cmac)) continue
+			a = cmac[i, b]
+			if (b == "6g") { err("network " net[i] ": bssid.6g= refused: on 6 GHz only the first network of the radio takes an address, the others are its nontransmitted BSSIDs (derived from it)"); continue }
+			if (cb != "" && blockof(a) != cb) { err("network " net[i] ": bssid." b "=" a " is not in the block of " cbn " (the firmware: every secondary of a radio in one address block, octets 0-4 and the bits above the last 3)"); continue }
+			if (lastbyte(a) % 8 == aix[b]) { err("network " net[i] ": bssid." b "=" a ": its last 3 bits (" lastbyte(a) % 8 ") are the index of the first network of the radio"); continue }
+			cb = blockof(a); cbn = a; blk[b] = a
+			cidx[b, net[i]] = (lastbyte(a) % 8 - aix[b] + 8) % 8
+		}
+	}
+	if (nerr) exit 1
 	# ---- BSSID indices: sticky, unique per radio, no BSSID twice anywhere ----
-	for (bi = 1; bi <= nbands; bi++) { b = BANDS[bi]; if (b in bmac) owner[bmac[b]] = "radio " b }
+	for (bi = 1; bi <= nbands; bi++) { b = BANDS[bi]; if (b in bmac) { owner[bmac[b]] = "radio " b; if (anc[b] != bmac[b]) owner[anc[b]] = "radio " b " (its anchor)" } }
 	# the BSSID indices of the networks scheduled off that kept their slot
 	for (bi = 1; bi <= nbands; bi++) {
 		b = BANDS[bi]
@@ -907,6 +1007,7 @@ END {
 			i = used[b, k]; if (i == "") continue
 			id = net[i]; want = -1
 			if (k == 0 && !(keep && promoted[b, id])) want = 0
+			else if ((b, id) in cidx) want = cidx[b, id]
 			else if ((b, id) in ex_mac) want = ex_mac[b, id]
 			else if ((b, id) in st_mac) {
 				want = st_mac[b, id]
@@ -917,10 +1018,12 @@ END {
 			if (want >= 0) {
 				a = bssid(b, want)
 				if (want > 0 && (a in owner)) {
+					if ((b, id) in cidx) { err("network " id ": bssid." b "=" a " is already " owner[a]); continue }
 					if ((b, id) in ex_mac) { err("network " id ": mac." b "=" want " gives " a ", already " owner[a]); continue }
 					warn("network " id ": BSSID index " want " on " b " collides with " owner[a] ": reallocated")
 					want = -1
 				} else if (want > 0 && ((b, want) in idxused)) {
+					if ((b, id) in cidx) { err("network " id ": bssid." b "=" a ": its index is taken on " b); continue }
 					warn("network " id ": BSSID index " want " on " b " taken: reallocated"); want = -1
 				}
 			}
