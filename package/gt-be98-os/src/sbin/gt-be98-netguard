@@ -17,7 +17,13 @@
 #   4. a Wi-Fi STATION (the uplink of gt-be98-wifi, listed in
 #      $GT_BE98_WIFI_STATIONS) is never a bridge port: a 3-address station
 #      cannot be bridged (cfg80211 refuses it too, IFF_DONT_BRIDGE); its
-#      networks are routed (gt-be98-wifi-sta).
+#      networks are routed (gt-be98-wifi-sta). Except a REPEATER: a
+#      4-address station listed in $GT_BE98_WIFI_REPEATERS ("<dev>
+#      <bridge>") may be a port of that one brwifi bridge (the repeated
+#      network's), never isolated, and that bridge holds no 802.1Q
+#      sub-interface of a protected port: with a Wi-Fi uplink in it, a trunk
+#      VLAN would join the wired LAN to the uplink's segment (a loop when
+#      the uplink AP sits on that LAN).
 # One exception to 1., the wired LAN (gt-be98-lan, off by default): a bare
 # port listed in LAN_PORTS may be a port of the bridge LAN_BRIDGE (br-lan),
 # and of no other bridge, when it is rnr1, rnr2 or rnr3 and not the Wi-Fi
@@ -37,6 +43,7 @@ WIFI_AP=/etc/conf.d/gt-be98-wifi-ap
 WIFI_DEF=/etc/conf.d/gt-be98-wifi
 WIFI_L2=${GT_BE98_WIFI_L2:-/run/gt-be98-wifi/l2.conf}
 WIFI_STATIONS=${GT_BE98_WIFI_STATIONS:-/run/gt-be98-wifi/stations}
+WIFI_REPEATERS=${GT_BE98_WIFI_REPEATERS:-/run/gt-be98-wifi/repeaters}
 LAN_CONF=${GT_BE98_LAN_CONF:-/etc/conf.d/gt-be98-lan}
 
 log() { logger -t gt-be98-netguard -- "$*" 2>/dev/null; echo "gt-be98-netguard: $*" > /dev/kmsg 2>/dev/null; }
@@ -53,6 +60,16 @@ protected() {
 }
 # is $1 a Wi-Fi station of gt-be98-wifi?
 station() { grep -qx "$1" "$WIFI_STATIONS" 2>/dev/null; }
+# is $1 the repeater station of bridge $2 (both given: a brwifi bridge)?
+repeater_of() {
+	case "$2" in brwifi[0-9]*) ;; *) return 1 ;; esac
+	awk -v d="$1" -v b="$2" '$1 == d && $2 == b { f = 1 } END { exit !f }' "$WIFI_REPEATERS" 2>/dev/null
+}
+# does bridge $1 hold a repeater station (listed for it)?
+repeater_bridge() {
+	case "$1" in brwifi[0-9]*) ;; *) return 1 ;; esac
+	awk -v b="$1" '$2 == b { f = 1 } END { exit !f }' "$WIFI_REPEATERS" 2>/dev/null
+}
 # Wi-Fi network settings as gt-be98-wifi applies them: its effective file
 # while it runs (it adds the VLANs and isolation of its network list,
 # WIFI_NETWORKS), else the web UI's file when present, else the defaults
@@ -101,12 +118,15 @@ verdict() {
 	*.*)	# 802.1Q sub-interface of a protected port: listed trunk VLANs only
 		if protected "${1%%.*}" && ! wifi_vlan_ok "$1" "$2"; then
 			echo "not a listed Wi-Fi VLAN of $2"; return
+		fi
+		if protected "${1%%.*}" && repeater_bridge "$2"; then
+			echo "$2 is a repeater bridge (Wi-Fi uplink): no wired VLAN in it"; return
 		fi ;;
 	*)	if protected "$1" && ! lan_port_ok "$1" "$2"; then
 			echo "protected port: never bridged except a LAN_PORTS port in $LBRIDGE"; return
 		fi
-		if station "$1"; then
-			echo "a Wi-Fi station: never bridged"; return
+		if station "$1" && ! repeater_of "$1" "$2"; then
+			echo "a Wi-Fi station: never bridged (a repeater only into its own repeated bridge)"; return
 		fi ;;
 	esac
 	echo keep
@@ -134,6 +154,8 @@ sweep() {
 			brwifi[0-9]*)
 				f=0
 				case "$i" in bcawl*) case " $ISOLATE " in *" $m "*) f=1 ;; esac ;; esac
+				# the repeater's uplink port is the way out: never isolated
+				repeater_of "$i" "$m" && f=0
 				[ "$(cat "$n/brport/isolated" 2>/dev/null)" = "$f" ] ||
 					{ echo "$f" > "$n/brport/isolated" 2>/dev/null &&
 						log "isolated=$f on $i (bridge $m)"; } ;;
@@ -146,7 +168,8 @@ sweep() {
 selftest() {
 	local fail=0 n=0 c
 	NETGUARD_PROTECT="rnr* eth* usb* enx*"
-	WIFI_STATIONS=$(mktemp); echo bcawl5 > "$WIFI_STATIONS"
+	WIFI_STATIONS=$(mktemp); printf 'bcawl5\nbcawl6\n' > "$WIFI_STATIONS"
+	WIFI_REPEATERS=$(mktemp); echo 'bcawl6 brwifi60' > "$WIFI_REPEATERS"
 	check() {	# <expect keep|detach> <port> <bridge> <LAN_PORTS> <trunk> <vlans>
 		LPORTS=$4; LBRIDGE=br-lan; TRUNK=$5; VLANS=$6
 		c=$(verdict "$2" "$3"); [ "$c" = keep ] || c=detach
@@ -170,7 +193,14 @@ selftest() {
 	check detach rnr1.20 br-lan  "rnr1"          rnr0 ""		# sub-interface of a LAN port
 	check keep   bcawl0  br-lan  "rnr1"          rnr0 ""		# Wi-Fi joins the wired LAN
 	check detach bcawl5  br-lan  "rnr1"          rnr0 ""		# a Wi-Fi station (unchanged rule)
-	rm -f "$WIFI_STATIONS"
+	check keep   bcawl6  brwifi60 ""             rnr0 ""		# the repeater, in its bridge
+	check detach bcawl6  brwifi61 ""             rnr0 ""		# ... in another brwifi bridge
+	check detach bcawl6  br-lan  "rnr1"          rnr0 ""		# ... in the wired LAN
+	check detach bcawl5  brwifi60 ""             rnr0 ""		# a station not listed for it
+	check detach rnr0.60 brwifi60 ""             rnr0 "brwifi60:60"	# a trunk VLAN in a repeater bridge, even listed
+	check keep   rnr0.61 brwifi61 ""             rnr0 "brwifi61:61"	# control: the same VLAN rule elsewhere
+	check keep   bcawl0  brwifi60 ""             rnr0 ""		# an AP of the repeated network
+	rm -f "$WIFI_STATIONS" "$WIFI_REPEATERS"
 	echo "selftest: $((n - fail))/$n ok"
 	[ $fail -eq 0 ]
 }

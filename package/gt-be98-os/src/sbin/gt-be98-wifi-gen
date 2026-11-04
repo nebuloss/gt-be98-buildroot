@@ -160,8 +160,19 @@
 #                                   it out of the station (gt-be98-wifi-sta).
 #                                   A 3-address station cannot be bridged (no
 #                                   4-address/WDS uplink): routed is the only
-#                                   way a network reaches a Wi-Fi uplink.
+#                                   way a network reaches a Wi-Fi uplink
+#                                   (a 4-address one: repeated=1).
 #                                   Needs a station= block in the list
+#     repeated=1                    instead of vlan=/routed=: the network is
+#                                   BRIDGED to the station uplink (Wi-Fi
+#                                   repeater, layer 2): its bridge brwifiID
+#                                   holds its BSSes and the station netdev in
+#                                   4-address mode, no VLAN, no trunk port,
+#                                   no address, no DHCP/NAT from the box (the
+#                                   uplink's LAN serves its clients). Needs a
+#                                   station= block with repeater= set; at most
+#                                   one repeated network (the station is one
+#                                   bridge port)
 #     hidden=0|1  isolate=0|1  max_clients=1..2007
 #                                   max_clients: hostapd max_num_sta, per
 #                                   BSS (a client beyond it is
@@ -219,6 +230,18 @@
 #                                   and '#': wpa_supplicant's comment rule)
 #                                   or 64 hex; sae: 8-63 printable ASCII
 #     bssid=aa:bb:cc:dd:ee:ff       optional: join this AP only
+#     repeater=0|4addr|multiap      the station's uplink mode: 0 (default)
+#                                   3-address, its networks are routed=;
+#                                   4addr: nl80211 4-address mode on before
+#                                   the join (an uplink with hostapd
+#                                   wds_sta=1, or a Broadcom DWDS AP);
+#                                   multiap: Multi-AP backhaul STA
+#                                   (wpa_supplicant multi_ap_backhaul_sta=1,
+#                                   an EasyMesh/Multi-AP backhaul BSS; the
+#                                   join is refused by an AP without it).
+#                                   Either one is bridged into the repeated=
+#                                   network's bridge; routed= networks need
+#                                   repeater=0 (a bridge port routes nothing)
 #
 # Schedules (radio= and network= blocks): WINDOWS is 1-32 windows
 # separated by blanks or commas, each DAYS@HH:MM-HH:MM in local time; DAYS
@@ -289,6 +312,10 @@
 #   station <band> <dev> <conf> <sha256 of conf> <first AP ifname or ->
 #                                              (an enabled station on a live radio;
 #                                               conf: sta-<dev>.conf, wpa_supplicant)
+#   repeated <id> <bridge> <isolate 0|1>       (the repeated=1 network, on >= 1 radio)
+#   repeater <dev> <4addr|multiap> <bridge or ->   (a live station with repeater= set:
+#                                               the bridge it joins, - when no
+#                                               repeated network is rendered)
 #   monitor <band> <dev> <MHz> <width> <centre MHz>   (monitor=1 radios)
 #   led <band> <dev> 0|1                       (every radio of -d)
 # and sched (also -Q's output), one line per network/radio that has a
@@ -329,6 +356,7 @@ features() {
 	feature wds 0
 	feature station 1
 	feature routed 1
+	feature repeater 1
 	station_security psk2 sae
 	EOF
 }
@@ -650,7 +678,7 @@ k == "network" {
 	aw[ci] = ""; alim[ci] = 0; nasw[ci] = 0
 	nb[ci] = 0; nra[ci] = 0
 	rs[ci] = ""; rp[ci] = ""; rk[ci] = ""; as[ci] = ""; ap[ci] = ""; ak[ci] = ""
-	rtd[ci] = ""
+	rtd[ci] = ""; rep[ci] = 0
 	next
 }
 k == "radio" {
@@ -663,6 +691,7 @@ k == "station" {
 	if (!validband(v)) { err("line " FNR ": station 2g|5gl|5gh|6g"); cur = "x"; next }
 	if (nsta) { err("station " v ": one station= block only (station " stab " is listed)"); cur = "x"; next }
 	nsta = 1; stab = v; cur = "s"; stenab = 1; stssid = ""; stsec = ""; stpass = ""; stbssid = ""
+	strep = "0"
 	next
 }
 cur == "" {
@@ -679,6 +708,8 @@ cur == "s" {
 	else if (k == "security") stsec = v
 	else if (k == "passphrase") stpass = v
 	else if (k == "bssid") stbssid = v
+	else if (k == "repeater" && (v == "0" || v == "4addr" || v == "multiap")) strep = v
+	else if (k == "repeater") err("station " stab ": repeater=" v " refused (0, 4addr or multiap)")
 	else err("station " stab ": unknown key " k)	# never echo a value that may be a secret
 	next
 }
@@ -718,6 +749,7 @@ cur == "n" {
 	}
 	else if (k == "vlan") vlan[ci] = v
 	else if (k == "routed") rtd[ci] = v
+	else if (k == "repeated" && (v == "0" || v == "1")) rep[ci] = v + 0
 	# v is a substr() result, a STRING: "0" is non-empty and so TRUE in awk; store the number
 	else if (k == "hidden" && (v == "0" || v == "1")) hid[ci] = v + 0
 	else if (k == "isolate" && (v == "0" || v == "1")) iso[ci] = v + 0
@@ -734,7 +766,7 @@ cur == "n" {
 	# a custom address (checked in END): bssid= (one band) or bssid.<band>=
 	else if (k == "bssid" && parsemac(v, tmo)) cmac0[ci] = tolower(v)
 	else if (k ~ /^bssid\./ && validband(substr(k, 7)) && parsemac(v, tmo)) cmac[ci, substr(k, 7)] = tolower(v)
-	else if (k ~ /^(hidden|isolate|max_clients|schedule|airtime_weight|airtime_limit|airtime_sta_weight|slot\.[0-9a-z]+|mac\.[0-9a-z]+|bssid|bssid\.[0-9a-z]+)$/) err("network " net[ci] ": " k "=" v " refused")
+	else if (k ~ /^(repeated|hidden|isolate|max_clients|schedule|airtime_weight|airtime_limit|airtime_sta_weight|slot\.[0-9a-z]+|mac\.[0-9a-z]+|bssid|bssid\.[0-9a-z]+)$/) err("network " net[ci] ": " k "=" v " refused")
 	else err("network " net[ci] ": unknown key " k)	# never echo a value that may be a secret
 	next
 }
@@ -789,7 +821,13 @@ END {
 		}
 		if (((i, "6g") in hasb) && (s == "open" || s == "psk2" || s == "wpa2-eap"))
 			err(tag ": 6 GHz needs WPA3: SAE (sae, psk2sae), OWE (owe, open-owe) or WPA3-Enterprise (wpa3-eap, wpa2-wpa3-eap)")
-		if (rtd[i] != "") {
+		if (rep[i]) {
+			if (vlan[i] != "" || rtd[i] != "") err(tag ": repeated=1 excludes vlan= and routed= (the network is bridged to the Wi-Fi uplink)")
+			if (nrep++) err(tag ": repeated=1: network " repid " is already repeated (one network per station uplink)")
+			else repid = id
+			if (!nsta) err(tag ": repeated=1 needs a station= uplink in the list")
+			else if (strep == "0") err(tag ": repeated=1 needs the station repeater=4addr or repeater=multiap (a 3-address station cannot be bridged)")
+		} else if (rtd[i] != "") {
 			if (vlan[i] != "") err(tag ": vlan= and routed= exclude each other (a routed network has no VLAN)")
 			if (!routedok(rtd[i])) err(tag ": routed=" rtd[i] ": the first host of a private subnet, A.B.C.1/P, P = 16..30 (10/8, 172.16/12, 192.168/16)")
 			else {
@@ -798,6 +836,7 @@ END {
 				rnetv[i] = RNET; rszv[i] = RSZ
 			}
 			if (!nsta) err(tag ": routed= needs a station= uplink in the list")
+			else if (strep != "0") err(tag ": routed= needs the station repeater=0 (a 4-address station is a bridge port of the repeated network)")
 		} else if (!isnum(vlan[i]) || vlan[i] + 0 < 1 || vlan[i] + 0 > 4094) err(tag ": vlan 1..4094 is required (or routed=)")
 		else if (vlan[i] in vseen) err(tag ": vlan " vlan[i] " also used by network " vseen[vlan[i]])
 		else vseen[vlan[i]] = id
@@ -1215,7 +1254,8 @@ END {
 		}
 	}
 	for (i = 1; i <= nnet; i++) if (net[i] in onradio) {
-		if (rtd[i] != "") print "routed " net[i] " brwifi" net[i] " " rtd[i] " " iso[i] > plan
+		if (rep[i]) print "repeated " net[i] " brwifi" net[i] " " iso[i] > plan
+		else if (rtd[i] != "") print "routed " net[i] " brwifi" net[i] " " rtd[i] " " iso[i] > plan
 		else print "net " net[i] " brwifi" net[i] " " vlan[i] " " iso[i] > plan
 	}
 	# the station: its wpa_supplicant config (0600, umask) and plan line
@@ -1232,6 +1272,9 @@ END {
 			print "\tssid=" hexs(stssid) > f
 			print "\tscan_ssid=1" > f
 			if (stbssid != "") print "\tbssid=" stbssid > f
+			# a Multi-AP backhaul STA: wpa_supplicant asks for the backhaul BSS
+			# and turns nl80211 4addr on from the association response of the AP
+			if (strep == "multiap") print "\tmulti_ap_backhaul_sta=1" > f
 			if (stsec == "psk2") {
 				print "\tkey_mgmt=WPA-PSK" > f; print "\tproto=RSN" > f; print "\tpairwise=CCMP" > f
 				print "\tieee80211w=0" > f
@@ -1247,6 +1290,7 @@ END {
 		close(f)
 		for (k = 1; k < cap; k++) if (used[b, k] != "") break
 		print "station " b " " d " " f " " ((k < cap && live[b]) ? d "-" k : "-") > plan
+		if (strep != "0") print "repeater " d " " strep " " ((nrep && (repid in onradio)) ? "brwifi" repid : "-") > plan
 	}
 	for (bi = 1; bi <= nbands; bi++) {
 		b = BANDS[bi]
@@ -1294,6 +1338,7 @@ while read -r t a b c d e f g h; do
 		{ echo "$H"; echo "interface=$b"; cat "$OUT/hdr-$a"; echo; cat "$OUT/sec-$b"; } > "$h"
 		echo "bss $a $b $c $d $e $f $g $h $(sum "$OUT/sec-$b")" >> "$OUT/plan" ;;
 	net|routed) echo "$t $a $b $c $d" >> "$OUT/plan" ;;
+	repeated|repeater) echo "$t $a $b $c" >> "$OUT/plan" ;;
 	station) # station <band> <dev> <conf> <first AP ifname or ->
 		echo "station $a $b $c $(sum "$c") $d" >> "$OUT/plan" ;;
 	monitor) echo "$t $a $b $c $d $e" >> "$OUT/plan" ;;

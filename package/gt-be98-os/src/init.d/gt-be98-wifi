@@ -81,8 +81,10 @@
 # with this service) restarts a dead process and reloads this service when
 # the uplink moved the radio to another channel. $STATE/stations lists the
 # station netdevs (gt-be98-netguard never lets one into a bridge: a
-# 3-address station cannot be bridged), $STATE/vifs the virtual interfaces
-# this service created, $STATE/routed the routed networks.
+# 3-address station cannot be bridged), $STATE/repeaters the 4-address
+# stations of a repeated network and their bridge (the one bridge netguard
+# lets each into: generator repeater=, repeated=1), $STATE/vifs the virtual
+# interfaces this service created, $STATE/routed the routed networks.
 #
 # Wi-Fi networks are pure L2: each network is a bridge brwifiN holding its
 # BSSes and the 802.1Q sub-interface <trunk>.<vid> of the wired trunk port;
@@ -598,6 +600,8 @@ gen_networks() {
 		case $t in
 		net)	net_br="$net_br $b"; net_vl="$net_vl $b:$c" ;;
 		routed) WIFI_ROUTED="${WIFI_ROUTED:-} $b=$c" ;;
+		# repeated <id> <bridge> <isolate>: the isolate flag is the 4th field
+		repeated) WIFI_REPEATED="${WIFI_REPEATED:-} $b"; [ "$c" = 1 ] && net_iso="$net_iso $b"; continue ;;
 		*)	continue ;;
 		esac
 		[ "$d" = 1 ] && net_iso="$net_iso $b"
@@ -815,6 +819,15 @@ write_routed() {
 	mv -f "$STATE/routed.new" "$STATE/routed"
 }
 
+# the repeater stations (plan: repeater <dev> <mode> <bridge>), for
+# gt-be98-netguard: "<dev> <bridge>" per line, written before any station
+# joins its bridge (netguard detaches a station that is not listed)
+write_repeaters() {
+	mkdir -p "$STATE"
+	awk '$1 == "repeater" && $4 ~ /^brwifi[0-9]+$/ { print $2, $4 }' "$STATE/gen/plan" 2>/dev/null > "$STATE/repeaters.new"
+	mv -f "$STATE/repeaters.new" "$STATE/repeaters"
+}
+
 # the station monitor daemon (gt-be98-wifi-sta monitor), while a station is planned
 sta_mon_running() {
 	local p
@@ -874,7 +887,18 @@ apply_hostapd() {
 		br_create "$b" || { rc=1; continue; }
 		brs="$brs $b"
 	done
+	# the repeated network's bridge (repeater): no VLAN, no trunk, no
+	# address; its uplink is the 4-address station (gt-be98-wifi-sta joins
+	# it). A trunk VLAN there would join the wired LAN to the Wi-Fi
+	# uplink's segment: refused here, and detached by gt-be98-netguard
+	for b in ${WIFI_REPEATED:-}; do
+		valid_bridge "$b" || { eerror "repeated bridge '$b' refused"; rc=1; continue; }
+		case " $brs " in *" $b "*) eerror "$b: repeated and bridged to a VLAN or routed"; rc=1; continue ;; esac
+		br_create "$b" || { rc=1; continue; }
+		brs="$brs $b"
+	done
 	write_routed
+	write_repeaters
 	# the stations before the APs; a frequency that changed renders the
 	# plan once more (-U: the APs of a station radio follow its uplink)
 	sta_prepare

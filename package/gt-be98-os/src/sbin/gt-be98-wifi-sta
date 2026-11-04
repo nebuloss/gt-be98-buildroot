@@ -22,6 +22,9 @@
 #                                   and policy routing out of the station
 #   gt-be98-wifi-sta unroute        all of that undone
 #   gt-be98-wifi-sta status         one line per station
+#   gt-be98-wifi-sta repeater DEV   the station's repeater mode and bridge
+#                                   ("4addr|multiap <bridge or ->", from the
+#                                   plan; nothing, exit 1: not a repeater)
 #   gt-be98-wifi-sta monitor        the daemon (gt-be98-wifi starts it):
 #                                   every STA_POLL s, a dead wpa_supplicant
 #                                   or DHCP client is restarted, and when the
@@ -42,6 +45,16 @@
 # box's default) and into table STA_TABLE for the routed networks
 # (ip rule iif <bridge>). A 3-address station cannot be bridged, so a
 # network behind the uplink is routed and NATed (masquerade), never bridged.
+#
+# Repeater (the generator's repeater=4addr|multiap, plan line "repeater <dev>
+# <mode> <bridge>"): the station runs in nl80211 4-address mode, set BEFORE
+# wpa_supplicant joins (the driver applies the firmware's dwds/map rows in
+# the join's core-down window: open-wifi docs/STA-WDS-2026-10-29.md §29-30),
+# and is a port of the repeated network's bridge (cfg80211 lets a 4-address
+# station into a bridge; gt-be98-netguard admits it in that bridge only).
+# A bridge port is no IP host: no DHCP client, no default route, no routed
+# networks (the generator refuses routed= beside a repeater). Leaving
+# repeater mode detaches the port first (4addr off is -EBUSY on a port).
 #
 # Settings (/etc/conf.d/gt-be98-wifi, parsed): STA_WAIT (30), STA_POLL (10),
 # STA_METRIC (3000), STA_DEFAULT_ROUTE (1), STA_TABLE (181), STA_DHCP (1),
@@ -110,6 +123,42 @@ stop_pid() {	# pidfile
 	rm -f "$1"
 }
 
+# the repeater line of the plan for station $1: "<mode> <bridge or ->"
+repeater() {
+	local r
+	r=$(awk -v d="$1" '$1 == "repeater" && $2 == d { print $3, $4; exit }' "$STATE/gen/plan" 2>/dev/null)
+	case "$r" in 4addr\ *|multiap\ *) echo "$r" ;; *) return 1 ;; esac
+}
+# 4-address mode wanted (the plan) / in force (nl80211): on|off
+rep_want() { repeater "$1" > /dev/null && echo on || echo off; }
+rep_have() { iw dev "$1" info 2>/dev/null | grep -q '4addr: on' && echo on || echo off; }
+# the bridge station $1 is a port of (nothing: none)
+master_of() { local m; m=$(readlink "$SYSNET/$1/master" 2>/dev/null) && echo "${m##*/}"; }
+
+# the 4-address mode and the bridge port of station $1, as its repeater
+# line says (none: 3-address, no bridge). Before the join (the mode must be
+# in force when wpa_supplicant connects); the netdev and its bridge port
+# stay across wpa_supplicant restarts
+rep_apply() {
+	local d=$1 r br m
+	m=$(master_of "$d")
+	if r=$(repeater "$d"); then
+		br=${r#* }
+		[ "$(rep_have "$d")" = on ] || iw dev "$d" set 4addr on ||
+			{ log "$d: 4-address mode refused"; return 1; }
+		[ "$m" = "$br" ] && return 0
+		[ -n "$m" ] && ip link set dev "$d" nomaster
+		case "$br" in brwifi[0-9]*) ;; *) return 0 ;; esac
+		[ -d "$SYSNET/$br/bridge" ] || { log "$d: repeater bridge $br missing"; return 1; }
+		ip link set dev "$d" master "$br" || { log "$d: not bridged into $br"; return 1; }
+		log "$d: repeater (${r%% *}): 4-address mode, port of $br"
+	else
+		[ -n "$m" ] && ip link set dev "$d" nomaster
+		[ "$(rep_have "$d")" = off ] || iw dev "$d" set 4addr off
+	fi
+	return 0
+}
+
 # the frequency the station is associated on
 freq() {
 	local d=$1 t
@@ -125,6 +174,8 @@ freq() {
 dhcp_start() {
 	local d=$1 dir=$S/dhcpcd-$1 conf=$S/$1.dhcpcd.conf
 	[ "$STA_DHCP" = 1 ] || return 0
+	# a repeater station is a bridge port, not an IP host
+	repeater "$d" > /dev/null && { dhcp_stop "$d"; return 0; }
 	dhcp_running "$d" && return 0
 	state_dir
 	mkdir -p "$dir" /var/run/dhcpcd
@@ -189,7 +240,7 @@ dhcp_event() {
 # ---- the station ----
 
 up() {
-	local d=$1 c=$2 sum=$3 how=${4:-} started=0 i st
+	local d=$1 c=$2 sum=$3 how=${4:-} started=0 i st br
 	need_dev "$d"
 	[ -f "$c" ] || die "$d: $c: no such file"
 	[ -e "$SYSNET/$d" ] || die "$d: no such interface"
@@ -198,6 +249,10 @@ up() {
 		if [ "$how" = restart ]; then
 			log "$d: an AP interface appeared on the radio: the station reconnects after it"
 			stop_pid "$S/$d.wpa.pid"
+		elif [ "$(rep_want "$d")" != "$(rep_have "$d")" ]; then
+			# the 4-address mode is applied at a join: the station rejoins
+			log "$d: repeater mode changed: the station reconnects in it"
+			stop_pid "$S/$d.wpa.pid"
 		elif [ "$(cat "$S/$d.sum" 2>/dev/null)" != "$sum" ]; then
 			log "$d: station settings changed: wpa_supplicant re-reads them"
 			wcli "$d" reconfigure | grep -qx OK || stop_pid "$S/$d.wpa.pid"
@@ -205,14 +260,23 @@ up() {
 	fi
 	if ! wpa_running "$d"; then
 		iw dev "$d" set type managed 2>/dev/null
+		rep_apply "$d"
 		ip link set dev "$d" up || die "$d: up failed"
 		mkdir -p "$LOGDIR"
-		wpa_supplicant -B -i "$d" -c "$c" -P "$S/$d.wpa.pid" -f "$LOGDIR/wpa_supplicant-$d.log" ||
+		# a bridge port: the bridge takes the EAPOL frames addressed to
+		# the port before a packet socket bound to it sees them, so
+		# wpa_supplicant also listens on the bridge (-b), or the 4-way
+		# handshake and every later rekey is lost
+		br=$(master_of "$d")
+		wpa_supplicant -B -i "$d" ${br:+-b "$br"} -c "$c" -P "$S/$d.wpa.pid" -f "$LOGDIR/wpa_supplicant-$d.log" ||
 			die "$d: wpa_supplicant did not start"
 		started=1
 		log "$d: wpa_supplicant started"
 	fi
 	echo "$sum" > "$S/$d.sum"
+	# the bridge port (the mode was set before the join; a changed repeater
+	# line changes SUM's plan too and comes through here)
+	rep_apply "$d"
 	dhcp_start "$d"
 	# a new station: wait for its association (the APs of the radio then
 	# start on its channel); a station with no network only scans
@@ -233,6 +297,8 @@ down() {
 	need_dev "$d"
 	dhcp_stop "$d"
 	stop_pid "$S/$d.wpa.pid"
+	[ -n "$(master_of "$d")" ] && ip link set dev "$d" nomaster
+	iw dev "$d" set 4addr off 2>/dev/null
 	ip route del default dev "$d" metric "$STA_METRIC" 2>/dev/null
 	ip -4 addr flush dev "$d" scope global 2>/dev/null
 	rm -f "$S/$d.sum" "$S/$d.lease" "$S/$d.follow" "$S/$d.dhcpcd.conf"
@@ -413,7 +479,10 @@ monitor() {
 				up "$d" "$c" "$s" > /dev/null 2>&1
 				continue
 			fi
-			if [ "$STA_DHCP" = 1 ] && ! dhcp_running "$d"; then
+			# a repeater stays a port of its bridge (a bridge re-created by a reload)
+			if repeater "$d" > /dev/null; then
+				rep_apply "$d"
+			elif [ "$STA_DHCP" = 1 ] && ! dhcp_running "$d"; then
 				log "$d: DHCP client is not running: restarted"
 				dhcp_start "$d"
 			fi
@@ -447,6 +516,7 @@ freq)	[ $# = 1 ] || die "freq DEV"; need_dev "$1"; freq "$1" ;;
 route)	route ;;
 unroute) unroute ;;
 status)	status ;;
+repeater) [ $# = 1 ] || die "repeater DEV"; need_dev "$1"; repeater "$1" ;;
 monitor) monitor ;;
 *)	sed -n '/^#   gt-be98-wifi-sta up/,/^#   (no argument/p' "$0" | sed 's/^# \{0,1\}//' >&2; exit 2 ;;
 esac
