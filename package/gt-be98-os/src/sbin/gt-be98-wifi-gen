@@ -1159,12 +1159,14 @@ END {
 			}
 			# zero-wait DFS: hostapd background radar (the ZW-DFS of the driver)
 			if (rzw[b]) print "enable_background_radar=1" > hdr
-			# hostapd's own channel picks stay on this radio's channels (the
-			# set chans() accepts): after a radar during a CAC or in service
-			# (the driver declares no DFS offload on these radios, so hostapd
-			# chooses) and for the background CAC chain (dfs.c is_in_chanlist).
-			# Without it a radar on 5gh ch100 moved 5gh onto 5gl's 36/80
-			# (run 1104-2058). Channels the regulatory domain disables stay off.
+			# the channel picks hostapd makes itself stay on the channels of
+			# this radio (the set chans() accepts): after a radar during a CAC
+			# or in service (the driver declares no DFS offload on these
+			# radios, so hostapd chooses) and for the background CAC chain
+			# (dfs.c is_in_chanlist). Without it a radar on 5gh ch100 moved
+			# 5gh onto the 36/80 block of 5gl (run 1104-2058). Channels the
+			# regulatory domain disables stay off.
+			# (no apostrophe in this program: it is a single-quoted string)
 			print "chanlist=" (b == "5gl" ? "36-64" : "100-144 149-177") > hdr
 		}
 		# TWT responder: on by hostapd default; rtwt[] holds numbers
