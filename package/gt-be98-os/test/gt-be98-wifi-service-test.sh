@@ -231,12 +231,24 @@ REMOVE bcawl3
 ADD bss_config=phy3:$G/hostapd-bcawl3.conf" "$cmds"
 check "failed BSS add: radio complete" "phy3 bcawl3 bcawl3-1 bcawl3-2" "$(hapd | grep '^phy3')"
 
-# 10. a refused list: nothing sent, everything left as it was
+# 10. a refused list (a list-wide error): nothing sent, everything left as it was
 cp "$T/nets" "$T/nets.ok"; before=$(hapd)
-net 60 bad psk2 password6 6g 60 >> "$T/nets"
+printf 'radio=2g\nchannel=999\n' >> "$T/nets"
 apply
 check "refused list: rc 1, no command, hostapd as before" "1 - same" "$rc -$cmds $( [ "$(hapd)" = "$before" ] && echo same || echo changed)"
 cp "$T/nets.ok" "$T/nets"
+# 10b. one bad network (WPA2 on 6 GHz) is skipped, not the list: rc 0,
+# nothing sent (the other networks did not change), the skip reported
+# (run 1105-0223/0227: one network that cannot run must not take the
+# radios down)
+net 60 bad psk2 password6 6g 60 >> "$T/nets"
+apply
+check "bad network: rc 0, no command, hostapd as before" "0 - same" "$rc -$cmds $( [ "$(hapd)" = "$before" ] && echo same || echo changed)"
+check "bad network: skipped, reported" "skipped 60|yes" \
+	"$(grep '^skipped ' "$G/plan")|$(grep -q '! Wi-Fi network(s) 60 skipped' "$T/out" && echo yes || echo no)"
+cp "$T/nets.ok" "$T/nets"
+apply
+check "bad network removed: no skipped line" "0 0" "$rc $(grep -c '^skipped ' "$G/plan")"
 
 # 11. HOSTAPD_ARGS changed: the process restarts, every radio is added again
 : > "$T/daemon"

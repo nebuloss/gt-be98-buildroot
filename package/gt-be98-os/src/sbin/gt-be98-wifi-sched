@@ -83,8 +83,9 @@ cmd_check() {
 		[ -n "$cur" ] || return 0
 	fi
 	now=$(cmd_now) || return 0	# no trusted time: leave things as they run
-	# a list the generator refuses: the service would refuse it too
-	want=$("$WIFI_GEN" -n "$NETS" -Q -T "$now" 2>/dev/null) || return 0
+	# a list the generator refuses: the service would refuse it too; -S as
+	# the service: a skipped network has no schedule state
+	want=$("$WIFI_GEN" -n "$NETS" -Q -S -T "$now" 2>/dev/null) || return 0
 	[ "$want" = "$cur" ] && return 0
 	log "$(echo "$now" | cut -c3-) schedule [$(echo $want)] (running: [$(echo $cur)]): reloading gt-be98-wifi"
 	${GT_BE98_RELOAD:-rc-service gt-be98-wifi reload} > /dev/null 2>&1 ||

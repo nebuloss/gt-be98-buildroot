@@ -961,6 +961,39 @@ stref "two repeated networks" "network 6 is already repeated" station=2g repeate
 stref "routed beside a repeater station" "routed= needs the station repeater=0" station=2g repeater=multiap network=1 ssid=a security=sae passphrase=password1 bands=2g routed=192.168.50.1/24
 stref "repeater bad value" "repeater=yes refused (0, 4addr or multiap)" station=2g repeater=yes $(nl "$N1")
 stref "repeated=2" "network 1: repeated=2 refused" station=2g repeater=4addr $(nl "$N1") repeated=2
+
+# ---- -S: a network that fails its own checks is skipped, not the list ----
+# (the service passes -S: one bad network must not take every radio down;
+# run 1105-0223/0227: a network with no VLAN beside valid ones)
+rm -f "$T/slots"
+{ net 1 good sae password1 "5gl 6g" 20
+  printf 'network=2\nssid=novlan\nsecurity=psk2sae\npassphrase=password2\nbands=5gl\n'
+  net 3 also sae password3 2g 30; } > "$T/sk1"
+gen "$T/sk1"; check "no -S: a network without a VLAN refuses the list" "1 yes" "$? $(grep -qF 'network 2: vlan 1..4094 is required' "$T/err" && echo yes || echo no)"
+gen "$T/sk1" -S
+check "-S: accepted, network 2 skipped, 1 and 3 rendered" "0|skipped 2|bcawl3 3 bcawl0 1 bcawl2 1 " \
+	"$?|$(grep '^skipped ' "$T/o/plan")|$(awk '$1 == "bss" { printf "%s %s ", $3, $5 }' "$T/o/plan")"
+check "-S: net lines of the rendered networks only" "net 1 brwifi1 20 0|net 3 brwifi3 30 0" "$(grep '^net ' "$T/o/plan" | tr '\n' '|' | sed 's/|$//')"
+check "-S: the skip is a warning naming the network and why" "yes no" \
+	"$(grep -qF 'warning: network 2 skipped: vlan 1..4094 is required' "$T/err" && echo yes || echo no) $(grep -v ': warning: ' "$T/err" | grep -c . | sed 's/^0$/no/')"
+check "-S: no slot kept for the skipped network" "" "$(awk '$3 == 2' "$T/o/slots.new")"
+conf_ok "-S skip"
+# a parse-time error of a network (unknown key) is skipped the same way
+{ net 1 good sae password1 5gl 20; printf 'network=4\nssid=k\nsecurity=sae\npassphrase=password4\nbands=5gl\nvlan=40\nfoo=1\n'; } > "$T/sk2"
+gen "$T/sk2" -S; check "-S: unknown key skips network 4 only" "0 skipped 4 bcawl0" "$? $(grep '^skipped ' "$T/o/plan") $(awk '$1 == "bss" { print $3 }' "$T/o/plan")"
+# only an invalid network: an empty plan, the radios stay (led lines), exit 0
+printf 'network=2\nssid=novlan\nsecurity=psk2sae\npassphrase=password2\nbands=5gl\n' > "$T/sk3"
+gen "$T/sk3" -S; check "-S: only a bad network: accepted, no BSS, skipped + led lines" "0 0 1 4" \
+	"$? $(grep -c '^bss ' "$T/o/plan") $(grep -c '^skipped 2$' "$T/o/plan") $(grep -c '^led ' "$T/o/plan")"
+# control: a list-wide error still refuses the list with -S
+{ printf 'radio=5gl\nchannel=999\n'; cat "$T/sk1"; } > "$T/sk4"
+gen "$T/sk4" -S; check "-S control: a radio error still refuses the list" "1 yes" "$? $(grep -qF 'radio 5gl: channel 999' "$T/err" && echo yes || echo no)"
+{ net 1 good sae password1 5gl 20; net 1 dup sae password1 5gl 21; } > "$T/sk5"
+gen "$T/sk5" -S; check "-S control: a network id twice still refuses the list" "1" "$?"
+# -Q -S: the skipped network has no schedule state
+{ printf 'network=2\nssid=novlan\nsecurity=psk2sae\npassphrase=password2\nbands=5gl\nschedule=daily@00:00-00:01\n'
+  net 5 sch sae password5 5gl 50; printf 'schedule=daily@00:00-00:01\n'; } > "$T/sk6"
+check "-Q -S: schedule state of the valid network only" "net 5 off" "$($SH "$G" -n "$T/sk6" -Q -S -T "1 12:00" 2> "$T/err" | tr '\n' ' ' | sed 's/ $//')"
 }
 
 for a in "busybox awk" mawk gawk; do

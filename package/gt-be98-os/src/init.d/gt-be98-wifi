@@ -40,7 +40,11 @@
 #     radio is restarted;
 #   - unchanged radios and BSSes are not touched; a HOSTAPD_ARGS change or a
 #     dead process restarts the process.
-# A network list that is refused leaves everything running as it was.
+# A network list that is refused leaves everything running as it was. A
+# network that fails its own checks (no VLAN, a bad passphrase, ...) does
+# not refuse the list: it is skipped (gt-be98-wifi-gen -S, a warning and a
+# "skipped <id>" plan line) and the other networks and the radios run, so
+# one bad network never takes every radio down (at boot nothing would run).
 #
 # Schedules (schedule= of a network or radio in the list): the list is
 # rendered for the current local time (gt-be98-wifi-sched now: only with a
@@ -589,8 +593,12 @@ gen_networks() {
 	"$WIFI_GEN" -n "$n" -o "$STATE/gen.new" -s "${WIFI_SLOTS:-/etc/hostapd/wifi-slots}" -m "$macs" \
 		-C "$MAX_BSS" -x "${HOSTAPD_CTRL:-$RUNDIR/hostapd}" -R "${WIFI_RNR:-1}" \
 		-K "${WIFI_ANCHOR_KEEP_BSSID:-1}" ${WIFI_RADIO_DEVS:+-d "$WIFI_RADIO_DEVS"} \
-		-X "${WPA_CTRL:-$RUNDIR/wpa_supplicant}" ${up:+-U "$up"} ${now:+-T "$now"} $cc ||
+		-X "${WPA_CTRL:-$RUNDIR/wpa_supplicant}" ${up:+-U "$up"} ${now:+-T "$now"} $cc -S ||
 		{ eerror "$n refused: nothing changed"; rm -rf "$STATE/gen.new"; return 1; }
+	# -S: a network that fails its own checks is left out (the generator's
+	# warning says why); the other networks and the radios run
+	t=$(awk '$1 == "skipped" { printf "%s%s", s, $2; s = " " }' "$STATE/gen.new/plan")
+	[ -z "$t" ] || ewarn "Wi-Fi network(s) $t skipped (invalid, see the warnings above): not broadcast, the others run"
 	rm -rf "$STATE/gen"
 	mv "$STATE/gen.new" "$STATE/gen"
 	# the generator wrote the configs under gen.new: point the plan at gen
