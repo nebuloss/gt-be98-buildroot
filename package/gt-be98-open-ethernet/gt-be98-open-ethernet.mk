@@ -17,7 +17,7 @@
 # console-stall-2026-10-26 2026-11-04 816dc90 (RUNNER-G2: secondary BSS netdevs join the Runner WLAN radio,
 #  provider ABI 4 attach_bss/detach_bss - pairs with open-wifi e0f00e1a; flowcache: an IPv4/IPv6 L2 entry always
 #  gets the tcp_pure_ack key variant; on top of b3ca337)
-GT_BE98_OPEN_ETHERNET_VERSION = 816dc9086e771927ac3f1be45c99bdb59c67a9fd
+GT_BE98_OPEN_ETHERNET_VERSION = 510ed306470162ce9f99f1f1f534c994266b4bc1
 GT_BE98_OPEN_ETHERNET_SITE = git@github.com:nebuloss/gt-be98-open-ethernet.git
 GT_BE98_OPEN_ETHERNET_SITE_METHOD = git
 GT_BE98_OPEN_ETHERNET_LICENSE = GPL-2.0
