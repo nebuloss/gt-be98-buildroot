@@ -14,7 +14,7 @@
 #   gt-be98-wifi-gen -n NETWORKS -o OUTDIR [-s SLOTS] [-m "2g=MAC 5gl=MAC ..."]
 #                    [-d "2g=bcawl3 5gl=bcawl0 5gh=bcawl1 6g=bcawl2"]
 #                    [-C MAX_BSS] [-x CTRL_DIR] [-c] [-R 0|1] [-K 0|1] [-N]
-#                    [-T "D HH:MM"] [-Q] [-U "2g=MHz ..."] [-X STA_CTRL_DIR]
+#                    [-T "D HH:MM"] [-Q] [-U "2g=MHz ..."] [-X STA_CTRL_DIR] [-S]
 #   gt-be98-wifi-gen -F
 #
 #   -n  the network list (format below)          -o  output dir (created)
@@ -38,6 +38,19 @@
 #       open-wifi's driver does not set bsscfg 0's address yet (its MBSS MAC
 #       set skips bsscfg 0), so the anchor is always the radio's own address
 #   -N  dry run: the slot file is not rewritten (OUTDIR/slots.new is)
+#   -S  skip a network that fails its OWN checks (ssid, security,
+#       passphrase, RADIUS, bands, vlan=/routed=/repeated=, bssid, an
+#       unknown or refused key) instead of refusing the whole list: a
+#       warning "network N skipped: <why>" and a plan line "skipped <id>";
+#       the other networks, the radios and the station are rendered as if
+#       it were not listed (it loses its sticky slots, like a deleted one).
+#       A network that clashes with a skipped one (same ssid, vlan, bssid,
+#       routed subnet, a second repeated=1) is skipped too. The service
+#       passes it, so one bad network never takes every radio down; the web
+#       UI's dry run does not (-N without -S), so a bad network is refused
+#       at the save. List-wide errors still refuse the list: country=,
+#       radio=/station= blocks, a network id or block listed twice, the
+#       per-radio limit, slot.<band>=, bssid.6g= on a secondary
 #   -T  the local time the schedules are evaluated at: D = ISO weekday
 #       (1 = Monday .. 7 = Sunday, `date +%u`), HH:MM. Without -T every
 #       schedule is checked but treated as on (the service passes -T only
@@ -318,13 +331,14 @@
 #                                               repeated network is rendered)
 #   monitor <band> <dev> <MHz> <width> <centre MHz>   (monitor=1 radios)
 #   led <band> <dev> 0|1                       (every radio of -d)
+#   skipped <id>                               (-S: a network left out, see -S)
 # and sched (also -Q's output), one line per network/radio that has a
 # schedule, in list/band order: net <id> on|off, radio <band> on|off
 # Exit 1 with the reasons on stderr when the list is refused: then nothing
 # but OUTDIR is written.
 set -u
 NETS='' OUT='' SLOTS='' MACS='' DEVS='' CAP=4 CTRL=/run/hostapd CC=0 RNR=1 KEEP=0 DRY=0
-NOW='' QUERY=0 UPF='' STACTRL=/run/wpa_supplicant
+NOW='' QUERY=0 UPF='' STACTRL=/run/wpa_supplicant SKIP=0
 SYSNET=${GT_BE98_SYSNET:-/sys/class/net}
 usage() { sed -n '/^#   gt-be98-wifi-gen -n/,/^#   -F  /p' "$0" | sed 's/^# \{0,1\}//' >&2; exit 2; }
 # what this generator supports (-F): keep it in line with the checks below
@@ -360,13 +374,13 @@ features() {
 	station_security psk2 sae
 	EOF
 }
-while getopts n:o:s:m:d:C:x:cR:K:NT:QFU:X: o; do
+while getopts n:o:s:m:d:C:x:cR:K:NT:QFU:X:S o; do
 	case $o in
 	n) NETS=$OPTARG ;; o) OUT=$OPTARG ;; s) SLOTS=$OPTARG ;; m) MACS=$OPTARG ;;
 	d) DEVS=$OPTARG ;; C) CAP=$OPTARG ;; x) CTRL=$OPTARG ;; c) CC=1 ;;
 	R) RNR=$OPTARG ;; K) KEEP=$OPTARG ;; N) DRY=1 ;;
 	T) NOW=$OPTARG ;; Q) QUERY=1 ;; F) features; exit 0 ;;
-	U) UPF=$OPTARG ;; X) STACTRL=$OPTARG ;; *) usage ;;
+	U) UPF=$OPTARG ;; X) STACTRL=$OPTARG ;; S) SKIP=1 ;; *) usage ;;
 	esac
 done
 [ "$QUERY" = 1 ] && [ -z "$OUT" ] && OUT=/dev/null
@@ -400,9 +414,18 @@ S=${SLOTS:-/dev/null}
 
 LC_ALL=C awk -v cap="$CAP" -v ctrl="$CTRL" -v devlist="$DEVS" -v maclist="$MACS" \
 	-v ccok="$CC" -v rnr="$RNR" -v keep="$KEEP" -v out="$OUT" -v slotsf="$S" \
-	-v now="$NOW" -v query="$QUERY" -v upf="$UPF" -v stactrl="$STACTRL" '
+	-v now="$NOW" -v query="$QUERY" -v upf="$UPF" -v stactrl="$STACTRL" -v skipbad="$SKIP" '
 function err(m) { print "gt-be98-wifi-gen: " m > "/dev/stderr"; nerr++ }
 function warn(m) { print "gt-be98-wifi-gen: warning: " m > "/dev/stderr" }
+# an error of network i itself: with -S the network is skipped (a warning),
+# else the list is refused
+function nerrf(i, m,    p) {
+	if (!skipbad) { err(m); return }
+	p = "network " net[i] ": "
+	if (index(m, p) == 1) m = substr(m, length(p) + 1)
+	bad[i] = 1
+	warn("network " net[i] " skipped: " m)
+}
 function trim(s) { sub(/^[ \t]+/, "", s); sub(/[ \t]+$/, "", s); return s }
 # decimal, no leading zero; NB values cut out of a line are strings: compare
 # them as numbers with "+ 0"
@@ -743,7 +766,7 @@ cur == "n" {
 	else if (k == "bands") {
 		nb[ci] = split(v, t, /[ \t,]+/)
 		for (i = 1; i <= nb[ci]; i++) {
-			if (!validband(t[i]) || ((ci, t[i]) in hasb)) { err("network " net[ci] ": band " t[i] " refused"); continue }
+			if (!validband(t[i]) || ((ci, t[i]) in hasb)) { nerrf(ci, "network " net[ci] ": band " t[i] " refused"); continue }
 			hasb[ci, t[i]] = 1
 		}
 	}
@@ -758,7 +781,7 @@ cur == "n" {
 	else if (k == "airtime_weight" && isnum(v) && v + 0 >= 1 && v + 0 <= 1000) aw[ci] = v + 0
 	else if (k == "airtime_limit" && (v == "0" || v == "1")) alim[ci] = v + 0
 	else if (k == "airtime_sta_weight" && airsta(v) && nasw[ci] < 64) {
-		if ((ci, AMAC) in aswseen) err("network " net[ci] ": airtime_sta_weight " AMAC " listed twice")
+		if ((ci, AMAC) in aswseen) nerrf(ci, "network " net[ci] ": airtime_sta_weight " AMAC " listed twice")
 		else { aswseen[ci, AMAC] = 1; asw[ci, ++nasw[ci]] = AMAC " " AW }
 	}
 	else if (k ~ /^slot\./ && validband(substr(k, 6)) && isnum(v)) ex_slot[substr(k, 6), net[ci]] = v + 0
@@ -766,8 +789,8 @@ cur == "n" {
 	# a custom address (checked in END): bssid= (one band) or bssid.<band>=
 	else if (k == "bssid" && parsemac(v, tmo)) cmac0[ci] = tolower(v)
 	else if (k ~ /^bssid\./ && validband(substr(k, 7)) && parsemac(v, tmo)) cmac[ci, substr(k, 7)] = tolower(v)
-	else if (k ~ /^(repeated|hidden|isolate|max_clients|schedule|airtime_weight|airtime_limit|airtime_sta_weight|slot\.[0-9a-z]+|mac\.[0-9a-z]+|bssid|bssid\.[0-9a-z]+)$/) err("network " net[ci] ": " k "=" v " refused")
-	else err("network " net[ci] ": unknown key " k)	# never echo a value that may be a secret
+	else if (k ~ /^(repeated|hidden|isolate|max_clients|schedule|airtime_weight|airtime_limit|airtime_sta_weight|slot\.[0-9a-z]+|mac\.[0-9a-z]+|bssid|bssid\.[0-9a-z]+)$/) nerrf(ci, "network " net[ci] ": " k "=" v " refused")
+	else nerrf(ci, "network " net[ci] ": unknown key " k)	# never echo a value that may be a secret
 	next
 }
 END {
@@ -775,71 +798,77 @@ END {
 	for (i = 1; i <= nnet; i++) {
 		id = net[i]; tag = "network " id
 		if (length(ssid[i]) < 1 || length(ssid[i]) > 32 || ssid[i] ~ /[\001-\037\177]/)
-			err(tag ": ssid must be 1-32 bytes, no control characters")
-		else if (ssid[i] in ssidseen) err(tag ": ssid also used by network " ssidseen[ssid[i]])
+			nerrf(i, tag ": ssid must be 1-32 bytes, no control characters")
+		else if (ssid[i] in ssidseen) nerrf(i, tag ": ssid also used by network " ssidseen[ssid[i]])
 		else ssidseen[ssid[i]] = id
 		s = sec[i]
 		if (s == "open" || s == "owe" || s == "open-owe") {
-			if (pass[i] != "") err(tag ": security " s " takes no passphrase")
+			if (pass[i] != "") nerrf(i, tag ": security " s " takes no passphrase")
 		} else if (s == "psk2") {
 			if (!((printable(pass[i]) && length(pass[i]) >= 8 && length(pass[i]) <= 63) || ishex64(pass[i])))
-				err(tag ": the WPA2 passphrase must be 8-63 printable ASCII characters, or 64 hex digits")
+				nerrf(i, tag ": the WPA2 passphrase must be 8-63 printable ASCII characters, or 64 hex digits")
 		} else if (s == "psk2sae" || s == "sae") {
 			if (!(printable(pass[i]) && length(pass[i]) >= 8 && length(pass[i]) <= 63))
-				err(tag ": the WPA3 (SAE) passphrase must be 8-63 printable ASCII characters")
+				nerrf(i, tag ": the WPA3 (SAE) passphrase must be 8-63 printable ASCII characters")
 		} else if (iseap(s)) {
-			if (pass[i] != "") err(tag ": security " s " takes no passphrase (the RADIUS server authenticates)")
-			if (!isip(rs[i])) err(tag ": security " s " needs radius_server=<IPv4 or IPv6 address>")
+			if (pass[i] != "") nerrf(i, tag ": security " s " takes no passphrase (the RADIUS server authenticates)")
+			if (!isip(rs[i])) nerrf(i, tag ": security " s " needs radius_server=<IPv4 or IPv6 address>")
 			if (rp[i] == "") rp[i] = 1812
-			else if (!isport(rp[i])) err(tag ": radius_port must be 1..65535")
-			if (!secretok(rk[i])) err(tag ": radius_secret must be 1-128 printable ASCII characters, no leading/trailing space")
+			else if (!isport(rp[i])) nerrf(i, tag ": radius_port must be 1..65535")
+			if (!secretok(rk[i])) nerrf(i, tag ": radius_secret must be 1-128 printable ASCII characters, no leading/trailing space")
 			if (as[i] != "" || ap[i] != "" || ak[i] != "") {
-				if (!isip(as[i])) err(tag ": radius_acct_server=<IPv4 or IPv6 address> is required with radius_acct_port/radius_acct_secret")
+				if (!isip(as[i])) nerrf(i, tag ": radius_acct_server=<IPv4 or IPv6 address> is required with radius_acct_port/radius_acct_secret")
 				if (ap[i] == "") ap[i] = 1813
-				else if (!isport(ap[i])) err(tag ": radius_acct_port must be 1..65535")
+				else if (!isport(ap[i])) nerrf(i, tag ": radius_acct_port must be 1..65535")
 				if (ak[i] == "") ak[i] = rk[i]
-				else if (!secretok(ak[i])) err(tag ": radius_acct_secret must be 1-128 printable ASCII characters, no leading/trailing space")
+				else if (!secretok(ak[i])) nerrf(i, tag ": radius_acct_secret must be 1-128 printable ASCII characters, no leading/trailing space")
 			}
-		} else err(tag ": security must be open, owe, open-owe, psk2, psk2sae, sae, wpa2-eap, wpa3-eap or wpa2-wpa3-eap")
-		if (!iseap(s) && nra[i]) err(tag ": radius_* only with security wpa2-eap, wpa3-eap or wpa2-wpa3-eap")
-		if (nb[i] == 0) err(tag ": no band")
+		} else nerrf(i, tag ": security must be open, owe, open-owe, psk2, psk2sae, sae, wpa2-eap, wpa3-eap or wpa2-wpa3-eap")
+		if (!iseap(s) && nra[i]) nerrf(i, tag ": radius_* only with security wpa2-eap, wpa3-eap or wpa2-wpa3-eap")
+		if (nb[i] == 0) nerrf(i, tag ": no band")
 		# custom addresses (bssid=, bssid.<band>=)
 		if (i in cmac0) {
-			if (nb[i] != 1) err(tag ": bssid= needs a one-band network (several bands: bssid.<band>=, one address per radio)")
+			if (nb[i] != 1) nerrf(i, tag ": bssid= needs a one-band network (several bands: bssid.<band>=, one address per radio)")
 			else for (bi = 1; bi <= nbands; bi++) if ((i, BANDS[bi]) in hasb) cmac[i, BANDS[bi]] = cmac0[i]
 		}
 		for (bi = 1; bi <= nbands; bi++) {
 			b = BANDS[bi]
 			if (!((i, b) in cmac)) continue
 			a = cmac[i, b]; parsemac(a, tmo)
-			if (!((i, b) in hasb)) { err(tag ": bssid." b "=" a " but the network is not on " b); continue }
-			if (tmo[0] % 2) { err(tag ": bssid." b "=" a " is a multicast address (bit 0 of the first octet)"); continue }
+			if (!((i, b) in hasb)) { nerrf(i, tag ": bssid." b "=" a " but the network is not on " b); continue }
+			if (tmo[0] % 2) { nerrf(i, tag ": bssid." b "=" a " is a multicast address (bit 0 of the first octet)"); continue }
 			if (int(tmo[0] / 2) % 2 == 0) warn(tag ": bssid." b "=" a " is not locally administered (bit 1 of the first octet): it may clash with a real device")
-			for (bj = 1; bj <= nbands; bj++) if ((BANDS[bj] in bmac) && bmac[BANDS[bj]] == a) err(tag ": bssid." b "=" a " is the address of radio " BANDS[bj])
-			if (a in cseen) err(tag ": bssid." b "=" a " is also " cseen[a])
+			for (bj = 1; bj <= nbands; bj++) if ((BANDS[bj] in bmac) && bmac[BANDS[bj]] == a) nerrf(i, tag ": bssid." b "=" a " is the address of radio " BANDS[bj])
+			if (a in cseen) nerrf(i, tag ": bssid." b "=" a " is also " cseen[a])
 			else cseen[a] = "network " id " on " b
 		}
 		if (((i, "6g") in hasb) && (s == "open" || s == "psk2" || s == "wpa2-eap"))
-			err(tag ": 6 GHz needs WPA3: SAE (sae, psk2sae), OWE (owe, open-owe) or WPA3-Enterprise (wpa3-eap, wpa2-wpa3-eap)")
+			nerrf(i, tag ": 6 GHz needs WPA3: SAE (sae, psk2sae), OWE (owe, open-owe) or WPA3-Enterprise (wpa3-eap, wpa2-wpa3-eap)")
 		if (rep[i]) {
-			if (vlan[i] != "" || rtd[i] != "") err(tag ": repeated=1 excludes vlan= and routed= (the network is bridged to the Wi-Fi uplink)")
-			if (nrep++) err(tag ": repeated=1: network " repid " is already repeated (one network per station uplink)")
+			if (vlan[i] != "" || rtd[i] != "") nerrf(i, tag ": repeated=1 excludes vlan= and routed= (the network is bridged to the Wi-Fi uplink)")
+			if (nrep++) nerrf(i, tag ": repeated=1: network " repid " is already repeated (one network per station uplink)")
 			else repid = id
-			if (!nsta) err(tag ": repeated=1 needs a station= uplink in the list")
-			else if (strep == "0") err(tag ": repeated=1 needs the station repeater=4addr or repeater=multiap (a 3-address station cannot be bridged)")
+			if (!nsta) nerrf(i, tag ": repeated=1 needs a station= uplink in the list")
+			else if (strep == "0") nerrf(i, tag ": repeated=1 needs the station repeater=4addr or repeater=multiap (a 3-address station cannot be bridged)")
 		} else if (rtd[i] != "") {
-			if (vlan[i] != "") err(tag ": vlan= and routed= exclude each other (a routed network has no VLAN)")
-			if (!routedok(rtd[i])) err(tag ": routed=" rtd[i] ": the first host of a private subnet, A.B.C.1/P, P = 16..30 (10/8, 172.16/12, 192.168/16)")
+			if (vlan[i] != "") nerrf(i, tag ": vlan= and routed= exclude each other (a routed network has no VLAN)")
+			if (!routedok(rtd[i])) nerrf(i, tag ": routed=" rtd[i] ": the first host of a private subnet, A.B.C.1/P, P = 16..30 (10/8, 172.16/12, 192.168/16)")
 			else {
 				for (j = 1; j < i; j++)
-					if ((j in rnetv) && RNET < rnetv[j] + rszv[j] && rnetv[j] < RNET + RSZ) err(tag ": routed=" rtd[i] " overlaps network " net[j])
+					if ((j in rnetv) && RNET < rnetv[j] + rszv[j] && rnetv[j] < RNET + RSZ) nerrf(i, tag ": routed=" rtd[i] " overlaps network " net[j])
 				rnetv[i] = RNET; rszv[i] = RSZ
 			}
-			if (!nsta) err(tag ": routed= needs a station= uplink in the list")
-			else if (strep != "0") err(tag ": routed= needs the station repeater=0 (a 4-address station is a bridge port of the repeated network)")
-		} else if (!isnum(vlan[i]) || vlan[i] + 0 < 1 || vlan[i] + 0 > 4094) err(tag ": vlan 1..4094 is required (or routed=)")
-		else if (vlan[i] in vseen) err(tag ": vlan " vlan[i] " also used by network " vseen[vlan[i]])
+			if (!nsta) nerrf(i, tag ": routed= needs a station= uplink in the list")
+			else if (strep != "0") nerrf(i, tag ": routed= needs the station repeater=0 (a 4-address station is a bridge port of the repeated network)")
+		} else if (!isnum(vlan[i]) || vlan[i] + 0 < 1 || vlan[i] + 0 > 4094) nerrf(i, tag ": vlan 1..4094 is required (or routed=)")
+		else if (vlan[i] in vseen) nerrf(i, tag ": vlan " vlan[i] " also used by network " vseen[vlan[i]])
 		else vseen[vlan[i]] = id
+	}
+	# -S: a skipped network is no longer in the list (no band: no BSS, no
+	# slot, no net/routed/repeated line; no schedule)
+	for (i = 1; i <= nnet; i++) if (i in bad) {
+		for (bi = 1; bi <= nbands; bi++) delete hasb[i, BANDS[bi]]
+		nsch[i] = ""
 	}
 	# the station (uplink): never echo its passphrase
 	if (nsta) {
@@ -1100,6 +1129,7 @@ END {
 	# ---- render ----
 	plan = out "/plan.raw"
 	printf "" > plan	# exists even for an empty list
+	for (i = 1; i <= nnet; i++) if (i in bad) print "skipped " net[i] > plan
 	for (bi = 1; bi <= nbands; bi++) {
 		b = BANDS[bi]
 		if (!live[b] || nmem[b] == 0) continue
@@ -1343,6 +1373,7 @@ while read -r t a b c d e f g h; do
 		echo "station $a $b $c $(sum "$c") $d" >> "$OUT/plan" ;;
 	monitor) echo "$t $a $b $c $d $e" >> "$OUT/plan" ;;
 	led)	echo "$t $a $b $c" >> "$OUT/plan" ;;
+	skipped) echo "$t $a" >> "$OUT/plan" ;;
 	esac
 done < "$OUT/plan.raw"
 rm -f "$OUT/plan.raw"
