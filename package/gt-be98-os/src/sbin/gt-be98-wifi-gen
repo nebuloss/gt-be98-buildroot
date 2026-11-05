@@ -75,7 +75,11 @@
 #                                   -c: hostapd runs DFS only with
 #                                   ieee80211h, which needs the country_code;
 #                                   without -c a warning, and the radio
-#                                   does not start)
+#                                   does not start; a 5 GHz radio is
+#                                   always written hostapd's chanlist= of
+#                                   its own channels, 5gl 36-64, 5gh
+#                                   100-144 149-177, so a move after a
+#                                   radar stays in the radio's band)
 #                                   2g: 20, 40; 5gl/5gh: 20, 40, 80;
 #                                   6g: 20, 40, 80, 160, 320 (HE, op_class
 #                                   131-134; 320 is EHT, op_class 137,
@@ -1155,6 +1159,15 @@ END {
 			}
 			# zero-wait DFS: hostapd background radar (the ZW-DFS of the driver)
 			if (rzw[b]) print "enable_background_radar=1" > hdr
+			# the channel picks hostapd makes itself stay on the channels of
+			# this radio (the set chans() accepts): after a radar during a CAC
+			# or in service (the driver declares no DFS offload on these
+			# radios, so hostapd chooses) and for the background CAC chain
+			# (dfs.c is_in_chanlist). Without it a radar on 5gh ch100 moved
+			# 5gh onto the 36/80 block of 5gl (run 1104-2058). Channels the
+			# regulatory domain disables stay off.
+			# (no apostrophe in this program: it is a single-quoted string)
+			print "chanlist=" (b == "5gl" ? "36-64" : "100-144 149-177") > hdr
 		}
 		# TWT responder: on by hostapd default; rtwt[] holds numbers
 		if (!rtwt[b]) print "he_twt_responder=0" > hdr
