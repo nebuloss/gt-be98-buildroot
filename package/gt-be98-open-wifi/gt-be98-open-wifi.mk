@@ -13,7 +13,7 @@
 # main 2026-11-04 e0f00e1a (box-verified: BSS0-MAC - the radio's first BSS takes hostapd's bssid= (custom
 #  first-network MAC, the 6 GHz LA anchor block: 8 networks on 6 GHz, B0/B0s/B2 PASS); RUNNER-G2 client: secondary
 #  BSS netdevs bind to their radio's Runner WLAN slot (provider ABI 4, needs open-ethernet 816dc90); on top of 18e96ed2)
-GT_BE98_OPEN_WIFI_VERSION = 7e14e98ac31e05dd86fa04488af3a3dfe3592b26
+GT_BE98_OPEN_WIFI_VERSION = 93b3896751bd968c4732299f4ba5b128f71dd8d7
 GT_BE98_OPEN_WIFI_SITE = git@github.com:nebuloss/gt-be98-open-wifi.git
 GT_BE98_OPEN_WIFI_SITE_METHOD = git
 GT_BE98_OPEN_WIFI_LICENSE = GPL-2.0-only
