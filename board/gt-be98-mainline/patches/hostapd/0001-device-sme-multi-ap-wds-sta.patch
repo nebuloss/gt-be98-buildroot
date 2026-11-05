@@ -3,7 +3,7 @@ hostapd 2.12: device SME (HAVE_AP_SME drivers) — Multi-AP backhaul and wds_sta
 gt-be98 (lane repeater, 2026-11-04). On a driver with WIPHY_FLAG_HAVE_AP_SME (open-wifi bca_pcie_ipc)
 hostapd 2.12 never runs the own-MLME association handler, so:
   - no station is ever flagged WLAN_STA_MULTI_AP (check_multi_ap() runs only there), and a backhaul
-    BSS (multi_ap=2, wds_sta=1) never creates its 4-address WDS interface (handle_assoc_cb);
+    BSS (multi_ap=1 = BACKHAUL_BSS, wds_sta=1) never creates its 4-address WDS interface (handle_assoc_cb);
   - the Multi-AP element is never put in the association response (the firmware builds it from the
     extra IEs), so a backhaul STA (multi_ap_backhaul_sta=1) disconnects;
   - the unexpected-4addr / class-3 frame events are never registered (only nl80211_mgmt_subscribe_ap).
@@ -46,7 +46,7 @@ diff -ruN a/src/ap/drv_callbacks.c b/src/ap/drv_callbacks.c
 +	/* gt-be98 (device SME): the Multi-AP element of the association request. The own-MLME
 +	 * path runs check_multi_ap() in its association handler; a HAVE_AP_SME driver reaches
 +	 * only this function, so without it no station is ever WLAN_STA_MULTI_AP and a backhaul
-+	 * BSS (multi_ap=2) never gets its 4-address WDS interface. */
++	 * BSS (multi_ap=1 = BACKHAUL_BSS) never gets its 4-address WDS interface. */
 +	if (hapd->conf->multi_ap) {
 +		u16 mst = check_multi_ap(hapd, sta, elems.multi_ap,
 +					 elems.multi_ap_len);
