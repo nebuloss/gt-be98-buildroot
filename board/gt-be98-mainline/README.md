@@ -511,7 +511,10 @@ dhcpcd, exactly as before; every other mode is opt-in.
   server's need): netdev `pppoe-wan`, `persist`, LCP echo 20 s x 3, the
   options file 0600 in `/run/gt-be98-wan` (password inside), peer DNS
   merged into `/etc/resolv.conf` through dhcpcd's per-interface fragment
-  directory (`/run/dhcpcd/resolv.conf/pppoe-wan.ppp`). Router
+  directory (`$state_dir/resolv.conf/pppoe-wan.ppp`, `state_dir` read from
+  `/lib/dhcpcd/dhcpcd-run-hooks`: `/var/run/dhcpcd/hook-state` for dhcpcd
+  10.2.4, so dhcpcd's own rebuilds keep it; written through the
+  `/etc/resolv.conf -> /run/resolv.conf` link). Router
   advertisements on the delegated LANs: a dnsmasq with `port=0` and
   `ra-only` constructor ranges (no DHCP, no DNS socket), RDNSS = the WAN's
   IPv6 servers.

@@ -356,6 +356,48 @@ check "ip-up: a bogus DNS value is dropped" "nameserver 10.9.9.9" "$(grep '^name
 wan hook ip-down pppoe-wan 2>/dev/null
 check "ip-down: PPP DNS gone" "nameserver 10.9.9.9" "$(grep '^nameserver' "$T/resolv.conf")"
 
+# ---- 6b. the PPP fragment lives in dhcpcd's OWN fragment directory --------------------------
+# (wan-arms W2 on img28: session up, 192.0.2.53 absent from /etc/resolv.conf. The tool wrote
+# /run/dhcpcd/resolv.conf/, dhcpcd 10.2.4 merges $state_dir/resolv.conf/ =
+# /var/run/dhcpcd/hook-state/resolv.conf/: each side's rebuild dropped the other's servers.)
+# Here: no DHCPCD_RESOLV_DIR override, the directory comes from the hook runner's state_dir,
+# and /etc/resolv.conf is a symlink as on the image (-> /run/resolv.conf).
+reset
+mkdir -p "$T/hs/resolv.conf"
+printf '#!/bin/sh\nstate_dir=%s\n' "$T/hs" > "$T/run-hooks"
+printf 'nameserver 10.9.9.9\n' > "$T/hs/resolv.conf/rnr0.dhcp"
+rm -rf "$T/resolv/"*; rm -f "$T/resolv.conf"; : > "$T/run-resolv.conf"; ln -s "$T/run-resolv.conf" "$T/resolv.conf"
+hk() { env -u DHCPCD_RESOLV_DIR DHCPCD_RUN_HOOKS="$T/run-hooks" $SH "$W" "$@"; }
+(umask 077; DNS1=192.0.2.53 hk hook ip-up pppoe-wan /dev/null 0 100.64.0.2 100.64.0.1 wan 2>/dev/null)
+check "ip-up: the PPP fragment is in dhcpcd's \$state_dir/resolv.conf" yes "$(yes_no grep -qx 'nameserver 192.0.2.53' "$T/hs/resolv.conf/pppoe-wan.ppp")"
+check "  control: nothing written to the override directory" no "$(yes_no test -e "$T/resolv/pppoe-wan.ppp")"
+check "ip-up: dhcpcd's server kept, the PPP one after it" "nameserver 10.9.9.9
+nameserver 192.0.2.53" "$(grep '^nameserver' "$T/run-resolv.conf")"
+check "ip-up: /etc/resolv.conf is still the symlink (written through it)" yes "$(yes_no test -L "$T/resolv.conf")"
+check "ip-up: resolv.conf 644 although pppd runs the hook with umask 077" 644 "$(stat -c %a "$T/run-resolv.conf")"
+# what dhcpcd's 20-resolv.conf does at its next rebuild: every fragment of its directory
+check "a dhcpcd rebuild (all of \$state_dir/resolv.conf/*) keeps the PPP DNS" yes \
+	"$(yes_no sh -c "cat '$T/hs/resolv.conf/'* | grep -qx 'nameserver 192.0.2.53'")"
+# a PPPoE trial, then revert: the PPP DNS goes, the management (dhcpcd) DNS stays
+printf 'WAN_PROTO=pppoe\nPPPOE_USER=u\n' > "$T/p.conf"
+hk try 60 "$T/p.conf" 2>/dev/null
+DNS1=192.0.2.53 hk hook ip-up pppoe-wan 2>/dev/null
+check "trial: PPP DNS in" yes "$(yes_no grep -qx 'nameserver 192.0.2.53' "$T/run-resolv.conf")"
+hk revert 2>/dev/null
+check "revert: PPP DNS gone, dhcpcd's kept" "nameserver 10.9.9.9" "$(grep '^nameserver' "$T/run-resolv.conf")"
+check "revert: the PPP fragment removed" no "$(yes_no test -e "$T/hs/resolv.conf/pppoe-wan.ppp")"
+check "revert: /etc/resolv.conf still the symlink" yes "$(yes_no test -L "$T/resolv.conf")"
+# against the image's dhcpcd (DHCPCD_HOOKS=<target>/lib/dhcpcd/dhcpcd-run-hooks): its
+# 20-resolv.conf merges "$state_dir/resolv.conf", the directory the tool derives
+if [ -n "${DHCPCD_HOOKS:-}" ]; then
+	td=$(DHCPCD_RUN_HOOKS="$DHCPCD_HOOKS" $SH -c "$(sed -n '/^dhcpcd_resolv_dir() {/,/^}/p' "$W"); dhcpcd_resolv_dir")
+	check "built dhcpcd: 20-resolv.conf merges \$state_dir/resolv.conf" yes \
+		"$(yes_no grep -qx 'resolv_conf_dir="$state_dir/resolv.conf"' "$(dirname "$DHCPCD_HOOKS")/dhcpcd-hooks/20-resolv.conf")"
+	check "built dhcpcd: the tool's fragment dir = its state_dir/resolv.conf" \
+		"$(sed -n 's/^state_dir=//p' "$DHCPCD_HOOKS")/resolv.conf" "$td"
+	check "  ... and not the old fixed /run/dhcpcd/resolv.conf" no "$(yes_no test "$td" = /run/dhcpcd/resolv.conf)"
+fi
+
 # ---- 7. integration: gt-be98-router follows the WAN ----------------------------------------
 reset
 printf 'WAN_PROTO=pppoe\nPPPOE_USER=u\n' > "$T/etc/wan.conf"
