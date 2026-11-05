@@ -473,6 +473,14 @@ if [ -n "$CONFCHECK" ]; then
 	check "control: hostapd refuses ieee80211h without 11d/country (why the country is required)" "1 yes" \
 		"$(grep -c '^FAIL ' "$T/d1cc") $(grep -q '802.11h without' "$T/d1cc" && echo yes || echo no)"
 fi
+# a radar's move stays in the radio's band: hostapd's DFS pick reads chanlist
+# (run 1104-2058: 5gh ch100 -> radar during the CAC -> hostapd picked 36/80, 5gl's block)
+{ printf 'country=DE\nradio=5gh\nchannel=100\nwidth=80\n'; net 1 a sae password1 "2g 5gl 5gh 6g" 1; } > "$T/d3"
+hcl() { [ -f "$T/o/hdr-$1" ] || { echo absent; return; }; grep '^chanlist=' "$T/o/hdr-$1" | tr '\n' ' ' | sed 's/ $//'; }
+rm -f "$T/slots"; gen "$T/d3" -c
+check "chanlist per 5 GHz radio: 5gh its own channels, 5gl its own, none on 2.4/6 (headers present)" \
+	"0|chanlist=36-64|chanlist=100-144 149-177||" "$?|$(hcl bcawl0)|$(hcl bcawl1)|$(hcl bcawl3)|$(hcl bcawl2)"
+conf_ok "chanlist on 5gl/5gh"
 rm -f "$T/slots"; gen "$T/d1"; check "country=DE without -c (no regdb): warned" "0 yes" \
 	"$? $(grep -q '5gh: channel 100 is a DFS (radar) channel and the regulatory database is not loaded' "$T/err" && echo yes || echo no)"
 { printf 'radio=5gh\nchannel=100\nmonitor=1\n'; net 1 a sae password1 "5gl 5gh" 1; } > "$T/d2"
