@@ -133,7 +133,14 @@
 #                                   background while the radio starts on a
 #                                   non-DFS channel, then hostapd moves to
 #                                   it). Acts on a DFS channel with the
-#                                   country written (-c: ieee80211h=1)
+#                                   country written (-c: ieee80211h=1).
+#                                   US and JP only: in every other country
+#                                   (an ETSI DFS region) it is DROPPED with
+#                                   a warning, never written (open-wifi
+#                                   ZW-N3: the driver refuses a background
+#                                   CAC there, and hostapd 2.12 then fails
+#                                   the radio's setup: the AP would not
+#                                   start)
 #     monitor=0|1                   1: the radio is a monitor, no BSS: its
 #                                   networks are not rendered there (they
 #                                   keep their slots) and the plan gets a
@@ -433,6 +440,10 @@ function isnum(s) { return s ~ /^[0-9]+$/ && s !~ /^0[0-9]/ }
 function hexv(c) { return index("0123456789abcdef", tolower(c)) - 1 }
 function hex2(n) { return sprintf("%02x", n) }
 function validband(b) { return b == "2g" || b == "5gl" || b == "5gh" || b == "6g" }
+# the DFS region of a country as the WiFi driver labels it (open-wifi
+# bca_reg.c bca_reg_dfs_region: US = FCC, JP = JP, every other country ETSI;
+# its wiphy is self-managed, so the wireless-regdb region is not the one used)
+function dfsetsi(c) { return c != "US" && c != "JP" }
 # MAC "aa:bb:cc:dd:ee:ff" -> o[0..5]; 1 on success
 function parsemac(m, o,    i, p, n) {
 	m = tolower(m)
@@ -896,6 +907,15 @@ END {
 		if (!(b in dev)) { err("no netdev for radio " b " (-d)"); continue }
 		# rax/rtwt/rzw/rmon/rled hold numbers (the "0" string trap)
 		if (rzw[b] && b != "5gl" && b != "5gh") err("radio " b ": zwdfs=1 refused (zero-wait DFS: 5gl, 5gh only)")
+		# [open-wifi ZW-N3] no background CAC in an ETSI DFS region: the driver
+		# refuses it (-EOPNOTSUPP) and hostapd 2.12 (dfs.c) then fails the
+		# interface setup, so enable_background_radar=1 would keep the radio
+		# down. Dropped, not refused: a zwdfs=1 stored before a country
+		# change must not stop the radio
+		else if (rzw[b] && dfsetsi(country)) {
+			warn("radio " b ": zwdfs=1 ignored: zero-wait DFS (background CAC) is not offered in country " country " (an ETSI DFS region: US and JP only), enable_background_radar is not written")
+			rzw[b] = 0
+		}
 		if (!(b in rtwt)) rtwt[b] = 1
 		if (!(b in rled)) rled[b] = 1
 		# HE / EHT: rax/rbe hold numbers; defaults ax=1, be=ax

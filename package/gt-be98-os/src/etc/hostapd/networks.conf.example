@@ -31,6 +31,8 @@
 # radio starts at once on a non-DFS channel, the DFS channel's CAC runs in
 # the background, then hostapd moves there; monitor=1 makes the radio a
 # monitor (<dev>mon on its channel/width, no BSS); led=0 turns its LED off.
+# zwdfs=1 acts in US and JP only: in any other country (an ETSI DFS region)
+# it is ignored with a warning (the driver refuses a background CAC there).
 # Station (Wi-Fi uplink, at most one): station=<band> with ssid=,
 # security=psk2|sae and passphrase= makes that radio a Wi-Fi client of
 # another AP (its networks then run on virtual interfaces, on the uplink's

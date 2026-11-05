@@ -589,11 +589,30 @@ check "twt=0 -> he_twt_responder=0 (6g, 5gl); twt=1 -> no line (2g)" "yes yes no
 	"$(hdr_has bcawl2 he_twt_responder=0) $(hdr_has bcawl0 he_twt_responder=0) $(grep -q '^he_twt_responder' "$T/o/hdr-bcawl3" && echo yes || echo no)"
 check "the single-BSS config carries he_twt_responder=0 too" 1 "$(grep -c '^he_twt_responder=0$' "$T/o/bss-bcawl2.conf")"
 conf_ok "twt"
-{ printf 'radio=5gl\nzwdfs=1\nchannel=52\nwidth=80\nradio=5gh\nzwdfs=0\n'; net 1 a sae password1 "5gl 5gh" 1; } > "$T/x4"
-rm -f "$T/slots"; gen "$T/x4"; check "zwdfs=1 on 5gl, zwdfs=0 on 5gh: accepted" 0 $?
-check "zwdfs=1 -> enable_background_radar=1 on 5gl only (zwdfs=0: none)" "yes no" \
+{ printf 'country=US\nradio=5gl\nzwdfs=1\nchannel=52\nwidth=80\nradio=5gh\nzwdfs=0\n'; net 1 a sae password1 "5gl 5gh" 1; } > "$T/x4"
+rm -f "$T/slots"; gen "$T/x4"; check "country=US: zwdfs=1 on 5gl, zwdfs=0 on 5gh: accepted, no zwdfs warning" "0 no" \
+	"$? $(grep -q 'zwdfs' "$T/err" && echo yes || echo no)"
+check "country=US: zwdfs=1 -> enable_background_radar=1 on 5gl only (zwdfs=0: none)" "yes no" \
 	"$(hdr_has bcawl0 enable_background_radar=1) $(grep -q '^enable_background_radar' "$T/o/hdr-bcawl1" && echo yes || echo no)"
 gen "$T/x4" -c; conf_ok "zwdfs"
+# [open-wifi ZW-N3] an ETSI DFS region (every country but US and JP, as the
+# driver labels it): zwdfs=1 is dropped with a warning, never written, and
+# the radio still renders (an old stored zwdfs=1 after a country change)
+sed 's/^country=US$/country=JP/' "$T/x4" > "$T/x4j"
+rm -f "$T/slots"; gen "$T/x4j" -c; check "country=JP (DFS region JP): enable_background_radar=1 written, no warning" "0 yes no" \
+	"$? $(hdr_has bcawl0 enable_background_radar=1) $(grep -q 'zwdfs' "$T/err" && echo yes || echo no)"
+for cc in FR DE GB CA -; do
+	ec=$cc
+	if [ "$cc" = - ]; then ec=FR; sed '/^country=/d' "$T/x4" > "$T/x4e"; else sed "s/^country=US\$/country=$cc/" "$T/x4" > "$T/x4e"; fi
+	rm -f "$T/slots"; gen "$T/x4e" -c; rc=$?
+	check "country=$cc (ETSI region; - = absent, the FR default): accepted, no enable_background_radar anywhere" "0 " \
+		"$rc $(grep -l '^enable_background_radar' "$T"/o/* 2>/dev/null | tr '\n' ' ')"
+	check "country=$cc: the warning names radio 5gl, zwdfs and the country (5gh zwdfs=0: no warning)" "1 0" \
+		"$(grep -c "warning: radio 5gl: zwdfs=1 ignored: .* in country $ec (an ETSI DFS region" "$T/err") $(grep -c 'radio 5gh: zwdfs' "$T/err")"
+	check "country=$cc: the 5gl radio still renders on its DFS channel (channel=52, ieee80211h=1)" "yes yes" \
+		"$(hdr_has bcawl0 channel=52) $(hdr_has bcawl0 ieee80211h=1)"
+done
+conf_ok "zwdfs dropped (ETSI)"
 # monitor: the radio carries no BSS, its networks keep their slots
 { net 1 a sae password1 "2g 5gh" 1; net 2 b sae password2 5gh 2; } > "$T/x5"
 rm -f "$T/slots"; gen "$T/x5"; check "monitor control: 5gh carries two BSSes" "bcawl1 bcawl1-1" \
