@@ -126,6 +126,13 @@
 #                                   be=1 with ax=0 is refused (ax=0 alone
 #                                   means be=0); 320 MHz needs be=1. The
 #                                   driver turns EHT off without ieee80211be
+#                                   Transmit beamforming (no key: always,
+#                                   stock's set, open-wifi PHYF-5): 5gl/5gh
+#                                   vht_capab=[SU-BEAMFORMER][SU-BEAMFORMEE]
+#                                   [MU-BEAMFORMER]; 5gl/5gh/6g with HE
+#                                   he_su/he_mu_beamformer=1, with EHT
+#                                   eht_su/eht_mu_beamformer=1; 2g SU only:
+#                                   he_su_beamformer=1, eht_su_beamformer=1
 #     twt=0|1                       hostapd he_twt_responder (radio-wide in
 #                                   hostapd): default 1, hostapd's own
 #                                   default; 0 writes he_twt_responder=0.
@@ -1166,6 +1173,10 @@ END {
 			# HE/EHT (header: ax=, be=); 20/40 MHz: no operation width lines
 			if (rax[b]) print "ieee80211ax=1" > hdr
 			if (rbe[b]) print "ieee80211be=1" > hdr
+			# transmit beamformer: stock 2.4 GHz txbf_bfr_cap 37 = SU only
+			# (VHT, HE, EHT); no MU line, so hostapd clears the MU bits
+			if (rax[b]) print "he_su_beamformer=1" > hdr
+			if (rbe[b]) print "eht_su_beamformer=1" > hdr
 		} else if (b == "6g") {
 			# the op_class sets the width (hostapd derives he/eht_oper_chwidth
 			# and the secondary channel from it on 6 GHz); the centre indices
@@ -1188,12 +1199,20 @@ END {
 					print "eht_oper_centr_freq_seg0_idx=" c6(ch, w) > hdr
 				}
 			}
+			# transmit beamformer, SU and MU: stock 6 GHz txbf_bfr_cap 255
+			print "he_su_beamformer=1" > hdr; print "he_mu_beamformer=1" > hdr
+			if (w == 320 || rbe[b]) { print "eht_su_beamformer=1" > hdr; print "eht_mu_beamformer=1" > hdr }
 		} else {
 			print "hw_mode=a" > hdr; print "channel=" ch > hdr
 			print "ieee80211n=1" > hdr; print "ieee80211ac=1" > hdr
 			if (w == 20) print "vht_oper_chwidth=0" > hdr
 			else if (w == 40) { print "ht_capab=[HT40" ht40(b, ch) "]" > hdr; print "vht_oper_chwidth=0" > hdr }
 			else { print "ht_capab=[HT40" ht40(b, ch) "]" > hdr; print "vht_oper_chwidth=1" > hdr; print "vht_oper_centr_freq_seg0_idx=" vht80(ch) > hdr }
+			# transmit beamformer, SU and MU on every generation: stock 5 GHz
+			# txbf_bfr_cap 255 (the driver clears each bit an element sent
+			# without it; hostapd defaults are all "no"). SU-BEAMFORMEE is
+			# the stock line; the driver keeps the stock beamformee per band
+			print "vht_capab=[SU-BEAMFORMER][SU-BEAMFORMEE][MU-BEAMFORMER]" > hdr
 			# HE/EHT (header: ax=, be=): their operation width/centre are the
 			# VHT ones (hostapd takes the channel width from the EHT lines
 			# when be=1, from the HE lines when ax=1)
@@ -1201,11 +1220,13 @@ END {
 				print "ieee80211ax=1" > hdr
 				if (w == 80) { print "he_oper_chwidth=1" > hdr; print "he_oper_centr_freq_seg0_idx=" vht80(ch) > hdr }
 				else print "he_oper_chwidth=0" > hdr
+				print "he_su_beamformer=1" > hdr; print "he_mu_beamformer=1" > hdr
 			}
 			if (rbe[b]) {
 				print "ieee80211be=1" > hdr
 				if (w == 80) { print "eht_oper_chwidth=1" > hdr; print "eht_oper_centr_freq_seg0_idx=" vht80(ch) > hdr }
 				else print "eht_oper_chwidth=0" > hdr
+				print "eht_su_beamformer=1" > hdr; print "eht_mu_beamformer=1" > hdr
 			}
 			# zero-wait DFS: hostapd background radar (the ZW-DFS of the driver)
 			if (rzw[b]) print "enable_background_radar=1" > hdr

@@ -587,6 +587,29 @@ check "default led=1 on every radio of -d, in band order" "led 2g bcawl3 1|led 5
 	"$(grep '^led ' "$T/o/plan" | tr '\n' '|' | sed 's/|$//')"
 check "no monitor line without monitor=1" "" "$(grep '^monitor ' "$T/o/plan")"
 conf_ok "ax"
+# PHYF-5 (open-wifi ledger): stock's transmit-beamformer lines on every
+# band; 5/6 GHz SU+MU, 2.4 GHz SU only (stock txbf_bfr_cap 37); each only
+# with the generation it belongs to (VHT on 5 GHz, HE with ax, EHT with be)
+bf() { grep -E '^(vht_capab|(he|eht)_(su|mu)_beamformer)=' "$T/o/hdr-$1" | tr '\n' ' ' | sed 's/ $//'; }
+BF5='vht_capab=[SU-BEAMFORMER][SU-BEAMFORMEE][MU-BEAMFORMER] he_su_beamformer=1 he_mu_beamformer=1 eht_su_beamformer=1 eht_mu_beamformer=1'
+BF6='he_su_beamformer=1 he_mu_beamformer=1 eht_su_beamformer=1 eht_mu_beamformer=1'
+check "PHYF-5 2g ax=1 be=1: he_su_beamformer=1 eht_su_beamformer=1, no MU, no VHT" "he_su_beamformer=1 eht_su_beamformer=1" "$(bf bcawl3)"
+check "PHYF-5 5gl 80 MHz: VHT SU/SU-bfee/MU, HE SU+MU, EHT SU+MU" "$BF5" "$(bf bcawl0)"
+check "PHYF-5 5gh 40 MHz: the same set" "$BF5" "$(bf bcawl1)"
+rm -f "$T/slots"; gen "$T/xb"; check "PHYF-5 off-generations list: accepted" 0 $?
+check "PHYF-5 2g be=0: HE SU only (no eht_* line)" "he_su_beamformer=1" "$(bf bcawl3)"
+check "PHYF-5 5gl ax=0: vht_capab only (no he_*/eht_* line)" "vht_capab=[SU-BEAMFORMER][SU-BEAMFORMEE][MU-BEAMFORMER]" "$(bf bcawl0)"
+check "PHYF-5 5gh ax=1 be=1 80 MHz: the full set" "$BF5" "$(bf bcawl1)"
+conf_ok "PHYF-5 off-generations"
+{ printf 'radio=6g\nchannel=37\nwidth=160\n'; net 1 a sae password1 6g 1; } > "$T/xbf6"
+rm -f "$T/slots"; gen "$T/xbf6"; check "PHYF-5 6g 160 MHz: accepted" 0 $?
+check "PHYF-5 6g (default be=1): HE SU+MU, EHT SU+MU, no vht_capab" "$BF6" "$(bf bcawl2)"
+{ printf 'radio=6g\nchannel=37\nwidth=320\n'; net 1 a sae password1 6g 1; } > "$T/xbf6"
+rm -f "$T/slots"; gen "$T/xbf6"; check "PHYF-5 6g 320 MHz: accepted, the same set once" "0 $BF6" "$? $(bf bcawl2)"
+{ printf 'radio=6g\nbe=0\nchannel=37\nwidth=160\n'; net 1 a sae password1 6g 1; } > "$T/xbf6"
+rm -f "$T/slots"; gen "$T/xbf6"; check "PHYF-5 6g be=0: HE SU+MU only" "0 he_su_beamformer=1 he_mu_beamformer=1" "$? $(bf bcawl2)"
+conf_ok "PHYF-5 6g"
+rm -f "$T/slots"; gen "$T/x1"	# back to the default list
 { printf 'radio=5gh\nchannel=100\nwidth=40\n'; net 1 a sae password1 5gh 1; } > "$T/x2"
 rm -f "$T/slots"; gen "$T/x2"; check "5gh HE at 40 MHz: he_oper_chwidth=0, no HE centre" "yes no" \
 	"$(hdr_has bcawl1 he_oper_chwidth=0) $(grep -q '^he_oper_centr' "$T/o/hdr-bcawl1" && echo yes || echo no)"
