@@ -7,6 +7,8 @@
 # the wired LAN's bridge (gt-be98-lan's LAN_BRIDGE, br-lan: the LAN ports,
 # never rnr0, plus any radio whose hostapd config says bridge=br-lan).
 #   $ROUTER_DIR/router.conf   ROUTER_WAN="rnr0" ROUTER_LANS="bcawl3=192.168.83.1/24 ..."
+#                             ROUTER_WAN_ALLOW="192.0.2.0/24 2001:db8::/64" (optional:
+#                             the management allow-list on the WAN, below)
 #                             (ROUTER_WAN="wan": the WAN netdev of gt-be98-wan,
 #                             rnr0 / rnr0.<vid> / pppoe-wan, resolved at each start
 #                             and reroute)
@@ -21,6 +23,15 @@
 # 06-gt-be98-router runs `reroute` when the WAN's lease changes. Masquerade
 # applies on any non-Wi-Fi output (router.nft). The WAN itself (its address,
 # its routes, its link) is never touched: it may be the only management path.
+# Input firewall (owner D22): router mode always filters the box's own input
+# from ROUTER_WAN, with gt-be98-wan's WAN input rules (replies, ICMP, DHCP
+# client replies; `gt-be98-wan input-nft`) in table inet gt_be98_router_in,
+# plus ROUTER_WAN_ALLOW (the management allow-list, router.conf: sources
+# that may reach the box from the WAN, IPv4/IPv6 CIDRs; none by default). It is
+# applied before forwarding is turned on, re-applied on reroute (the WAN
+# netdev may change) and removed at stop; if it cannot be applied, router
+# mode does not start. AP mode (this service stopped) filters nothing: rnr0
+# stays open to management there.
 # Settings: /etc/conf.d/gt-be98-router. Saved to /jffs with the AP configs.
 description="Wi-Fi router mode: routed Wi-Fi subnets, DHCP/DNS, NAT out of the WAN"
 extra_started_commands="reroute"
@@ -29,6 +40,8 @@ ROUTER_DIR=${ROUTER_DIR:-/etc/gt-be98-router}
 DNSMASQ_PID=/run/gt-be98-router-dnsmasq.pid
 APPLIED=/run/gt-be98-router.applied
 ROUTER_TABLE=${ROUTER_TABLE:-180}
+INPUT_TABLE=gt_be98_router_in
+INPUT_NFT=${ROUTER_INPUT_NFT:-/run/gt-be98-router-in.nft}
 
 depend() {
 	need gt-be98-wifi
@@ -51,6 +64,11 @@ load_conf() {
 	[ -f "$f" ] || { eerror "no $f (configure router mode in the web UI)"; return 1; }
 	ROUTER_WAN=$(sed -n 's/^ROUTER_WAN="\([A-Za-z0-9_.-]*\)"$/\1/p' "$f" | tail -n1)
 	ROUTER_LANS=$(sed -n 's|^ROUTER_LANS="\([A-Za-z0-9_.=/ -]*\)"$|\1|p' "$f" | tail -n1)
+	# CIDR characters only (no glob, no quote); each CIDR is checked by input-nft
+	if grep -q '^ROUTER_WAN_ALLOW=' "$f" && grep '^ROUTER_WAN_ALLOW=' "$f" | grep -qvE '^ROUTER_WAN_ALLOW="[0-9A-Fa-f.:/ ]*"$'; then
+		eerror "ROUTER_WAN_ALLOW refused: IPv4/IPv6 CIDRs, space separated, in double quotes"; return 1
+	fi
+	ROUTER_WAN_ALLOW=$(sed -n 's|^ROUTER_WAN_ALLOW="\([0-9A-Fa-f.:/ ]*\)"$|\1|p' "$f" | tail -n1)
 	if [ "$ROUTER_WAN" = wan ]; then
 		ROUTER_WAN=$(${GT_BE98_WAN:-/usr/sbin/gt-be98-wan} ifname 2>/dev/null) ||
 			{ eerror "router WAN 'wan': gt-be98-wan has no valid WAN config"; return 1; }
@@ -97,9 +115,17 @@ route_table() {
 	done
 }
 
+# the input filter on ROUTER_WAN (header); 1 if it is not in place
+input_filter() {
+	# shellcheck disable=SC2086 # the allow-list: words (CIDR characters only, load_conf)
+	${GT_BE98_WAN:-/usr/sbin/gt-be98-wan} input-nft "$INPUT_TABLE" "$ROUTER_WAN" $ROUTER_WAN_ALLOW > "$INPUT_NFT" &&
+		nft -c -f "$INPUT_NFT" && nft -f "$INPUT_NFT"
+}
+
 reroute() {
 	load_conf || return 1
 	ebegin "Router mode: Wi-Fi routing table $ROUTER_TABLE via $ROUTER_WAN"
+	input_filter || { eend 1 "input filter on $ROUTER_WAN not applied"; return 1; }
 	route_table
 	eend 0
 }
@@ -127,6 +153,8 @@ start() {
 		ip rule add iif "$i" table "$ROUTER_TABLE" priority "$ROUTER_TABLE"
 		echo "$l" >> $APPLIED
 	done
+	# the input firewall first: no forwarding without it
+	input_filter || { eend 1 "input filter on $ROUTER_WAN not applied: router mode not started"; return 1; }
 	route_table
 	nft -c -f "$ROUTER_DIR/router.nft" && nft -f "$ROUTER_DIR/router.nft" ||
 		{ eend 1 "router.nft rejected"; return 1; }
@@ -146,6 +174,8 @@ stop() {
 	# forwarding stays on while the routed networks of a Wi-Fi station run
 	[ -s /run/gt-be98-wifi/sta/routed.applied ] || sysctl -q -w net.ipv4.ip_forward=0
 	nft delete table ip gt_be98_router 2>/dev/null
+	nft delete table inet $INPUT_TABLE 2>/dev/null
+	rm -f "$INPUT_NFT"
 	# the addresses this instance set (router.conf may already be the next one)
 	if [ -f $APPLIED ]; then
 		while read -r l; do

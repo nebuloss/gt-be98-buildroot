@@ -88,6 +88,16 @@ the fix's commit in "Changes since" -->
 
 - Boot is one-shot: any reset or power cut returns to stock until the boot
   step is run again (by design, FLASHING.md).
+- No input firewall on the uplink in AP mode (owner D22, 2026-11-06,
+  option a): release 1 is an access point on a trusted LAN, and management
+  (ssh, the web UI) is reachable on the uplink `rnr0`. Do not connect
+  `rnr0` to the internet directly. Router mode always implies an input
+  firewall on its WAN: `gt-be98-router` loads `table inet
+  gt_be98_router_in` (the VLAN/PPPoE WAN's input rules: replies, ICMP,
+  DHCP client replies; management only from `ROUTER_WAN_ALLOW` in
+  `/etc/gt-be98-router/router.conf`) before it turns forwarding on, and does
+  not start without it. <state whether this image's web UI can enable
+  router mode>.
 - The rootfs contains the SSH host keys and the web UI password hash of
   the release build (PERSISTENCE.md, "secrets off the served rootfs"): do
   not share the kit.

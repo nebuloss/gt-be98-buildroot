@@ -427,6 +427,80 @@ check "router: ROUTER_WAN=wan with an invalid WAN config refused" 1 "$( (
 	ROUTER_DIR="$T/router" GT_BE98_WAN="$SH $W"
 	. "$SRC/init.d/gt-be98-router"; load_conf ) >/dev/null 2>&1; echo $?)"
 
+# ---- 8. D22: router mode implies an input firewall on its WAN ------------------------------
+# the rule set is gt-be98-wan's VLAN/PPPoE input chain, the same lines
+reset
+printf 'WAN_PROTO=pppoe\nPPPOE_USER=u\n' > "$T/etc/wan.conf"
+wan start 2>/dev/null; wan stop 2>/dev/null
+sed -n '/chain input/,/^[[:space:]]*}$/p' "$T/run/wan.nft" | sed 's/"pppoe-wan"/"IF"/' > "$T/in.wan"
+$SH "$W" input-nft gt_be98_router_in rnr0 > "$T/in.nft" 2>/dev/null; r=$?
+check "input-nft rnr0: exit 0" 0 $r
+check "input-nft: the VLAN/PPPoE WAN's own input chain, on rnr0" "$(cat "$T/in.wan")" \
+	"$(sed -n '/chain input/,/^[[:space:]]*}$/p' "$T/in.nft" | sed 's/"rnr0"/"IF"/')"
+check "  control: the PPPoE chain was read (it drops)" yes "$(yes_no grep -q 'iifname "IF" drop' "$T/in.wan")"
+check "input-nft: one table inet, replaced atomically" "table inet gt_be98_router_in {}|delete table inet gt_be98_router_in|table inet gt_be98_router_in {" \
+	"$(head -n3 "$T/in.nft" | tr '\n' '|' | sed 's/|$//')"
+$SH "$W" input-nft gt_be98_router_in rnr0 192.0.2.0/24 2001:db8::/64 198.51.100.7/32 > "$T/in2.nft" 2>/dev/null
+check "input-nft allow-list: v4 and v6 accepts after DHCP, before the drop" \
+	'iifname "rnr0" udp dport { 68, 546 } accept|iifname "rnr0" ip saddr { 192.0.2.0/24, 198.51.100.7/32 } accept|iifname "rnr0" ip6 saddr { 2001:db8::/64 } accept|iifname "rnr0" drop' \
+	"$(grep -E 'udp dport|saddr|drop' "$T/in2.nft" | sed 's/^[[:space:]]*//' | tr '\n' '|' | sed 's/|$//')"
+check "input-nft without an allow-list: no saddr rule" no "$(yes_no grep -q saddr "$T/in.nft")"
+for bad in '192.0.2.0' '192.0.2.0/33' '300.0.2.0/24' '2001:db8::/129' 'x;drop/24' ''; do
+	check "input-nft refuses allow '$bad'" 1 "$($SH "$W" input-nft t rnr0 "$bad" >/dev/null 2>&1; echo $?)"
+done
+check "  control: 0.0.0.0/0 and ::/0 accepted" 0 "$($SH "$W" input-nft t rnr0 0.0.0.0/0 ::/0 >/dev/null 2>&1; echo $?)"
+check "input-nft refuses interface 'rnr0 }'" 1 "$($SH "$W" input-nft t 'rnr0 }' >/dev/null 2>&1; echo $?)"
+check "input-nft refuses table 'a b'" 1 "$($SH "$W" input-nft 'a b' rnr0 >/dev/null 2>&1; echo $?)"
+check "input-nft refuses a missing interface" 1 "$($SH "$W" input-nft t >/dev/null 2>&1; echo $?)"
+# the service: router mode on the bare uplink loads the filter BEFORE NAT and
+# forwarding; a filter that cannot be built keeps router mode down
+rsrc() {	# the router service's functions, its run files under $T
+	eerror() { echo "E $*"; }; ebegin() { :; }; eend() { [ "${1:-0}" = 0 ] || echo "E $*"; return "${1:-0}"; }; ewarn() { :; }
+	ROUTER_DIR="$T/router" GT_BE98_WAN="$SH $W" ROUTER_TABLE=180 ROUTER_INPUT_NFT="$T/router-in.nft"
+	. "$SRC/init.d/gt-be98-router"
+	APPLIED=$T/router.applied DNSMASQ_PID=$T/router-dnsmasq.pid IFACE_WAIT=0
+}
+rstart() { ( rsrc; start; echo "rc=$?" ); }
+isrc() { printf '%s\n' "$1" | grep -qx "$2" && echo yes || echo no; }
+reset; rm -f "$T/etc/wan.conf"
+printf 'ROUTER_WAN="rnr0"\nROUTER_LANS="bcawl3=192.168.83.1/24"\nROUTER_WAN_ALLOW="192.0.2.0/24"\n' > "$T/router/router.conf"
+r=$(rstart 2>&1)
+check "router start on rnr0: rc 0" yes "$(isrc "$r" rc=0)"
+check "router: input filter checked, loaded, then router.nft, then forwarding" \
+	"nft -c -f $T/router-in.nft|nft -f $T/router-in.nft|nft -c -f $T/router/router.nft|nft -f $T/router/router.nft|sysctl -q -w net.ipv4.ip_forward=1" \
+	"$(grep -E '^(nft|sysctl)' "$FAKE/log" | tr '\n' '|' | sed 's/|$//')"
+check "router: the filter is on rnr0, with the allow-list" yes "$(yes_no grep -q 'iifname "rnr0" ip saddr { 192.0.2.0/24 } accept' "$T/router-in.nft")"
+check "router: the filter drops the rest of rnr0's input" yes "$(yes_no grep -q 'iifname "rnr0" drop' "$T/router-in.nft")"
+reset
+printf 'ROUTER_WAN="rnr0"\nROUTER_LANS="bcawl3=192.168.83.1/24"\nROUTER_WAN_ALLOW="192.0.2.0"\n' > "$T/router/router.conf"
+r=$(rstart 2>&1)
+check "router: a bad allow-list CIDR = router mode not started (rc 1)" yes "$(isrc "$r" rc=1)"
+check "  ... no NAT loaded, no forwarding turned on" "" "$(grep -E 'router.nft|ip_forward=1' "$FAKE/log")"
+reset
+printf 'ROUTER_WAN="rnr0"\nROUTER_LANS="bcawl3=192.168.83.1/24"\nROUTER_WAN_ALLOW="192.0.2.0/24 *"\n' > "$T/router/router.conf"
+r=$(rstart 2>&1)
+check "router: an allow-list with a non-CIDR character refused (rc 1, no NAT)" "yes " "$(isrc "$r" rc=1) $(grep -E 'router.nft|ip_forward=1' "$FAKE/log")"
+reset
+printf 'ROUTER_WAN="rnr0"\nROUTER_LANS="bcawl3=192.168.83.1/24"\n' > "$T/router/router.conf"
+r=$(rstart 2>&1)
+check "router: no allow-list = rc 0, filter without saddr, NAT and forwarding on" "yes no yes" \
+	"$(isrc "$r" rc=0) $(yes_no grep -q saddr "$T/router-in.nft") $(yes_no has "$FAKE/log" 'net.ipv4.ip_forward=1')"
+reset
+( rsrc; stop ) >/dev/null 2>&1
+check "router stop: the input filter table is removed" yes "$(yes_no has "$FAKE/log" "nft delete table inet gt_be98_router_in")"
+# reroute follows ROUTER_WAN="wan": the WAN netdev changes, the filter with it
+reset
+printf 'WAN_VLAN=835\n' > "$T/etc/wan.conf"
+printf 'ROUTER_WAN="wan"\nROUTER_LANS="bcawl3=192.168.83.1/24"\n' > "$T/router/router.conf"
+( rsrc; reroute ) >/dev/null 2>&1
+check "router reroute: the filter re-applied on the WAN netdev (rnr0.835)" "yes yes" \
+	"$(yes_no has "$FAKE/log" "nft -f $T/router-in.nft") $(yes_no grep -q 'iifname "rnr0.835" drop' "$T/router-in.nft")"
+# AP mode: nothing in the WAN tool filters the bare uplink (rnr0 = management)
+reset; rm -f "$T/etc/wan.conf"
+wan start 2>/dev/null
+check "AP mode (default WAN, no router): no nft at all, rnr0 unfiltered" "" "$(grep '^nft' "$FAKE/log")"
+wan stop 2>/dev/null
+
 echo "gt-be98-wan-test ($SH): $((n - fail))/$n ok"
 [ $fail -eq 0 ] && echo "all passed"
 [ $fail -eq 0 ]

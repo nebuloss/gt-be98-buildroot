@@ -21,6 +21,10 @@
 #   gt-be98-wan revert             drop the trial config now and re-apply
 #   gt-be98-wan status             key=value state of the WAN
 #   gt-be98-wan hook ...           called by dhcpcd (07-gt-be98-wan) and pppd
+#   gt-be98-wan input-nft TABLE IF [CIDR...]
+#                                  print an nft file: table inet TABLE with the
+#                                  WAN input filter on IF, plus accept from
+#                                  the CIDRs (router mode, gt-be98-router)
 #
 # Config: /etc/gt-be98-wan/wan.conf (0600, written by the web UI through
 # `try`, saved to /jffs), KEY=VALUE, parsed, never sourced. No file = DHCP on
@@ -387,15 +391,48 @@ render_nft() {
 		echo "		iifname \"$i\" meta nfproto ipv6 drop"
 	fi
 	echo "	}"
-	if [ "$W_IF" != "$W_PORT" ]; then
-		echo "	chain input {"
-		echo "		type filter hook input priority filter; policy accept;"
-		echo "		iifname \"$i\" ct state established,related accept"
-		echo "		iifname \"$i\" meta l4proto { icmp, ipv6-icmp } accept"
-		echo "		iifname \"$i\" udp dport { 68, 546 } accept"
-		echo "		iifname \"$i\" drop"
-		echo "	}"
-	fi
+	[ "$W_IF" != "$W_PORT" ] && render_input "$i"
+	echo "}"
+}
+# the input chain of a WAN interface IF: the box answers it only with replies,
+# ICMP and DHCP client replies, plus anything from the allow-list (IPv4/IPv6
+# CIDRs, already validated). One rule set for both users: the VLAN/PPPoE WAN
+# above (no allow-list) and router mode's WAN (input-nft, gt-be98-router)
+render_input() {
+	local i=$1 c v4= v6=
+	shift
+	for c in "$@"; do
+		case "$c" in *:*) v6="$v6${v6:+, }$c" ;; *) v4="$v4${v4:+, }$c" ;; esac
+	done
+	echo "	chain input {"
+	echo "		type filter hook input priority filter; policy accept;"
+	echo "		iifname \"$i\" ct state established,related accept"
+	echo "		iifname \"$i\" meta l4proto { icmp, ipv6-icmp } accept"
+	echo "		iifname \"$i\" udp dport { 68, 546 } accept"
+	[ -n "$v4" ] && echo "		iifname \"$i\" ip saddr { $v4 } accept"
+	[ -n "$v6" ] && echo "		iifname \"$i\" ip6 saddr { $v6 } accept"
+	echo "		iifname \"$i\" drop"
+	echo "	}"
+}
+cidr_ok() {
+	case "$1" in */*) ;; *) return 1 ;; esac
+	case "$1" in
+	*:*)	printf '%s' "${1%/*}" | grep -qE '^[0-9A-Fa-f:]+$' && num_in "${1#*/}" 0 128 ;;
+	*)	ipv4_ok "${1%/*}" && num_in "${1#*/}" 0 32 ;;
+	esac
+}
+# input-nft TABLE IF [CIDR...]: the whole file, replacing TABLE atomically
+cmd_input_nft() {
+	local t=${1:-} i=${2:-} c
+	[ $# -ge 2 ] || die "usage: input-nft TABLE IF [CIDR...]"
+	shift 2
+	printf '%s' "$t" | grep -qE '^[a-z][a-z0-9_]{0,31}$' || die "input-nft: table '$t' refused"
+	printf '%s' "$i" | grep -qE '^[A-Za-z0-9][A-Za-z0-9_.-]{0,14}$' || die "input-nft: interface '$i' refused"
+	for c in "$@"; do cidr_ok "$c" || die "input-nft: allow '$c': an IPv4 or IPv6 CIDR (a.b.c.d/p, x:y::/p)"; done
+	echo "table inet $t {}"
+	echo "delete table inet $t"
+	echo "table inet $t {"
+	render_input "$i" "$@"
 	echo "}"
 }
 need_nft() { [ "$W_PROTO" = pppoe ] || [ -n "$W_MTU$W_PD_LANS" ] || [ "$W_IF" != "$W_PORT" ]; }
@@ -746,5 +783,6 @@ revert)		shift; lock; cmd_revert "$@" ;;
 status)		cmd_status ;;
 watch)		mkdir -p "$RUN"; chmod 700 "$RUN"; cmd_watch ;;
 hook)		shift; cmd_hook "$@" ;;
-*)		sed -n '3,22s/^# \{0,1\}//p' "$0"; exit 2 ;;
+input-nft)	shift; cmd_input_nft "$@" ;;
+*)		sed -n '3,26s/^# \{0,1\}//p' "$0"; exit 2 ;;
 esac

@@ -380,8 +380,17 @@ nftables, dnsmasq): no driver internals or module parameters.
   `LAN_BRIDGE`), a Wi-Fi/bridge WAN, or a LAN that is a bridge port; it
   bridges nothing itself, `gt-be98-netguard` still applies. The WAN's own
   link, address and routes are never touched (it may be the only management
-  path). `stop` removes the addresses and rules it set, both tables, and
-  turns forwarding off. hostapd always runs under `gt-be98-wifi` (`-B -P
+  path). Router mode implies an input firewall (owner D22): before NAT and
+  forwarding it loads `table inet gt_be98_router_in` on `ROUTER_WAN` (the
+  same rules as a VLAN/PPPoE WAN's input chain, rendered by `gt-be98-wan
+  input-nft`: replies, ICMP, DHCP client replies, then drop), with the
+  management allow-list `ROUTER_WAN_ALLOW` (IPv4/IPv6 CIDRs in
+  `router.conf`, none by default) accepted before the drop;
+  `reroute` re-applies it on the current WAN netdev; if it cannot be
+  loaded, router mode does not start. A VLAN/PPPoE WAN keeps
+  `gt_be98_wan`'s own drop too, so the allow-list does not open that one
+  (a drop in any table is final). `stop` removes the addresses and rules
+  it set, the three tables, and turns forwarding off. hostapd always runs under `gt-be98-wifi` (`-B -P
   /run/hostapd-wifi.pid`), never by hand.
 - Station (Wi-Fi uplink, client mode; design below).
 - Persistence: `etc/hostapd`, `etc/conf.d/gt-be98-wifi-ap`,
@@ -536,8 +545,10 @@ dhcpcd, exactly as before; every other mode is opt-in.
   size set rt mtu`: nft_exthdr + nft_rt, built into nf_tables); from the
   WAN into the delegated LANs only replies and ICMPv6; the box's own
   input from a WAN netdev other than the bare port (a VLAN or `pppoe-wan`):
-  replies, ICMP, DHCP client replies only. The bare port gets no input
-  filter (on the bench it is the management path). Masquerade stays where
+  replies, ICMP, DHCP client replies only. In AP mode the bare port gets
+  no input filter (it is the management path: owner D22, release 1 is an
+  AP on a trusted LAN); router mode puts the same rules on it
+  (`gt-be98-router`, above). Masquerade stays where
   it was: gt-be98-router's `router.nft` (any non-Wi-Fi output) and the web
   UI's `table ip webui`, whose WAN interface follows the OS's WAN netdev
   when it is a VLAN or PPPoE of `WAN_IF`.
