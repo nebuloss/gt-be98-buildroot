@@ -15,6 +15,7 @@
 #                    [-d "2g=bcawl3 5gl=bcawl0 5gh=bcawl1 6g=bcawl2"]
 #                    [-C MAX_BSS] [-x CTRL_DIR] [-c] [-R 0|1] [-K 0|1] [-N]
 #                    [-T "D HH:MM"] [-Q] [-U "2g=MHz ..."] [-X STA_CTRL_DIR] [-S]
+#                    [-B "BANDS"]
 #   gt-be98-wifi-gen -F
 #
 #   -n  the network list (format below)          -o  output dir (created)
@@ -64,6 +65,20 @@
 #       service passes what wpa_supplicant reports (gt-be98-wifi-sta freq)
 #   -X  ctrl_interface of the station's wpa_supplicant (default
 #       /run/wpa_supplicant)
+#   -B  the radios (bands, "2g 5gl ...") whose driver advertises AP beacon
+#       protection (nl80211 NL80211_EXT_FEATURE_BEACON_PROTECTION: `iw phy
+#       <phy> info` lists "[ BEACON_PROTECTION ]"; the service passes them).
+#       On those radios every SAE (sae, psk2sae) and OWE BSS gets
+#       beacon_prot=1 (BIGTK, 802.11-2020 beacon protection), as stock does
+#       (its bcnprot enable = 1 on SAE, 0 on WPA2); WPA2-only, Enterprise
+#       and open BSSes never. Without -B none. NB hostapd 2.12 itself
+#       (a) clears beacon_prot when the driver lacks the feature
+#       (wpa_auth_glue.c) and advertises it (Extended Capabilities bit 84)
+#       only with it, and (b) turns it ON by itself on every BSS with PMF
+#       of an EHT radio (ieee80211be=1, the default: ap_config.c "Enabling
+#       beacon protection as IEEE 802.11be is enabled"), Enterprise with
+#       PMF included. So -B decides for HE-only radios (be=0) and states
+#       the intent; on EHT radios hostapd's own rule wins
 #   -F  print what this generator supports (one "<what> <values>" per
 #       line: feature <name> 0|1, width <band> <MHz...>, security <modes>,
 #       station_security <modes>, max_clients <min> <max>) and exit. The web
@@ -93,7 +108,15 @@
 #                                   its own channels, 5gl 36-64, 5gh
 #                                   100-144 149-177, so a move after a
 #                                   radar stays in the radio's band)
-#                                   2g: 20, 40; 5gl/5gh: 20, 40, 80;
+#                                   2g: 20, 40 (40: rendered at 20 MHz
+#                                   with a warning while HT40_2G=0, see
+#                                   below); 5gl/5gh: 20, 40, 80, 160
+#                                   (160: the blocks 36-64 and 100-128,
+#                                   centre 50/114, [VHT160]; each holds
+#                                   DFS channels, so 160 MHz needs -c like
+#                                   a DFS channel; 5gh 100-128 holds the
+#                                   ETSI weather channels 120-128: a 10 min
+#                                   CAC in an ETSI country);
 #                                   6g: 20, 40, 80, 160, 320 (HE, op_class
 #                                   131-134; 320 is EHT, op_class 137,
 #                                   rendered with ieee80211be=1). The
@@ -219,6 +242,14 @@
 #     airtime_sta_weight=MAC W      one station's weight, W = 1..65535
 #                                   (airtime=1); the key repeats, at most
 #                                   64 per network
+#     kv=0|1                        802.11k/v roaming help: hostapd
+#                                   rrm_neighbor_report=1 + bss_transition=1
+#                                   (neighbor reports, BSS transition
+#                                   management). Rendered only while KV=1
+#                                   (below; -F feature kv): until the driver
+#                                   passes the RRM/WNM action frames through
+#                                   (open-wifi INV-T6) kv=1 is DROPPED with
+#                                   a warning, never written
 #     twt=0|1  wds=0|1              network level: refused (-F: feature
 #                                   twt 0, feature wds 0). TWT is radio-wide
 #                                   in hostapd (radio twt=, feature
@@ -355,8 +386,30 @@
 # Exit 1 with the reasons on stderr when the list is refused: then nothing
 # but OUTDIR is written.
 set -u
+# [open-wifi INV-HT40-2G] THE one switch of 2.4 GHz 40 MHz. 0 (interim, owner
+# OD1 pending its bench arm): the driver's 2.4 GHz wiphy advertises HT20 only
+# (open-wifi ap_2ghz_ht=1: no IEEE80211_HT_CAP_SUP_WIDTH_20_40), so hostapd
+# would refuse ht_capab=[HT40+/-] and the radio stay dark: a radio=2g width=40
+# is RENDERED AT 20 MHz with a warning (accepted, so a stored 40 never stops
+# the radio). 1: width=40 renders ht_capab=[HT40+/-] (set it once the bench
+# shows the firmware holds 40 MHz on 2.4 GHz and the driver advertises it).
+# -F says which: feature ht40_2g 0|1 (the web UI warns on 0).
+# (GT_BE98_HT40_2G: the offline test harness only)
+HT40_2G=${GT_BE98_HT40_2G:-0}
+# [open-wifi INV-T6] THE one switch of 802.11k/v (network kv=1). 0 (prepared,
+# disabled): the driver does not pass the RRM / WNM action frames between the
+# firmware and hostapd yet (.mgmt_tx refuses them, no action-frame RX), so
+# hostapd's neighbor report / BSS transition answers could never reach a
+# client: kv=1 is accepted and dropped with a warning. 1 once the driver
+# lane lands the frames (owner OD4 (a)) AND the OS hostapd is built with
+# CONFIG_WNM (BR2_PACKAGE_GT_BE98_OS_HOSTAPD_WNM=y, off today): without it
+# hostapd 2.12 does not know bss_transition= ("unknown configuration item",
+# config_file.c #ifdef CONFIG_WNM_AP) and refuses the WHOLE radio config.
+# -F: feature kv 0|1 (the web UI offers the option only on 1).
+# (GT_BE98_KV: the offline test harness only)
+KV=${GT_BE98_KV:-0}
 NETS='' OUT='' SLOTS='' MACS='' DEVS='' CAP=4 CTRL=/run/hostapd CC=0 RNR=1 KEEP=0 DRY=0
-NOW='' QUERY=0 UPF='' STACTRL=/run/wpa_supplicant SKIP=0
+NOW='' QUERY=0 UPF='' STACTRL=/run/wpa_supplicant SKIP=0 BPB=''
 SYSNET=${GT_BE98_SYSNET:-/sys/class/net}
 usage() { sed -n '/^#   gt-be98-wifi-gen -n/,/^#   -F  /p' "$0" | sed 's/^# \{0,1\}//' >&2; exit 2; }
 # what this generator supports (-F): keep it in line with the checks below
@@ -366,8 +419,8 @@ features() {
 	security open owe open-owe psk2 psk2sae sae wpa2-eap wpa3-eap wpa2-wpa3-eap
 	max_clients 1 2007
 	width 2g 20 40
-	width 5gl 20 40 80
-	width 5gh 20 40 80
+	width 5gl 20 40 80 160
+	width 5gh 20 40 80 160
 	width 6g 20 40 80 160 320
 	feature country 1
 	feature hidden 1
@@ -389,16 +442,19 @@ features() {
 	feature station 1
 	feature routed 1
 	feature repeater 1
+	feature beacon_prot 1
 	station_security psk2 sae
 	EOF
+	echo "feature ht40_2g $HT40_2G"
+	echo "feature kv $KV"
 }
-while getopts n:o:s:m:d:C:x:cR:K:NT:QFU:X:S o; do
+while getopts n:o:s:m:d:C:x:cR:K:NT:QFU:X:SB: o; do
 	case $o in
 	n) NETS=$OPTARG ;; o) OUT=$OPTARG ;; s) SLOTS=$OPTARG ;; m) MACS=$OPTARG ;;
 	d) DEVS=$OPTARG ;; C) CAP=$OPTARG ;; x) CTRL=$OPTARG ;; c) CC=1 ;;
 	R) RNR=$OPTARG ;; K) KEEP=$OPTARG ;; N) DRY=1 ;;
 	T) NOW=$OPTARG ;; Q) QUERY=1 ;; F) features; exit 0 ;;
-	U) UPF=$OPTARG ;; X) STACTRL=$OPTARG ;; S) SKIP=1 ;; *) usage ;;
+	U) UPF=$OPTARG ;; X) STACTRL=$OPTARG ;; S) SKIP=1 ;; B) BPB=$OPTARG ;; *) usage ;;
 	esac
 done
 [ "$QUERY" = 1 ] && [ -z "$OUT" ] && OUT=/dev/null
@@ -409,6 +465,8 @@ case "$NOW" in
 *) echo "gt-be98-wifi-gen: -T $NOW: \"D HH:MM\", D = 1 (Monday) .. 7" >&2; exit 1 ;;
 esac
 case "$CAP" in [1-8]) ;; *) echo "gt-be98-wifi-gen: -C $CAP: 1..8" >&2; exit 1 ;; esac
+case "$HT40_2G" in 0|1) ;; *) echo "gt-be98-wifi-gen: HT40_2G=$HT40_2G: 0 or 1" >&2; exit 1 ;; esac
+case "$KV" in 0|1) ;; *) echo "gt-be98-wifi-gen: KV=$KV: 0 or 1" >&2; exit 1 ;; esac
 case "$CTRL" in /*) ;; *) echo "gt-be98-wifi-gen: -x must be absolute" >&2; exit 1 ;; esac
 case "$CTRL" in *[!A-Za-z0-9/_.-]*) echo "gt-be98-wifi-gen: -x $CTRL refused" >&2; exit 1 ;; esac
 case "$STACTRL" in /*) ;; *) echo "gt-be98-wifi-gen: -X must be absolute" >&2; exit 1 ;; esac
@@ -432,7 +490,8 @@ S=${SLOTS:-/dev/null}
 
 LC_ALL=C awk -v cap="$CAP" -v ctrl="$CTRL" -v devlist="$DEVS" -v maclist="$MACS" \
 	-v ccok="$CC" -v rnr="$RNR" -v keep="$KEEP" -v out="$OUT" -v slotsf="$S" \
-	-v now="$NOW" -v query="$QUERY" -v upf="$UPF" -v stactrl="$STACTRL" -v skipbad="$SKIP" '
+	-v now="$NOW" -v query="$QUERY" -v upf="$UPF" -v stactrl="$STACTRL" -v skipbad="$SKIP" \
+	-v ht402g="$HT40_2G" -v bpbands="$BPB" -v kvon="$KV" '
 function err(m) { print "gt-be98-wifi-gen: " m > "/dev/stderr"; nerr++ }
 function warn(m) { print "gt-be98-wifi-gen: warning: " m > "/dev/stderr" }
 # an error of network i itself: with -S the network is skipped (a warning),
@@ -553,6 +612,7 @@ function widthok(b, ch, w) {
 	if (b == "2g") return w == 40
 	if (w == 40) return ht40(b, ch) != ""
 	if (w == 80) return vht80(ch) != 0
+	if (w == 160) return vht160(ch) != 0
 	return 0
 }
 function secretok(s) { return printable(s) && length(s) >= 1 && length(s) <= 128 && s !~ /^ / && s !~ / $/ }
@@ -581,6 +641,18 @@ function vht80(ch,    i, n, bs) {
 	for (i = 1; i <= n; i++) if (ch >= bs[i] + 0 && ch <= bs[i] + 12) return bs[i] + 6
 	return 0
 }
+# 5 GHz 160 MHz (open-wifi INV-160-5G, owner OD2): the centre channel of the
+# 160 MHz block that holds ch, 0 if none offered. Two blocks: 36-64 (centre
+# 50, 5gl) and 100-128 (centre 114, 5gh); 149-177 is not offered (outside
+# the ETSI band, never measured on the box)
+function vht160(ch) { return (ch >= 36 && ch <= 64) ? 50 : (ch >= 100 && ch <= 128) ? 114 : 0 }
+# 5 GHz: the VHT/HE/EHT operation width code (0: 20/40, 1: 80, 2: 160) and
+# the centre channel index (80/160 MHz only)
+function chw5(w) { return w == 160 ? 2 : w == 80 ? 1 : 0 }
+function c5(ch, w) { return w == 160 ? vht160(ch) : vht80(ch) }
+# a 5 GHz radio whose channel block (at width w) holds a DFS (radar)
+# channel, 52-144: a DFS primary, or 160 MHz (36-64 holds 52-64)
+function dfs5(b, ch, w) { return (b == "5gl" || b == "5gh") && ((ch >= 52 && ch <= 144) || (w == 160 && vht160(ch) != 0)) }
 # 6 GHz (802.11ax-2021 Annex E, op_class 131-134/137): the centre channel
 # index of the w MHz block that holds channel ch, 0 if the band has none (its
 # top channels). 40/80/160: blocks of 2/4/8 channels from channel 1 (centres
@@ -603,7 +675,7 @@ function cfreq(b, ch, w) {
 	if (w == 20) return freq(b, ch)
 	if (b == "6g") return 5950 + 5 * c6(ch, w)
 	if (w == 40) return freq(b, ch) + (ht40(b, ch) == "+" ? 10 : -10)
-	return 5000 + 5 * vht80(ch)
+	return 5000 + 5 * c5(ch, w)
 }
 # ---- schedules (see the header) ----
 # mon..sun -> 1..7, else 0
@@ -693,6 +765,13 @@ BEGIN {
 		if (!validband(kv[1]) || !isnum(kv[2])) { err("-U " t[i] ": band=MHz"); continue }
 		ufreq[kv[1]] = kv[2] + 0
 	}
+	# -B: the radios whose driver advertises beacon protection
+	n = split(bpbands, t, /[ \t,]+/)
+	for (i = 1; i <= n; i++) {
+		if (t[i] == "") continue
+		if (!validband(t[i])) { err("-B " t[i] ": a band (2g 5gl 5gh 6g)"); continue }
+		bpok[t[i]] = 1
+	}
 	nsta = 0
 	if (havenow) { split(now, t, " "); tdow = t[1] + 0; tmin = hm(t[2]) }
 }
@@ -723,7 +802,7 @@ k == "network" {
 	aw[ci] = ""; alim[ci] = 0; nasw[ci] = 0
 	nb[ci] = 0; nra[ci] = 0
 	rs[ci] = ""; rp[ci] = ""; rk[ci] = ""; as[ci] = ""; ap[ci] = ""; ak[ci] = ""
-	rtd[ci] = ""; rep[ci] = 0
+	rtd[ci] = ""; rep[ci] = 0; kv[ci] = 0
 	next
 }
 k == "radio" {
@@ -798,6 +877,7 @@ cur == "n" {
 	# v is a substr() result, a STRING: "0" is non-empty and so TRUE in awk; store the number
 	else if (k == "hidden" && (v == "0" || v == "1")) hid[ci] = v + 0
 	else if (k == "isolate" && (v == "0" || v == "1")) iso[ci] = v + 0
+	else if (k == "kv" && (v == "0" || v == "1")) kv[ci] = v + 0
 	else if (k == "max_clients" && isnum(v) && v + 0 >= 1 && v + 0 <= 2007) maxc[ci] = v + 0
 	else if (k == "schedule" && (v == "" || schedok(v))) nsch[ci] = v
 	else if (k == "airtime_weight" && isnum(v) && v + 0 >= 1 && v + 0 <= 1000) aw[ci] = v + 0
@@ -811,7 +891,7 @@ cur == "n" {
 	# a custom address (checked in END): bssid= (one band) or bssid.<band>=
 	else if (k == "bssid" && parsemac(v, tmo)) cmac0[ci] = tolower(v)
 	else if (k ~ /^bssid\./ && validband(substr(k, 7)) && parsemac(v, tmo)) cmac[ci, substr(k, 7)] = tolower(v)
-	else if (k ~ /^(repeated|hidden|isolate|max_clients|schedule|airtime_weight|airtime_limit|airtime_sta_weight|slot\.[0-9a-z]+|mac\.[0-9a-z]+|bssid|bssid\.[0-9a-z]+)$/) nerrf(ci, "network " net[ci] ": " k "=" v " refused")
+	else if (k ~ /^(repeated|hidden|isolate|kv|max_clients|schedule|airtime_weight|airtime_limit|airtime_sta_weight|slot\.[0-9a-z]+|mac\.[0-9a-z]+|bssid|bssid\.[0-9a-z]+)$/) nerrf(ci, "network " net[ci] ": " k "=" v " refused")
 	else nerrf(ci, "network " net[ci] ": unknown key " k)	# never echo a value that may be a secret
 	next
 }
@@ -892,6 +972,11 @@ END {
 		for (bi = 1; bi <= nbands; bi++) delete hasb[i, BANDS[bi]]
 		nsch[i] = ""
 	}
+	# [open-wifi INV-T6] KV=0 (header): kv=1 dropped, said once per network
+	for (i = 1; i <= nnet; i++) if (kv[i] && !(kvon + 0) && !(i in bad)) {
+		warn("network " net[i] ": kv=1 ignored: 802.11k/v (neighbor reports, BSS transition) waits for the Wi-Fi driver to pass the RRM/WNM action frames (open-wifi INV-T6); rrm_neighbor_report/bss_transition are not written")
+		kv[i] = 0
+	}
 	# the station (uplink): never echo its passphrase
 	if (nsta) {
 		tag = "station " stab
@@ -940,19 +1025,27 @@ END {
 		if (!(b in rw)) rw[b] = 20
 		if (b == "6g" && rw[b] == 320 && !rbe[b]) err("radio 6g: 320 MHz needs EHT (be=1)")
 		if (b == "6g" && c6(rch[b], rw[b]) == 0) err("radio 6g: channel " rch[b] " has no " rw[b] " MHz block (the 6 GHz band ends at channel 233)")
-		if (b != "6g" && rw[b] >= 160) err("radio " b ": " rw[b] " MHz is 6 GHz only (this radio: " (b == "2g" ? "20, 40" : "20, 40, 80") " MHz)")
+		if ((b == "2g" && rw[b] >= 160) || (b != "6g" && rw[b] == 320)) err("radio " b ": " rw[b] " MHz is " (rw[b] == 320 ? "6 GHz" : "5/6 GHz") " only (this radio: " (b == "2g" ? "20, 40" : "20, 40, 80, 160") " MHz)")
 		if (b == "2g" && rw[b] == 80) err("radio 2g: 80 MHz is 5/6 GHz only")
+		if ((b == "5gl" || b == "5gh") && rw[b] == 160 && vht160(rch[b]) == 0) err("radio " b ": channel " rch[b] " has no 160 MHz block (5 GHz 160 MHz: channels 36-64 and 100-128)")
+		# [open-wifi INV-HT40-2G] HT40_2G=0 (header): 40 MHz on 2.4 GHz is
+		# rendered at 20 (the driver advertises HT20 only there); said once
+		if (b == "2g" && rw[b] == 40 && !(ht402g + 0)) {
+			if (renab[b] != "0") warn("radio 2g: width=40 rendered at 20 MHz: the Wi-Fi driver advertises 20 MHz only on 2.4 GHz (open-wifi INV-HT40-2G), hostapd would refuse HT40 and the radio would not start")
+			rw[b] = 20
+		}
 		if ((b == "5gl" || b == "5gh") && rw[b] == 40 && ht40(b, rch[b]) == "") err("radio " b ": channel " rch[b] " has no 40 MHz pair")
 		if ((b == "5gl" || b == "5gh") && rw[b] == 80 && vht80(rch[b]) == 0) err("radio " b ": channel " rch[b] " has no 80 MHz block")
 		# a DFS channel (5 GHz 52-144; their 40/80 MHz blocks never straddle
-		# a non-DFS one) is usable only with IEEE 802.11h, which hostapd
+		# a non-DFS one; a 160 MHz block always holds DFS channels: 36-64
+		# holds 52-64) is usable only with IEEE 802.11h, which hostapd
 		# allows only with 11d and a country_code: without them hostapd marks
 		# every radar channel DISABLED itself (hw_features.c: "Hardware does
 		# not support configured channel"), and on 5gh (the firmware keeps
 		# 100-140 only) that is every channel. Said loudly; the web UI refuses
-		if ((b == "5gl" || b == "5gh") && rch[b] >= 52 && rch[b] <= 144 && renab[b] != "0" && !rmon[b] && !(ccok && country != "")) {
+		if (dfs5(b, rch[b], rw[b]) && renab[b] != "0" && !rmon[b] && !(ccok && country != "")) {
 			m = 0; for (i = 1; i <= nnet; i++) if ((i, b) in hasb) m++
-			if (m) warn("radio " b ": channel " rch[b] " is a DFS (radar) channel and the regulatory database is not loaded (no -c, so no country_code): hostapd cannot run DFS without a country_code, so the BSSes of this radio will not start")
+			if (m) warn("radio " b ": " (rch[b] >= 52 ? "channel " rch[b] " is a DFS (radar) channel" : "the 160 MHz block of channel " rch[b] " (36-64) holds DFS (radar) channels") " and the regulatory database is not loaded (no -c, so no country_code): hostapd cannot run DFS without a country_code, so the BSSes of this radio will not start")
 		}
 	}
 	if (nerr) exit 1
@@ -1207,24 +1300,26 @@ END {
 			print "ieee80211n=1" > hdr; print "ieee80211ac=1" > hdr
 			if (w == 20) print "vht_oper_chwidth=0" > hdr
 			else if (w == 40) { print "ht_capab=[HT40" ht40(b, ch) "]" > hdr; print "vht_oper_chwidth=0" > hdr }
-			else { print "ht_capab=[HT40" ht40(b, ch) "]" > hdr; print "vht_oper_chwidth=1" > hdr; print "vht_oper_centr_freq_seg0_idx=" vht80(ch) > hdr }
+			else { print "ht_capab=[HT40" ht40(b, ch) "]" > hdr; print "vht_oper_chwidth=" chw5(w) > hdr; print "vht_oper_centr_freq_seg0_idx=" c5(ch, w) > hdr }
 			# transmit beamformer, SU and MU on every generation: stock 5 GHz
 			# txbf_bfr_cap 255 (the driver clears each bit an element sent
 			# without it; hostapd defaults are all "no"). SU-BEAMFORMEE is
 			# the stock line; the driver keeps the stock beamformee per band
-			print "vht_capab=[SU-BEAMFORMER][SU-BEAMFORMEE][MU-BEAMFORMER]" > hdr
+			# 160 MHz: [VHT160] (hostapd checks it against the VHT
+			# capabilities of the driver; the box-proven 160 MHz set, perf-wide 1104-1551)
+			print "vht_capab=[SU-BEAMFORMER][SU-BEAMFORMEE][MU-BEAMFORMER]" (w == 160 ? "[VHT160]" : "") > hdr
 			# HE/EHT (header: ax=, be=): their operation width/centre are the
 			# VHT ones (hostapd takes the channel width from the EHT lines
 			# when be=1, from the HE lines when ax=1)
 			if (rax[b]) {
 				print "ieee80211ax=1" > hdr
-				if (w == 80) { print "he_oper_chwidth=1" > hdr; print "he_oper_centr_freq_seg0_idx=" vht80(ch) > hdr }
+				if (w >= 80) { print "he_oper_chwidth=" chw5(w) > hdr; print "he_oper_centr_freq_seg0_idx=" c5(ch, w) > hdr }
 				else print "he_oper_chwidth=0" > hdr
 				print "he_su_beamformer=1" > hdr; print "he_mu_beamformer=1" > hdr
 			}
 			if (rbe[b]) {
 				print "ieee80211be=1" > hdr
-				if (w == 80) { print "eht_oper_chwidth=1" > hdr; print "eht_oper_centr_freq_seg0_idx=" vht80(ch) > hdr }
+				if (w >= 80) { print "eht_oper_chwidth=" chw5(w) > hdr; print "eht_oper_centr_freq_seg0_idx=" c5(ch, w) > hdr }
 				else print "eht_oper_chwidth=0" > hdr
 				print "eht_su_beamformer=1" > hdr; print "eht_mu_beamformer=1" > hdr
 			}
@@ -1267,10 +1362,17 @@ END {
 			# REQUIRED: without WMM the firmware RSN capabilities (0x000c) do
 			# not match hostapd 3/4 RSN IE and clients drop (reason 17)
 			print "wmm_enabled=1" > f
+			# U-APSD advertised in the WMM element, as stock: hostapd defaults
+			# to not advertising it, and the driver follows the per-BSS
+			# setting hostapd sends (open-wifi INV-UAPSD), so without this
+			# line every BSS would lose U-APSD
+			print "uapsd_advertisement_enabled=1" > f
 			print "auth_algs=1" > f
 			if (hid[i]) print "ignore_broadcast_ssid=1" > f
 			if (iso[i]) print "ap_isolate=1" > f
 			if (maxc[i] != "") print "max_num_sta=" maxc[i] > f
+			# 802.11k/v (kv=1, KV=1 only): neighbor reports + BSS transition management
+			if (kv[i]) { print "rrm_neighbor_report=1" > f; print "bss_transition=1" > f }
 			# airtime: only on a radio whose airtime mode is on (hostapd ignores them at 0)
 			if (rair[b]) {
 				if (aw[i] != "") print "airtime_bss_weight=" aw[i] > f
@@ -1315,6 +1417,9 @@ END {
 				else if (s == "wpa3-eap") { print "wpa_key_mgmt=WPA-EAP-SHA256" > f; print "ieee80211w=2" > f }
 				else if (s == "psk2sae") { print "wpa_key_mgmt=WPA-PSK SAE" > f; print "ieee80211w=1" > f; print "sae_pwe=2" > f }
 				else { print "wpa_key_mgmt=SAE" > f; print "ieee80211w=2" > f; print "sae_require_mfp=1" > f; print "sae_pwe=" (b == "6g" ? 1 : 2) > f }
+				# beacon protection (-B: the driver advertises it): SAE and
+				# OWE BSSes, PMF on in each (stock: bcnprot 1 on SAE, 0 on WPA2)
+				if ((b in bpok) && (s == "sae" || s == "psk2sae" || s == "owe")) print "beacon_prot=1" > f
 				if (iseap(s)) {
 					# 802.1X: hostapd is the authenticator, the EAP
 					# conversation is relayed to the RADIUS server

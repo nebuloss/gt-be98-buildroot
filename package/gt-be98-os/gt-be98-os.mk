@@ -29,7 +29,7 @@ define GT_BE98_OS_INSTALL_TARGET_CMDS
 	for f in gt-be98-postcode gt-be98-health gt-be98-wdtd gt-be98-status \
 		gt-be98-macaddr gt-be98-netguard gt-be98-save gt-be98-nandcheck \
 		gt-be98-nandpage gt-be98-autosave gt-be98-wifi-gen gt-be98-wifi-sched \
-		gt-be98-leds gt-be98-wifi-sta gt-be98-wan; do \
+		gt-be98-leds gt-be98-wifi-sta gt-be98-wifi-reprobe gt-be98-wan; do \
 		$(INSTALL) -D -m 0755 $(@D)/sbin/$$f $(TARGET_DIR)/usr/sbin/$$f || exit 1; \
 	done
 	for s in $(GT_BE98_OS_SERVICES); do \
@@ -161,6 +161,13 @@ endif
 ifeq ($(BR2_PACKAGE_GT_BE98_OS_HOSTAPD_FILS),y)
 HOSTAPD_CONFIG_ENABLE += CONFIG_FILS
 HOSTAPD_CONFIG_DISABLE += CONFIG_FILS_SK_PFS
+endif
+
+# hostapd: CONFIG_WNM (-> CONFIG_WNM_AP: bss_transition=, for the
+# generator's 802.11k/v kv=1), same mechanism as MBO; off by default. No
+# other #CONFIG_WNM* line in hostapd/defconfig shares the prefix.
+ifeq ($(BR2_PACKAGE_GT_BE98_OS_HOSTAPD_WNM),y)
+HOSTAPD_CONFIG_ENABLE += CONFIG_WNM
 endif
 
 # hostapd: CONFIG_AIRTIME_POLICY (airtime_mode and the per-station airtime

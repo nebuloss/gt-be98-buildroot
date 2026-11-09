@@ -67,6 +67,18 @@ config BR2_PACKAGE_GT_BE98_OS_HOSTAPD_MBO
 	  then requires PMF. WNM (BSS transition management) is not
 	  enabled by this option.
 
+config BR2_PACKAGE_GT_BE98_OS_HOSTAPD_WNM
+	bool "hostapd: WNM (802.11v BSS transition management)"
+	depends on BR2_PACKAGE_HOSTAPD
+	help
+	  Build Buildroot's hostapd with CONFIG_WNM (CONFIG_WNM_AP:
+	  src/ap/wnm_ap.c and the bss_transition= / wnm_sleep_mode= keys),
+	  which Buildroot's hostapd package has no option for. Needed by
+	  gt-be98-wifi-gen's 802.11k/v (network kv=1, the generator's KV
+	  switch): without it hostapd refuses a config with bss_transition=.
+	  Off: 802.11k/v waits for the Wi-Fi driver to pass the RRM/WNM
+	  action frames (open-wifi INV-T6); turn it on with KV=1.
+
 config BR2_PACKAGE_GT_BE98_OS_HOSTAPD_AIRTIME_POLICY
 	bool "hostapd: airtime policy (airtime_mode)"
 	depends on BR2_PACKAGE_HOSTAPD

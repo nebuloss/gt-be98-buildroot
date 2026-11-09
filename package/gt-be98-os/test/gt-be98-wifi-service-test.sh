@@ -31,12 +31,19 @@ for p in 0:a4 1:a8 2:ac 3:a0; do	# bcawl<i>: phy<i>, address
 done
 cat > "$T/bin/hostapd_cli" <<'X'
 #!/bin/sh
-# hostapd_cli -p DIR -i NAME raw CMD [ARG]
-while [ $# -gt 0 ]; do case $1 in -p|-i) shift 2 ;; raw) shift; break ;; *) shift ;; esac; done
+# hostapd_cli -p DIR -i NAME raw CMD [ARG] (global) | -i NAME status (a BSS)
+ifn=
+while [ $# -gt 0 ]; do case $1 in -i) ifn=$2; shift 2 ;; -p) shift 2 ;; raw) shift; break ;; *) break ;; esac; done
 S=$FAKE/hapd
 p=$(cat "$FAKE/run/hostapd-wifi.pid" 2>/dev/null)
 [ -n "$p" ] && kill -0 "$p" 2>/dev/null || { echo "Failed to connect to hostapd"; exit 255; }
 touch "$S"
+# a BSS's status: its state, $FAKE/state-<ifname> (a radio that fails late:
+# DISABLED), else ENABLED while hostapd runs it
+if [ "${1:-}" = status ]; then
+	tr ' ' '\n' < "$S" | grep -qx "$ifn" || exit 1
+	echo "state=$(cat "$FAKE/state-$ifn" 2>/dev/null || echo ENABLED)"; exit 0
+fi
 case "$1" in PING|INTERFACES) ;; *) echo "$*" >> "$FAKE/cmds"; echo "hapd $*" >> "$FAKE/seq" ;; esac
 if [ -f "$FAKE/fail" ] && echo "$*" | grep -q -f "$FAKE/fail"; then echo FAIL; exit 0; fi
 inuse() { tr ' ' '\n' < "$S" | grep -qx "$1"; }
@@ -440,6 +447,149 @@ check "station off: no station, no vif" "|" "$(cat "$T/run/gt-be98-wifi/stations
 check "station only: hostapd stopped, the station up" "0 stop sta up bcawl0" "$rc $(tail -n1 "$T/daemon") $(tr '\n' '|' < "$T/seq" | grep -o 'sta up bcawl0')"
 ( stop_hostapd ) >> "$T/out" 2>&1
 check "stop: the station down, routing undone" "down bcawl0 unroute" "$(grep -E '^(down|unroute)' "$T/stalog" | tail -n2 | cut -d' ' -f1,2 | tr '\n' ' ' | sed 's/ *$//')"
+: > "$T/nets"; apply
+
+# 18. beacon protection: the radios whose driver advertises it (iw phy info
+# "[ BEACON_PROTECTION ]", open-wifi SD-BCNPROT) get beacon_prot=1 on their
+# SAE/OWE BSSes; the _CLIENT feature alone is not it
+rm -f "$T/slots" "$T"/iw-phy*
+{ net 1 a sae password1 "2g 5gl" 1; net 2 b psk2 password2 2g 2; } > "$T/nets"
+apply
+check "no radio advertises it: rc 0, no beacon_prot" "0 0" "$rc $(cat "$G"/hostapd-*.conf | grep -c '^beacon_prot=1$')"
+printf '\tSupported extended features:\n\t\t* [ BEACON_PROTECTION ]: beacon protection support\n' > "$T/iw-phy3"
+printf '\tSupported extended features:\n\t\t* [ BEACON_PROTECTION_CLIENT ]: beacon protection support (client)\n' > "$T/iw-phy0"
+check "bcnprot_bands: phy3 (2g) only, not the _CLIENT one (phy0)" "2g" "$(bcnprot_bands)"
+apply
+check "2g advertises it: its SAE BSS (bcawl3) beacon_prot=1, its WPA2 BSS and 5gl none; 2g restarts alone" \
+	"0 1 0 0 REMOVE bcawl3|ADD bss_config=phy3:$G/hostapd-bcawl3.conf" \
+	"$rc $(grep -c '^beacon_prot=1$' "$G/hostapd-bcawl3.conf") $(grep -c '^beacon_prot=1$' "$G/bss-bcawl3-1.conf") $(grep -c '^beacon_prot' "$G/hostapd-bcawl0.conf") $(echo "$cmds" | tr '\n' '|' | sed 's/|$//')"
+rm -f "$T"/iw-phy*; : > "$T/nets"; apply
+
+# 19. a radio re-probed by the driver (open-wifi radio_rebind): its netdev
+# comes back under the same name with a new ifindex; the reload restarts
+# that radio alone (hostapd is bound to the old netdev), its station too
+rm -f "$T/slots"; WIFI_MAX_BSS=4
+for i in 0 1 2 3; do echo "1$i" > "$T/net/bcawl$i/ifindex"; done
+{ net 1 a sae password1 "2g 5gl" 1; net 2 b sae password2 2g 2; } > "$T/nets"
+apply
+check "ids: recorded for the started radios only (bcawl3 13, bcawl0 10)" "0 bcawl0:10 bcawl3:13" \
+	"$rc $(for f in "$T"/run/gt-be98-wifi/ids/*; do printf '%s:%s ' "${f##*/}" "$(cat "$f")"; done | sed 's/ $//')"
+apply
+check "ids: same netdevs, no command" "0 -" "$rc -$cmds"
+echo 23 > "$T/net/bcawl3/ifindex"
+apply
+check "bcawl3 re-probed (ifindex 13 -> 23): that radio alone restarted, whole (its two BSSes)" \
+	"0 REMOVE bcawl3|ADD bss_config=phy3:$G/hostapd-bcawl3.conf phy0 bcawl0|phy3 bcawl3 bcawl3-1" \
+	"$rc $(echo "$cmds" | tr '\n' '|' | sed 's/|$//') $(hapd | tr '\n' '|' | sed 's/|$//')"
+check "re-probe: said so, the new ifindex recorded, bcawl0 untouched" "yes 23 10" \
+	"$(grep -q 'radio bcawl3 was re-probed by the Wi-Fi driver' "$T/out" && echo yes || echo no) $(cat "$T/run/gt-be98-wifi/ids/bcawl3") $(cat "$T/run/gt-be98-wifi/ids/bcawl0")"
+apply
+check "after the restart: no command" "0 -" "$rc -$cmds"
+# a radio no longer configured is forgotten (a later re-probe of it is not ours)
+{ net 1 a sae password1 2g 1; net 2 b sae password2 2g 2; } > "$T/nets"
+apply
+check "5gl no longer configured: removed, its id forgotten" "0 REMOVE bcawl0 bcawl3" \
+	"$rc $cmds $(ls "$T/run/gt-be98-wifi/ids" | tr '\n' ' ' | sed 's/ $//')"
+# a station radio re-probed: its AP interface went with the old wiphy; the
+# station restarts (wpa_supplicant is bound to the old netdev), then the APs
+rm -f "$T/slots" "$T"/freq-* "$T"/assoc-*
+{ printf 'radio=5gl\nchannel=36\nwidth=80\n'; sta; net 1 a sae password1 "2g 5gl" 1; } > "$T/nets"
+apply
+echo 1 > "$T/net/bcawl0-1/ifindex" 2>/dev/null
+check "station radio: running, its id recorded" "0 phy0 bcawl0-1 10" "$rc $(hapd | grep '^phy0') $(cat "$T/run/gt-be98-wifi/ids/bcawl0")"
+echo 30 > "$T/net/bcawl0/ifindex"; rm -rf "${T:?}/net/bcawl0-1"; : > "$T/seq"
+apply
+check "station radio re-probed: the AP interface again, the station restarted, then its APs (A1 order)" \
+	"0 iw add bcawl0-1|sta up bcawl0 restart|hapd REMOVE bcawl0-1|hapd ADD bss_config=phy0:$G/hostapd-bcawl0.conf" \
+	"$rc $(tr '\n' '|' < "$T/seq" | sed 's/|$//')"
+check "station radio re-probed: the new id recorded, 2g untouched (no command for bcawl3)" "30 0" \
+	"$(cat "$T/run/gt-be98-wifi/ids/bcawl0") $(echo "$cmds" | grep -c bcawl3)"
+# the daemon: started when not running, stopped with the service; stop
+# forgets every id (an unload is not a re-probe)
+WIFI_REPROBE="$here/../src/sbin/gt-be98-wifi-reprobe"; : > "$T/stalog"
+reprobe_start; reprobe_start
+check "reprobe daemon: started once" "start $T/run/gt-be98-wifi-reprobe.pid" "$(grep 'reprobe' "$T/stalog")"
+reprobe_stop
+check "reprobe daemon: stopped" "stop $T/run/gt-be98-wifi-reprobe.pid no" "$(grep '^stop.*reprobe' "$T/stalog") $([ -f "$T/run/gt-be98-wifi-reprobe.pid" ] && echo yes || echo no)"
+( stop_hostapd ) >> "$T/out" 2>&1
+check "stop: the ids forgotten" "no" "$([ -d "$T/run/gt-be98-wifi/ids" ] && echo yes || echo no)"
+for i in 0 1 2 3; do rm -f "$T/net/bcawl$i/ifindex"; done
+: > "$T/nets"; apply
+
+# 20. a radio that fails LATE (hostapd answered the ADD, then its setup
+# failed: DISABLED in hostapd's list): a failure, never "unchanged"; that
+# radio alone retried 3 times (30 s, 2 min, 10 min), then left and reported;
+# the other radio untouched; a new config starts over; ENABLED clears it
+export GT_BE98_LOG="$T/slog"; : > "$T/slog"
+default_status() { return 0; }
+rm -f "$T/slots" "$T"/state-*; WIFI_MAX_BSS=4
+{ net 1 a sae password1 "2g 5gl" 1; } > "$T/nets"
+F="$T/run/gt-be98-wifi/failed/bcawl0"
+at() { export GT_BE98_NOW=$1; apply; }
+at 1000
+check "late failure control: both radios run, no record" "0 phy3 bcawl3|phy0 bcawl0 no" "$rc $(hapd | tr '\n' '|' | sed 's/|$//') $([ -f "$F" ] && echo yes || echo no)"
+echo DISABLED > "$T/state-bcawl0"
+printf '1000.1: bcawl0: interface state COUNTRY_UPDATE->DISABLED\n1000.2: bcawl0: AP-DISABLED \n' >> "$T/hostapd.log"
+at 1001
+check "bcawl0 DISABLED: a failure (rc 1), no command, recorded (state, tries 0, retry at +30 s), hostapd's reason kept" \
+	"1 - state=DISABLED tries=0 next=1031 given_up=0 yes" \
+	"$rc -$cmds $(grep -E '^(state|tries|next|given_up)=' "$F" | tr '\n' ' ')$(grep -q '^reason=.*AP-DISABLED' "$F" && echo yes || echo no)"
+check "  syslog: FAILED, retry 1/3 in 30 s; the service output an error" "1 yes" \
+	"$(grep -c 'radio bcawl0 FAILED to start (hostapd: DISABLED): .*AP-DISABLED.*; retry 1/3 in 30 s' "$T/slog") $(grep -q ' E radio bcawl0 failed to start' "$T/out" && echo yes || echo no)"
+at 1020; check "1020: not due, nothing sent" "1 -" "$rc -$cmds"
+nadd=0; tried() { nadd=$((nadd + $(echo "$cmds" | grep -c '^ADD bss_config=phy0:'))); }
+at 1031; tried
+check "1031: retry 1/3: bcawl0 alone REMOVE + ADD, 2g untouched" "REMOVE bcawl0|ADD bss_config=phy0:$G/hostapd-bcawl0.conf 1 0" \
+	"$(echo "$cmds" | tr '\n' '|' | sed 's/|$//') $(grep '^tries=' "$F" | cut -d= -f2) $(echo "$cmds" | grep -c bcawl3)"
+at 1032; tried
+check "1032: DISABLED again: retry 2/3 in 120 s, nothing sent" "1 - next=1152 1" "$rc -$cmds $(grep '^next=' "$F") $(grep -c 'FAILED again (hostapd: DISABLED, try 1/3).*retry 2/3 in 120 s' "$T/slog")"
+at 1100; tried; at 1152; tried; at 1153; tried
+check "1152: retry 2; 1153: DISABLED again, retry 3/3 in 600 s" "tries=2 next=1753" "$(grep '^tries=' "$F") $(grep '^next=' "$F")"
+at 1753; tried; at 1754; tried
+check "1753: retry 3; 1754: given up, said once" "tries=3 given_up=1 1" \
+	"$(grep '^tries=' "$F") $(grep '^given_up=' "$F") $(grep -c 'radio bcawl0 FAILED to start (hostapd: DISABLED) after 3 retries' "$T/slog")"
+at 5000; tried; at 9000; tried
+check "given up: no more command, exactly 3 retries (ADDs) in all, never a command for 2g" "- 3 0" \
+	"-$cmds $nadd $(grep -c 'bcawl3' "$T/cmds")"
+check "given up: no second syslog line" "1" "$(grep -c 'after 3 retries' "$T/slog")"
+: > "$T/out"; ( status ) >> "$T/out" 2>&1; src=$?
+check "status: an error naming bcawl0, given up, the reason; non-zero" "yes 1" \
+	"$(grep -q ' E radio bcawl0 FAILED to start (DISABLED), given up after 3 retries: .*AP-DISABLED' "$T/out" && echo yes || echo no) $src"
+# a new config of that radio: a new count, restarted at once
+sed -i '1i radio=5gl\nchannel=44' "$T/nets"
+at 9001
+check "5gl channel changed: restarted at once" "REMOVE bcawl0|ADD bss_config=phy0:$G/hostapd-bcawl0.conf" "$(echo "$cmds" | tr '\n' '|' | sed 's/|$//')"
+at 9002
+check "  still DISABLED: a NEW record (tries 0, next +30)" "tries=0 next=9032" "$(grep '^tries=' "$F") $(grep '^next=' "$F")"
+rm -f "$T/state-bcawl0"; at 9003
+check "ENABLED: the record goes, recovered said, rc 0" "0 no 1" "$rc $([ -f "$F" ] && echo yes || echo no) $(grep -c 'radio bcawl0 recovered (ENABLED)' "$T/slog")"
+# a failure INSIDE the ADD (hostapd answers FAIL): the same budget
+sed -i '/^radio=5gl$/d; /^channel=44$/d' "$T/nets"
+echo 'hostapd-bcawl0' > "$T/fail"; at 9100
+check "ADD FAIL: rc 1, recorded ADD-FAILED, retry at +30" "1 state=ADD-FAILED next=9130" "$rc $(grep '^state=' "$F") $(grep '^next=' "$F")"
+at 9110; check "  9110: held (no ADD for bcawl0)" "0" "$(echo "$cmds" | grep -c 'ADD bss_config=phy0')"
+at 9130; check "  9130: retry 1 (the ADD sent again, FAIL again: retry 2 in 120 s)" "1 tries=1 next=9250" \
+	"$(echo "$cmds" | grep -c 'ADD bss_config=phy0') $(grep '^tries=' "$F") $(grep '^next=' "$F")"
+rm -f "$T/fail"; at 9250; at 9251
+check "  9250: the retry works; 9251: ENABLED, record cleared" "no" "$([ -f "$F" ] && echo yes || echo no)"
+# a radio leaving the plan takes its record with it; stop forgets all
+echo DISABLED > "$T/state-bcawl0"; at 9300
+{ net 1 a sae password1 2g 1; } > "$T/nets"; rm -f "$T/state-bcawl0"; at 9301
+check "5gl out of the plan: its record gone" "no" "$([ -f "$F" ] && echo yes || echo no)"
+( stop_hostapd ) >> "$T/out" 2>&1
+check "stop: no failed dir" "no" "$([ -d "$T/run/gt-be98-wifi/failed" ] && echo yes || echo no)"
+unset GT_BE98_NOW GT_BE98_LOG; : > "$T/nets"; apply
+
+# 21. a dead hostapd (the stub: its pid killed, the fake's interface list
+# gone with it): the reload the watcher runs restarts the process and adds
+# every radio again, said; a dead process is never "unchanged"
+rm -f "$T/slots" "$T"/state-*
+{ net 1 a sae password1 "2g 5gl" 1; } > "$T/nets"; apply
+kill "$(cat "$T/run/hostapd-wifi.pid")" 2>/dev/null; rm -f "$T/hapd"; sleep 0.2 2>/dev/null || sleep 1
+: > "$T/daemon"; apply
+check "dead hostapd: rc 0, the process started again, both radios added, said" \
+	"0 start yes ADD bss_config=phy3:$G/hostapd-bcawl3.conf|ADD bss_config=phy0:$G/hostapd-bcawl0.conf yes" \
+	"$rc $(cut -d' ' -f1 "$T/daemon" | tr '\n' '|' | sed 's/|$//') $(hap_running && echo yes || echo no) $(echo "$cmds" | tr '\n' '|' | sed 's/|$//') $(grep -q '! hostapd had died' "$T/out" && echo yes || echo no)"
 : > "$T/nets"; apply
 
 if [ $fail = 0 ]; then echo "ALL OK ($n checks)"; else echo "FAILED"; cat "$T/out"; fi

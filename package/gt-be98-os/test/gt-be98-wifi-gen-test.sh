@@ -219,7 +219,7 @@ net 1 a sae password1 "2g 7g" 5 > "$T/r"; refuse "unknown band" "$T/r"
 { net 1 a sae password1 2g 1; printf 'slot.2g=1\n'; net 2 b sae password2 2g 2; printf 'slot.2g=1\n'; } > "$T/r"; refuse "explicit slot twice" "$T/r"
 { net 1 a sae password1 2g 1; printf 'slot.2g=4\n'; } > "$T/r"; refuse "explicit slot >= cap" "$T/r"
 { printf 'radio=5gl\nchannel=100\n'; net 1 a sae password1 5gl 1; } > "$T/r"; refuse "5gl channel 100" "$T/r"
-for cw in 6g:233:40 6g:225:80 6g:229:160 6g:233:320 6g:37:60 6g:37:640 5gl:36:160 5gh:100:320 2g:6:80 2g:6:160; do
+for cw in 6g:233:40 6g:225:80 6g:229:160 6g:233:320 6g:37:60 6g:37:640 5gl:36:320 5gh:132:160 5gh:149:160 5gh:100:320 2g:6:80 2g:6:160; do
 	b=${cw%%:*}; c=${cw#*:}; w=${c#*:}; c=${c%%:*}
 	{ printf 'radio=%s\nchannel=%s\nwidth=%s\n' "$b" "$c" "$w"; net 1 a sae password1 "$b" 1; } > "$T/r"; refuse "$b channel $c at $w MHz" "$T/r"
 done
@@ -556,6 +556,93 @@ rm -f "$T/slots"; gen "$T/c6" -K 1; check "-K: a custom 6 GHz anchor; the second
 	"$? $(bssid_of bcawl2) $(bssid_of bcawl2-1)"
 check "-F: feature bssid 1" "feature bssid 1" "$($SH "$G" -F | grep '^feature bssid ')"
 
+# ---- 10b6. beacon protection (open-wifi SD-BCNPROT): -B lists the radios
+# whose driver advertises NL80211_EXT_FEATURE_BEACON_PROTECTION; there SAE
+# (sae, psk2sae) and OWE BSSes get beacon_prot=1, as stock (bcnprot 1 on
+# SAE, 0 on WPA2); WPA2, Enterprise, open never; no -B: none ----
+check "-F: feature beacon_prot 1" "feature beacon_prot 1" "$(grep '^feature beacon_prot ' "$T/feat" 2>/dev/null || $SH "$G" -F | grep '^feature beacon_prot ')"
+{ net 1 s sae password1 "2g 5gl 6g" 1; net 2 m psk2sae password2 "2g 5gl 6g" 2; net 3 w psk2 password3 "2g 5gl" 3
+  printf 'network=4\nssid=o\nsecurity=open-owe\nbands=2g 6g\nvlan=4\n'; printf 'network=5\nssid=e\nsecurity=owe\nbands=5gl\nvlan=5\n'
+  printf 'network=6\nssid=x\nsecurity=wpa3-eap\nbands=5gl\nvlan=6\nradius_server=192.0.2.10\nradius_secret=s3cret\n'; } > "$T/bp"
+bpl() {	# the BSSes (net@ifname) whose section has beacon_prot=1, plan order
+	awk '$1 == "bss" { print $5 "@" $3 }' "$T/o/plan" | while read -r x; do
+		grep -qx 'beacon_prot=1' "$T/o/sec-${x#*@}" && printf '%s ' "$x"; done | sed 's/ $//'
+}
+rm -f "$T/slots"; gen "$T/bp" -C 8; check "beacon protection, no -B: accepted, none" "0 " "$? $(bpl)"
+gen "$T/bp" -C 8 -B "2g 5gl 5gh 6g"
+check "-B all radios: SAE, WPA2/WPA3 and OWE BSSes only (not WPA2, open, open-owe on 2.4, WPA3-Enterprise)" \
+	"0 1@bcawl3 2@bcawl3-1 1@bcawl0 2@bcawl0-1 5@bcawl0-3 1@bcawl2 2@bcawl2-1 4@bcawl2-2" "$? $(bpl)"
+check "-B: the single-BSS config carries it too (bss-bcawl2-2, OWE on 6 GHz)" "1" "$(grep -c '^beacon_prot=1$' "$T/o/bss-bcawl2-2.conf")"
+check "-B: every beacon_prot BSS has PMF (ieee80211w 1 or 2)" "" \
+	"$(for f in "$T"/o/sec-*; do grep -q '^beacon_prot=1$' "$f" && ! grep -qE '^ieee80211w=[12]$' "$f" && echo "${f##*/}"; done)"
+conf_ok "beacon protection"
+gen "$T/bp" -C 8 -B "6g"; check "-B 6g: the 6 GHz BSSes only" "0 1@bcawl2 2@bcawl2-1 4@bcawl2-2" "$? $(bpl)"
+gen "$T/bp" -C 8 -B "2g,5gl"; check "-B comma-separated: 2.4 and 5 GHz-low" "0 1@bcawl3 2@bcawl3-1 1@bcawl0 2@bcawl0-1 5@bcawl0-3" "$? $(bpl)"
+# hostapd 2.12's own rule (ap_config.c): on an EHT radio (be=1, the default)
+# every BSS with PMF gets beacon protection whatever beacon_prot says; on an
+# HE-only radio (be=0) only beacon_prot=1 asks for it. Both ways, no -B
+if [ -n "$CONFCHECK" ]; then
+	{ printf 'radio=5gl\nbe=0\n'; net 1 s sae password1 "2g 5gl" 1; } > "$T/bpe"
+	rm -f "$T/slots"; gen "$T/bpe"
+	"$CONFCHECK" "$T/o/hostapd-bcawl3.conf" > "$T/cce" 2>&1; "$CONFCHECK" "$T/o/hostapd-bcawl0.conf" > "$T/cch" 2>&1
+	check "hostapd itself: EHT 2g SAE BSS gets beacon protection without beacon_prot=1; HE-only 5gl does not" "1 0" \
+		"$(grep -c 'Enabling beacon protection as IEEE 802.11be is enabled' "$T/cce") $(grep -c 'Enabling beacon protection' "$T/cch")"
+	gen "$T/bp" -C 8
+fi
+cp "$T/slots" "$T/slots.bp"; gen "$T/bp" -C 8 -B "2g 7g"
+check "-B with an unknown band: refused, said why, slots untouched" "1 yes same" \
+	"$? $(grep -q -- '-B 7g: a band' "$T/err" && echo yes || echo no) $(cmp -s "$T/slots" "$T/slots.bp" && echo same || echo changed)"
+
+# ---- 10b7. 802.11k/v (network kv=1; open-wifi INV-T6, owner OD4 (a)):
+# prepared, disabled. KV=0 (the default): -F feature kv 0, kv=1 accepted and
+# DROPPED with a warning; KV=1: rrm_neighbor_report=1 + bss_transition=1 on
+# every BSS of the network, none elsewhere ----
+check "-F: feature kv 0 (the default)" "feature kv 0" "$($SH "$G" -F | grep '^feature kv ')"
+check "-F with KV=1: feature kv 1" "feature kv 1" "$(GT_BE98_KV=1 $SH "$G" -F | grep '^feature kv ')"
+{ net 1 a sae password1 "2g 5gl 6g" 1; printf 'kv=1\n'; net 2 b sae password2 "2g 5gl" 2; printf 'kv=0\n'; net 3 c psk2 password3 2g 3; } > "$T/kv"
+kvl() {	# the BSSes (net@ifname) whose section has both 11k/v lines
+	awk '$1 == "bss" { print $5 "@" $3 }' "$T/o/plan" | while read -r x; do
+		grep -qx 'rrm_neighbor_report=1' "$T/o/sec-${x#*@}" && grep -qx 'bss_transition=1' "$T/o/sec-${x#*@}" && printf '%s ' "$x"; done | sed 's/ $//'
+}
+rm -f "$T/slots"; gen "$T/kv"
+check "KV=0: kv=1 accepted, nothing written, one warning naming network 1 and INV-T6" "0 0 1" \
+	"$? $(cat "$T"/o/sec-* | grep -cE '^(rrm_neighbor_report|bss_transition)=') $(grep -c 'warning: network 1: kv=1 ignored: .*INV-T6' "$T/err")"
+check "KV=0: kv=0 says nothing" "0" "$(grep -c 'network 2: kv' "$T/err")"
+rm -f "$T/slots"; GT_BE98_KV=1 gen "$T/kv"
+check "KV=1: network 1 on its three radios only, no warning" "0 1@bcawl3 1@bcawl0 1@bcawl2 0" "$? $(kvl) $(grep -c 'kv=' "$T/err")"
+check "KV=1: only those two lines added (network 2, kv=0: neither)" "" "$(grep -hE '^(rrm_|bss_transition)' "$T/o/sec-bcawl3-1" "$T/o/sec-bcawl0-1")"
+# hostapd's own reading: bss_transition= exists only with CONFIG_WNM_AP (the
+# OS option BR2_PACKAGE_GT_BE98_OS_HOSTAPD_WNM, off today); a hostapd without
+# it refuses the whole config. So with the OS's hostapd the ONLY error must
+# be that key (every other line parses); with a WNM hostapd every config
+if [ -n "$CONFCHECK" ]; then
+	"$CONFCHECK" "$T"/o/hostapd-*.conf "$T"/o/bss-*.conf > "$T/cckv" 2>&1
+	if grep -q "unknown configuration item 'bss_transition'" "$T/cckv"; then
+		check "KV=1, a hostapd without CONFIG_WNM: bss_transition is the only error (KV=1 needs BR2_PACKAGE_GT_BE98_OS_HOSTAPD_WNM)" "" \
+			"$(grep -E '^Line [0-9]+:' "$T/cckv" | grep -v "unknown configuration item 'bss_transition'" | head -3)"
+	else
+		conf_ok "kv (hostapd with CONFIG_WNM)"
+	fi
+else
+	echo "skip kv hostapd reading (no hostapd-confcheck)"
+fi
+GT_BE98_KV=0 gen "$T/kv"; conf_ok "kv=1 dropped (KV=0): the shipped path parses"
+rm -f "$T/slots"; GT_BE98_KV=1 gen "$T/kv" -S; check "KV=1 -S: the same" "0 1@bcawl3 1@bcawl0 1@bcawl2" "$? $(kvl)"
+{ net 1 a sae password1 2g 1; printf 'kv=2\n'; } > "$T/r"; rm -f "$T/slots"; gen "$T/r"
+check "kv=2: refused, said why" "1 yes" "$? $(grep -q 'network 1: kv=2 refused' "$T/err" && echo yes || echo no)"
+check "KV=x: refused" "1" "$(GT_BE98_KV=x $SH "$G" -n "$T/kv" -o "$T/o" -s "$T/slots" -m "$M" > /dev/null 2>&1; echo $?)"
+
+# ---- 10b8. U-APSD advertised on every BSS (open-wifi INV-UAPSD: the driver
+# follows hostapd's per-BSS setting, hostapd's default is off; stock on) ----
+{ net 1 s sae password1 "2g 5gl 5gh 6g" 1; net 2 w psk2 password2 "2g 5gl" 2
+  printf 'network=3\nssid=o\nsecurity=open\nbands=2g\nvlan=3\n'; printf 'network=4\nssid=e\nsecurity=owe\nbands=6g\nvlan=4\n'; } > "$T/ua"
+rm -f "$T/slots"; gen "$T/ua"
+check "U-APSD: every BSS section once, every single-BSS config once (8 BSSes)" "0 8 8" \
+	"$? $(cat "$T"/o/sec-* | grep -cx 'uapsd_advertisement_enabled=1') $(cat "$T"/o/bss-*.conf | grep -cx 'uapsd_advertisement_enabled=1')"
+check "U-APSD: each radio config carries it once per BSS (2g: 3)" "3" "$(grep -cx 'uapsd_advertisement_enabled=1' "$T/o/hostapd-bcawl3.conf")"
+check "U-APSD: never =0 anywhere" "" "$(grep -l 'uapsd_advertisement_enabled=0' "$T"/o/* 2>/dev/null)"
+conf_ok "U-APSD"
+
 # ---- 10c. radio features: HE (ax=), TWT responder (twt=), zero-wait DFS
 # (zwdfs=), monitor (monitor=), LED (led=) ----
 # HE/EHT (ax=, be=): default both on, every radio; each off both ways
@@ -664,9 +751,10 @@ mon() {	# band channel width -> the monitor line
 	rm -f "$T/slots"; [ "$1" = 2g ] && { printf 'radio=%s\nmonitor=1\nchannel=%s\nwidth=%s\n' "$1" "$2" "$3"; net 1 a sae password1 5gl 1; } > "$T/xm"
 	gen "$T/xm" && grep '^monitor ' "$T/o/plan"
 }
-check "monitor freq/centre: 2g 6/40, 2g 11/40, 5gl 40/40, 6g 37/320, 6g 5/20" \
+check "monitor freq/centre (HT40_2G=1): 2g 6/40, 2g 11/40, 5gl 40/40, 6g 37/320, 6g 5/20" \
 	"monitor 2g bcawl3 2437 40 2447|monitor 2g bcawl3 2462 40 2452|monitor 5gl bcawl0 5200 40 5190|monitor 6g bcawl2 6135 320 6105|monitor 6g bcawl2 5975 20 5975" \
-	"$({ mon 2g 6 40; mon 2g 11 40; mon 5gl 40 40; mon 6g 37 320; mon 6g 5 20; } | tr '\n' '|' | sed 's/|$//')"
+	"$(export GT_BE98_HT40_2G=1; { mon 2g 6 40; mon 2g 11 40; mon 5gl 40 40; mon 6g 37 320; mon 6g 5 20; } | tr '\n' '|' | sed 's/|$//')"
+check "monitor 2g 6/40 with HT40_2G=0 (the default): at 20 MHz" "monitor 2g bcawl3 2437 20 2437" "$(mon 2g 6 40)"
 { printf 'radio=5gh\nmonitor=1\nenabled=0\n'; net 1 a sae password1 5gh 1; } > "$T/x8"
 rm -f "$T/slots"; gen "$T/x8"; check "monitor=1 with enabled=0: no monitor" "0 0" "$? $(grep -c '^monitor ' "$T/o/plan")"
 { printf 'radio=2g\nled=0\nradio=6g\nled=1\n'; net 1 a sae password1 2g 1; } > "$T/x9"
@@ -685,7 +773,7 @@ mv "$T/slots.keep0" "$T/slots.keep"
 # ---- 11. -F: what the generator supports ----
 check "-F: exit 0 without -n/-o" 0 "$($SH "$G" -F > "$T/feat" 2>&1; echo $?)"
 check "-F: schedule and max_clients on, 6g up to 320 MHz, twt/wds not yet" \
-	"feature schedule 1|feature max_clients 1|width 6g 20 40 80 160 320|width 5gl 20 40 80|feature twt 0|feature wds 0|feature width320 1" \
+	"feature schedule 1|feature max_clients 1|width 6g 20 40 80 160 320|width 5gl 20 40 80 160|feature twt 0|feature wds 0|feature width320 1" \
 	"$(for k in 'feature schedule ' 'feature max_clients ' 'width 6g ' 'width 5gl ' 'feature twt ' 'feature wds ' 'feature width320 '; do grep "^$k" "$T/feat"; done | tr '\n' '|' | sed 's/|$//')"
 check "-F: the radio features he, eht, twt_responder, zwdfs, monitor, led" \
 	"feature he 1|feature eht 1|feature twt_responder 1|feature zwdfs 1|feature monitor 1|feature led 1|" \
@@ -805,6 +893,101 @@ if [ -n "$CONFCHECK" ]; then
 else
 	echo "skip hostapd 6 GHz width reading (no hostapd-confcheck)"
 fi
+
+# ---- 11b2. 2.4 GHz 40 MHz (open-wifi INV-HT40-2G, interim): the driver
+# advertises HT20 only on 2.4 GHz, hostapd would refuse [HT40+/-] and the
+# radio stay dark. HT40_2G=0 (the default) renders width=40 at 20 with a
+# warning; HT40_2G=1 (one line in the generator) brings HT40 back ----
+check "-F: feature ht40_2g 0, width 2g still offers 40" "width 2g 20 40|feature ht40_2g 0" \
+	"$(grep -E '^(feature ht40_2g|width 2g) ' "$T/feat" | tr '\n' '|' | sed 's/|$//')"
+check "-F with HT40_2G=1: feature ht40_2g 1" "feature ht40_2g 1" "$(GT_BE98_HT40_2G=1 $SH "$G" -F | grep '^feature ht40_2g ')"
+{ printf 'radio=2g\nchannel=6\nwidth=40\n'; net 1 a sae password1 "2g 5gl" 1; } > "$T/h40"
+rm -f "$T/slots"; gen "$T/h40"
+check "2g width=40, HT40_2G=0: accepted, no ht_capab anywhere on 2g, warned once naming INV-HT40-2G" "0 0 1" \
+	"$? $(grep -c '^ht_capab' "$T/o/hdr-bcawl3") $(grep -c 'warning: radio 2g: width=40 rendered at 20 MHz: .*INV-HT40-2G' "$T/err")"
+check "2g width=40, HT40_2G=0: the BSS configs carry no HT40 either" "" "$(grep -l 'HT40' "$T"/o/hostapd-bcawl3.conf "$T"/o/bss-bcawl3*.conf 2>/dev/null)"
+check "2g width=40, HT40_2G=0: the 5gl radio untouched (no warning about it)" "0" "$(grep -c 'radio 5gl' "$T/err")"
+conf_ok "2g 40 at 20"
+rm -f "$T/slots"; GT_BE98_HT40_2G=1 gen "$T/h40"
+check "2g width=40, HT40_2G=1: ht_capab=[HT40+] (ch 6), no warning" "0 ht_capab=[HT40+] 0" \
+	"$? $(grep '^ht_capab' "$T/o/hdr-bcawl3") $(grep -c 'width=40 rendered at 20' "$T/err")"
+{ printf 'radio=2g\nchannel=6\nwidth=20\n'; net 1 a sae password1 2g 1; } > "$T/h20"
+rm -f "$T/slots"; gen "$T/h20"
+check "2g width=20 (control): no warning, no ht_capab" "0 0" "$(grep -c 'width=40' "$T/err") $(grep -c '^ht_capab' "$T/o/hdr-bcawl3")"
+{ printf 'radio=2g\nenabled=0\nwidth=40\n'; net 1 a sae password1 "2g 5gl" 1; } > "$T/h40d"
+rm -f "$T/slots"; gen "$T/h40d"
+check "2g width=40 on a disabled radio: no warning" "0" "$(grep -c 'width=40' "$T/err")"
+check "HT40_2G=x: refused" "1" "$(GT_BE98_HT40_2G=x $SH "$G" -n "$T/h40" -o "$T/o" -s "$T/slots" -m "$M" > /dev/null 2>&1; echo $?)"
+
+# ---- 11c. 5 GHz 160 MHz (open-wifi INV-160-5G, owner OD2): the blocks
+# 36-64 (centre 50) and 100-128 (centre 114) only; VHT/HE/EHT width 2 and
+# the centre, [VHT160] (the set run on the box, perf-wide 1104-1551); every
+# 160 MHz block holds DFS channels: the DFS warning without a country ----
+check "-F: width 5gl and 5gh offer 160 MHz" "width 5gl 20 40 80 160|width 5gh 20 40 80 160" \
+	"$(grep -E '^width 5g[lh] ' "$T/feat" | tr '\n' '|' | sed 's/|$//')"
+w5() {	# band channel width [extra list lines] -> the 5 GHz width lines of the radio header
+	{ printf 'radio=%s\nchannel=%s\nwidth=%s\n%s' "$1" "$2" "$3" "${4:-}"; net 1 a sae password1 "$1" 1; } > "$T/w5"
+	rm -f "$T/slots"; gen "$T/w5" -c || { echo refused; return; }
+	d=$( [ "$1" = 5gl ] && echo bcawl0 || echo bcawl1 )
+	grep -E '^(channel|ht_capab|vht_oper|vht_capab|he_oper|eht_oper)' "$T/o/hdr-$d" | tr '\n' ' ' | sed 's/ $//'
+}
+V160='vht_capab=[SU-BEAMFORMER][SU-BEAMFORMEE][MU-BEAMFORMER][VHT160]'
+for t in \
+	"5gl 36|channel=36 ht_capab=[HT40+] vht_oper_chwidth=2 vht_oper_centr_freq_seg0_idx=50 $V160 he_oper_chwidth=2 he_oper_centr_freq_seg0_idx=50 eht_oper_chwidth=2 eht_oper_centr_freq_seg0_idx=50" \
+	"5gl 64|channel=64 ht_capab=[HT40-] vht_oper_chwidth=2 vht_oper_centr_freq_seg0_idx=50 $V160 he_oper_chwidth=2 he_oper_centr_freq_seg0_idx=50 eht_oper_chwidth=2 eht_oper_centr_freq_seg0_idx=50" \
+	"5gh 100|channel=100 ht_capab=[HT40+] vht_oper_chwidth=2 vht_oper_centr_freq_seg0_idx=114 $V160 he_oper_chwidth=2 he_oper_centr_freq_seg0_idx=114 eht_oper_chwidth=2 eht_oper_centr_freq_seg0_idx=114" \
+	"5gh 128|channel=128 ht_capab=[HT40-] vht_oper_chwidth=2 vht_oper_centr_freq_seg0_idx=114 $V160 he_oper_chwidth=2 he_oper_centr_freq_seg0_idx=114 eht_oper_chwidth=2 eht_oper_centr_freq_seg0_idx=114"; do
+	set -- ${t%%|*}
+	check "5 GHz 160: $1 channel $2 (centre, HT40 side, [VHT160], HE/EHT width 2)" "${t#*|}" "$(w5 "$1" "$2" 160)"
+done
+conf_ok "5 GHz 160"
+check "5 GHz 160: ieee80211h + country written (-c)" "yes yes" "$(hdr_has bcawl1 ieee80211h=1) $(hdr_has bcawl1 country_code=FR)"
+check "5 GHz 160, ax=0: VHT 160 only (no he/eht lines)" \
+	"channel=36 ht_capab=[HT40+] vht_oper_chwidth=2 vht_oper_centr_freq_seg0_idx=50 $V160" "$(w5 5gl 36 160 'ax=0
+')"
+check "5 GHz 160, be=0: HE 160, no eht lines" \
+	"channel=36 ht_capab=[HT40+] vht_oper_chwidth=2 vht_oper_centr_freq_seg0_idx=50 $V160 he_oper_chwidth=2 he_oper_centr_freq_seg0_idx=50" "$(w5 5gl 36 160 'be=0
+')"
+check "5 GHz 80 MHz control: width 1, no [VHT160]" \
+	"channel=36 ht_capab=[HT40+] vht_oper_chwidth=1 vht_oper_centr_freq_seg0_idx=42 vht_capab=[SU-BEAMFORMER][SU-BEAMFORMEE][MU-BEAMFORMER] he_oper_chwidth=1 he_oper_centr_freq_seg0_idx=42 eht_oper_chwidth=1 eht_oper_centr_freq_seg0_idx=42" "$(w5 5gl 36 80)"
+# every 5 GHz channel of each radio at 160: accepted iff 36-64 / 100-128
+acc=''
+for b in 5gl 5gh; do
+	k=0
+	for c in 36 40 44 48 52 56 60 64 100 104 108 112 116 120 124 128 132 136 140 144 149 153 157 161 165 169 173 177; do
+		[ "$(w5 "$b" "$c" 160)" = refused ] || k=$((k + 1))
+	done
+	acc="$acc $b:$k"
+done
+check "5 GHz 160: channels accepted per radio (5gl 36-64, 5gh 100-128)" "5gl:8 5gh:8" "${acc# }"
+w5 5gh 132 160 > /dev/null
+check "5 GHz 160 refusal says why" "yes" "$(grep -q 'radio 5gh: channel 132 has no 160 MHz block (5 GHz 160 MHz: channels 36-64 and 100-128)' "$T/err" && echo yes || echo no)"
+{ printf 'radio=5gl\nchannel=36\nwidth=160\n'; net 1 a sae password1 5gl 1; } > "$T/w5"
+rm -f "$T/slots"; gen "$T/w5"
+check "5gl ch36 at 160 without -c: accepted, the DFS warning (52-64 in the block), no 11h" "0 yes no" \
+	"$? $(grep -q 'radio 5gl: the 160 MHz block of channel 36 (36-64) holds DFS (radar) channels and the regulatory database is not loaded' "$T/err" && echo yes || echo no) $(hdr_has bcawl0 ieee80211h=1)"
+{ printf 'radio=5gl\nchannel=36\nwidth=80\n'; net 1 a sae password1 5gl 1; } > "$T/w5"
+rm -f "$T/slots"; gen "$T/w5"
+check "5gl ch36 at 80 without -c: no DFS warning (control)" "no" "$(grep -q 'DFS (radar)' "$T/err" && echo yes || echo no)"
+# a station radio follows its uplink: 160 kept where the block holds the
+# uplink's channel, lowered to 80 where it does not
+{ printf 'radio=5gh\nchannel=100\nwidth=160\n'; stab5() { printf 'station=5gh\nssid=up\nsecurity=sae\npassphrase=saepassword1\n'; }; stab5; net 1 a sae password1 5gh 1; } > "$T/w5s"
+rm -f "$T/slots"; gen "$T/w5s" -U "5gh=5600"
+check "-U 5600 (ch 120) on a 5gh 160 station radio: 160 kept, centre 114" "channel=120 vht_oper_chwidth=2 vht_oper_centr_freq_seg0_idx=114" \
+	"$(grep -E '^(channel|vht_oper_chwidth|vht_oper_centr_freq_seg0_idx)=' "$T/o/hostapd-bcawl1.conf" | tr '\n' ' ' | sed 's/ $//')"
+gen "$T/w5s" -U "5gh=5660"
+check "-U 5660 (ch 132): lowered to 80 (centre 138), warned" "channel=132 vht_oper_chwidth=1 vht_oper_centr_freq_seg0_idx=138 yes" \
+	"$(grep -E '^(channel|vht_oper_chwidth|vht_oper_centr_freq_seg0_idx)=' "$T/o/hostapd-bcawl1.conf" | tr '\n' ' ')$(grep -q '80 MHz instead of 160 (no 160 MHz block holds channel 132)' "$T/err" && echo yes || echo no)"
+# a monitor at 160: the centre frequency of the block
+{ printf 'radio=5gl\nmonitor=1\nchannel=36\nwidth=160\n'; net 1 a sae password1 2g 1; } > "$T/w5m"
+rm -f "$T/slots"; gen "$T/w5m"
+check "monitor 5gl 36 at 160: centre 5250 MHz" "monitor 5gl bcawl0 5180 160 5250" "$(grep '^monitor ' "$T/o/plan")"
+if [ -n "$CONFCHECK" ]; then
+	for c in 5gl:36 5gh:100; do w5 "${c%%:*}" "${c#*:}" 160 > /dev/null; cp "$T/o/hostapd-bcawl$( [ "${c%%:*}" = 5gl ] && echo 0 || echo 1).conf" "$T/w5-${c%%:*}.conf"; done
+	"$CONFCHECK" "$T/w5-5gl.conf" "$T/w5-5gh.conf" > "$T/cc5" 2>&1
+	check "hostapd reads 5 GHz 160 (EHT width 2, centre 50 / 114)" "be=1/2/50 be=1/2/114" \
+		"$(grep -o 'be=1/2/[0-9]*' "$T/cc5" | tr '\n' ' ' | sed 's/ $//')"
+fi
 cp "$T/slots.f" "$T/slots"
 # net 1 always on (2g); net 2 weekdays 08-18 (2g 5gl); net 3 on 5gh, whose
 # radio runs 22:00-06:00 every day
@@ -915,8 +1098,10 @@ check "-U on a radio without a station: ignored" "channel=6" "$(grep '^channel='
 gen "$T/st1" -U "5gl=5258"
 check "-U 5258 (between channels): ignored" "channel=36" "$(grep '^channel=' "$T/o/hostapd-bcawl0.conf")"
 { printf 'radio=2g\nwidth=40\n'; stab 2g ssid=up security=sae passphrase=saepassword1 bssid=02:00:5E:00:53:01; net 1 a sae password1 2g 1; } > "$T/st2"
+rm -f "$T/slots"; GT_BE98_HT40_2G=1 gen "$T/st2" -U "2g=2462"
+check "2g station, -U 2462 (HT40_2G=1): channel 11, HT40-" "channel=11 ht_capab=[HT40-]" "$(grep -E '^(channel|ht_capab)=' "$T/o/hostapd-bcawl3.conf" | tr '\n' ' ' | sed 's/ $//')"
 rm -f "$T/slots"; gen "$T/st2" -U "2g=2462"
-check "2g station, -U 2462: channel 11, HT40-" "channel=11 ht_capab=[HT40-]" "$(grep -E '^(channel|ht_capab)=' "$T/o/hostapd-bcawl3.conf" | tr '\n' ' ' | sed 's/ $//')"
+check "2g station, -U 2462 (HT40_2G=0, the default): channel 11 at 20 MHz, no ht_capab" "channel=11" "$(grep -E '^(channel|ht_capab)=' "$T/o/hostapd-bcawl3.conf" | tr '\n' ' ' | sed 's/ $//')"
 check "SAE station: SAE, PMF required, H2E/HnP, hex password, bssid lower-cased" \
 	"	bssid=02:00:5e:00:53:01|	key_mgmt=SAE|	ieee80211w=2|	sae_pwe=2|	sae_password=73616570617373776f726431|no-psk" \
 	"$(grep -E '^	(key_mgmt|ieee80211w|sae_pwe|sae_password|bssid)=' "$T/o/sta-bcawl3.conf" | tr '\n' '|')$(grep -q 'psk=' "$T/o/sta-bcawl3.conf" && echo psk || echo no-psk)"
