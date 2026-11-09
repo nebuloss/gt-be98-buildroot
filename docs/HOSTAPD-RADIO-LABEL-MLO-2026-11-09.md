@@ -40,3 +40,44 @@ Label each radio by its primary netdev name (`bcawlN`), which is unique per radi
 
 Risk: none known for non-grouped wiphys (the label is a key, not a driver handle). To verify on the box when built:
 `hostapd_cli -i <bss> status` shows `phy=bcawlN`, and per-BSS add/remove still lands in the right radio.
+
+## Hazard 2 (lane mlo-prod, q126 1109-1800 cell C): one refused MLD ADD killed the hostapd process
+
+**What the log shows** (`C-hapd-full.txt`; hostapd 2.12, `-g` + ADD, the product's launch shape):
+
+1. `ADD bss_config=bcawl3:/run/a2-plain.conf`: a plain BSS on bcawl3, running.
+2. `ADD bss_config=mld0a:/run/a2-mla.conf`: an AP MLD first link, on the grouped wiphy (one wiphy for the radios).
+3. `hostapd/main.c:373` `hostapd_driver_init`: the driver does not advertise MLO (`WPA_DRIVER_FLAGS2_MLO`, from
+   `NL80211_ATTR_MLO_SUPPORT`) -> "MLD: Not supported by the driver", return -1. This check runs AFTER
+   `hapd->driver->hapd_init()` has succeeded, and on the grouped wiphy the new BSS was attached to bcawl3's
+   driver context.
+4. Cleanup (`hostapd_deinit_driver`): "Teardown AP(mld0) link 0", "remove link: Link not found", "No more links
+   remaining, so remove interface", "Not the first BSS - remove it", "Teardown AP(mld0) - device_ap_sme=1",
+   "Unsubscribe mgmt frames ... (AP teardown (dev SME))" — and the log ENDS there. No terminate/deinit lines
+   follow: the process did not exit through eloop (terminate_on_error is 0 with `-g`); it died. The plain BSS on
+   bcawl3 went with it.
+
+**Why it matters for the product:** the product runs ONE hostapd for every radio (§ the failure-isolation note).
+One MLD config ADDed on a driver/wiphy without MLO support therefore takes every network of every radio down —
+the very class the supervised restart does not cover (the watcher reloads a dead hostapd at most 3 times per
+10 min; a list that re-ADDs the MLD kills it again each time, and then it is left dead and reported).
+
+**Gate (when MLO ships, generator + service):**
+- The generator renders an MLD (`mld_ap=1`) section only when the service passes the radios whose driver
+  advertises MLO (like `-B` for beacon protection): never by default. -F says `feature mld 0|1`.
+- The service reads the capability per wiphy before rendering: the nl80211 attribute
+  `NL80211_ATTR_MLO_SUPPORT` (cfg80211 `WIPHY_FLAG_SUPPORTS_MLO`). ⚠Whether `iw phy <phy> info` prints it on the
+  OS's iw is UNREAD; if it does not, the source is the wiphy dump read another way (a small nl80211 reader, or a
+  driver-exported flag) — to settle with mlo-prod before MLO ships.
+- An MLD unit is its own ADD unit (label: the MLD name), so its failure is recorded against it, not a radio.
+- Keep hostapd's own refusal as the second line of defence only: in 2.12 that refusal is what kills the process.
+
+**Upstream (hostapd 2.12) — a bug worth reporting, evidence level stated:** a configuration error detected in
+`hostapd_driver_init` (MLO not supported by the driver) is reported AFTER the driver context is set up and,
+on a wiphy whose context is shared with a running interface, its cleanup takes the running interface down and
+the process dies instead of failing that ADD alone. Proven: the order of the check (source, main.c:302 hapd_init,
+:371 the MLO check), the sequence and the abrupt end of the log. NOT proven: the exact fault (no core, no
+backtrace; a use-after-free in the shared-context teardown is the hypothesis). Not checked: hostapd's current
+upstream tree (whether the check moved before hapd_init or into config validation). A reproduction without this
+hardware for the report: mac80211_hwsim with MLO support off (its `mlo` module parameter), `hostapd -g`, ADD a
+plain BSS, then ADD an `mld_ap=1` config on the same phy.
