@@ -1362,6 +1362,11 @@ END {
 			# REQUIRED: without WMM the firmware RSN capabilities (0x000c) do
 			# not match hostapd 3/4 RSN IE and clients drop (reason 17)
 			print "wmm_enabled=1" > f
+			# U-APSD advertised in the WMM element, as stock: hostapd defaults
+			# to not advertising it, and the driver follows the per-BSS
+			# setting hostapd sends (open-wifi INV-UAPSD), so without this
+			# line every BSS would lose U-APSD
+			print "uapsd_advertisement_enabled=1" > f
 			print "auth_algs=1" > f
 			if (hid[i]) print "ignore_broadcast_ssid=1" > f
 			if (iso[i]) print "ap_isolate=1" > f

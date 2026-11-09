@@ -632,6 +632,17 @@ rm -f "$T/slots"; GT_BE98_KV=1 gen "$T/kv" -S; check "KV=1 -S: the same" "0 1@bc
 check "kv=2: refused, said why" "1 yes" "$? $(grep -q 'network 1: kv=2 refused' "$T/err" && echo yes || echo no)"
 check "KV=x: refused" "1" "$(GT_BE98_KV=x $SH "$G" -n "$T/kv" -o "$T/o" -s "$T/slots" -m "$M" > /dev/null 2>&1; echo $?)"
 
+# ---- 10b8. U-APSD advertised on every BSS (open-wifi INV-UAPSD: the driver
+# follows hostapd's per-BSS setting, hostapd's default is off; stock on) ----
+{ net 1 s sae password1 "2g 5gl 5gh 6g" 1; net 2 w psk2 password2 "2g 5gl" 2
+  printf 'network=3\nssid=o\nsecurity=open\nbands=2g\nvlan=3\n'; printf 'network=4\nssid=e\nsecurity=owe\nbands=6g\nvlan=4\n'; } > "$T/ua"
+rm -f "$T/slots"; gen "$T/ua"
+check "U-APSD: every BSS section once, every single-BSS config once (8 BSSes)" "0 8 8" \
+	"$? $(cat "$T"/o/sec-* | grep -cx 'uapsd_advertisement_enabled=1') $(cat "$T"/o/bss-*.conf | grep -cx 'uapsd_advertisement_enabled=1')"
+check "U-APSD: each radio config carries it once per BSS (2g: 3)" "3" "$(grep -cx 'uapsd_advertisement_enabled=1' "$T/o/hostapd-bcawl3.conf")"
+check "U-APSD: never =0 anywhere" "" "$(grep -l 'uapsd_advertisement_enabled=0' "$T"/o/* 2>/dev/null)"
+conf_ok "U-APSD"
+
 # ---- 10c. radio features: HE (ax=), TWT responder (twt=), zero-wait DFS
 # (zwdfs=), monitor (monitor=), LED (led=) ----
 # HE/EHT (ax=, be=): default both on, every radio; each off both ways
