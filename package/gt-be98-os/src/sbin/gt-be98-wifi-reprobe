@@ -50,7 +50,8 @@ MIN=$(num "${REPROBE_MIN:-}" 20)
 TRIES=$(num "${REPROBE_TRIES:-}" 3)
 
 log() {
-	if command -v logger > /dev/null 2>&1; then logger -t gt-be98-wifi-reprobe -- "$*"
+	if [ -n "${GT_BE98_LOG:-}" ]; then echo "$*" >> "$GT_BE98_LOG"
+	elif command -v logger > /dev/null 2>&1; then logger -t gt-be98-wifi-reprobe -- "$*"
 	else echo "gt-be98-wifi-reprobe: $*" >&2; fi
 }
 

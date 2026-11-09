@@ -30,8 +30,8 @@ for f in "$FAKE"/run/gt-be98-wifi/ids/*; do
 done
 exit 0
 X
-# logger: to a file (the daemon's messages)
-printf '#!/bin/sh\nshift 2; [ "$1" = -- ] && shift; echo "$*" >> "$FAKE/log"\n' > "$T/bin/logger"
+# the daemon's messages: to a file (busybox sh runs its logger applet before PATH)
+export GT_BE98_LOG="$T/log"; : > "$T/log"
 chmod +x "$T/bin/"*
 PATH="$T/bin:$PATH"
 export GT_BE98_RELOAD="$T/bin/reload"
