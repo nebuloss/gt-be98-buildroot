@@ -163,6 +163,13 @@ HOSTAPD_CONFIG_ENABLE += CONFIG_FILS
 HOSTAPD_CONFIG_DISABLE += CONFIG_FILS_SK_PFS
 endif
 
+# hostapd: CONFIG_WNM (-> CONFIG_WNM_AP: bss_transition=, for the
+# generator's 802.11k/v kv=1), same mechanism as MBO; off by default. No
+# other #CONFIG_WNM* line in hostapd/defconfig shares the prefix.
+ifeq ($(BR2_PACKAGE_GT_BE98_OS_HOSTAPD_WNM),y)
+HOSTAPD_CONFIG_ENABLE += CONFIG_WNM
+endif
+
 # hostapd: CONFIG_AIRTIME_POLICY (airtime_mode and the per-station airtime
 # weights), same mechanism as MBO. No other option shares the prefix.
 ifeq ($(BR2_PACKAGE_GT_BE98_OS_HOSTAPD_AIRTIME_POLICY),y)

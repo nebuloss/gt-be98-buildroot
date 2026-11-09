@@ -600,7 +600,22 @@ check "KV=0: kv=0 says nothing" "0" "$(grep -c 'network 2: kv' "$T/err")"
 rm -f "$T/slots"; GT_BE98_KV=1 gen "$T/kv"
 check "KV=1: network 1 on its three radios only, no warning" "0 1@bcawl3 1@bcawl0 1@bcawl2 0" "$? $(kvl) $(grep -c 'kv=' "$T/err")"
 check "KV=1: only those two lines added (network 2, kv=0: neither)" "" "$(grep -hE '^(rrm_|bss_transition)' "$T/o/sec-bcawl3-1" "$T/o/sec-bcawl0-1")"
-conf_ok "kv"
+# hostapd's own reading: bss_transition= exists only with CONFIG_WNM_AP (the
+# OS option BR2_PACKAGE_GT_BE98_OS_HOSTAPD_WNM, off today); a hostapd without
+# it refuses the whole config. So with the OS's hostapd the ONLY error must
+# be that key (every other line parses); with a WNM hostapd every config
+if [ -n "$CONFCHECK" ]; then
+	"$CONFCHECK" "$T"/o/hostapd-*.conf "$T"/o/bss-*.conf > "$T/cckv" 2>&1
+	if grep -q "unknown configuration item 'bss_transition'" "$T/cckv"; then
+		check "KV=1, a hostapd without CONFIG_WNM: bss_transition is the only error (KV=1 needs BR2_PACKAGE_GT_BE98_OS_HOSTAPD_WNM)" "" \
+			"$(grep -E '^Line [0-9]+:' "$T/cckv" | grep -v "unknown configuration item 'bss_transition'" | head -3)"
+	else
+		conf_ok "kv (hostapd with CONFIG_WNM)"
+	fi
+else
+	echo "skip kv hostapd reading (no hostapd-confcheck)"
+fi
+GT_BE98_KV=0 gen "$T/kv"; conf_ok "kv=1 dropped (KV=0): the shipped path parses"
 rm -f "$T/slots"; GT_BE98_KV=1 gen "$T/kv" -S; check "KV=1 -S: the same" "0 1@bcawl3 1@bcawl0 1@bcawl2" "$? $(kvl)"
 { net 1 a sae password1 2g 1; printf 'kv=2\n'; } > "$T/r"; rm -f "$T/slots"; gen "$T/r"
 check "kv=2: refused, said why" "1 yes" "$? $(grep -q 'network 1: kv=2 refused' "$T/err" && echo yes || echo no)"

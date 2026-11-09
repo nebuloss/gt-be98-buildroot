@@ -395,8 +395,12 @@ HT40_2G=${GT_BE98_HT40_2G:-0}
 # firmware and hostapd yet (.mgmt_tx refuses them, no action-frame RX), so
 # hostapd's neighbor report / BSS transition answers could never reach a
 # client: kv=1 is accepted and dropped with a warning. 1 once the driver
-# lane lands the frames (owner OD4 (a)). -F: feature kv 0|1 (the web UI
-# offers the option only on 1). (GT_BE98_KV: the offline test harness only)
+# lane lands the frames (owner OD4 (a)) AND the OS hostapd is built with
+# CONFIG_WNM (BR2_PACKAGE_GT_BE98_OS_HOSTAPD_WNM=y, off today): without it
+# hostapd 2.12 does not know bss_transition= ("unknown configuration item",
+# config_file.c #ifdef CONFIG_WNM_AP) and refuses the WHOLE radio config.
+# -F: feature kv 0|1 (the web UI offers the option only on 1).
+# (GT_BE98_KV: the offline test harness only)
 KV=${GT_BE98_KV:-0}
 NETS='' OUT='' SLOTS='' MACS='' DEVS='' CAP=4 CTRL=/run/hostapd CC=0 RNR=1 KEEP=0 DRY=0
 NOW='' QUERY=0 UPF='' STACTRL=/run/wpa_supplicant SKIP=0 BPB=''
