@@ -15,6 +15,7 @@
 #                    [-d "2g=bcawl3 5gl=bcawl0 5gh=bcawl1 6g=bcawl2"]
 #                    [-C MAX_BSS] [-x CTRL_DIR] [-c] [-R 0|1] [-K 0|1] [-N]
 #                    [-T "D HH:MM"] [-Q] [-U "2g=MHz ..."] [-X STA_CTRL_DIR] [-S]
+#                    [-B "BANDS"]
 #   gt-be98-wifi-gen -F
 #
 #   -n  the network list (format below)          -o  output dir (created)
@@ -64,6 +65,14 @@
 #       service passes what wpa_supplicant reports (gt-be98-wifi-sta freq)
 #   -X  ctrl_interface of the station's wpa_supplicant (default
 #       /run/wpa_supplicant)
+#   -B  the radios (bands, "2g 5gl ...") whose driver advertises AP beacon
+#       protection (nl80211 NL80211_EXT_FEATURE_BEACON_PROTECTION: `iw phy
+#       <phy> info` lists "[ BEACON_PROTECTION ]"; the service passes them).
+#       On those radios every SAE (sae, psk2sae) and OWE BSS gets
+#       beacon_prot=1 (BIGTK, 802.11-2020 beacon protection), as stock does
+#       (its bcnprot enable = 1 on SAE, 0 on WPA2); WPA2-only, Enterprise
+#       and open BSSes never. Without -B none (a driver without the feature
+#       would leave hostapd's beacon_prot inert or refused)
 #   -F  print what this generator supports (one "<what> <values>" per
 #       line: feature <name> 0|1, width <band> <MHz...>, security <modes>,
 #       station_security <modes>, max_clients <min> <max>) and exit. The web
@@ -374,7 +383,7 @@ set -u
 # (GT_BE98_HT40_2G: the offline test harness only)
 HT40_2G=${GT_BE98_HT40_2G:-0}
 NETS='' OUT='' SLOTS='' MACS='' DEVS='' CAP=4 CTRL=/run/hostapd CC=0 RNR=1 KEEP=0 DRY=0
-NOW='' QUERY=0 UPF='' STACTRL=/run/wpa_supplicant SKIP=0
+NOW='' QUERY=0 UPF='' STACTRL=/run/wpa_supplicant SKIP=0 BPB=''
 SYSNET=${GT_BE98_SYSNET:-/sys/class/net}
 usage() { sed -n '/^#   gt-be98-wifi-gen -n/,/^#   -F  /p' "$0" | sed 's/^# \{0,1\}//' >&2; exit 2; }
 # what this generator supports (-F): keep it in line with the checks below
@@ -407,17 +416,18 @@ features() {
 	feature station 1
 	feature routed 1
 	feature repeater 1
+	feature beacon_prot 1
 	station_security psk2 sae
 	EOF
 	echo "feature ht40_2g $HT40_2G"
 }
-while getopts n:o:s:m:d:C:x:cR:K:NT:QFU:X:S o; do
+while getopts n:o:s:m:d:C:x:cR:K:NT:QFU:X:SB: o; do
 	case $o in
 	n) NETS=$OPTARG ;; o) OUT=$OPTARG ;; s) SLOTS=$OPTARG ;; m) MACS=$OPTARG ;;
 	d) DEVS=$OPTARG ;; C) CAP=$OPTARG ;; x) CTRL=$OPTARG ;; c) CC=1 ;;
 	R) RNR=$OPTARG ;; K) KEEP=$OPTARG ;; N) DRY=1 ;;
 	T) NOW=$OPTARG ;; Q) QUERY=1 ;; F) features; exit 0 ;;
-	U) UPF=$OPTARG ;; X) STACTRL=$OPTARG ;; S) SKIP=1 ;; *) usage ;;
+	U) UPF=$OPTARG ;; X) STACTRL=$OPTARG ;; S) SKIP=1 ;; B) BPB=$OPTARG ;; *) usage ;;
 	esac
 done
 [ "$QUERY" = 1 ] && [ -z "$OUT" ] && OUT=/dev/null
@@ -453,7 +463,7 @@ S=${SLOTS:-/dev/null}
 LC_ALL=C awk -v cap="$CAP" -v ctrl="$CTRL" -v devlist="$DEVS" -v maclist="$MACS" \
 	-v ccok="$CC" -v rnr="$RNR" -v keep="$KEEP" -v out="$OUT" -v slotsf="$S" \
 	-v now="$NOW" -v query="$QUERY" -v upf="$UPF" -v stactrl="$STACTRL" -v skipbad="$SKIP" \
-	-v ht402g="$HT40_2G" '
+	-v ht402g="$HT40_2G" -v bpbands="$BPB" '
 function err(m) { print "gt-be98-wifi-gen: " m > "/dev/stderr"; nerr++ }
 function warn(m) { print "gt-be98-wifi-gen: warning: " m > "/dev/stderr" }
 # an error of network i itself: with -S the network is skipped (a warning),
@@ -726,6 +736,13 @@ BEGIN {
 		split(t[i], kv, "=")
 		if (!validband(kv[1]) || !isnum(kv[2])) { err("-U " t[i] ": band=MHz"); continue }
 		ufreq[kv[1]] = kv[2] + 0
+	}
+	# -B: the radios whose driver advertises beacon protection
+	n = split(bpbands, t, /[ \t,]+/)
+	for (i = 1; i <= n; i++) {
+		if (t[i] == "") continue
+		if (!validband(t[i])) { err("-B " t[i] ": a band (2g 5gl 5gh 6g)"); continue }
+		bpok[t[i]] = 1
 	}
 	nsta = 0
 	if (havenow) { split(now, t, " "); tdow = t[1] + 0; tmin = hm(t[2]) }
@@ -1359,6 +1376,9 @@ END {
 				else if (s == "wpa3-eap") { print "wpa_key_mgmt=WPA-EAP-SHA256" > f; print "ieee80211w=2" > f }
 				else if (s == "psk2sae") { print "wpa_key_mgmt=WPA-PSK SAE" > f; print "ieee80211w=1" > f; print "sae_pwe=2" > f }
 				else { print "wpa_key_mgmt=SAE" > f; print "ieee80211w=2" > f; print "sae_require_mfp=1" > f; print "sae_pwe=" (b == "6g" ? 1 : 2) > f }
+				# beacon protection (-B: the driver advertises it): SAE and
+				# OWE BSSes, PMF on in each (stock: bcnprot 1 on SAE, 0 on WPA2)
+				if ((b in bpok) && (s == "sae" || s == "psk2sae" || s == "owe")) print "beacon_prot=1" > f
 				if (iseap(s)) {
 					# 802.1X: hostapd is the authenticator, the EAP
 					# conversation is relayed to the RADIUS server

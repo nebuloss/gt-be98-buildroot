@@ -556,6 +556,32 @@ rm -f "$T/slots"; gen "$T/c6" -K 1; check "-K: a custom 6 GHz anchor; the second
 	"$? $(bssid_of bcawl2) $(bssid_of bcawl2-1)"
 check "-F: feature bssid 1" "feature bssid 1" "$($SH "$G" -F | grep '^feature bssid ')"
 
+# ---- 10b6. beacon protection (open-wifi SD-BCNPROT): -B lists the radios
+# whose driver advertises NL80211_EXT_FEATURE_BEACON_PROTECTION; there SAE
+# (sae, psk2sae) and OWE BSSes get beacon_prot=1, as stock (bcnprot 1 on
+# SAE, 0 on WPA2); WPA2, Enterprise, open never; no -B: none ----
+check "-F: feature beacon_prot 1" "feature beacon_prot 1" "$(grep '^feature beacon_prot ' "$T/feat" 2>/dev/null || $SH "$G" -F | grep '^feature beacon_prot ')"
+{ net 1 s sae password1 "2g 5gl 6g" 1; net 2 m psk2sae password2 "2g 5gl 6g" 2; net 3 w psk2 password3 "2g 5gl" 3
+  printf 'network=4\nssid=o\nsecurity=open-owe\nbands=2g 6g\nvlan=4\n'; printf 'network=5\nssid=e\nsecurity=owe\nbands=5gl\nvlan=5\n'
+  printf 'network=6\nssid=x\nsecurity=wpa3-eap\nbands=5gl\nvlan=6\nradius_server=192.0.2.10\nradius_secret=s3cret\n'; } > "$T/bp"
+bpl() {	# the BSSes (net@ifname) whose section has beacon_prot=1, plan order
+	awk '$1 == "bss" { print $5 "@" $3 }' "$T/o/plan" | while read -r x; do
+		grep -qx 'beacon_prot=1' "$T/o/sec-${x#*@}" && printf '%s ' "$x"; done | sed 's/ $//'
+}
+rm -f "$T/slots"; gen "$T/bp" -C 8; check "beacon protection, no -B: accepted, none" "0 " "$? $(bpl)"
+gen "$T/bp" -C 8 -B "2g 5gl 5gh 6g"
+check "-B all radios: SAE, WPA2/WPA3 and OWE BSSes only (not WPA2, open, open-owe on 2.4, WPA3-Enterprise)" \
+	"0 1@bcawl3 2@bcawl3-1 1@bcawl0 2@bcawl0-1 5@bcawl0-3 1@bcawl2 2@bcawl2-1 4@bcawl2-2" "$? $(bpl)"
+check "-B: the single-BSS config carries it too (bss-bcawl2-2, OWE on 6 GHz)" "1" "$(grep -c '^beacon_prot=1$' "$T/o/bss-bcawl2-2.conf")"
+check "-B: every beacon_prot BSS has PMF (ieee80211w 1 or 2)" "" \
+	"$(for f in "$T"/o/sec-*; do grep -q '^beacon_prot=1$' "$f" && ! grep -qE '^ieee80211w=[12]$' "$f" && echo "${f##*/}"; done)"
+conf_ok "beacon protection"
+gen "$T/bp" -C 8 -B "6g"; check "-B 6g: the 6 GHz BSSes only" "0 1@bcawl2 2@bcawl2-1 4@bcawl2-2" "$? $(bpl)"
+gen "$T/bp" -C 8 -B "2g,5gl"; check "-B comma-separated: 2.4 and 5 GHz-low" "0 1@bcawl3 2@bcawl3-1 1@bcawl0 2@bcawl0-1 5@bcawl0-3" "$? $(bpl)"
+cp "$T/slots" "$T/slots.bp"; gen "$T/bp" -C 8 -B "2g 7g"
+check "-B with an unknown band: refused, said why, slots untouched" "1 yes same" \
+	"$? $(grep -q -- '-B 7g: a band' "$T/err" && echo yes || echo no) $(cmp -s "$T/slots" "$T/slots.bp" && echo same || echo changed)"
+
 # ---- 10c. radio features: HE (ax=), TWT responder (twt=), zero-wait DFS
 # (zwdfs=), monitor (monitor=), LED (led=) ----
 # HE/EHT (ax=, be=): default both on, every radio; each off both ways

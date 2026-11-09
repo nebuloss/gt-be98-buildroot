@@ -442,5 +442,21 @@ check "station only: hostapd stopped, the station up" "0 stop sta up bcawl0" "$r
 check "stop: the station down, routing undone" "down bcawl0 unroute" "$(grep -E '^(down|unroute)' "$T/stalog" | tail -n2 | cut -d' ' -f1,2 | tr '\n' ' ' | sed 's/ *$//')"
 : > "$T/nets"; apply
 
+# 18. beacon protection: the radios whose driver advertises it (iw phy info
+# "[ BEACON_PROTECTION ]", open-wifi SD-BCNPROT) get beacon_prot=1 on their
+# SAE/OWE BSSes; the _CLIENT feature alone is not it
+rm -f "$T/slots" "$T"/iw-phy*
+{ net 1 a sae password1 "2g 5gl" 1; net 2 b psk2 password2 2g 2; } > "$T/nets"
+apply
+check "no radio advertises it: rc 0, no beacon_prot" "0 0" "$rc $(cat "$G"/hostapd-*.conf | grep -c '^beacon_prot=1$')"
+printf '\tSupported extended features:\n\t\t* [ BEACON_PROTECTION ]: beacon protection support\n' > "$T/iw-phy3"
+printf '\tSupported extended features:\n\t\t* [ BEACON_PROTECTION_CLIENT ]: beacon protection support (client)\n' > "$T/iw-phy0"
+check "bcnprot_bands: phy3 (2g) only, not the _CLIENT one (phy0)" "2g" "$(bcnprot_bands)"
+apply
+check "2g advertises it: its SAE BSS (bcawl3) beacon_prot=1, its WPA2 BSS and 5gl none; 2g restarts alone" \
+	"0 1 0 0 REMOVE bcawl3|ADD bss_config=phy3:$G/hostapd-bcawl3.conf" \
+	"$rc $(grep -c '^beacon_prot=1$' "$G/hostapd-bcawl3.conf") $(grep -c '^beacon_prot=1$' "$G/bss-bcawl3-1.conf") $(grep -c '^beacon_prot' "$G/hostapd-bcawl0.conf") $(echo "$cmds" | tr '\n' '|' | sed 's/|$//')"
+rm -f "$T"/iw-phy*; : > "$T/nets"; apply
+
 if [ $fail = 0 ]; then echo "ALL OK ($n checks)"; else echo "FAILED"; cat "$T/out"; fi
 exit $fail
