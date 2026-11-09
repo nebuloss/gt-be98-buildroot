@@ -74,6 +74,23 @@
 # (started and stopped with this service, pid /run/gt-be98-wifi-reprobe.pid)
 # notices the new netdev and runs that reload, debounced.
 #
+# A radio that fails to start (bounded supervised restart): hostapd runs
+# with only its global socket (-g, no config file on its command line, so
+# terminate_on_error is 0) and a radio whose setup fails is left by hostapd
+# in its list in state DISABLED, the others running; a setup that fails
+# inside the ADD answers FAIL. Either is a FAILURE of that radio, never
+# "unchanged": $STATE/failed/<dev> records it (key=value: key = the radio's
+# config checksum, state, reason = hostapd's last lines for it, tries, next
+# = when the next retry is due, given_up), a syslog line says it, `status`
+# prints it as an error and the web UI warns. The radio alone is restarted
+# at most 3 times per config: 30 s after the failure, then 2 min and 10 min
+# after each failed retry; then it is left DISABLED and reported. Starting
+# states (COUNTRY_UPDATE, DFS, HT_SCAN, ACS, NO_IR, UNINITIALIZED) are never
+# a failure. The record goes when the radio is ENABLED (said: recovered),
+# when it leaves the plan, and on stop; a new config starts a new count.
+# gt-be98-wifi-reprobe runs the due reloads (and one when the hostapd
+# process died).
+#
 # LEDs (led=0|1 of a radio in the list): $STATE/leds lists the radios whose
 # LED is off (WIFI_LEDS_OFF="bcawlN ..."); gt-be98-leds reads it, and is run
 # after every start and reload.
@@ -459,6 +476,11 @@ ids_prune() {
 		[ -f "$f" ] || continue
 		in_list " $1 " "${f##*/}" || rm -f "$f"
 	done
+	# failure records of radios no longer planned
+	for f in "$STATE"/failed/*; do
+		[ -f "$f" ] || continue
+		in_list " $1 " "${f##*/}" || rm -f "$f"
+	done
 }
 
 # ---- units: one per radio ----
@@ -504,6 +526,88 @@ bss_state() {
 # the BSS netdevs hostapd runs, as " a b c "
 hap_live() { echo " $(hap_cmd INTERFACES | tr '\n' ' ') "; }
 
+# ---- failed radios: the bounded supervised restart (header) ----
+
+now_s() { echo "${GT_BE98_NOW:-$(date +%s)}"; }
+
+# a syslog line (GT_BE98_LOG: the offline test harness only)
+slog() {
+	if [ -n "${GT_BE98_LOG:-}" ]; then echo "$*" >> "$GT_BE98_LOG"
+	elif command -v logger > /dev/null 2>&1; then logger -t gt-be98-wifi -- "$*"; fi
+}
+
+# field $2 of the failure record of radio $1
+fail_get() { sed -n "s/^$2=//p" "$STATE/failed/$1" 2>/dev/null | head -n1; }
+
+# hostapd's last words about interface $1, one line (the failure's reason)
+hap_reason() {
+	grep -a "$1" "$HAP_LOG" 2>/dev/null |
+		grep -aE 'AP-DISABLED|initialization failed|Could not|[Ff]ailed|refused|DFS-|not supported|Invalid' |
+		tail -n 2 | sed 's/^[0-9.]*: //' | tr -d '\000-\010\013-\037' | tr '\n' ' ' | cut -c1-200
+}
+
+# the delay before the retry that follows try $1 (0: the first retry)
+fail_backoff() { case "$1" in 0) echo 30 ;; 1) echo 120 ;; *) echo 600 ;; esac; }
+
+# write the failure record of radio $1: key state reason tries next given_up since
+fail_write() {
+	mkdir -p "$STATE/failed"
+	{
+		echo "dev=$1"; echo "key=$2"; echo "state=$3"; echo "reason=$4"
+		echo "tries=$5"; echo "next=$6"; echo "given_up=$7"; echo "since=$8"
+	} > "$STATE/failed/$1.new" && mv -f "$STATE/failed/$1.new" "$STATE/failed/$1"
+}
+
+# radio $1 failed (state $2: DISABLED or ADD-FAILED, reason $3). Records it
+# and says so; returns 0 when a retry is due NOW (the caller restarts it)
+fail_note() {
+	local d=$1 st=$2 why=$3 key t tries next gu since
+	key=$(unit_line "$STATE/want/$d" radio); t=$(now_s)
+	if [ ! -f "$STATE/failed/$d" ] || [ "$(fail_get "$d" key)" != "$key" ]; then
+		next=$((t + $(fail_backoff 0)))
+		fail_write "$d" "$key" "$st" "$why" 0 "$next" 0 "$t"
+		slog "radio $d FAILED to start (hostapd: $st): ${why:-no reason in hostapd.log}; retry 1/3 in $(fail_backoff 0) s"
+		eerror "radio $d failed to start ($st): ${why:-see $HAP_LOG}; retry 1/3 in $(fail_backoff 0) s"
+		return 1
+	fi
+	tries=$(fail_get "$d" tries); next=$(fail_get "$d" next); gu=$(fail_get "$d" given_up); since=$(fail_get "$d" since)
+	tries=${tries:-0}
+	if [ "$gu" = 1 ]; then
+		eerror "radio $d failed to start ($st), given up after 3 retries: $(fail_get "$d" reason)"
+		return 1
+	fi
+	if [ -z "$next" ]; then
+		# a retry ran and failed again
+		if [ "$tries" -ge 3 ]; then
+			fail_write "$d" "$key" "$st" "$why" "$tries" "" 1 "$since"
+			slog "radio $d FAILED to start (hostapd: $st) after 3 retries: ${why:-no reason in hostapd.log}; left down"
+			eerror "radio $d failed to start ($st) after 3 retries: ${why:-see $HAP_LOG}; left down"
+			return 1
+		fi
+		next=$((t + $(fail_backoff "$tries")))
+		fail_write "$d" "$key" "$st" "$why" "$tries" "$next" 0 "$since"
+		slog "radio $d FAILED again (hostapd: $st, try $tries/3): ${why:-no reason in hostapd.log}; retry $((tries + 1))/3 in $(fail_backoff "$tries") s"
+		eerror "radio $d failed again ($st, try $tries/3); retry $((tries + 1))/3 in $(fail_backoff "$tries") s"
+		return 1
+	fi
+	if [ "$t" -lt "$next" ]; then
+		eerror "radio $d failed to start ($st): retry $((tries + 1))/3 in $((next - t)) s"
+		return 1
+	fi
+	tries=$((tries + 1))
+	fail_write "$d" "$key" "$st" "$(fail_get "$d" reason)" "$tries" "" 0 "$since"
+	slog "radio $d: retry $tries/3 (restarting it alone)"
+	ewarn "radio $d: retry $tries/3 after a failed start"
+	return 0
+}
+
+# radio $1 is ENABLED: its failure record (if any) goes
+fail_clear() {
+	[ -f "$STATE/failed/$1" ] || return 0
+	slog "radio $1 recovered (ENABLED) after $(fail_get "$1" tries) retr$( [ "$(fail_get "$1" tries)" = 1 ] && echo y || echo ies)"
+	rm -f "$STATE/failed/$1"
+}
+
 # (re)start radio $1 with all its BSSes
 unit_restart() {
 	local d=$1 w="$STATE/want/$1" c phy f o
@@ -521,8 +625,13 @@ unit_restart() {
 	# that must exist (gone with an earlier REMOVE when hostapd had made it)
 	if [ "$f" != "$d" ]; then vif_add "$d" "$f" || return 1; fi
 	ebegin "hostapd: starting radio $d ($c)"
-	hap_ok ADD "bss_config=$phy:$c"
-	eend $? || return 1
+	if ! hap_ok ADD "bss_config=$phy:$c"; then
+		eend 1
+		# a setup that failed inside the ADD: a failure of this radio too
+		fail_note "$d" ADD-FAILED "$(hap_reason "$f")"
+		return 1
+	fi
+	eend 0
 	cp "$w" "$STATE/applied/$d"
 	id_record "$d"
 }
@@ -539,12 +648,27 @@ unit_apply() {
 	fi
 	if [ ! -f "$a" ] || [ "$(unit_line "$a" conf)" != "$(unit_line "$w" conf)" ] ||
 	   [ "$(unit_line "$a" radio)" != "$(unit_line "$w" radio)" ]; then
+		# a failed start of this same config: restarted only when its retry
+		# is due (bounded, counted by fail_note); a new config starts over
+		if [ ! -f "$a" ] && [ -f "$STATE/failed/$d" ] && [ "$(fail_get "$d" key)" = "$(unit_line "$w" radio)" ]; then
+			if fail_note "$d" "$(fail_get "$d" state)" "$(fail_get "$d" reason)"; then unit_restart "$d"; fi
+			return 1
+		fi
 		unit_restart "$d"
 		return
 	fi
 	# what hostapd really runs: a BSS it lost is added again
 	live=$(hap_live)
 	in_list "$live" "$(unit_first "$a" "$d")" || { ewarn "hostapd lost radio $d"; unit_restart "$d"; return; }
+	# a radio whose setup failed after the ADD: DISABLED is a FAILURE, never
+	# "unchanged"; starting states are left alone; ENABLED clears a record
+	s=$(bss_state "$(unit_first "$a" "$d")")
+	case "$s" in
+	DISABLED)
+		if fail_note "$d" DISABLED "$(hap_reason "$(unit_first "$a" "$d")")"; then unit_restart "$d"; fi
+		return 1 ;;
+	ENABLED) fail_clear "$d" ;;
+	esac
 	if cmp -s "$a" "$w"; then
 		while read -r i s p; do
 			[ -z "$i" ] || in_list "$live" "$i" || ok=0
@@ -1134,7 +1258,7 @@ stop_hostapd() {
 	vlan_prune ""
 	br_prune ""
 	rm -f "$STATE/l2.conf"
-	rm -rf "$STATE/ids" "$STATE/reprobe"
+	rm -rf "$STATE/ids" "$STATE/reprobe" "$STATE/failed"
 }
 
 start() {
@@ -1218,6 +1342,16 @@ status() {
 		return $rc
 	fi
 	einfo "hostapd: running (pid $(cat "$HAP_PID")), global control $(hap_global)"
+	for p in "$STATE"/failed/*; do
+		[ -f "$p" ] || continue
+		d=${p##*/}
+		if [ "$(fail_get "$d" given_up)" = 1 ]; then
+			eerror "radio $d FAILED to start ($(fail_get "$d" state)), given up after 3 retries: $(fail_get "$d" reason)"
+		else
+			eerror "radio $d FAILED to start ($(fail_get "$d" state)), retry $(( $(fail_get "$d" tries) + 1 ))/3 pending: $(fail_get "$d" reason)"
+		fi
+		rc=1
+	done
 	[ -s "$STATE/gen/sched" ] && einfo "schedules: $(tr '\n' ' ' < "$STATE/gen/sched")"
 	live=$(hap_live)
 	for p in "$STATE"/applied/*; do

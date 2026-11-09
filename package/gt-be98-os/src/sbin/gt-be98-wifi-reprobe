@@ -33,8 +33,18 @@
 # REPROBE_TRIES such reloads is left alone (logged once): the service failed
 # it that many times (see its log); a new re-probe starts over.
 #
+# The same pass also runs the reloads of the bounded supervised restart
+# (gt-be98-wifi header: a radio that fails to start):
+#   - a planned radio hostapd runs in state DISABLED for REPROBE_DISABLED s
+#     with no failure record yet: due (the reload records the failure);
+#   - a failure record whose retry time (next=) has come, not given up: due;
+#   - the hostapd process died (its pid file names a dead process): due, at
+#     most HAP_DEATHS reloads per 600 s (then logged once and left: a hostapd
+#     that dies at every start is not hidden behind a restart loop).
+#
 # Settings (environment, defaults): REPROBE_POLL 2, REPROBE_SETTLE 5,
-# REPROBE_GONE 90, REPROBE_MIN 20, REPROBE_TRIES 3. State: $STATE/reprobe.
+# REPROBE_GONE 90, REPROBE_MIN 20, REPROBE_TRIES 3, REPROBE_DISABLED 10,
+# HAP_DEATHS 3, HOSTAPD_CTRL /run/hostapd. State: $STATE/reprobe.
 set -u
 # (GT_BE98_*: the offline test harness only)
 RUNDIR=${GT_BE98_RUN:-/run}
@@ -48,6 +58,10 @@ SETTLE=$(num "${REPROBE_SETTLE:-}" 5)
 GONE=$(num "${REPROBE_GONE:-}" 90)
 MIN=$(num "${REPROBE_MIN:-}" 20)
 TRIES=$(num "${REPROBE_TRIES:-}" 3)
+DISW=$(num "${REPROBE_DISABLED:-}" 10)
+DEATHS=$(num "${HAP_DEATHS:-}" 3)
+CTRL=${HOSTAPD_CTRL:-$RUNDIR/hostapd}
+HAP_PID=$RUNDIR/hostapd-wifi.pid
 
 log() {
 	if [ -n "${GT_BE98_LOG:-}" ]; then echo "$*" >> "$GT_BE98_LOG"
@@ -62,11 +76,54 @@ ifidx() { cat "$SYSNET/$1/ifindex" 2>/dev/null; }
 
 valid_dev() { case "$1" in bcawl[0-9]|bcawl[0-9][0-9]) return 0 ;; esac; return 1; }
 
+# hostapd's state of BSS $1
+hstate() { hostapd_cli -p "$CTRL" -i "$1" status 2>/dev/null | sed -n 's/^state=//p' | head -n1; }
+
+# field $2 of the failure record of radio $1
+fget() { sed -n "s/^$2=//p" "$STATE/failed/$1" 2>/dev/null | head -n1; }
+
+# the supervision half of a pass (header): prints the due reasons
+health() {
+	local t=$1 f d st since p n
+	# the hostapd process died
+	if [ -f "$HAP_PID" ]; then
+		p=$(cat "$HAP_PID" 2>/dev/null)
+		if [ -n "$p" ] && ! kill -0 "$p" 2>/dev/null; then
+			# deaths in the last 600 s
+			n=$(awk -v t="$t" '$1 > t - 600' "$W/deaths" 2>/dev/null | wc -l | tr -d ' ')
+			if [ "$n" -lt "$DEATHS" ]; then rm -f "$W/deaths.said"; echo "hostapd-died"
+			elif [ ! -f "$W/deaths.said" ]; then
+				log "hostapd died $n times in 10 min: no more reloads for it (see /var/log/hostapd.log); a manual restart of gt-be98-wifi retries"
+				: > "$W/deaths.said"
+			fi
+		fi
+	fi
+	for f in "$STATE"/want/*; do
+		[ -f "$f" ] || continue
+		d=${f##*/}
+		valid_dev "$d" || continue
+		if [ -f "$STATE/failed/$d" ]; then
+			rm -f "$W/$d.dis"
+			[ "$(fget "$d" given_up)" = 1 ] && continue
+			n=$(fget "$d" next)
+			[ -n "$n" ] && [ "$t" -ge "$n" ] && echo "retry:$d"
+			continue
+		fi
+		[ -f "$STATE/applied/$d" ] || continue
+		st=$(hstate "$(sed -n 's/^first //p' "$STATE/applied/$d" | head -n1)")
+		if [ "$st" != DISABLED ]; then rm -f "$W/$d.dis"; continue; fi
+		[ -f "$W/$d.dis" ] || { echo "$t" > "$W/$d.dis"; log "$d: hostapd reports it DISABLED (its setup failed)"; }
+		since=$(cat "$W/$d.dis")
+		[ $((t - since)) -ge "$DISW" ] && echo "failed:$d"
+	done
+}
+
 cmd_check() {
-	local f d rec cur t due='' hold=0 s since n tr
-	[ -d "$STATE/ids" ] || return 0	# the service runs no radio
-	mkdir -p "$W"
+	local f d rec cur t due='' hold=0 s since n tr why
+	mkdir -p "$W" 2>/dev/null || return 0
 	t=$(now)
+	why=$(health "$t" | tr '\n' ' ')
+	[ -d "$STATE/ids" ] || [ -n "$why" ] || return 0	# the service runs no radio
 	for f in "$STATE"/ids/*; do
 		[ -f "$f" ] || continue
 		d=${f##*/}
@@ -103,7 +160,8 @@ cmd_check() {
 		fi
 		due="$due $d"
 	done
-	[ -n "$due" ] && [ "$hold" = 0 ] || return 0
+	[ -n "$due" ] && [ "$hold" = 1 ] && due=''	# re-probes wait; supervision does not
+	[ -n "$due" ] || [ -n "$why" ] || return 0
 	s=$(cat "$W/last" 2>/dev/null)
 	[ -n "$s" ] && [ $((t - s)) -lt "$MIN" ] && return 0
 	echo "$t" > "$W/last"
@@ -112,7 +170,9 @@ cmd_check() {
 		n=0; [ "${tr%% *}" = "$cur" ] && n=${tr#* }
 		echo "$cur $((n + 1))" > "$W/$d.tries"
 	done
-	log "re-probed radio(s)${due}: reloading gt-be98-wifi (restarts them alone)"
+	case " $why " in *" hostapd-died "*) echo "$t" >> "$W/deaths" ;; esac
+	[ -z "$due" ] || log "re-probed radio(s)${due}: reloading gt-be98-wifi (restarts them alone)"
+	[ -z "$why" ] || log "supervision: ${why% }: reloading gt-be98-wifi"
 	${GT_BE98_RELOAD:-rc-service gt-be98-wifi reload} > /dev/null 2>&1 ||
 		log "gt-be98-wifi reload failed: retried in ${MIN}s"
 	return 0

@@ -86,5 +86,50 @@ echo 1 > "$I/eth0"; dev eth0 2
 check "a non-radio name in ids: ignored" "0 0" "$(at 800)"
 check "usage: exit 2" 2 "$($SH "$R" bogus > /dev/null 2>&1; echo $?)"
 
+# ---- the supervision half (gt-be98-wifi: a radio that fails to start) ----
+# hostapd_cli -i <bss> status: the state in $FAKE/state-<bss>
+cat > "$T/bin/hostapd_cli" <<'X'
+#!/bin/sh
+while [ $# -gt 0 ]; do case $1 in -i) i=$2; shift 2 ;; -p) shift 2 ;; *) break ;; esac; done
+[ "$1" = status ] && [ -f "$FAKE/state-$i" ] && echo "state=$(cat "$FAKE/state-$i")"
+exit 0
+X
+chmod +x "$T/bin/hostapd_cli"
+rm -rf "$I" "$T/run/gt-be98-wifi/reprobe"; S="$T/run/gt-be98-wifi"
+mkdir -p "$S/want" "$S/applied"
+for d in bcawl0 bcawl3; do printf 'conf x\nfirst %s\nradio k-%s\n' "$d" "$d" > "$S/want/$d"; cp "$S/want/$d" "$S/applied/$d"; echo ENABLED > "$T/state-$d"; done
+check "supervision: both radios ENABLED: no reload" "0 0" "$(at 1000)"
+echo DISABLED > "$T/state-bcawl0"
+check "bcawl0 DISABLED, seen at 1001: not yet (REPROBE_DISABLED 10 s)" "0 0" "$(at 1001)"
+check "  said so" "yes" "$(grep -q 'bcawl0: hostapd reports it DISABLED' "$T/log" && echo yes || echo no)"
+check "1011 (10 s DISABLED, no record): one reload" "0 1" "$(at 1011)"
+check "  the log names it" "yes" "$(grep -q 'supervision: failed:bcawl0: reloading' "$T/log" && echo yes || echo no)"
+# the service recorded the failure: retry due at next=
+printf 'dev=bcawl0\nkey=k-bcawl0\nstate=DISABLED\nreason=r\ntries=0\nnext=1041\ngiven_up=0\nsince=1011\n' > "$S/failed.tmp"; mkdir -p "$S/failed"; mv "$S/failed.tmp" "$S/failed/bcawl0"
+check "record, next=1041: at 1035 nothing" "0 0" "$(at 1035)"
+check "at 1041 (the retry is due): one reload" "0 1" "$(at 1041)"
+sed -i 's/^next=.*/next=/' "$S/failed/bcawl0"
+check "a retry running (next empty): nothing" "0 0" "$(at 1100)"
+sed -i 's/^next=.*/next=1150/; s/^tries=.*/tries=1/' "$S/failed/bcawl0"
+check "within REPROBE_MIN of the last reload? no (1150-1041): due at 1150" "0 1" "$(at 1150)"
+sed -i 's/^next=.*/next=1160/' "$S/failed/bcawl0"
+check "due at 1160 but the last reload was 1150 (< 20 s): none" "0 0" "$(at 1160)"
+check "  then at 1170: one" "0 1" "$(at 1170)"
+sed -i 's/^next=.*/next=/; s/^given_up=.*/given_up=1/; s/^tries=.*/tries=3/' "$S/failed/bcawl0"
+check "given up: never again" "0 0|0 0" "$(at 2000)|$(at 9000)"
+check "bcawl3 (ENABLED) never named by the supervision" "0" "$(grep -cE 'supervision: .*bcawl3|bcawl3: hostapd reports' "$T/log")"
+# the hostapd process died
+rm -rf "$S/failed"; echo ENABLED > "$T/state-bcawl0"
+sleep 0 & dead=$!; wait $dead
+echo "$dead" > "$T/run/hostapd-wifi.pid"
+check "hostapd died (its pid is gone): one reload" "0 1" "$(at 10000)"
+check "  the log says so" "yes" "$(grep -q 'supervision: hostapd-died: reloading' "$T/log" && echo yes || echo no)"
+check "still dead at 10030, 10060: reloads 2 and 3" "0 1|0 1" "$(at 10030)|$(at 10060)"
+check "a 4th death within 600 s: none, said once" "0 0|0 0|1" "$(at 10090)|$(at 10120)|$(grep -c 'hostapd died 3 times in 10 min' "$T/log")"
+check "600 s after the first death: reloads again" "0 1" "$(at 10601)"
+sleep 1000 & alive=$!; echo "$alive" > "$T/run/hostapd-wifi.pid"
+check "hostapd alive: nothing" "0 0" "$(at 11000)"
+kill "$alive" 2>/dev/null
+
 if [ $fail = 0 ]; then echo "ALL OK ($n checks)"; else echo "FAILED"; cat "$T/log"; fi
 exit $fail
