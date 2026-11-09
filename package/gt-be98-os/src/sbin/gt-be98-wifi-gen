@@ -236,6 +236,14 @@
 #     airtime_sta_weight=MAC W      one station's weight, W = 1..65535
 #                                   (airtime=1); the key repeats, at most
 #                                   64 per network
+#     kv=0|1                        802.11k/v roaming help: hostapd
+#                                   rrm_neighbor_report=1 + bss_transition=1
+#                                   (neighbor reports, BSS transition
+#                                   management). Rendered only while KV=1
+#                                   (below; -F feature kv): until the driver
+#                                   passes the RRM/WNM action frames through
+#                                   (open-wifi INV-T6) kv=1 is DROPPED with
+#                                   a warning, never written
 #     twt=0|1  wds=0|1              network level: refused (-F: feature
 #                                   twt 0, feature wds 0). TWT is radio-wide
 #                                   in hostapd (radio twt=, feature
@@ -382,6 +390,14 @@ set -u
 # -F says which: feature ht40_2g 0|1 (the web UI warns on 0).
 # (GT_BE98_HT40_2G: the offline test harness only)
 HT40_2G=${GT_BE98_HT40_2G:-0}
+# [open-wifi INV-T6] THE one switch of 802.11k/v (network kv=1). 0 (prepared,
+# disabled): the driver does not pass the RRM / WNM action frames between the
+# firmware and hostapd yet (.mgmt_tx refuses them, no action-frame RX), so
+# hostapd's neighbor report / BSS transition answers could never reach a
+# client: kv=1 is accepted and dropped with a warning. 1 once the driver
+# lane lands the frames (owner OD4 (a)). -F: feature kv 0|1 (the web UI
+# offers the option only on 1). (GT_BE98_KV: the offline test harness only)
+KV=${GT_BE98_KV:-0}
 NETS='' OUT='' SLOTS='' MACS='' DEVS='' CAP=4 CTRL=/run/hostapd CC=0 RNR=1 KEEP=0 DRY=0
 NOW='' QUERY=0 UPF='' STACTRL=/run/wpa_supplicant SKIP=0 BPB=''
 SYSNET=${GT_BE98_SYSNET:-/sys/class/net}
@@ -420,6 +436,7 @@ features() {
 	station_security psk2 sae
 	EOF
 	echo "feature ht40_2g $HT40_2G"
+	echo "feature kv $KV"
 }
 while getopts n:o:s:m:d:C:x:cR:K:NT:QFU:X:SB: o; do
 	case $o in
@@ -439,6 +456,7 @@ case "$NOW" in
 esac
 case "$CAP" in [1-8]) ;; *) echo "gt-be98-wifi-gen: -C $CAP: 1..8" >&2; exit 1 ;; esac
 case "$HT40_2G" in 0|1) ;; *) echo "gt-be98-wifi-gen: HT40_2G=$HT40_2G: 0 or 1" >&2; exit 1 ;; esac
+case "$KV" in 0|1) ;; *) echo "gt-be98-wifi-gen: KV=$KV: 0 or 1" >&2; exit 1 ;; esac
 case "$CTRL" in /*) ;; *) echo "gt-be98-wifi-gen: -x must be absolute" >&2; exit 1 ;; esac
 case "$CTRL" in *[!A-Za-z0-9/_.-]*) echo "gt-be98-wifi-gen: -x $CTRL refused" >&2; exit 1 ;; esac
 case "$STACTRL" in /*) ;; *) echo "gt-be98-wifi-gen: -X must be absolute" >&2; exit 1 ;; esac
@@ -463,7 +481,7 @@ S=${SLOTS:-/dev/null}
 LC_ALL=C awk -v cap="$CAP" -v ctrl="$CTRL" -v devlist="$DEVS" -v maclist="$MACS" \
 	-v ccok="$CC" -v rnr="$RNR" -v keep="$KEEP" -v out="$OUT" -v slotsf="$S" \
 	-v now="$NOW" -v query="$QUERY" -v upf="$UPF" -v stactrl="$STACTRL" -v skipbad="$SKIP" \
-	-v ht402g="$HT40_2G" -v bpbands="$BPB" '
+	-v ht402g="$HT40_2G" -v bpbands="$BPB" -v kvon="$KV" '
 function err(m) { print "gt-be98-wifi-gen: " m > "/dev/stderr"; nerr++ }
 function warn(m) { print "gt-be98-wifi-gen: warning: " m > "/dev/stderr" }
 # an error of network i itself: with -S the network is skipped (a warning),
@@ -774,7 +792,7 @@ k == "network" {
 	aw[ci] = ""; alim[ci] = 0; nasw[ci] = 0
 	nb[ci] = 0; nra[ci] = 0
 	rs[ci] = ""; rp[ci] = ""; rk[ci] = ""; as[ci] = ""; ap[ci] = ""; ak[ci] = ""
-	rtd[ci] = ""; rep[ci] = 0
+	rtd[ci] = ""; rep[ci] = 0; kv[ci] = 0
 	next
 }
 k == "radio" {
@@ -849,6 +867,7 @@ cur == "n" {
 	# v is a substr() result, a STRING: "0" is non-empty and so TRUE in awk; store the number
 	else if (k == "hidden" && (v == "0" || v == "1")) hid[ci] = v + 0
 	else if (k == "isolate" && (v == "0" || v == "1")) iso[ci] = v + 0
+	else if (k == "kv" && (v == "0" || v == "1")) kv[ci] = v + 0
 	else if (k == "max_clients" && isnum(v) && v + 0 >= 1 && v + 0 <= 2007) maxc[ci] = v + 0
 	else if (k == "schedule" && (v == "" || schedok(v))) nsch[ci] = v
 	else if (k == "airtime_weight" && isnum(v) && v + 0 >= 1 && v + 0 <= 1000) aw[ci] = v + 0
@@ -862,7 +881,7 @@ cur == "n" {
 	# a custom address (checked in END): bssid= (one band) or bssid.<band>=
 	else if (k == "bssid" && parsemac(v, tmo)) cmac0[ci] = tolower(v)
 	else if (k ~ /^bssid\./ && validband(substr(k, 7)) && parsemac(v, tmo)) cmac[ci, substr(k, 7)] = tolower(v)
-	else if (k ~ /^(repeated|hidden|isolate|max_clients|schedule|airtime_weight|airtime_limit|airtime_sta_weight|slot\.[0-9a-z]+|mac\.[0-9a-z]+|bssid|bssid\.[0-9a-z]+)$/) nerrf(ci, "network " net[ci] ": " k "=" v " refused")
+	else if (k ~ /^(repeated|hidden|isolate|kv|max_clients|schedule|airtime_weight|airtime_limit|airtime_sta_weight|slot\.[0-9a-z]+|mac\.[0-9a-z]+|bssid|bssid\.[0-9a-z]+)$/) nerrf(ci, "network " net[ci] ": " k "=" v " refused")
 	else nerrf(ci, "network " net[ci] ": unknown key " k)	# never echo a value that may be a secret
 	next
 }
@@ -942,6 +961,11 @@ END {
 	for (i = 1; i <= nnet; i++) if (i in bad) {
 		for (bi = 1; bi <= nbands; bi++) delete hasb[i, BANDS[bi]]
 		nsch[i] = ""
+	}
+	# [open-wifi INV-T6] KV=0 (header): kv=1 dropped, said once per network
+	for (i = 1; i <= nnet; i++) if (kv[i] && !(kvon + 0) && !(i in bad)) {
+		warn("network " net[i] ": kv=1 ignored: 802.11k/v (neighbor reports, BSS transition) waits for the Wi-Fi driver to pass the RRM/WNM action frames (open-wifi INV-T6); rrm_neighbor_report/bss_transition are not written")
+		kv[i] = 0
 	}
 	# the station (uplink): never echo its passphrase
 	if (nsta) {
@@ -1332,6 +1356,8 @@ END {
 			if (hid[i]) print "ignore_broadcast_ssid=1" > f
 			if (iso[i]) print "ap_isolate=1" > f
 			if (maxc[i] != "") print "max_num_sta=" maxc[i] > f
+			# 802.11k/v (kv=1, KV=1 only): neighbor reports + BSS transition management
+			if (kv[i]) { print "rrm_neighbor_report=1" > f; print "bss_transition=1" > f }
 			# airtime: only on a radio whose airtime mode is on (hostapd ignores them at 0)
 			if (rair[b]) {
 				if (aw[i] != "") print "airtime_bss_weight=" aw[i] > f

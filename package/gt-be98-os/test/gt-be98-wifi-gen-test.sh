@@ -582,6 +582,30 @@ cp "$T/slots" "$T/slots.bp"; gen "$T/bp" -C 8 -B "2g 7g"
 check "-B with an unknown band: refused, said why, slots untouched" "1 yes same" \
 	"$? $(grep -q -- '-B 7g: a band' "$T/err" && echo yes || echo no) $(cmp -s "$T/slots" "$T/slots.bp" && echo same || echo changed)"
 
+# ---- 10b7. 802.11k/v (network kv=1; open-wifi INV-T6, owner OD4 (a)):
+# prepared, disabled. KV=0 (the default): -F feature kv 0, kv=1 accepted and
+# DROPPED with a warning; KV=1: rrm_neighbor_report=1 + bss_transition=1 on
+# every BSS of the network, none elsewhere ----
+check "-F: feature kv 0 (the default)" "feature kv 0" "$($SH "$G" -F | grep '^feature kv ')"
+check "-F with KV=1: feature kv 1" "feature kv 1" "$(GT_BE98_KV=1 $SH "$G" -F | grep '^feature kv ')"
+{ net 1 a sae password1 "2g 5gl 6g" 1; printf 'kv=1\n'; net 2 b sae password2 "2g 5gl" 2; printf 'kv=0\n'; net 3 c psk2 password3 2g 3; } > "$T/kv"
+kvl() {	# the BSSes (net@ifname) whose section has both 11k/v lines
+	awk '$1 == "bss" { print $5 "@" $3 }' "$T/o/plan" | while read -r x; do
+		grep -qx 'rrm_neighbor_report=1' "$T/o/sec-${x#*@}" && grep -qx 'bss_transition=1' "$T/o/sec-${x#*@}" && printf '%s ' "$x"; done | sed 's/ $//'
+}
+rm -f "$T/slots"; gen "$T/kv"
+check "KV=0: kv=1 accepted, nothing written, one warning naming network 1 and INV-T6" "0 0 1" \
+	"$? $(cat "$T"/o/sec-* | grep -cE '^(rrm_neighbor_report|bss_transition)=') $(grep -c 'warning: network 1: kv=1 ignored: .*INV-T6' "$T/err")"
+check "KV=0: kv=0 says nothing" "0" "$(grep -c 'network 2: kv' "$T/err")"
+rm -f "$T/slots"; GT_BE98_KV=1 gen "$T/kv"
+check "KV=1: network 1 on its three radios only, no warning" "0 1@bcawl3 1@bcawl0 1@bcawl2 0" "$? $(kvl) $(grep -c 'kv=' "$T/err")"
+check "KV=1: only those two lines added (network 2, kv=0: neither)" "" "$(grep -hE '^(rrm_|bss_transition)' "$T/o/sec-bcawl3-1" "$T/o/sec-bcawl0-1")"
+conf_ok "kv"
+rm -f "$T/slots"; GT_BE98_KV=1 gen "$T/kv" -S; check "KV=1 -S: the same" "0 1@bcawl3 1@bcawl0 1@bcawl2" "$? $(kvl)"
+{ net 1 a sae password1 2g 1; printf 'kv=2\n'; } > "$T/r"; rm -f "$T/slots"; gen "$T/r"
+check "kv=2: refused, said why" "1 yes" "$? $(grep -q 'network 1: kv=2 refused' "$T/err" && echo yes || echo no)"
+check "KV=x: refused" "1" "$(GT_BE98_KV=x $SH "$G" -n "$T/kv" -o "$T/o" -s "$T/slots" -m "$M" > /dev/null 2>&1; echo $?)"
+
 # ---- 10c. radio features: HE (ax=), TWT responder (twt=), zero-wait DFS
 # (zwdfs=), monitor (monitor=), LED (led=) ----
 # HE/EHT (ax=, be=): default both on, every radio; each off both ways
