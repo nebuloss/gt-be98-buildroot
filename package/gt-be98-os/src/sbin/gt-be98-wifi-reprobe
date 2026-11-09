@@ -38,6 +38,9 @@
 #   - a planned radio hostapd runs in state DISABLED for REPROBE_DISABLED s
 #     with no failure record yet: due (the reload records the failure);
 #   - a failure record whose retry time (next=) has come, not given up: due;
+#   - a record whose retry ran (next= empty) and the radio DISABLED again
+#     for REPROBE_DISABLED s: due (the reload counts it, schedules the next);
+#     ENABLED instead: due (the reload clears the record: recovered);
 #   - the hostapd process died (its pid file names a dead process): due, at
 #     most HAP_DEATHS reloads per 600 s (then logged once and left: a hostapd
 #     that dies at every start is not hidden behind a restart loop).
@@ -103,14 +106,20 @@ health() {
 		d=${f##*/}
 		valid_dev "$d" || continue
 		if [ -f "$STATE/failed/$d" ]; then
-			rm -f "$W/$d.dis"
-			[ "$(fget "$d" given_up)" = 1 ] && continue
+			if [ "$(fget "$d" given_up)" = 1 ]; then rm -f "$W/$d.dis"; continue; fi
 			n=$(fget "$d" next)
-			[ -n "$n" ] && [ "$t" -ge "$n" ] && echo "retry:$d"
-			continue
+			if [ -n "$n" ]; then
+				rm -f "$W/$d.dis"
+				[ "$t" -ge "$n" ] && echo "retry:$d"
+				continue
+			fi
+			# a retry ran (next empty): due again once it is DISABLED again,
+			# so the reload counts the failed retry and schedules the next
 		fi
 		[ -f "$STATE/applied/$d" ] || continue
 		st=$(hstate "$(sed -n 's/^first //p' "$STATE/applied/$d" | head -n1)")
+		# a retry that worked: the reload clears the record (says recovered)
+		if [ "$st" = ENABLED ] && [ -f "$STATE/failed/$d" ]; then rm -f "$W/$d.dis"; echo "recovered:$d"; continue; fi
 		if [ "$st" != DISABLED ]; then rm -f "$W/$d.dis"; continue; fi
 		[ -f "$W/$d.dis" ] || { echo "$t" > "$W/$d.dis"; log "$d: hostapd reports it DISABLED (its setup failed)"; }
 		since=$(cat "$W/$d.dis")
