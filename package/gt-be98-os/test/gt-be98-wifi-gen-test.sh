@@ -578,6 +578,17 @@ check "-B: every beacon_prot BSS has PMF (ieee80211w 1 or 2)" "" \
 conf_ok "beacon protection"
 gen "$T/bp" -C 8 -B "6g"; check "-B 6g: the 6 GHz BSSes only" "0 1@bcawl2 2@bcawl2-1 4@bcawl2-2" "$? $(bpl)"
 gen "$T/bp" -C 8 -B "2g,5gl"; check "-B comma-separated: 2.4 and 5 GHz-low" "0 1@bcawl3 2@bcawl3-1 1@bcawl0 2@bcawl0-1 5@bcawl0-3" "$? $(bpl)"
+# hostapd 2.12's own rule (ap_config.c): on an EHT radio (be=1, the default)
+# every BSS with PMF gets beacon protection whatever beacon_prot says; on an
+# HE-only radio (be=0) only beacon_prot=1 asks for it. Both ways, no -B
+if [ -n "$CONFCHECK" ]; then
+	{ printf 'radio=5gl\nbe=0\n'; net 1 s sae password1 "2g 5gl" 1; } > "$T/bpe"
+	rm -f "$T/slots"; gen "$T/bpe"
+	"$CONFCHECK" "$T/o/hostapd-bcawl3.conf" > "$T/cce" 2>&1; "$CONFCHECK" "$T/o/hostapd-bcawl0.conf" > "$T/cch" 2>&1
+	check "hostapd itself: EHT 2g SAE BSS gets beacon protection without beacon_prot=1; HE-only 5gl does not" "1 0" \
+		"$(grep -c 'Enabling beacon protection as IEEE 802.11be is enabled' "$T/cce") $(grep -c 'Enabling beacon protection' "$T/cch")"
+	gen "$T/bp" -C 8
+fi
 cp "$T/slots" "$T/slots.bp"; gen "$T/bp" -C 8 -B "2g 7g"
 check "-B with an unknown band: refused, said why, slots untouched" "1 yes same" \
 	"$? $(grep -q -- '-B 7g: a band' "$T/err" && echo yes || echo no) $(cmp -s "$T/slots" "$T/slots.bp" && echo same || echo changed)"

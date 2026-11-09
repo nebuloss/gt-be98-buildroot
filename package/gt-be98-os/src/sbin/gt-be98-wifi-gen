@@ -71,8 +71,14 @@
 #       On those radios every SAE (sae, psk2sae) and OWE BSS gets
 #       beacon_prot=1 (BIGTK, 802.11-2020 beacon protection), as stock does
 #       (its bcnprot enable = 1 on SAE, 0 on WPA2); WPA2-only, Enterprise
-#       and open BSSes never. Without -B none (a driver without the feature
-#       would leave hostapd's beacon_prot inert or refused)
+#       and open BSSes never. Without -B none. NB hostapd 2.12 itself
+#       (a) clears beacon_prot when the driver lacks the feature
+#       (wpa_auth_glue.c) and advertises it (Extended Capabilities bit 84)
+#       only with it, and (b) turns it ON by itself on every BSS with PMF
+#       of an EHT radio (ieee80211be=1, the default: ap_config.c "Enabling
+#       beacon protection as IEEE 802.11be is enabled"), Enterprise with
+#       PMF included. So -B decides for HE-only radios (be=0) and states
+#       the intent; on EHT radios hostapd's own rule wins
 #   -F  print what this generator supports (one "<what> <values>" per
 #       line: feature <name> 0|1, width <band> <MHz...>, security <modes>,
 #       station_security <modes>, max_clients <min> <max>) and exit. The web
