@@ -93,7 +93,9 @@
 #                                   its own channels, 5gl 36-64, 5gh
 #                                   100-144 149-177, so a move after a
 #                                   radar stays in the radio's band)
-#                                   2g: 20, 40; 5gl/5gh: 20, 40, 80, 160
+#                                   2g: 20, 40 (40: rendered at 20 MHz
+#                                   with a warning while HT40_2G=0, see
+#                                   below); 5gl/5gh: 20, 40, 80, 160
 #                                   (160: the blocks 36-64 and 100-128,
 #                                   centre 50/114, [VHT160]; each holds
 #                                   DFS channels, so 160 MHz needs -c like
@@ -361,6 +363,16 @@
 # Exit 1 with the reasons on stderr when the list is refused: then nothing
 # but OUTDIR is written.
 set -u
+# [open-wifi INV-HT40-2G] THE one switch of 2.4 GHz 40 MHz. 0 (interim, owner
+# OD1 pending its bench arm): the driver's 2.4 GHz wiphy advertises HT20 only
+# (open-wifi ap_2ghz_ht=1: no IEEE80211_HT_CAP_SUP_WIDTH_20_40), so hostapd
+# would refuse ht_capab=[HT40+/-] and the radio stay dark: a radio=2g width=40
+# is RENDERED AT 20 MHz with a warning (accepted, so a stored 40 never stops
+# the radio). 1: width=40 renders ht_capab=[HT40+/-] (set it once the bench
+# shows the firmware holds 40 MHz on 2.4 GHz and the driver advertises it).
+# -F says which: feature ht40_2g 0|1 (the web UI warns on 0).
+# (GT_BE98_HT40_2G: the offline test harness only)
+HT40_2G=${GT_BE98_HT40_2G:-0}
 NETS='' OUT='' SLOTS='' MACS='' DEVS='' CAP=4 CTRL=/run/hostapd CC=0 RNR=1 KEEP=0 DRY=0
 NOW='' QUERY=0 UPF='' STACTRL=/run/wpa_supplicant SKIP=0
 SYSNET=${GT_BE98_SYSNET:-/sys/class/net}
@@ -397,6 +409,7 @@ features() {
 	feature repeater 1
 	station_security psk2 sae
 	EOF
+	echo "feature ht40_2g $HT40_2G"
 }
 while getopts n:o:s:m:d:C:x:cR:K:NT:QFU:X:S o; do
 	case $o in
@@ -415,6 +428,7 @@ case "$NOW" in
 *) echo "gt-be98-wifi-gen: -T $NOW: \"D HH:MM\", D = 1 (Monday) .. 7" >&2; exit 1 ;;
 esac
 case "$CAP" in [1-8]) ;; *) echo "gt-be98-wifi-gen: -C $CAP: 1..8" >&2; exit 1 ;; esac
+case "$HT40_2G" in 0|1) ;; *) echo "gt-be98-wifi-gen: HT40_2G=$HT40_2G: 0 or 1" >&2; exit 1 ;; esac
 case "$CTRL" in /*) ;; *) echo "gt-be98-wifi-gen: -x must be absolute" >&2; exit 1 ;; esac
 case "$CTRL" in *[!A-Za-z0-9/_.-]*) echo "gt-be98-wifi-gen: -x $CTRL refused" >&2; exit 1 ;; esac
 case "$STACTRL" in /*) ;; *) echo "gt-be98-wifi-gen: -X must be absolute" >&2; exit 1 ;; esac
@@ -438,7 +452,8 @@ S=${SLOTS:-/dev/null}
 
 LC_ALL=C awk -v cap="$CAP" -v ctrl="$CTRL" -v devlist="$DEVS" -v maclist="$MACS" \
 	-v ccok="$CC" -v rnr="$RNR" -v keep="$KEEP" -v out="$OUT" -v slotsf="$S" \
-	-v now="$NOW" -v query="$QUERY" -v upf="$UPF" -v stactrl="$STACTRL" -v skipbad="$SKIP" '
+	-v now="$NOW" -v query="$QUERY" -v upf="$UPF" -v stactrl="$STACTRL" -v skipbad="$SKIP" \
+	-v ht402g="$HT40_2G" '
 function err(m) { print "gt-be98-wifi-gen: " m > "/dev/stderr"; nerr++ }
 function warn(m) { print "gt-be98-wifi-gen: warning: " m > "/dev/stderr" }
 # an error of network i itself: with -S the network is skipped (a warning),
@@ -962,6 +977,12 @@ END {
 		if ((b == "2g" && rw[b] >= 160) || (b != "6g" && rw[b] == 320)) err("radio " b ": " rw[b] " MHz is " (rw[b] == 320 ? "6 GHz" : "5/6 GHz") " only (this radio: " (b == "2g" ? "20, 40" : "20, 40, 80, 160") " MHz)")
 		if (b == "2g" && rw[b] == 80) err("radio 2g: 80 MHz is 5/6 GHz only")
 		if ((b == "5gl" || b == "5gh") && rw[b] == 160 && vht160(rch[b]) == 0) err("radio " b ": channel " rch[b] " has no 160 MHz block (5 GHz 160 MHz: channels 36-64 and 100-128)")
+		# [open-wifi INV-HT40-2G] HT40_2G=0 (header): 40 MHz on 2.4 GHz is
+		# rendered at 20 (the driver advertises HT20 only there); said once
+		if (b == "2g" && rw[b] == 40 && !(ht402g + 0)) {
+			if (renab[b] != "0") warn("radio 2g: width=40 rendered at 20 MHz: the Wi-Fi driver advertises 20 MHz only on 2.4 GHz (open-wifi INV-HT40-2G), hostapd would refuse HT40 and the radio would not start")
+			rw[b] = 20
+		}
 		if ((b == "5gl" || b == "5gh") && rw[b] == 40 && ht40(b, rch[b]) == "") err("radio " b ": channel " rch[b] " has no 40 MHz pair")
 		if ((b == "5gl" || b == "5gh") && rw[b] == 80 && vht80(rch[b]) == 0) err("radio " b ": channel " rch[b] " has no 80 MHz block")
 		# a DFS channel (5 GHz 52-144; their 40/80 MHz blocks never straddle
