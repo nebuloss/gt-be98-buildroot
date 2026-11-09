@@ -17,7 +17,11 @@
 # console-stall-2026-10-26 2026-11-04 816dc90 (RUNNER-G2: secondary BSS netdevs join the Runner WLAN radio,
 #  provider ABI 4 attach_bss/detach_bss - pairs with open-wifi e0f00e1a; flowcache: an IPv4/IPv6 L2 entry always
 #  gets the tcp_pure_ack key variant; on top of b3ca337)
-GT_BE98_OPEN_ETHERNET_VERSION = 1968937b334f801990dfa78e9ece93511da20b08
+# oe-mlo-0907-2026-11-09 2026-11-09 a9960de (= console-stall 1968937 + PCIe 0907: BCM6813 run-time
+#  peer-to-peer inbound windows, brcm_pcie_p2p_window_open/_close exported for the open-wifi MLO BRIDGE
+#  step; inert unless a driver calls them - no register write at probe or resume; no Kconfig change).
+#  The kernel series changed: an existing output tree needs linux-dirclean.
+GT_BE98_OPEN_ETHERNET_VERSION = a9960de5dfead2e62b4f3d8461142ad5b4264d92
 GT_BE98_OPEN_ETHERNET_SITE = git@github.com:nebuloss/gt-be98-open-ethernet.git
 GT_BE98_OPEN_ETHERNET_SITE_METHOD = git
 GT_BE98_OPEN_ETHERNET_LICENSE = GPL-2.0
