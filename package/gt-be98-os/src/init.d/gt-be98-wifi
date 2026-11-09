@@ -63,6 +63,17 @@
 # radio's BSSes start again; only what this service created ($STATE/monitors)
 # is ever deleted.
 #
+# Driver re-probe (open-wifi radio_rebind, INV-RECOVERY): the driver may
+# remove and re-probe ONE radio after a firmware trap; its netdev comes back
+# under the same name with a new ifindex and a new wiphy, and hostapd /
+# wpa_supplicant are still bound to the old one. $STATE/ids/<dev> holds the
+# ifindex of each radio netdev this service started (hostapd radio, station
+# or monitor); a reload restarts a radio whose netdev is no longer that one
+# (REMOVE + ADD of that radio alone, its station restarted, its monitor made
+# again), the other radios untouched. The daemon gt-be98-wifi-reprobe
+# (started and stopped with this service, pid /run/gt-be98-wifi-reprobe.pid)
+# notices the new netdev and runs that reload, debounced.
+#
 # LEDs (led=0|1 of a radio in the list): $STATE/leds lists the radios whose
 # LED is off (WIFI_LEDS_OFF="bcawlN ..."); gt-be98-leds reads it, and is run
 # after every start and reload.
@@ -124,6 +135,8 @@ SYSNET=${GT_BE98_SYSNET:-/sys/class/net}
 WIFI_GEN=${GT_BE98_WIFI_GEN:-/usr/sbin/gt-be98-wifi-gen}
 WIFI_SCHED=${GT_BE98_WIFI_SCHED:-/usr/sbin/gt-be98-wifi-sched}
 WIFI_STA=${GT_BE98_WIFI_STA:-/usr/sbin/gt-be98-wifi-sta}
+WIFI_REPROBE=${GT_BE98_WIFI_REPROBE:-/usr/sbin/gt-be98-wifi-reprobe}
+REPROBE_PID=$RUNDIR/gt-be98-wifi-reprobe.pid
 STA_MON_PID=$RUNDIR/gt-be98-wifi-sta.pid
 SCHED_PID=$RUNDIR/gt-be98-wifi-sched.pid
 STATE=$RUNDIR/gt-be98-wifi
@@ -410,6 +423,44 @@ radio_phy() {
 	return 1
 }
 
+# ---- radio identity: the netdev this service started (driver re-probe) ----
+
+# the ifindex of radio netdev $1 ("" = absent)
+radio_id() { cat "$SYSNET/$1/ifindex" 2>/dev/null; }
+
+# radio $1 was started on its current netdev
+id_record() {
+	local i
+	i=$(radio_id "$1") || return 0
+	[ -n "$i" ] || return 0
+	mkdir -p "$STATE/ids" && echo "$i" > "$STATE/ids/$1"
+}
+
+# the radios the driver re-probed since this service started them (netdev
+# present under another ifindex than the one recorded) -> REPROBED, taken
+# once at the start of an apply: the station and the hostapd unit of one
+# radio must both see it (the station's restart records the new ifindex)
+reprobed_scan() {
+	local f d r i
+	REPROBED=' '
+	for f in "$STATE"/ids/*; do
+		[ -f "$f" ] || continue
+		d=${f##*/}; r=$(cat "$f" 2>/dev/null); i=$(radio_id "$d")
+		[ -n "$r" ] && [ -n "$i" ] && [ "$i" != "$r" ] && REPROBED="$REPROBED$d "
+	done
+}
+
+reprobed() { in_list "${REPROBED:- }" "$1"; }
+
+# forget the radios not in the list $1 (" bcawl0 bcawl3 ")
+ids_prune() {
+	local f
+	for f in "$STATE"/ids/*; do
+		[ -f "$f" ] || continue
+		in_list " $1 " "${f##*/}" || rm -f "$f"
+	done
+}
+
 # ---- units: one per radio ----
 # $STATE/want/<dev> and $STATE/applied/<dev>:
 #   conf <path>            the radio config (ADD of the whole radio)
@@ -473,11 +524,19 @@ unit_restart() {
 	hap_ok ADD "bss_config=$phy:$c"
 	eend $? || return 1
 	cp "$w" "$STATE/applied/$d"
+	id_record "$d"
 }
 
 # bring radio $1 in line with its unit, per BSS where hostapd allows it
 unit_apply() {
 	local d=$1 w="$STATE/want/$1" a="$STATE/applied/$1" live i s p phy ok=1
+	# the driver re-probed the radio: hostapd runs it on a netdev that no
+	# longer exists, whatever its state says; the whole radio again
+	if [ -f "$a" ] && reprobed "$d"; then
+		ewarn "radio $d was re-probed by the Wi-Fi driver (a new netdev, ifindex $(radio_id "$d")): restarting it"
+		unit_restart "$d"
+		return
+	fi
 	if [ ! -f "$a" ] || [ "$(unit_line "$a" conf)" != "$(unit_line "$w" conf)" ] ||
 	   [ "$(unit_line "$a" radio)" != "$(unit_line "$w" radio)" ]; then
 		unit_restart "$d"
@@ -685,6 +744,7 @@ mon_add() {
 	if [ "$w" = 20 ]; then iw dev "$m" set freq "$f" HT20
 	else iw dev "$m" set freq "$f" "$w" "$c"; fi || { eerror "$m: set freq $f/$w failed"; return 1; }
 	einfo "monitor $m: $f MHz, $w MHz wide"
+	id_record "$d"
 }
 
 # every monitor of the plan (after hostapd released those radios)
@@ -817,11 +877,16 @@ sta_prepare() {
 		fi
 		fr0=$("$WIFI_STA" freq "$d" 2>/dev/null)
 		new=
+		# a re-probed radio: wpa_supplicant is bound to the old netdev
+		if reprobed "$d"; then
+			ewarn "station $d: the radio was re-probed by the Wi-Fi driver: restarting the station"
+			new=restart
+		fi
 		if [ "$f" != - ] && [ ! -e "$SYSNET/$f" ]; then
 			vif_add "$d" "$f" || { rc=1; continue; }
 			new=restart	# an AP interface appeared under a running station
 		fi
-		"$WIFI_STA" up "$d" "$c" "$s" $new || rc=1
+		if "$WIFI_STA" up "$d" "$c" "$s" $new; then id_record "$d"; else rc=1; fi
 		fr1=$("$WIFI_STA" freq "$d" 2>/dev/null)
 		[ "$fr0" = "$fr1" ] || [ $rc != 0 ] || rc=2
 	done <<-EOF
@@ -872,6 +937,8 @@ sta_mon_apply() {
 # bring hostapd in line with the settings: only what changed
 apply_hostapd() {
 	local c i b v want='' brs='' subs='' rc=0 t d p plan="$STATE/gen/plan"
+	reprobed_scan
+	[ "$REPROBED" = ' ' ] || ewarn "re-probed by the Wi-Fi driver:${REPROBED% }: restarting those radios"
 	ap_override
 	stop_legacy
 	gen_networks || return 1
@@ -969,6 +1036,7 @@ apply_hostapd() {
 		"$WIFI_STA" route || rc=1
 		sta_mon_apply
 		mon_apply || rc=1
+		ids_prune "$(ids_want "")"
 		return $rc
 	fi
 	# the process: (re)started when dead or started with other arguments
@@ -998,7 +1066,14 @@ apply_hostapd() {
 	sta_mon_apply
 	# the monitors, now that hostapd released their radios
 	mon_apply || rc=1
+	ids_prune "$(ids_want "$want")"
 	return $rc
+}
+
+# the radios whose netdev identity is kept: hostapd radios $1, stations,
+# monitors
+ids_want() {
+	echo "$1 $(cat "$STATE/stations" 2>/dev/null | tr '\n' ' ') $(mon_want | awk '{ printf "%s ", $1 }')"
 }
 
 # the schedule daemon (gt-be98-wifi-sched run), started when not running
@@ -1022,6 +1097,27 @@ sched_stop() {
 	rm -f "$SCHED_PID"
 }
 
+# the re-probe daemon (gt-be98-wifi-reprobe run), started when not running
+# (never stopped by reload: the daemon itself runs the reload)
+reprobe_running() {
+	local p
+	p=$(cat "$REPROBE_PID" 2>/dev/null) || return 1
+	[ -n "$p" ] && kill -0 "$p" 2>/dev/null
+}
+
+reprobe_start() {
+	[ -x "$WIFI_REPROBE" ] || return 0
+	reprobe_running && return 0
+	start-stop-daemon --start --background --make-pidfile --pidfile "$REPROBE_PID" \
+		--exec "$WIFI_REPROBE" -- run
+}
+
+reprobe_stop() {
+	[ -f "$REPROBE_PID" ] || return 0
+	start-stop-daemon --stop --pidfile "$REPROBE_PID" --retry TERM/5/KILL/2 > /dev/null 2>&1
+	rm -f "$REPROBE_PID"
+}
+
 stop_hostapd() {
 	local d
 	stop_legacy
@@ -1038,6 +1134,7 @@ stop_hostapd() {
 	vlan_prune ""
 	br_prune ""
 	rm -f "$STATE/l2.conf"
+	rm -rf "$STATE/ids" "$STATE/reprobe"
 }
 
 start() {
@@ -1062,6 +1159,8 @@ start() {
 	local rc=$?
 	sched_stop
 	sched_start
+	reprobe_stop
+	reprobe_start
 	# the radios' LEDs come with the driver (gt-be98-leds)
 	leds_apply
 	return $rc
@@ -1074,12 +1173,15 @@ reload() {
 	apply_hostapd
 	rc=$?
 	sched_start
+	reprobe_start
 	leds_apply	# led= of the list may have changed
 	return $rc
 }
 
 stop() {
 	sched_stop
+	# first: an unload must not look like a re-probe
+	reprobe_stop
 	stop_hostapd
 	if [ "${WIFI_UNLOAD_ON_STOP:-yes}" = yes ] && wifi_loaded; then
 		ebegin "Unloading bca_pcie_ipc"

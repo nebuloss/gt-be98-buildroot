@@ -458,5 +458,56 @@ check "2g advertises it: its SAE BSS (bcawl3) beacon_prot=1, its WPA2 BSS and 5g
 	"$rc $(grep -c '^beacon_prot=1$' "$G/hostapd-bcawl3.conf") $(grep -c '^beacon_prot=1$' "$G/bss-bcawl3-1.conf") $(grep -c '^beacon_prot' "$G/hostapd-bcawl0.conf") $(echo "$cmds" | tr '\n' '|' | sed 's/|$//')"
 rm -f "$T"/iw-phy*; : > "$T/nets"; apply
 
+# 19. a radio re-probed by the driver (open-wifi radio_rebind): its netdev
+# comes back under the same name with a new ifindex; the reload restarts
+# that radio alone (hostapd is bound to the old netdev), its station too
+rm -f "$T/slots"; WIFI_MAX_BSS=4
+for i in 0 1 2 3; do echo "1$i" > "$T/net/bcawl$i/ifindex"; done
+{ net 1 a sae password1 "2g 5gl" 1; net 2 b sae password2 2g 2; } > "$T/nets"
+apply
+check "ids: recorded for the started radios only (bcawl3 13, bcawl0 10)" "0 bcawl0:10 bcawl3:13" \
+	"$rc $(for f in "$T"/run/gt-be98-wifi/ids/*; do printf '%s:%s ' "${f##*/}" "$(cat "$f")"; done | sed 's/ $//')"
+apply
+check "ids: same netdevs, no command" "0 -" "$rc -$cmds"
+echo 23 > "$T/net/bcawl3/ifindex"
+apply
+check "bcawl3 re-probed (ifindex 13 -> 23): that radio alone restarted, whole (its two BSSes)" \
+	"0 REMOVE bcawl3|ADD bss_config=phy3:$G/hostapd-bcawl3.conf phy0 bcawl0|phy3 bcawl3 bcawl3-1" \
+	"$rc $(echo "$cmds" | tr '\n' '|' | sed 's/|$//') $(hapd | tr '\n' '|' | sed 's/|$//')"
+check "re-probe: said so, the new ifindex recorded, bcawl0 untouched" "yes 23 10" \
+	"$(grep -q 'radio bcawl3 was re-probed by the Wi-Fi driver' "$T/out" && echo yes || echo no) $(cat "$T/run/gt-be98-wifi/ids/bcawl3") $(cat "$T/run/gt-be98-wifi/ids/bcawl0")"
+apply
+check "after the restart: no command" "0 -" "$rc -$cmds"
+# a radio no longer configured is forgotten (a later re-probe of it is not ours)
+{ net 1 a sae password1 2g 1; net 2 b sae password2 2g 2; } > "$T/nets"
+apply
+check "5gl no longer configured: removed, its id forgotten" "0 REMOVE bcawl0 bcawl3" \
+	"$rc $cmds $(ls "$T/run/gt-be98-wifi/ids" | tr '\n' ' ' | sed 's/ $//')"
+# a station radio re-probed: its AP interface went with the old wiphy; the
+# station restarts (wpa_supplicant is bound to the old netdev), then the APs
+rm -f "$T/slots" "$T"/freq-* "$T"/assoc-*
+{ printf 'radio=5gl\nchannel=36\nwidth=80\n'; sta; net 1 a sae password1 "2g 5gl" 1; } > "$T/nets"
+apply
+echo 1 > "$T/net/bcawl0-1/ifindex" 2>/dev/null
+check "station radio: running, its id recorded" "0 phy0 bcawl0-1 10" "$rc $(hapd | grep '^phy0') $(cat "$T/run/gt-be98-wifi/ids/bcawl0")"
+echo 30 > "$T/net/bcawl0/ifindex"; rm -rf "${T:?}/net/bcawl0-1"; : > "$T/seq"
+apply
+check "station radio re-probed: the AP interface again, the station restarted, then its APs (A1 order)" \
+	"0 iw add bcawl0-1|sta up bcawl0 restart|hapd REMOVE bcawl0-1|hapd ADD bss_config=phy0:$G/hostapd-bcawl0.conf" \
+	"$rc $(tr '\n' '|' < "$T/seq" | sed 's/|$//')"
+check "station radio re-probed: the new id recorded, 2g untouched (no command for bcawl3)" "30 0" \
+	"$(cat "$T/run/gt-be98-wifi/ids/bcawl0") $(echo "$cmds" | grep -c bcawl3)"
+# the daemon: started when not running, stopped with the service; stop
+# forgets every id (an unload is not a re-probe)
+WIFI_REPROBE="$here/../src/sbin/gt-be98-wifi-reprobe"; : > "$T/stalog"
+reprobe_start; reprobe_start
+check "reprobe daemon: started once" "start $T/run/gt-be98-wifi-reprobe.pid" "$(grep 'reprobe' "$T/stalog")"
+reprobe_stop
+check "reprobe daemon: stopped" "stop $T/run/gt-be98-wifi-reprobe.pid no" "$(grep '^stop.*reprobe' "$T/stalog") $([ -f "$T/run/gt-be98-wifi-reprobe.pid" ] && echo yes || echo no)"
+( stop_hostapd ) >> "$T/out" 2>&1
+check "stop: the ids forgotten" "no" "$([ -d "$T/run/gt-be98-wifi/ids" ] && echo yes || echo no)"
+for i in 0 1 2 3; do rm -f "$T/net/bcawl$i/ifindex"; done
+: > "$T/nets"; apply
+
 if [ $fail = 0 ]; then echo "ALL OK ($n checks)"; else echo "FAILED"; cat "$T/out"; fi
 exit $fail

@@ -1,0 +1,131 @@
+#!/bin/sh
+# shellcheck shell=busybox
+# SPDX-License-Identifier: GPL-2.0
+# gt-be98-wifi-reprobe: bring a radio's hostapd (and station) back after the
+# Wi-Fi driver re-probed that radio (open-wifi radio_rebind: remove + cold
+# probe of ONE PCI function after a firmware trap or a dead control
+# producer; INV-RECOVERY, owner OD3 (a): the OS half).
+#
+# A re-probe unregisters the radio's netdev and registers a NEW one (same
+# name, a new ifindex, a new wiphy). hostapd and wpa_supplicant stay bound to
+# the old one, so the radio stays off the air until they are restarted on
+# the new one. gt-be98-wifi records the ifindex of every radio netdev it
+# started ($STATE/ids/<dev>), and its reload restarts a radio whose netdev is
+# no longer that one (REMOVE + ADD of that radio only, its station
+# restarted; the other radios are not touched). This daemon notices the new
+# netdev and runs that reload, debounced:
+#
+#   gt-be98-wifi-reprobe check   one pass (below)
+#   gt-be98-wifi-reprobe run     a pass every REPROBE_POLL s, forever (the
+#                                daemon gt-be98-wifi starts and stops)
+#
+# One pass, per radio recorded in $STATE/ids:
+#   - its netdev absent: a re-probe is under way, nothing yet; it holds the
+#     reload back for REPROBE_GONE s at most (a radio that never comes back
+#     must not keep the others down: its rebind failed, the driver's
+#     RECOVERY line says why);
+#   - present with the recorded ifindex: nothing (any state of it cleared);
+#   - present with another ifindex: re-probed; due once that ifindex has
+#     been the same for REPROBE_SETTLE s (the probe's bring-up is over).
+# When at least one radio is due and none is settling or held absent: ONE
+# `rc-service gt-be98-wifi reload` for all of them, at most one every
+# REPROBE_MIN s. A radio still not restarted on one ifindex after
+# REPROBE_TRIES such reloads is left alone (logged once): the service failed
+# it that many times (see its log); a new re-probe starts over.
+#
+# Settings (environment, defaults): REPROBE_POLL 2, REPROBE_SETTLE 5,
+# REPROBE_GONE 90, REPROBE_MIN 20, REPROBE_TRIES 3. State: $STATE/reprobe.
+set -u
+# (GT_BE98_*: the offline test harness only)
+RUNDIR=${GT_BE98_RUN:-/run}
+SYSNET=${GT_BE98_SYSNET:-/sys/class/net}
+STATE=$RUNDIR/gt-be98-wifi
+W=$STATE/reprobe
+
+num() { case "$1" in ''|*[!0-9]*) echo "$2" ;; *) echo "$1" ;; esac; }
+POLL=$(num "${REPROBE_POLL:-}" 2)
+SETTLE=$(num "${REPROBE_SETTLE:-}" 5)
+GONE=$(num "${REPROBE_GONE:-}" 90)
+MIN=$(num "${REPROBE_MIN:-}" 20)
+TRIES=$(num "${REPROBE_TRIES:-}" 3)
+
+log() {
+	if command -v logger > /dev/null 2>&1; then logger -t gt-be98-wifi-reprobe -- "$*"
+	else echo "gt-be98-wifi-reprobe: $*" >&2; fi
+}
+
+now() { echo "${GT_BE98_NOW:-$(date +%s)}"; }
+
+# the ifindex of netdev $1 ("" = absent)
+ifidx() { cat "$SYSNET/$1/ifindex" 2>/dev/null; }
+
+valid_dev() { case "$1" in bcawl[0-9]|bcawl[0-9][0-9]) return 0 ;; esac; return 1; }
+
+cmd_check() {
+	local f d rec cur t due='' hold=0 s since n tr
+	[ -d "$STATE/ids" ] || return 0	# the service runs no radio
+	mkdir -p "$W"
+	t=$(now)
+	for f in "$STATE"/ids/*; do
+		[ -f "$f" ] || continue
+		d=${f##*/}
+		valid_dev "$d" || continue
+		rec=$(cat "$f" 2>/dev/null)
+		cur=$(ifidx "$d")
+		if [ -z "$cur" ]; then
+			# absent: a re-probe under way (or a rebind that failed)
+			[ -f "$W/$d.gone" ] || { echo "$t" > "$W/$d.gone"; log "$d: netdev gone (ifindex $rec): waiting for the driver's re-probe"; }
+			since=$(cat "$W/$d.gone")
+			[ $((t - since)) -lt "$GONE" ] && hold=1
+			rm -f "$W/$d.seen"
+			continue
+		fi
+		rm -f "$W/$d.gone"
+		if [ "$cur" = "$rec" ]; then
+			rm -f "$W/$d.seen" "$W/$d.tries"
+			continue
+		fi
+		# re-probed: a new netdev; due once its ifindex is stable
+		s=$(cat "$W/$d.seen" 2>/dev/null)
+		if [ "${s%% *}" != "$cur" ]; then
+			echo "$cur $t" > "$W/$d.seen"
+			log "$d: re-probed by the driver (ifindex $rec -> $cur)"
+			s="$cur $t"
+		fi
+		since=${s#* }
+		if [ $((t - since)) -lt "$SETTLE" ]; then hold=1; continue; fi
+		tr=$(cat "$W/$d.tries" 2>/dev/null)
+		n=0; [ "${tr%% *}" = "$cur" ] && n=${tr#* }
+		if [ "$n" -ge "$TRIES" ]; then
+			[ "$n" = "$TRIES" ] && { log "$d: still not restarted after $TRIES reloads: left (see gt-be98-wifi's log)"; echo "$cur $((n + 1))" > "$W/$d.tries"; }
+			continue
+		fi
+		due="$due $d"
+	done
+	[ -n "$due" ] && [ "$hold" = 0 ] || return 0
+	s=$(cat "$W/last" 2>/dev/null)
+	[ -n "$s" ] && [ $((t - s)) -lt "$MIN" ] && return 0
+	echo "$t" > "$W/last"
+	for d in $due; do
+		tr=$(cat "$W/$d.tries" 2>/dev/null); cur=$(ifidx "$d")
+		n=0; [ "${tr%% *}" = "$cur" ] && n=${tr#* }
+		echo "$cur $((n + 1))" > "$W/$d.tries"
+	done
+	log "re-probed radio(s)${due}: reloading gt-be98-wifi (restarts them alone)"
+	${GT_BE98_RELOAD:-rc-service gt-be98-wifi reload} > /dev/null 2>&1 ||
+		log "gt-be98-wifi reload failed: retried in ${MIN}s"
+	return 0
+}
+
+cmd_run() {
+	while :; do
+		sleep "$POLL"
+		cmd_check
+	done
+}
+
+case "${1:-}" in
+check) cmd_check ;;
+run) cmd_run ;;
+*) sed -n '/^#   gt-be98-wifi-reprobe check/,/^#   *daemon gt-be98-wifi/p' "$0" | sed 's/^# \{0,1\}//' >&2; exit 2 ;;
+esac
