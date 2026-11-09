@@ -580,5 +580,17 @@ check "5gl out of the plan: its record gone" "no" "$([ -f "$F" ] && echo yes || 
 check "stop: no failed dir" "no" "$([ -d "$T/run/gt-be98-wifi/failed" ] && echo yes || echo no)"
 unset GT_BE98_NOW GT_BE98_LOG; : > "$T/nets"; apply
 
+# 21. a dead hostapd (the stub: its pid killed, the fake's interface list
+# gone with it): the reload the watcher runs restarts the process and adds
+# every radio again, said; a dead process is never "unchanged"
+rm -f "$T/slots" "$T"/state-*
+{ net 1 a sae password1 "2g 5gl" 1; } > "$T/nets"; apply
+kill "$(cat "$T/run/hostapd-wifi.pid")" 2>/dev/null; rm -f "$T/hapd"; sleep 0.2 2>/dev/null || sleep 1
+: > "$T/daemon"; apply
+check "dead hostapd: rc 0, the process started again, both radios added, said" \
+	"0 start yes ADD bss_config=phy3:$G/hostapd-bcawl3.conf|ADD bss_config=phy0:$G/hostapd-bcawl0.conf yes" \
+	"$rc $(cut -d' ' -f1 "$T/daemon" | tr '\n' '|' | sed 's/|$//') $(hap_running && echo yes || echo no) $(echo "$cmds" | tr '\n' '|' | sed 's/|$//') $(grep -q '! hostapd had died' "$T/out" && echo yes || echo no)"
+: > "$T/nets"; apply
+
 if [ $fail = 0 ]; then echo "ALL OK ($n checks)"; else echo "FAILED"; cat "$T/out"; fi
 exit $fail
