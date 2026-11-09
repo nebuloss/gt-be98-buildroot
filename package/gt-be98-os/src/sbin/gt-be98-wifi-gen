@@ -93,7 +93,13 @@
 #                                   its own channels, 5gl 36-64, 5gh
 #                                   100-144 149-177, so a move after a
 #                                   radar stays in the radio's band)
-#                                   2g: 20, 40; 5gl/5gh: 20, 40, 80;
+#                                   2g: 20, 40; 5gl/5gh: 20, 40, 80, 160
+#                                   (160: the blocks 36-64 and 100-128,
+#                                   centre 50/114, [VHT160]; each holds
+#                                   DFS channels, so 160 MHz needs -c like
+#                                   a DFS channel; 5gh 100-128 holds the
+#                                   ETSI weather channels 120-128: a 10 min
+#                                   CAC in an ETSI country);
 #                                   6g: 20, 40, 80, 160, 320 (HE, op_class
 #                                   131-134; 320 is EHT, op_class 137,
 #                                   rendered with ieee80211be=1). The
@@ -366,8 +372,8 @@ features() {
 	security open owe open-owe psk2 psk2sae sae wpa2-eap wpa3-eap wpa2-wpa3-eap
 	max_clients 1 2007
 	width 2g 20 40
-	width 5gl 20 40 80
-	width 5gh 20 40 80
+	width 5gl 20 40 80 160
+	width 5gh 20 40 80 160
 	width 6g 20 40 80 160 320
 	feature country 1
 	feature hidden 1
@@ -553,6 +559,7 @@ function widthok(b, ch, w) {
 	if (b == "2g") return w == 40
 	if (w == 40) return ht40(b, ch) != ""
 	if (w == 80) return vht80(ch) != 0
+	if (w == 160) return vht160(ch) != 0
 	return 0
 }
 function secretok(s) { return printable(s) && length(s) >= 1 && length(s) <= 128 && s !~ /^ / && s !~ / $/ }
@@ -581,6 +588,18 @@ function vht80(ch,    i, n, bs) {
 	for (i = 1; i <= n; i++) if (ch >= bs[i] + 0 && ch <= bs[i] + 12) return bs[i] + 6
 	return 0
 }
+# 5 GHz 160 MHz (open-wifi INV-160-5G, owner OD2): the centre channel of the
+# 160 MHz block that holds ch, 0 if none offered. Two blocks: 36-64 (centre
+# 50, 5gl) and 100-128 (centre 114, 5gh); 149-177 is not offered (outside
+# the ETSI band, never measured on the box)
+function vht160(ch) { return (ch >= 36 && ch <= 64) ? 50 : (ch >= 100 && ch <= 128) ? 114 : 0 }
+# 5 GHz: the VHT/HE/EHT operation width code (0: 20/40, 1: 80, 2: 160) and
+# the centre channel index (80/160 MHz only)
+function chw5(w) { return w == 160 ? 2 : w == 80 ? 1 : 0 }
+function c5(ch, w) { return w == 160 ? vht160(ch) : vht80(ch) }
+# a 5 GHz radio whose channel block (at width w) holds a DFS (radar)
+# channel, 52-144: a DFS primary, or 160 MHz (36-64 holds 52-64)
+function dfs5(b, ch, w) { return (b == "5gl" || b == "5gh") && ((ch >= 52 && ch <= 144) || (w == 160 && vht160(ch) != 0)) }
 # 6 GHz (802.11ax-2021 Annex E, op_class 131-134/137): the centre channel
 # index of the w MHz block that holds channel ch, 0 if the band has none (its
 # top channels). 40/80/160: blocks of 2/4/8 channels from channel 1 (centres
@@ -603,7 +622,7 @@ function cfreq(b, ch, w) {
 	if (w == 20) return freq(b, ch)
 	if (b == "6g") return 5950 + 5 * c6(ch, w)
 	if (w == 40) return freq(b, ch) + (ht40(b, ch) == "+" ? 10 : -10)
-	return 5000 + 5 * vht80(ch)
+	return 5000 + 5 * c5(ch, w)
 }
 # ---- schedules (see the header) ----
 # mon..sun -> 1..7, else 0
@@ -940,19 +959,21 @@ END {
 		if (!(b in rw)) rw[b] = 20
 		if (b == "6g" && rw[b] == 320 && !rbe[b]) err("radio 6g: 320 MHz needs EHT (be=1)")
 		if (b == "6g" && c6(rch[b], rw[b]) == 0) err("radio 6g: channel " rch[b] " has no " rw[b] " MHz block (the 6 GHz band ends at channel 233)")
-		if (b != "6g" && rw[b] >= 160) err("radio " b ": " rw[b] " MHz is 6 GHz only (this radio: " (b == "2g" ? "20, 40" : "20, 40, 80") " MHz)")
+		if ((b == "2g" && rw[b] >= 160) || (b != "6g" && rw[b] == 320)) err("radio " b ": " rw[b] " MHz is " (rw[b] == 320 ? "6 GHz" : "5/6 GHz") " only (this radio: " (b == "2g" ? "20, 40" : "20, 40, 80, 160") " MHz)")
 		if (b == "2g" && rw[b] == 80) err("radio 2g: 80 MHz is 5/6 GHz only")
+		if ((b == "5gl" || b == "5gh") && rw[b] == 160 && vht160(rch[b]) == 0) err("radio " b ": channel " rch[b] " has no 160 MHz block (5 GHz 160 MHz: channels 36-64 and 100-128)")
 		if ((b == "5gl" || b == "5gh") && rw[b] == 40 && ht40(b, rch[b]) == "") err("radio " b ": channel " rch[b] " has no 40 MHz pair")
 		if ((b == "5gl" || b == "5gh") && rw[b] == 80 && vht80(rch[b]) == 0) err("radio " b ": channel " rch[b] " has no 80 MHz block")
 		# a DFS channel (5 GHz 52-144; their 40/80 MHz blocks never straddle
-		# a non-DFS one) is usable only with IEEE 802.11h, which hostapd
+		# a non-DFS one; a 160 MHz block always holds DFS channels: 36-64
+		# holds 52-64) is usable only with IEEE 802.11h, which hostapd
 		# allows only with 11d and a country_code: without them hostapd marks
 		# every radar channel DISABLED itself (hw_features.c: "Hardware does
 		# not support configured channel"), and on 5gh (the firmware keeps
 		# 100-140 only) that is every channel. Said loudly; the web UI refuses
-		if ((b == "5gl" || b == "5gh") && rch[b] >= 52 && rch[b] <= 144 && renab[b] != "0" && !rmon[b] && !(ccok && country != "")) {
+		if (dfs5(b, rch[b], rw[b]) && renab[b] != "0" && !rmon[b] && !(ccok && country != "")) {
 			m = 0; for (i = 1; i <= nnet; i++) if ((i, b) in hasb) m++
-			if (m) warn("radio " b ": channel " rch[b] " is a DFS (radar) channel and the regulatory database is not loaded (no -c, so no country_code): hostapd cannot run DFS without a country_code, so the BSSes of this radio will not start")
+			if (m) warn("radio " b ": " (rch[b] >= 52 ? "channel " rch[b] " is a DFS (radar) channel" : "the 160 MHz block of channel " rch[b] " (36-64) holds DFS (radar) channels") " and the regulatory database is not loaded (no -c, so no country_code): hostapd cannot run DFS without a country_code, so the BSSes of this radio will not start")
 		}
 	}
 	if (nerr) exit 1
@@ -1207,24 +1228,26 @@ END {
 			print "ieee80211n=1" > hdr; print "ieee80211ac=1" > hdr
 			if (w == 20) print "vht_oper_chwidth=0" > hdr
 			else if (w == 40) { print "ht_capab=[HT40" ht40(b, ch) "]" > hdr; print "vht_oper_chwidth=0" > hdr }
-			else { print "ht_capab=[HT40" ht40(b, ch) "]" > hdr; print "vht_oper_chwidth=1" > hdr; print "vht_oper_centr_freq_seg0_idx=" vht80(ch) > hdr }
+			else { print "ht_capab=[HT40" ht40(b, ch) "]" > hdr; print "vht_oper_chwidth=" chw5(w) > hdr; print "vht_oper_centr_freq_seg0_idx=" c5(ch, w) > hdr }
 			# transmit beamformer, SU and MU on every generation: stock 5 GHz
 			# txbf_bfr_cap 255 (the driver clears each bit an element sent
 			# without it; hostapd defaults are all "no"). SU-BEAMFORMEE is
 			# the stock line; the driver keeps the stock beamformee per band
-			print "vht_capab=[SU-BEAMFORMER][SU-BEAMFORMEE][MU-BEAMFORMER]" > hdr
+			# 160 MHz: [VHT160] (hostapd checks it against the VHT
+			# capabilities of the driver; the box-proven 160 MHz set, perf-wide 1104-1551)
+			print "vht_capab=[SU-BEAMFORMER][SU-BEAMFORMEE][MU-BEAMFORMER]" (w == 160 ? "[VHT160]" : "") > hdr
 			# HE/EHT (header: ax=, be=): their operation width/centre are the
 			# VHT ones (hostapd takes the channel width from the EHT lines
 			# when be=1, from the HE lines when ax=1)
 			if (rax[b]) {
 				print "ieee80211ax=1" > hdr
-				if (w == 80) { print "he_oper_chwidth=1" > hdr; print "he_oper_centr_freq_seg0_idx=" vht80(ch) > hdr }
+				if (w >= 80) { print "he_oper_chwidth=" chw5(w) > hdr; print "he_oper_centr_freq_seg0_idx=" c5(ch, w) > hdr }
 				else print "he_oper_chwidth=0" > hdr
 				print "he_su_beamformer=1" > hdr; print "he_mu_beamformer=1" > hdr
 			}
 			if (rbe[b]) {
 				print "ieee80211be=1" > hdr
-				if (w == 80) { print "eht_oper_chwidth=1" > hdr; print "eht_oper_centr_freq_seg0_idx=" vht80(ch) > hdr }
+				if (w >= 80) { print "eht_oper_chwidth=" chw5(w) > hdr; print "eht_oper_centr_freq_seg0_idx=" c5(ch, w) > hdr }
 				else print "eht_oper_chwidth=0" > hdr
 				print "eht_su_beamformer=1" > hdr; print "eht_mu_beamformer=1" > hdr
 			}

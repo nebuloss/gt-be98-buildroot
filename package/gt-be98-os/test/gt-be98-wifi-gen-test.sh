@@ -219,7 +219,7 @@ net 1 a sae password1 "2g 7g" 5 > "$T/r"; refuse "unknown band" "$T/r"
 { net 1 a sae password1 2g 1; printf 'slot.2g=1\n'; net 2 b sae password2 2g 2; printf 'slot.2g=1\n'; } > "$T/r"; refuse "explicit slot twice" "$T/r"
 { net 1 a sae password1 2g 1; printf 'slot.2g=4\n'; } > "$T/r"; refuse "explicit slot >= cap" "$T/r"
 { printf 'radio=5gl\nchannel=100\n'; net 1 a sae password1 5gl 1; } > "$T/r"; refuse "5gl channel 100" "$T/r"
-for cw in 6g:233:40 6g:225:80 6g:229:160 6g:233:320 6g:37:60 6g:37:640 5gl:36:160 5gh:100:320 2g:6:80 2g:6:160; do
+for cw in 6g:233:40 6g:225:80 6g:229:160 6g:233:320 6g:37:60 6g:37:640 5gl:36:320 5gh:132:160 5gh:149:160 5gh:100:320 2g:6:80 2g:6:160; do
 	b=${cw%%:*}; c=${cw#*:}; w=${c#*:}; c=${c%%:*}
 	{ printf 'radio=%s\nchannel=%s\nwidth=%s\n' "$b" "$c" "$w"; net 1 a sae password1 "$b" 1; } > "$T/r"; refuse "$b channel $c at $w MHz" "$T/r"
 done
@@ -685,7 +685,7 @@ mv "$T/slots.keep0" "$T/slots.keep"
 # ---- 11. -F: what the generator supports ----
 check "-F: exit 0 without -n/-o" 0 "$($SH "$G" -F > "$T/feat" 2>&1; echo $?)"
 check "-F: schedule and max_clients on, 6g up to 320 MHz, twt/wds not yet" \
-	"feature schedule 1|feature max_clients 1|width 6g 20 40 80 160 320|width 5gl 20 40 80|feature twt 0|feature wds 0|feature width320 1" \
+	"feature schedule 1|feature max_clients 1|width 6g 20 40 80 160 320|width 5gl 20 40 80 160|feature twt 0|feature wds 0|feature width320 1" \
 	"$(for k in 'feature schedule ' 'feature max_clients ' 'width 6g ' 'width 5gl ' 'feature twt ' 'feature wds ' 'feature width320 '; do grep "^$k" "$T/feat"; done | tr '\n' '|' | sed 's/|$//')"
 check "-F: the radio features he, eht, twt_responder, zwdfs, monitor, led" \
 	"feature he 1|feature eht 1|feature twt_responder 1|feature zwdfs 1|feature monitor 1|feature led 1|" \
@@ -804,6 +804,76 @@ if [ -n "$CONFCHECK" ]; then
 		"$("$CONFCHECK" "$T"/w6bad/*.conf 2>/dev/null | bw6_bad | wc -l | tr -d ' ')"
 else
 	echo "skip hostapd 6 GHz width reading (no hostapd-confcheck)"
+fi
+
+# ---- 11c. 5 GHz 160 MHz (open-wifi INV-160-5G, owner OD2): the blocks
+# 36-64 (centre 50) and 100-128 (centre 114) only; VHT/HE/EHT width 2 and
+# the centre, [VHT160] (the set run on the box, perf-wide 1104-1551); every
+# 160 MHz block holds DFS channels: the DFS warning without a country ----
+check "-F: width 5gl and 5gh offer 160 MHz" "width 5gl 20 40 80 160|width 5gh 20 40 80 160" \
+	"$(grep -E '^width 5g[lh] ' "$T/feat" | tr '\n' '|' | sed 's/|$//')"
+w5() {	# band channel width [extra list lines] -> the 5 GHz width lines of the radio header
+	{ printf 'radio=%s\nchannel=%s\nwidth=%s\n%s' "$1" "$2" "$3" "${4:-}"; net 1 a sae password1 "$1" 1; } > "$T/w5"
+	rm -f "$T/slots"; gen "$T/w5" -c || { echo refused; return; }
+	d=$( [ "$1" = 5gl ] && echo bcawl0 || echo bcawl1 )
+	grep -E '^(channel|ht_capab|vht_oper|vht_capab|he_oper|eht_oper)' "$T/o/hdr-$d" | tr '\n' ' ' | sed 's/ $//'
+}
+V160='vht_capab=[SU-BEAMFORMER][SU-BEAMFORMEE][MU-BEAMFORMER][VHT160]'
+for t in \
+	"5gl 36|channel=36 ht_capab=[HT40+] vht_oper_chwidth=2 vht_oper_centr_freq_seg0_idx=50 $V160 he_oper_chwidth=2 he_oper_centr_freq_seg0_idx=50 eht_oper_chwidth=2 eht_oper_centr_freq_seg0_idx=50" \
+	"5gl 64|channel=64 ht_capab=[HT40-] vht_oper_chwidth=2 vht_oper_centr_freq_seg0_idx=50 $V160 he_oper_chwidth=2 he_oper_centr_freq_seg0_idx=50 eht_oper_chwidth=2 eht_oper_centr_freq_seg0_idx=50" \
+	"5gh 100|channel=100 ht_capab=[HT40+] vht_oper_chwidth=2 vht_oper_centr_freq_seg0_idx=114 $V160 he_oper_chwidth=2 he_oper_centr_freq_seg0_idx=114 eht_oper_chwidth=2 eht_oper_centr_freq_seg0_idx=114" \
+	"5gh 128|channel=128 ht_capab=[HT40-] vht_oper_chwidth=2 vht_oper_centr_freq_seg0_idx=114 $V160 he_oper_chwidth=2 he_oper_centr_freq_seg0_idx=114 eht_oper_chwidth=2 eht_oper_centr_freq_seg0_idx=114"; do
+	set -- ${t%%|*}
+	check "5 GHz 160: $1 channel $2 (centre, HT40 side, [VHT160], HE/EHT width 2)" "${t#*|}" "$(w5 "$1" "$2" 160)"
+done
+conf_ok "5 GHz 160"
+check "5 GHz 160: ieee80211h + country written (-c)" "yes yes" "$(hdr_has bcawl1 ieee80211h=1) $(hdr_has bcawl1 country_code=FR)"
+check "5 GHz 160, ax=0: VHT 160 only (no he/eht lines)" \
+	"channel=36 ht_capab=[HT40+] vht_oper_chwidth=2 vht_oper_centr_freq_seg0_idx=50 $V160" "$(w5 5gl 36 160 'ax=0
+')"
+check "5 GHz 160, be=0: HE 160, no eht lines" \
+	"channel=36 ht_capab=[HT40+] vht_oper_chwidth=2 vht_oper_centr_freq_seg0_idx=50 $V160 he_oper_chwidth=2 he_oper_centr_freq_seg0_idx=50" "$(w5 5gl 36 160 'be=0
+')"
+check "5 GHz 80 MHz control: width 1, no [VHT160]" \
+	"channel=36 ht_capab=[HT40+] vht_oper_chwidth=1 vht_oper_centr_freq_seg0_idx=42 vht_capab=[SU-BEAMFORMER][SU-BEAMFORMEE][MU-BEAMFORMER] he_oper_chwidth=1 he_oper_centr_freq_seg0_idx=42 eht_oper_chwidth=1 eht_oper_centr_freq_seg0_idx=42" "$(w5 5gl 36 80)"
+# every 5 GHz channel of each radio at 160: accepted iff 36-64 / 100-128
+acc=''
+for b in 5gl 5gh; do
+	k=0
+	for c in 36 40 44 48 52 56 60 64 100 104 108 112 116 120 124 128 132 136 140 144 149 153 157 161 165 169 173 177; do
+		[ "$(w5 "$b" "$c" 160)" = refused ] || k=$((k + 1))
+	done
+	acc="$acc $b:$k"
+done
+check "5 GHz 160: channels accepted per radio (5gl 36-64, 5gh 100-128)" "5gl:8 5gh:8" "${acc# }"
+w5 5gh 132 160 > /dev/null
+check "5 GHz 160 refusal says why" "yes" "$(grep -q 'radio 5gh: channel 132 has no 160 MHz block (5 GHz 160 MHz: channels 36-64 and 100-128)' "$T/err" && echo yes || echo no)"
+{ printf 'radio=5gl\nchannel=36\nwidth=160\n'; net 1 a sae password1 5gl 1; } > "$T/w5"
+rm -f "$T/slots"; gen "$T/w5"
+check "5gl ch36 at 160 without -c: accepted, the DFS warning (52-64 in the block), no 11h" "0 yes no" \
+	"$? $(grep -q 'radio 5gl: the 160 MHz block of channel 36 (36-64) holds DFS (radar) channels and the regulatory database is not loaded' "$T/err" && echo yes || echo no) $(hdr_has bcawl0 ieee80211h=1)"
+{ printf 'radio=5gl\nchannel=36\nwidth=80\n'; net 1 a sae password1 5gl 1; } > "$T/w5"
+rm -f "$T/slots"; gen "$T/w5"
+check "5gl ch36 at 80 without -c: no DFS warning (control)" "no" "$(grep -q 'DFS (radar)' "$T/err" && echo yes || echo no)"
+# a station radio follows its uplink: 160 kept where the block holds the
+# uplink's channel, lowered to 80 where it does not
+{ printf 'radio=5gh\nchannel=100\nwidth=160\n'; stab5() { printf 'station=5gh\nssid=up\nsecurity=sae\npassphrase=saepassword1\n'; }; stab5; net 1 a sae password1 5gh 1; } > "$T/w5s"
+rm -f "$T/slots"; gen "$T/w5s" -U "5gh=5600"
+check "-U 5600 (ch 120) on a 5gh 160 station radio: 160 kept, centre 114" "channel=120 vht_oper_chwidth=2 vht_oper_centr_freq_seg0_idx=114" \
+	"$(grep -E '^(channel|vht_oper_chwidth|vht_oper_centr_freq_seg0_idx)=' "$T/o/hostapd-bcawl1.conf" | tr '\n' ' ' | sed 's/ $//')"
+gen "$T/w5s" -U "5gh=5660"
+check "-U 5660 (ch 132): lowered to 80 (centre 138), warned" "channel=132 vht_oper_chwidth=1 vht_oper_centr_freq_seg0_idx=138 yes" \
+	"$(grep -E '^(channel|vht_oper_chwidth|vht_oper_centr_freq_seg0_idx)=' "$T/o/hostapd-bcawl1.conf" | tr '\n' ' ')$(grep -q '80 MHz instead of 160 (no 160 MHz block holds channel 132)' "$T/err" && echo yes || echo no)"
+# a monitor at 160: the centre frequency of the block
+{ printf 'radio=5gl\nmonitor=1\nchannel=36\nwidth=160\n'; net 1 a sae password1 2g 1; } > "$T/w5m"
+rm -f "$T/slots"; gen "$T/w5m"
+check "monitor 5gl 36 at 160: centre 5250 MHz" "monitor 5gl bcawl0 5180 160 5250" "$(grep '^monitor ' "$T/o/plan")"
+if [ -n "$CONFCHECK" ]; then
+	for c in 5gl:36 5gh:100; do w5 "${c%%:*}" "${c#*:}" 160 > /dev/null; cp "$T/o/hostapd-bcawl$( [ "${c%%:*}" = 5gl ] && echo 0 || echo 1).conf" "$T/w5-${c%%:*}.conf"; done
+	"$CONFCHECK" "$T/w5-5gl.conf" "$T/w5-5gh.conf" > "$T/cc5" 2>&1
+	check "hostapd reads 5 GHz 160 (EHT width 2, centre 50 / 114)" "be=1/2/50 be=1/2/114" \
+		"$(grep -o 'be=1/2/[0-9]*' "$T/cc5" | tr '\n' ' ' | sed 's/ $//')"
 fi
 cp "$T/slots.f" "$T/slots"
 # net 1 always on (2g); net 2 weekdays 08-18 (2g 5gl); net 3 on 5gh, whose
