@@ -1,8 +1,8 @@
 # GT-BE98 mainline OS 1.0-rc3 - release notes
 
 Date: 2026-11-09 · Status: **release candidate 3**, tagged `gt-be98-rc3`
-in all four repositories. **DRAFT**: the on-box test of the release
-images (below) has not run yet.
+in all four repositories. The release images below passed the on-box
+release test (flash, first boot, second boot) on 2026-11-09.
 
 Evidence is named by the orchestrator's run directory (`MMDD-HHMM-<arm>`).
 The run directories stay on the orchestrator's machine and are not in
@@ -81,22 +81,23 @@ Flash and rollback on the box:
 - The release helper's end-to-end run (`release-flash-e2e`, stock to
   release to stock to release) passed on the RC1 release images
   (`1103-1620`). Not repeated on RC3: the flash procedure is unchanged.
-- **Not run yet on RC3:** the release-image test below.
+- **Done with the RC3 release images**, by the orchestrator, using the lab
+  flash procedure: the lab state set aside, flash from stock, one-shot
+  boot, first boot, then back through stock and a second boot, then the
+  lab image and its state restored (`1109-0922-release-build-prep` to
+  `1109-0933-release-build-restore`).
 
 ## Release image on the box
 
-Not run yet. Planned: the same checks as RC1 (`release-build-arms.sh`:
-prep, flash, first boot, second boot, restore). RC1's results
-(`1103-1546-release-build-first`, `1103-1549-release-build-second`):
-host keys made on the box and kept across a reboot, web UI closed until
-the password is set with the one-time token.
+The images above (rootfs `a8dc3d7a`, itb `af0b8d49`), the same checks as
+RC1. First boot: 15 ok, 0 FAIL. Second boot: 6 ok, 0 FAIL.
 
 | Check | Result | Run |
 |---|---|---|
-| release mode | not run yet | |
-| SSH host keys, first boot (H1, H2, H3, H6) | not run yet | |
-| web UI first login (W1 to W7, W5b) | not run yet | |
-| second boot (H5, H5b, H6, W8, W8b, W8c) | not run yet | |
+| release mode | `release-mode yes`, `/jffs` read-write | `1109-0925-release-build-first` |
+| SSH host keys, first boot | made on the box: every `HostKey` of `sshd_config` (3) present, private keys 0600 (H1); no host key outside `sshd_config` (H6); the 6 key files saved in `/jffs/mainline-os/state.tgz` (H2); generated and saved by `gt-be98-hostkeys` (H3) | same |
+| web UI first login | token file 0600 root, 24 hex characters (W1); unconfigured, token offered (W2a); every gated action and endpoint answers `need_auth` on loopback and LAN (W2b); `set_password` refused without the token or with a wrong one, still unconfigured after (W3, W4, W4b); accepted with it (W5); token file removed and replay refused (W6, W7); login works (W5b) | same |
+| second boot (via stock and a new one-shot boot) | same ed25519 fingerprint, keys restored not regenerated, no mldsa44 key (H5, H5b, H6); web UI still configured, no setup token, login works (W8, W8b, W8c) | `1109-0929-release-build-second` |
 
 ## What works
 
