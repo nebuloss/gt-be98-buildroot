@@ -65,6 +65,11 @@
 #       service passes what wpa_supplicant reports (gt-be98-wifi-sta freq)
 #   -X  ctrl_interface of the station's wpa_supplicant (default
 #       /run/wpa_supplicant)
+#   -6  the highest 6 GHz channel the country allows (the service reads it
+#       from the 6 GHz radio's `iw phy` channel list, e.g. 93 in DE/FR:
+#       5945-6425 MHz). A 320 MHz block must end inside it. Default: 233
+#       with country=US, else 93 (the 5945-6425 MHz band of the EU and
+#       most other regulators)
 #   -B  the radios (bands, "2g 5gl ...") whose driver advertises AP beacon
 #       protection (nl80211 NL80211_EXT_FEATURE_BEACON_PROTECTION: `iw phy
 #       <phy> info` lists "[ BEACON_PROTECTION ]"; the service passes them).
@@ -123,8 +128,15 @@
 #                                   channel must have a block of that width
 #                                   (6g: none at 40 for 233, none at 80/160/
 #                                   320 for 225-233); 320 takes the 320-1
-#                                   block (centre 31/95/159), else 320-2
-#                                   (centre 191: channels 193-221)
+#                                   block (centre 31/95/159) that fits in
+#                                   the country's 6 GHz band (-6), else the
+#                                   320-2 block (centre 63/127/191) that
+#                                   holds the channel and fits: in DE/FR
+#                                   (5945-6425 MHz, channels 1-93) ch 1-61
+#                                   -> 31, ch 65-93 -> 63; no 320 block
+#                                   fits: rendered at 160 with a warning.
+#                                   6g default width: 320 (owner 11-10;
+#                                   160 with be=0); others 20
 #     schedule=WINDOWS              optional: the radio runs only inside
 #                                   these windows (all its BSSes stop
 #                                   outside them; format below)
@@ -409,7 +421,7 @@ HT40_2G=${GT_BE98_HT40_2G:-0}
 # (GT_BE98_KV: the offline test harness only)
 KV=${GT_BE98_KV:-0}
 NETS='' OUT='' SLOTS='' MACS='' DEVS='' CAP=4 CTRL=/run/hostapd CC=0 RNR=1 KEEP=0 DRY=0
-NOW='' QUERY=0 UPF='' STACTRL=/run/wpa_supplicant SKIP=0 BPB=''
+NOW='' QUERY=0 UPF='' STACTRL=/run/wpa_supplicant SKIP=0 BPB='' SIXTOP=''
 SYSNET=${GT_BE98_SYSNET:-/sys/class/net}
 usage() { sed -n '/^#   gt-be98-wifi-gen -n/,/^#   -F  /p' "$0" | sed 's/^# \{0,1\}//' >&2; exit 2; }
 # what this generator supports (-F): keep it in line with the checks below
@@ -448,13 +460,13 @@ features() {
 	echo "feature ht40_2g $HT40_2G"
 	echo "feature kv $KV"
 }
-while getopts n:o:s:m:d:C:x:cR:K:NT:QFU:X:SB: o; do
+while getopts n:o:s:m:d:C:x:cR:K:NT:QFU:X:SB:6: o; do
 	case $o in
 	n) NETS=$OPTARG ;; o) OUT=$OPTARG ;; s) SLOTS=$OPTARG ;; m) MACS=$OPTARG ;;
 	d) DEVS=$OPTARG ;; C) CAP=$OPTARG ;; x) CTRL=$OPTARG ;; c) CC=1 ;;
 	R) RNR=$OPTARG ;; K) KEEP=$OPTARG ;; N) DRY=1 ;;
 	T) NOW=$OPTARG ;; Q) QUERY=1 ;; F) features; exit 0 ;;
-	U) UPF=$OPTARG ;; X) STACTRL=$OPTARG ;; S) SKIP=1 ;; B) BPB=$OPTARG ;; *) usage ;;
+	U) UPF=$OPTARG ;; X) STACTRL=$OPTARG ;; S) SKIP=1 ;; B) BPB=$OPTARG ;; 6) SIXTOP=$OPTARG ;; *) usage ;;
 	esac
 done
 [ "$QUERY" = 1 ] && [ -z "$OUT" ] && OUT=/dev/null
@@ -466,6 +478,7 @@ case "$NOW" in
 esac
 case "$CAP" in [1-8]) ;; *) echo "gt-be98-wifi-gen: -C $CAP: 1..8" >&2; exit 1 ;; esac
 case "$HT40_2G" in 0|1) ;; *) echo "gt-be98-wifi-gen: HT40_2G=$HT40_2G: 0 or 1" >&2; exit 1 ;; esac
+case "$SIXTOP" in ''|[1-9]|[1-9][0-9]|1[0-9][0-9]|2[0-2][0-9]|23[0-3]) ;; *) echo "gt-be98-wifi-gen: -6 $SIXTOP: a 6 GHz channel 1..233" >&2; exit 1 ;; esac
 case "$KV" in 0|1) ;; *) echo "gt-be98-wifi-gen: KV=$KV: 0 or 1" >&2; exit 1 ;; esac
 case "$CTRL" in /*) ;; *) echo "gt-be98-wifi-gen: -x must be absolute" >&2; exit 1 ;; esac
 case "$CTRL" in *[!A-Za-z0-9/_.-]*) echo "gt-be98-wifi-gen: -x $CTRL refused" >&2; exit 1 ;; esac
@@ -491,7 +504,7 @@ S=${SLOTS:-/dev/null}
 LC_ALL=C awk -v cap="$CAP" -v ctrl="$CTRL" -v devlist="$DEVS" -v maclist="$MACS" \
 	-v ccok="$CC" -v rnr="$RNR" -v keep="$KEEP" -v out="$OUT" -v slotsf="$S" \
 	-v now="$NOW" -v query="$QUERY" -v upf="$UPF" -v stactrl="$STACTRL" -v skipbad="$SKIP" \
-	-v ht402g="$HT40_2G" -v bpbands="$BPB" -v kvon="$KV" '
+	-v ht402g="$HT40_2G" -v bpbands="$BPB" -v kvon="$KV" -v sixtop="$SIXTOP" '
 function err(m) { print "gt-be98-wifi-gen: " m > "/dev/stderr"; nerr++ }
 function warn(m) { print "gt-be98-wifi-gen: warning: " m > "/dev/stderr" }
 # an error of network i itself: with -S the network is skipped (a warning),
@@ -656,15 +669,21 @@ function dfs5(b, ch, w) { return (b == "5gl" || b == "5gh") && ((ch >= 52 && ch 
 # 6 GHz (802.11ax-2021 Annex E, op_class 131-134/137): the centre channel
 # index of the w MHz block that holds channel ch, 0 if the band has none (its
 # top channels). 40/80/160: blocks of 2/4/8 channels from channel 1 (centres
-# 3, 7, 15 + k * 8/16/32). 320: the 320-1 blocks (centres 31, 95, 159) first,
-# else the 320-2 block that holds it (centre 191, channels 193-221).
+# 3, 7, 15 + k * 8/16/32). 320: the 320-1 block that holds it (centres 31,
+# 95, 159) when it ends at or below T6 (the country top 6 GHz channel, -6),
+# else the 320-2 block that holds it (centres 63, 127, 191) when that fits;
+# 0 when neither does (in DE/FR, T6 93: ch 1-61 -> 31, ch 65-93 -> 63).
 function c6(ch, w,    n, c) {
 	if (w == 20) return ch + 0
 	n = w / 5	# the span of the block, in channel numbers
 	if (w == 320) {
 		c = int((ch - 1) / 64) * 64 + 31
-		if (c + 30 > 233 && ch >= 33) c = int((ch - 33) / 64) * 64 + 63
-	} else c = int((ch - 1) / n) * n + n / 2 - 1
+		if (c + 30 <= T6) return c
+		if (ch < 33) return 0
+		c = int((ch - 33) / 64) * 64 + 63
+		return (c + 30 <= T6 && c + 30 <= 233) ? c : 0
+	}
+	c = int((ch - 1) / n) * n + n / 2 - 1
 	return (c + n / 2 - 2 <= 233) ? c : 0	# its top channel exists
 }
 function opclass6(w) { return w == 20 ? 131 : w == 40 ? 132 : w == 80 ? 133 : w == 160 ? 134 : 137 }
@@ -896,6 +915,8 @@ cur == "n" {
 	next
 }
 END {
+	# the top 6 GHz channel a 320 MHz block may reach (-6, else by country)
+	T6 = (sixtop != "") ? sixtop + 0 : (country == "US") ? 233 : 93
 	# ---- validate each network ----
 	for (i = 1; i <= nnet; i++) {
 		id = net[i]; tag = "network " id
@@ -1022,9 +1043,15 @@ END {
 		if (b in rch) {
 			if (!chans(b, rch[b])) { err("radio " b ": channel " rch[b] " is not a channel of this radio"); continue }
 		} else rch[b] = (b == "2g") ? 6 : (b == "5gl") ? 36 : (b == "5gh") ? 100 : 37
-		if (!(b in rw)) rw[b] = 20
+		# 6 GHz default: 320 MHz (owner 11-10), 160 without EHT; others 20
+		if (!(b in rw)) rw[b] = (b == "6g") ? (rbe[b] ? 320 : 160) : 20
 		if (b == "6g" && rw[b] == 320 && !rbe[b]) err("radio 6g: 320 MHz needs EHT (be=1)")
-		if (b == "6g" && c6(rch[b], rw[b]) == 0) err("radio 6g: channel " rch[b] " has no " rw[b] " MHz block (the 6 GHz band ends at channel 233)")
+		# 320 MHz with no block inside the country band (T6): 160, said
+		if (b == "6g" && rw[b] == 320 && rbe[b] && c6(rch[b], 320) == 0 && c6(rch[b], 160) != 0) {
+			if (renab[b] != "0") warn("radio 6g: channel " rch[b] " has no 320 MHz block inside this country 6 GHz band (channels up to " T6 "): rendered at 160 MHz")
+			rw[b] = 160
+		}
+		if (b == "6g" && c6(rch[b], rw[b]) == 0) err("radio 6g: channel " rch[b] " has no " rw[b] " MHz block (the 6 GHz band ends at channel " (rw[b] == 320 ? T6 : 233) ")")
 		if ((b == "2g" && rw[b] >= 160) || (b != "6g" && rw[b] == 320)) err("radio " b ": " rw[b] " MHz is " (rw[b] == 320 ? "6 GHz" : "5/6 GHz") " only (this radio: " (b == "2g" ? "20, 40" : "20, 40, 80, 160") " MHz)")
 		if (b == "2g" && rw[b] == 80) err("radio 2g: 80 MHz is 5/6 GHz only")
 		if ((b == "5gl" || b == "5gh") && rw[b] == 160 && vht160(rch[b]) == 0) err("radio " b ": channel " rch[b] " has no 160 MHz block (5 GHz 160 MHz: channels 36-64 and 100-128)")

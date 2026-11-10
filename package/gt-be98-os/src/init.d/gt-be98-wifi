@@ -791,12 +791,31 @@ bcnprot_bands() {
 	echo "${out# }"
 }
 
+# the highest 6 GHz channel the 6 GHz radio's wiphy allows ("" = unread):
+# the last channel of 5955-7115 MHz `iw phy <phy> info` lists without
+# "disabled" (93 in DE/FR: 5945-6425 MHz). The generator's -6: a 320 MHz block
+# must end inside it
+six_top() {
+	local p d phy
+	for p in ${WIFI_RADIO_DEVS:-2g=bcawl3 5gl=bcawl0 5gh=bcawl1 6g=bcawl2}; do
+		[ "${p%%=*}" = 6g ] && d=${p#*=}
+	done
+	[ -n "${d:-}" ] || return 0
+	phy=$(cat "$SYSNET/$d/phy80211/name" 2>/dev/null) || return 0
+	iw phy "$phy" info 2>/dev/null | awk '
+		/ MHz \[[0-9]+\]/ && !/disabled/ {
+			f = $2 + 0; c = $4; gsub(/[^0-9]/, "", c)
+			if (f >= 5955 && f <= 7115 && c + 0 > m) m = c + 0
+		}
+		END { if (m) print m }'
+}
+
 # the network list -> $STATE/gen (configs + plan) and $STATE/slots; the
 # bridges/VLANs/isolation of its networks are added to WIFI_*
 # $1 = "again": the same list rendered once more with the stations'
 # frequencies (-U) that changed since; the bridges/VLANs are not re-read
 gen_networks() {
-	local n=$WIFI_NETWORKS t a b c d cc='' net_br='' net_vl='' net_iso='' macs now='' up bp
+	local n=$WIFI_NETWORKS t a b c d cc='' net_br='' net_vl='' net_iso='' macs now='' up bp st
 	rm -rf "$STATE/gen.new"
 	[ -n "$n" ] || { rm -rf "$STATE/gen"; return 0; }
 	[ -f "$n" ] || { eerror "WIFI_NETWORKS $n: missing"; return 1; }
@@ -810,11 +829,12 @@ gen_networks() {
 	wifi_max_bss
 	up=$(sta_freqs)
 	bp=$(bcnprot_bands)
+	st=$(six_top)
 	# shellcheck disable=SC2086 # $cc: an option or nothing
 	"$WIFI_GEN" -n "$n" -o "$STATE/gen.new" -s "${WIFI_SLOTS:-/etc/hostapd/wifi-slots}" -m "$macs" \
 		-C "$MAX_BSS" -x "${HOSTAPD_CTRL:-$RUNDIR/hostapd}" -R "${WIFI_RNR:-1}" \
 		-K "${WIFI_ANCHOR_KEEP_BSSID:-1}" ${WIFI_RADIO_DEVS:+-d "$WIFI_RADIO_DEVS"} \
-		-X "${WPA_CTRL:-$RUNDIR/wpa_supplicant}" ${up:+-U "$up"} ${bp:+-B "$bp"} ${now:+-T "$now"} $cc -S ||
+		-X "${WPA_CTRL:-$RUNDIR/wpa_supplicant}" ${up:+-U "$up"} ${bp:+-B "$bp"} ${st:+-6 "$st"} ${now:+-T "$now"} $cc -S ||
 		{ eerror "$n refused: nothing changed"; rm -rf "$STATE/gen.new"; return 1; }
 	# -S: a network that fails its own checks is left out (the generator's
 	# warning says why); the other networks and the radios run
