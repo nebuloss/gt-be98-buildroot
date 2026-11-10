@@ -13,14 +13,9 @@
 # main 2026-11-04 e0f00e1a (box-verified: BSS0-MAC - the radio's first BSS takes hostapd's bssid= (custom
 #  first-network MAC, the 6 GHz LA anchor block: 8 networks on 6 GHz, B0/B0s/B2 PASS); RUNNER-G2 client: secondary
 #  BSS netdevs bind to their radio's Runner WLAN slot (provider ABI 4, needs open-ethernet 816dc90); on top of 18e96ed2)
-# ⛔⛔ img38 PLACEHOLDER — the driver pin is NOT set on this branch. The orchestrator sets it once the 11-09
-#  landings finish (R4 step 1, BSSDEL/UAPSD/PUNCT, C2C), in a commit replacing the next line with the 40-hex SHA
-#  and deleting this block. Until then any make fails at once (the $(error) below), never with an old driver.
-#  (RC3 / mainline-os pinned cb1c8952066cda02ce5ccb5ac7e38644f7e201c4.)
-GT_BE98_OPEN_WIFI_VERSION = IMG38-DRIVER-SHA-PLACEHOLDER
-ifeq ($(GT_BE98_OPEN_WIFI_VERSION),IMG38-DRIVER-SHA-PLACEHOLDER)
-$(error gt-be98-open-wifi: img38 placeholder - set GT_BE98_OPEN_WIFI_VERSION to the driver SHA first (package/gt-be98-open-wifi/gt-be98-open-wifi.mk))
-endif
+# main 2026-11-09 eead8fbb (img38: INV-MLE, MLO R1/R3/R4 step 1, int-1109k (bcnprot, evt-defects, KEY-110 b),
+#  TXPWR-AUTO, INV-C2C, BSSDEL, UAPSD; on top of cb1c8952)
+GT_BE98_OPEN_WIFI_VERSION = eead8fbb7a367051971557036cfad97e411b1c27
 GT_BE98_OPEN_WIFI_SITE = git@github.com:nebuloss/gt-be98-open-wifi.git
 GT_BE98_OPEN_WIFI_SITE_METHOD = git
 GT_BE98_OPEN_WIFI_LICENSE = GPL-2.0-only
