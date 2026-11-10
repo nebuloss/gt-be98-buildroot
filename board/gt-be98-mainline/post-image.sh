@@ -55,8 +55,8 @@ die() { echo "post-image: $*" >&2; exit 1; }
 case "$RESCUE" in 0|1) ;; *) die "RESCUE must be 0 or 1" ;; esac
 case "$IMAGE" in netroot|initrd) ;; *) die "IMAGE must be netroot or initrd" ;; esac
 case "$NAND" in off|ro|rw-jffs) ;; *) die "NAND must be off, ro or rw-jffs" ;; esac
-# the IO-coherency bench (D31): PCIe + Runner coherent, never with a NAND node, never a release
-case "$COH_BENCH" in 0) ;; 1) [ "$NAND" = off ] || die "COH_BENCH=1 needs NAND=off (no NAND node in a coherency bench)"
+# the IO-coherency bench (D31): PCIe + Runner coherent; NAND absent or read-only (never writable), never a release
+case "$COH_BENCH" in 0) ;; 1) case "$NAND" in off|ro) ;; *) die "COH_BENCH=1 needs NAND=off or NAND=ro (never a writable NAND in a coherency bench)" ;; esac
 	[ "$RELEASE_MODE" = no ] || die "COH_BENCH=1 is a bench, never a release"
 	[ "$IMAGE" = netroot ] || die "COH_BENCH=1 needs IMAGE=netroot" ;;
 	*) die "COH_BENCH must be 0 or 1" ;; esac
@@ -189,7 +189,9 @@ cat > "$D/gt-be98-os.dts" <<'EOF'
 
 /* GT-BE98 coherency BENCH (D31, COH_BENCH=1 only): IO-coherent PCIe on all four RCs (open-ethernet 0991 enables the
  * CCI-500 CPU snoop + the core's UBUS master cache bits at probe because the node is dma-coherent) and the Runner
- * (ML_DMA_COHERENT). NAND=off is enforced, so no NAND node exists. */
+ * (ML_DMA_COHERENT). NAND is off or read-only (NAND=ro: every partition read-only, brcmnand allow_write off, UBI
+ * attached read-only by /init to copy the rootfs into RAM); the NAND node is never dma-coherent and its PER UBUS
+ * master is never touched. */
 #ifdef ML_COH_BENCH
 &pcie0 { dma-coherent; brcm,ubus-master = <0x83030000>; brcm,cci = <0x81100000>; brcm,cci-cpu-si = <1>; };
 &pcie1 { dma-coherent; brcm,ubus-master = <0x83038000>; brcm,cci = <0x81100000>; brcm,cci-cpu-si = <1>; };

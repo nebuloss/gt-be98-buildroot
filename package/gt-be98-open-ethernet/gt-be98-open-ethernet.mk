@@ -23,7 +23,7 @@
 #  The kernel series changed: an existing output tree needs linux-dirclean.
 # br-cohbench-2026-11-10 (BENCH ONLY, D31): oe-cohbench-2026-11-10 = a9960de + series.coh-bench (0990 outer
 #  shareable, 0991 BCM6813 IO-coherent root complex when dma-coherent). Never on a release branch.
-GT_BE98_OPEN_ETHERNET_VERSION = 79887b312e39ca5120884f705aee85c261e32255
+GT_BE98_OPEN_ETHERNET_VERSION = e57939b8f368ca0650bd500ac418eb43172d8384
 GT_BE98_OPEN_ETHERNET_SITE = git@github.com:nebuloss/gt-be98-open-ethernet.git
 GT_BE98_OPEN_ETHERNET_SITE_METHOD = git
 GT_BE98_OPEN_ETHERNET_LICENSE = GPL-2.0
