@@ -16,13 +16,13 @@ sources: same commits, lab keys. The release images below are the
 
 | File | sha256 |
 |---|---|
-| `rootfs.squashfs` | `@ROOTFS@` |
-| `ml-bootfs.itb` | `@ITB@` |
+| `rootfs.squashfs` | `c29b380005527218e47d6e84e188df9db150291b98f2de2043a627eb19376737` |
+| `ml-bootfs.itb` | `7626d37b52d16f32ad112f6bf0b469a4859e49963ef6b2529161fa0e14fd879b` |
 
-Build id (DT): `@BUILDID@`
+Build id (DT): `20261110T154323Z-c3cc8fccab22-rw-jffs`
 
 Built with `RELEASE=1` (`ml-bootfs.info`: `release mode: yes`), and
-`release-check.sh` returned @RCHECK@. **These images are a TEST build**:
+`release-check.sh` returned PASS (selftest 21/21; built-in checks and all lab patterns absent). **These images are a TEST build**:
 their `SSH_AUTHORIZED_KEYS` is the lab's public key, so the orchestrator
 can run the on-box test. They are never handed over. A hand-over build
 is the same sources with the recipient's keys, checked again with
@@ -45,7 +45,9 @@ Built from (`gt-be98-rc4` tags, once tagged):
 The web UI in the release image is byte-identical to the one in image
 #39 (`webui` sha256 `6eac6608...`): it was rebuilt from `370d523` with
 `tools/build-mainline.sh` and compared. It has the first-login setup
-token. @MODULES@
+token. The three driver modules have the same `.text` as in image #39;
+their `.rodata`, symbol table and build id differ (build path and release
+build identity). hostapd is byte-identical to image #39's.
 
 ## Scope (owner decisions)
 
