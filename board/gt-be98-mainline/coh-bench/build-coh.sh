@@ -127,7 +127,7 @@ mldefaults "$RSHA" "$RSZ" > "$I/ml-defaults"
 modsum() { find "$C/modroot/lib/modules/7.2.9" -name '*.ko' -print0 | sort -z | xargs -0 sha256sum | sha256sum | cut -c1-16; }
 M1=$(modsum)
 "${MK[@]}" -C "$K" O="$O" Image
-got=$(xz -dc "$O/usr/initramfs_inc_data" 2>/dev/null | (cd "${TMPDIR:?}" && rm -rf -- ./irx && mkdir irx && cd irx && cpio -id --quiet && cat ./etc/ml-defaults))
+got=$(xz -dc "$O/usr/initramfs_inc_data" 2>/dev/null | (cd "${TMPDIR:?}" && rm -rf -- ./irx && mkdir irx && cd irx && cpio -id --quiet 'etc/ml-defaults' && cat ./etc/ml-defaults))
 printf '%s\n' "$got" | grep -qx "ROOTFS_SHA256=$RSHA" && printf '%s\n' "$got" | grep -qx 'UBI_ROOT_VOL=rootfs1' \
 	|| { echo "the relinked Image does not carry the final ml-defaults"; printf '%s\n' "$got"; exit 1; }
 [ "$(modsum)" = "$M1" ] || { echo "modules changed across the relink"; exit 1; }
