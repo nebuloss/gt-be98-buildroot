@@ -15,7 +15,13 @@
 #  BSS netdevs bind to their radio's Runner WLAN slot (provider ABI 4, needs open-ethernet 816dc90); on top of 18e96ed2)
 # main 2026-11-09 eead8fbb (img38: INV-MLE, MLO R1/R3/R4 step 1, int-1109k (bcnprot, evt-defects, KEY-110 b),
 #  TXPWR-AUTO, INV-C2C, BSSDEL, UAPSD; on top of cb1c8952)
-GT_BE98_OPEN_WIFI_VERSION = eead8fbb7a367051971557036cfad97e411b1c27
+# ⛔⛔ img39 PLACEHOLDER — the driver pin is NOT set on this branch. The orchestrator sets it once multi-link step 2
+#  lands, in a commit replacing the next line with the 40-hex SHA and deleting this block. Until then any make fails
+#  at once (the $(error) below), never with an old driver. (img38 pinned eead8fbb7a367051971557036cfad97e411b1c27.)
+GT_BE98_OPEN_WIFI_VERSION = IMG39-DRIVER-SHA-PLACEHOLDER
+ifeq ($(GT_BE98_OPEN_WIFI_VERSION),IMG39-DRIVER-SHA-PLACEHOLDER)
+$(error gt-be98-open-wifi: img39 placeholder - set GT_BE98_OPEN_WIFI_VERSION to the driver SHA first (package/gt-be98-open-wifi/gt-be98-open-wifi.mk))
+endif
 GT_BE98_OPEN_WIFI_SITE = git@github.com:nebuloss/gt-be98-open-wifi.git
 GT_BE98_OPEN_WIFI_SITE_METHOD = git
 GT_BE98_OPEN_WIFI_LICENSE = GPL-2.0-only
