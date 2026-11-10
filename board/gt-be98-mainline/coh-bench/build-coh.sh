@@ -36,11 +36,11 @@ step "0. kernel tree: pristine 7.2.9 + board patches + img39's series + the benc
 	|| { echo "bench patches missing in $C/patches"; exit 1; }
 grep -q 'BE98PC cd' "$C/patches/0991-PCI-brcmstb-bcm6813-IO-coherent-bench.patch" || { echo "0991 without the cd/ce post-codes"; exit 1; }
 rm -rf -- "${K:?}"; (cd "$C" && tar -xf "$HOME/be98/dl/linux/linux-7.2.9.tar.xz")
-for p in "$C"/board-patches/000*.patch; do patch -d "$K" -p1 -F0 -s < "$p" || { echo "BOARD FAIL $p"; exit 1; }; done
+for p in "$C"/board-patches/000*.patch; do patch -d "$K" -p1 -F0 -s --no-backup-if-mismatch < "$p" || { echo "BOARD FAIL $p"; exit 1; }; done
 SER=$MO/build/gt-be98-kernel-series; n=0
-while read -r p; do [ -n "$p" ] || continue; patch -d "$K" -p1 -F0 -s < "$SER/$p" || { echo "SERIES FAIL $p"; exit 1; }; n=$((n+1)); done < "$SER/series"
-for p in "$C"/patches/099[01]-*.patch; do patch -d "$K" -p1 -F0 -s < "$p" || { echo "BENCH FAIL $p"; exit 1; }; done
-[ -z "$(find "$K" -name '*.rej' -o -name '*.orig' | head -1)" ] || { echo "rejects/orig files in the tree"; exit 1; }
+while read -r p; do [ -n "$p" ] || continue; patch -d "$K" -p1 -F0 -s --no-backup-if-mismatch < "$SER/$p" || { echo "SERIES FAIL $p"; exit 1; }; n=$((n+1)); done < "$SER/series"
+for p in "$C"/patches/099[01]-*.patch; do patch -d "$K" -p1 -F0 -s --no-backup-if-mismatch < "$p" || { echo "BENCH FAIL $p"; exit 1; }; done
+[ -z "$(find "$K" -name '*.rej' | head -1)" ] || { echo "rejects in the tree"; exit 1; }	# offsets are allowed (as Buildroot), fuzz is not (-F0)
 echo "  board $(ls "$C"/board-patches/000*.patch | wc -l), series $n, bench 2"
 
 step "1. initramfs (NAND=ro: UBI keys; provisional ml-defaults until the rootfs exists; ROOTFS_URL=$URL kept as the fallback)"
