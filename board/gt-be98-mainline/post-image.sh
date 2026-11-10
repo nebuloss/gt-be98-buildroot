@@ -38,6 +38,7 @@ IMAGE=netroot
 ROOTFS_URL=
 PAD_TOTAL_MB=30
 NAND=off
+COH_BENCH=0
 [ -n "$LOCAL_CONF" ] && . "$LOCAL_CONF"
 SHARE=$HOST_DIR/share/gt-be98-mainline/mainline-boot
 HERE=$(cd "$(dirname "$0")" && pwd)
@@ -54,6 +55,11 @@ die() { echo "post-image: $*" >&2; exit 1; }
 case "$RESCUE" in 0|1) ;; *) die "RESCUE must be 0 or 1" ;; esac
 case "$IMAGE" in netroot|initrd) ;; *) die "IMAGE must be netroot or initrd" ;; esac
 case "$NAND" in off|ro|rw-jffs) ;; *) die "NAND must be off, ro or rw-jffs" ;; esac
+# the IO-coherency bench (D31): PCIe + Runner coherent, never with a NAND node, never a release
+case "$COH_BENCH" in 0) ;; 1) [ "$NAND" = off ] || die "COH_BENCH=1 needs NAND=off (no NAND node in a coherency bench)"
+	[ "$RELEASE_MODE" = no ] || die "COH_BENCH=1 is a bench, never a release"
+	[ "$IMAGE" = netroot ] || die "COH_BENCH=1 needs IMAGE=netroot" ;;
+	*) die "COH_BENCH must be 0 or 1" ;; esac
 case "$ROOTFS_URL" in ''|http://*) ;; *) die "ROOTFS_URL: http:// only (BusyBox wget)" ;; esac
 case "$ROOTFS_URL" in *[!A-Za-z0-9:/._~%+@-]*) die "ROOTFS_URL: unexpected characters" ;; esac
 # a release image carries no lab address: no HTTP rootfs fallback (the
@@ -181,6 +187,16 @@ cat > "$D/gt-be98-os.dts" <<'EOF'
 };
 #endif
 
+/* GT-BE98 coherency BENCH (D31, COH_BENCH=1 only): IO-coherent PCIe on all four RCs (open-ethernet 0991 enables the
+ * CCI-500 CPU snoop + the core's UBUS master cache bits at probe because the node is dma-coherent) and the Runner
+ * (ML_DMA_COHERENT). NAND=off is enforced, so no NAND node exists. */
+#ifdef ML_COH_BENCH
+&pcie0 { dma-coherent; brcm,ubus-master = <0x83030000>; brcm,cci = <0x81100000>; brcm,cci-cpu-si = <1>; };
+&pcie1 { dma-coherent; brcm,ubus-master = <0x83038000>; brcm,cci = <0x81100000>; brcm,cci-cpu-si = <1>; };
+&pcie2 { dma-coherent; brcm,ubus-master = <0x83040000>; brcm,cci = <0x81100000>; brcm,cci-cpu-si = <1>; };
+&pcie3 { dma-coherent; brcm,ubus-master = <0x83048000>; brcm,cci = <0x81100000>; brcm,cci-cpu-si = <1>; };
+#endif
+
 /* build id of this image (gt-be98-nandcheck --sha-list: tells a flash of a
  * new mainline image from an unexplained change of bootfs1) */
 #ifdef ML_BUILD_ID
@@ -201,6 +217,7 @@ EOF
 BUILD_ID="$(date -u +%Y%m%dT%H%M%SZ)-$(sha256sum "$B/Image.lzo" | cut -c1-12)-$NAND"
 mkdtb() {	# [initrd start, initrd end]
 	set -- ${1:+-DML_INITRD_START=$1 -DML_INITRD_END=$2} "-DML_BUILD_ID=\"$BUILD_ID\""
+	[ "$COH_BENCH" = 1 ] && set -- "$@" -DML_COH_BENCH -DML_DMA_COHERENT
 	case "$NAND" in
 	ro) set -- "$@" -DML_NAND_RO ;;
 	rw-jffs) set -- "$@" -DML_NAND_RO -DML_NAND_RW_JFFS ;;

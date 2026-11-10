@@ -21,7 +21,9 @@
 #  peer-to-peer inbound windows, brcm_pcie_p2p_window_open/_close exported for the open-wifi MLO BRIDGE
 #  step; inert unless a driver calls them - no register write at probe or resume; no Kconfig change).
 #  The kernel series changed: an existing output tree needs linux-dirclean.
-GT_BE98_OPEN_ETHERNET_VERSION = a9960de5dfead2e62b4f3d8461142ad5b4264d92
+# br-cohbench-2026-11-10 (BENCH ONLY, D31): oe-cohbench-2026-11-10 = a9960de + series.coh-bench (0990 outer
+#  shareable, 0991 BCM6813 IO-coherent root complex when dma-coherent). Never on a release branch.
+GT_BE98_OPEN_ETHERNET_VERSION = 79887b312e39ca5120884f705aee85c261e32255
 GT_BE98_OPEN_ETHERNET_SITE = git@github.com:nebuloss/gt-be98-open-ethernet.git
 GT_BE98_OPEN_ETHERNET_SITE_METHOD = git
 GT_BE98_OPEN_ETHERNET_LICENSE = GPL-2.0
@@ -32,7 +34,7 @@ GT_BE98_OPEN_ETHERNET_PATCH_DIR = $(GT_BE98_OPEN_ETHERNET_DIR)/kernel-patches/ma
 # kernel-patches/mainline/README, "Apply order"
 GT_BE98_OPEN_ETHERNET_SERIES = series.pmb series series.phy series.phylink \
 	series.postcode series.usb series.mdio series.mdio-debug series.rxfcs \
-	series.mpm series.pcie
+	series.mpm series.pcie series.coh-bench
 
 GT_BE98_OPEN_ETHERNET_MODULE_SUBDIRS =
 ifeq ($(BR2_PACKAGE_GT_BE98_OPEN_ETHERNET_RUNNER),y)
