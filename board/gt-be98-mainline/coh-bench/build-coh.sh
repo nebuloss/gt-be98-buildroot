@@ -60,8 +60,8 @@ sed -i "s#^CONFIG_INITRAMFS_SOURCE=.*#CONFIG_INITRAMFS_SOURCE=\"$I/list\"#" "$O/
 "${MK[@]}" -C "$K" O="$O" olddefconfig >/dev/null
 diff <(grep -v INITRAMFS_SOURCE "$MO/build/linux-7.2.9/.config") <(grep -v INITRAMFS_SOURCE "$O/.config") >/dev/null \
 	|| { echo "CONFIG DRIFT vs img39 beyond INITRAMFS_SOURCE"; exit 1; }
-gzip -9nc "$O/.config" | sha256sum | cut -d' ' -f1 > "$C/KCONFIG.sha256"
-echo "  KCONFIG (gzip of .config) $(cut -c1-12 "$C/KCONFIG.sha256"); img39 differs only in CONFIG_INITRAMFS_SOURCE"
+sha256sum "$O/.config" | cut -d' ' -f1 > "$C/KCONFIG.sha256"	# push-ko.sh convention: sha256 of zcat /proc/config.gz
+echo "  KCONFIG $(cut -c1-12 "$C/KCONFIG.sha256"); img39 differs only in CONFIG_INITRAMFS_SOURCE"
 
 step "3. kernel Image + in-tree modules"
 "${MK[@]}" -C "$K" O="$O" Image modules
@@ -123,7 +123,10 @@ echo "  DTB: dma-coherent nodes $nc (want 5: pcie0-3 + runner), NAND node strap 
 [ "$nc" = 5 ] && [ "$nn" = 0 ] || { echo "DTB coherency/NAND check FAILED"; exit 1; }
 
 step "7. FIT (mkbootfs.py, the stock bootfs) and the output"
-STOCK_BOOTFS=$(sed -n 's/^STOCK_BOOTFS=//p' "$HOME/.config/gt-be98-os/img39.conf" | tr -d '"')
+# the conf is a shell file post-image.sh SOURCES ($HOME etc. expand there): source it the same way
+STOCK_BOOTFS=$( . "${BASE_CONF:-$HOME/.config/gt-be98-os/img39.conf}"; printf '%s' "$STOCK_BOOTFS" )
+[ -f "$STOCK_BOOTFS" ] || { echo "STOCK_BOOTFS missing: $STOCK_BOOTFS"; exit 1; }
+export PATH="$H/bin:$H/sbin:$PATH"	# as post-image.sh: dumpimage/mkimage from the host tools
 rm -rf "$C/fit"; python3 "$SHARE/mkbootfs.py" "$STOCK_BOOTFS" "$C/Image.lzo" "$C/gt-be98-os.dtb" "$C/ml-bootfs.itb" "$C/fit" >/dev/null
 fsz=$(stat -c %s "$C/ml-bootfs.itb"); isz=$(od -A n -t u8 -j 16 -N 8 "$O/arch/arm64/boot/Image" | tr -d ' ')
 [ "$fsz" -lt 16777216 ] && [ "$isz" -lt $((0x2000000 - 0x200000)) ] || { echo "SIZE limits exceeded (FIT $fsz, image_size $isz)"; exit 1; }
@@ -134,7 +137,7 @@ cp "$C/KCONFIG.sha256" "$OUT/"; (cd "$OUT" && sha256sum rootfs.squashfs > rootfs
 	echo "base: img39 (buildroot 0a1bbcf, open-wifi $OWV, open-ethernet $OEV) + open-ethernet series.coh-bench 0990 0991"
 	echo "NAND=off (no NAND node); ROOTFS_URL=$URL (serve rootfs.squashfs + rootfs.squashfs.sha256 there)"
 	echo "build id (DT): $BUILD_ID"
-	echo "KCONFIG.sha256 (gzip -9n of .config): $(cat "$C/KCONFIG.sha256") — img39 differs only in CONFIG_INITRAMFS_SOURCE"
+	echo "KCONFIG.sha256 (sha256 of the uncompressed .config, as push-ko.sh compares /proc/config.gz): $(cat "$C/KCONFIG.sha256") — img39 differs only in CONFIG_INITRAMFS_SOURCE"
 	echo "FIT $fsz B, Image image_size $isz B"
 } > "$OUT/coh-bench.info"
 (cd "$OUT" && sha256sum ml-bootfs.itb rootfs.squashfs Image gt-be98-os.dtb > SHA256SUMS)
