@@ -41,7 +41,8 @@
 #   - a record whose retry ran (next= empty) and the radio DISABLED again
 #     for REPROBE_DISABLED s: due (the reload counts it, schedules the next);
 #     ENABLED instead: due (the reload clears the record: recovered);
-#   - the hostapd process died (its pid file names a dead process): due, at
+#   - the hostapd process died (its pid file names a dead process, or no pid
+#     file while radios are applied): due, at
 #     most HAP_DEATHS reloads per 600 s (then logged once and left: a hostapd
 #     that dies at every start is not hidden behind a restart loop).
 #
@@ -88,17 +89,19 @@ fget() { sed -n "s/^$2=//p" "$STATE/failed/$1" 2>/dev/null | head -n1; }
 # the supervision half of a pass (header): prints the due reasons
 health() {
 	local t=$1 f d st since p n
-	# the hostapd process died
-	if [ -f "$HAP_PID" ]; then
-		p=$(cat "$HAP_PID" 2>/dev/null)
-		if [ -n "$p" ] && ! kill -0 "$p" 2>/dev/null; then
-			# deaths in the last 600 s
-			n=$(awk -v t="$t" '$1 > t - 600' "$W/deaths" 2>/dev/null | wc -l | tr -d ' ')
-			if [ "$n" -lt "$DEATHS" ]; then rm -f "$W/deaths.said"; echo "hostapd-died"
-			elif [ ! -f "$W/deaths.said" ]; then
-				log "hostapd died $n times in 10 min: no more reloads for it (see /var/log/hostapd.log); a manual restart of gt-be98-wifi retries"
-				: > "$W/deaths.said"
-			fi
+	# the hostapd process died: its pid file names a dead process, or there
+	# is no pid file while the service has radios applied (a hostapd that
+	# exited cleanly removes its own pid file; the service removes it only
+	# together with $STATE/applied)
+	p=$(cat "$HAP_PID" 2>/dev/null)
+	if { [ -n "$p" ] && ! kill -0 "$p" 2>/dev/null; } ||
+	   { [ -z "$p" ] && ls "$STATE"/applied/* > /dev/null 2>&1; }; then
+		# deaths in the last 600 s
+		n=$(awk -v t="$t" '$1 > t - 600' "$W/deaths" 2>/dev/null | wc -l | tr -d ' ')
+		if [ "$n" -lt "$DEATHS" ]; then rm -f "$W/deaths.said"; echo "hostapd-died"
+		elif [ ! -f "$W/deaths.said" ]; then
+			log "hostapd died $n times in 10 min: no more reloads for it (see /var/log/hostapd.log); a manual restart of gt-be98-wifi retries"
+			: > "$W/deaths.said"
 		fi
 	fi
 	for f in "$STATE"/want/*; do
@@ -183,7 +186,7 @@ cmd_check() {
 	[ -z "$due" ] || log "re-probed radio(s)${due}: reloading gt-be98-wifi (restarts them alone)"
 	[ -z "$why" ] || log "supervision: ${why% }: reloading gt-be98-wifi"
 	${GT_BE98_RELOAD:-rc-service gt-be98-wifi reload} > /dev/null 2>&1 ||
-		log "gt-be98-wifi reload failed: retried in ${MIN}s"
+		log "gt-be98-wifi reload reported a failed radio (see service log)"
 	return 0
 }
 

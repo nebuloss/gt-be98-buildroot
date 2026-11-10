@@ -130,7 +130,7 @@ check "isolate -> ap_isolate=1 (guest only)" "yes no" "$(has bcawl3 ap_isolate=1
 check "wmm_enabled=1 everywhere" "" "$(for f in "$T"/o/sec-*; do grep -qx wmm_enabled=1 "$f" || echo "${f##*/}"; done)"
 check "5gl radio lines (ch 40, 80 MHz)" "channel=40 ht_capab=[HT40-] vht_oper_chwidth=1 vht_oper_centr_freq_seg0_idx=42" \
 	"$(grep -E '^(channel|ht_capab|vht_oper)' "$T/o/hdr-bcawl0" | tr '\n' ' ' | sed 's/ $//')"
-check "6g radio lines" "op_class=131 channel=37 ieee80211ax=1" \
+check "6g radio lines (no width: the 6 GHz default, 320 MHz)" "op_class=137 channel=37 ieee80211ax=1" \
 	"$(grep -E '^(op_class|channel|ieee80211ax)' "$T/o/hdr-bcawl2" | tr '\n' ' ' | sed 's/ $//')"
 check "no country_code without -c" "" "$(grep -l country_code "$T"/o/hdr-* | tr '\n' ' ')"
 check "radio conf: interface= then bss= in slot order" "interface=bcawl3 bss=bcawl3-1 bss=bcawl3-2" \
@@ -802,7 +802,7 @@ done
 w6() {	# channel width [be] -> the 6g radio lines after channel=
 	{ printf 'radio=6g\nchannel=%s\nwidth=%s\n%s' "$1" "$2" "${3:+be=$3
 }"; net 1 a sae password1 6g 1; } > "$T/w6"
-	rm -f "$T/slots"; gen "$T/w6" || { echo refused; return; }
+	rm -f "$T/slots"; gen "$T/w6" -6 "${W6TOP:-233}" || { echo refused; return; }
 	grep -E '^(op_class|he_oper|ieee80211be|eht_oper)' "$T/o/hdr-bcawl2" | tr '\n' ' ' | sed 's/ $//'
 }
 for t in \
@@ -846,7 +846,7 @@ for w in 20 40 80 160 320; do
 	c=1; while [ $c -le 233 ]; do
 		{ printf 'radio=6g\nchannel=%s\nwidth=%s\n' "$c" "$w"; net 1 a sae password1 6g 1; } > "$T/w6"
 		rm -f "$T/slots"
-		if gen "$T/w6"; then
+		if gen "$T/w6" -6 233; then
 			k=$((k + 1)); cp "$T/o/hostapd-bcawl2.conf" "$T/w6all/c$c-w$w.conf"
 		fi
 		c=$((c + 4))
@@ -918,6 +918,40 @@ check "2g width=20 (control): no warning, no ht_capab" "0 0" "$(grep -c 'width=4
 rm -f "$T/slots"; gen "$T/h40d"
 check "2g width=40 on a disabled radio: no warning" "0" "$(grep -c 'width=40' "$T/err")"
 check "HT40_2G=x: refused" "1" "$(GT_BE98_HT40_2G=x $SH "$G" -n "$T/h40" -o "$T/o" -s "$T/slots" -m "$M" > /dev/null 2>&1; echo $?)"
+
+# ---- 11b3. 6 GHz 320 MHz as the product default (owner 11-10) and the
+# country band: a 320 block must end inside the top 6 GHz channel (-6, else
+# 233 for US and 93 elsewhere: 5945-6425 MHz). DE/FR: ch 1-61 -> centre 31,
+# ch 65-93 -> centre 63, never 95 (65-125 runs past 6425); no block that
+# fits -> 160 with a warning ----
+w6d() {	# channel [extra list lines] [gen options...] -> op_class, EHT centre, warning yes|no
+	c=$1; x=${2:-}; shift; [ $# -gt 0 ] && shift
+	{ printf 'country=DE\nradio=6g\nchannel=%s\n%s' "$c" "$x"; net 1 a sae password1 6g 1; } > "$T/w6d"
+	rm -f "$T/slots"; gen "$T/w6d" "$@" || { echo refused; return; }
+	echo "$(sed -n 's/^op_class=//p' "$T/o/hdr-bcawl2") $(sed -n 's/^eht_oper_centr_freq_seg0_idx=//p' "$T/o/hdr-bcawl2") $(grep -q 'has no 320 MHz block' "$T/err" && echo warned || echo -)"
+}
+check "6g no width, DE, ch 37: 320 MHz (op_class 137), centre 31" "137 31 -" "$(w6d 37)"
+check "6g no width, DE, ch 1 / 61: centre 31" "137 31 -|137 31 -" "$(w6d 1)|$(w6d 61)"
+check "6g no width, DE, ch 65 / 93: centre 63 (block 33-93 ends at 6425), never 95" "137 63 -|137 63 -" "$(w6d 65)|$(w6d 93)"
+check "6g width=320, DE, ch 65: centre 63 (explicit width, same rule)" "137 63 -" "$(w6d 65 'width=320
+')"
+check "6g -6 233 (US-like band), ch 65: centre 95 (the 320-1 block fits)" "137 95 -" "$(w6d 65 '' -6 233)"
+check "6g -6 61 (a band ending at ch 61), ch 65: no 320 block -> 160 (centre 79), warned" "134 79 warned" "$(w6d 65 '' -6 61)"
+check "6g -6 61, ch 37: 320 still fits (centre 31)" "137 31 -" "$(w6d 37 '' -6 61)"
+check "6g country=US without -6: band 233, ch 189 -> 159" "137 159 -" "$(c=189; { printf 'country=US\nradio=6g\nchannel=189\n'; net 1 a sae password1 6g 1; } > "$T/w6d"; rm -f "$T/slots"; gen "$T/w6d"; echo "$(sed -n 's/^op_class=//p' "$T/o/hdr-bcawl2") $(sed -n 's/^eht_oper_centr_freq_seg0_idx=//p' "$T/o/hdr-bcawl2") -")"
+check "6g DE ch 189 (outside the band) at 320: falls back to 160 (centre 175), warned" "134 175 warned" "$(w6d 189)"
+check "6g width=160 kept (160 and below stay selectable): op_class 134" "134 47 -" "$(w6d 37 'width=160
+')"
+check "6g be=0, no width: 160 (no EHT: centre line absent)" "134  -" "$(w6d 37 'be=0
+')"
+check "6g width=20 kept: op_class 131" "131  -" "$(w6d 37 'width=20
+')"
+check "-6 300: refused" "1" "$(printf 'radio=6g\n' > "$T/r6"; net 1 a sae password1 6g 1 >> "$T/r6"; gen "$T/r6" -6 300; echo $?)"
+for c in 1 33 61 65 93; do w6d $c > /dev/null; cp "$T/o/hostapd-bcawl2.conf" "$T/w6de-$c.conf" 2>/dev/null; done
+if [ -n "$CONFCHECK" ]; then
+	check "hostapd parses the DE 320 configs (ch 1 33 61 65 93)" "5" "$("$CONFCHECK" "$T"/w6de-*.conf 2>/dev/null | grep -c '^OK ')"
+fi
+rm -f "$T"/w6de-*.conf
 
 # ---- 11c. 5 GHz 160 MHz (open-wifi INV-160-5G, owner OD2): the blocks
 # 36-64 (centre 50) and 100-128 (centre 114) only; VHT/HE/EHT width 2 and

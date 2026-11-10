@@ -533,9 +533,21 @@ printf '1000.1: bcawl0: interface state COUNTRY_UPDATE->DISABLED\n1000.2: bcawl0
 at 1001
 check "bcawl0 DISABLED: a failure (rc 1), no command, recorded (state, tries 0, retry at +30 s), hostapd's reason kept" \
 	"1 - state=DISABLED tries=0 next=1031 given_up=0 yes" \
-	"$rc -$cmds $(grep -E '^(state|tries|next|given_up)=' "$F" | tr '\n' ' ')$(grep -q '^reason=.*AP-DISABLED' "$F" && echo yes || echo no)"
+	"$rc -$cmds $(grep -E '^(state|tries|next|given_up)=' "$F" | tr '\n' ' ')$(grep -q '^reason=.*interface state COUNTRY_UPDATE->DISABLED' "$F" && echo yes || echo no)"
 check "  syslog: FAILED, retry 1/3 in 30 s; the service output an error" "1 yes" \
-	"$(grep -c 'radio bcawl0 FAILED to start (hostapd: DISABLED): .*AP-DISABLED.*; retry 1/3 in 30 s' "$T/slog") $(grep -q ' E radio bcawl0 failed to start' "$T/out" && echo yes || echo no)"
+	"$(grep -c 'radio bcawl0 FAILED to start (hostapd: DISABLED): .*interface state COUNTRY_UPDATE->DISABLED.*; retry 1/3 in 30 s' "$T/slog") $(grep -q ' E radio bcawl0 failed to start' "$T/out" && echo yes || echo no)"
+# the reason: hostapd's cause lines just before the failure (q135, img38: they name no interface), never another
+# radio's line, and not the REMOVE of a radio already down (DISABLED->DISABLED) that follows
+cp "$T/hostapd.log" "$T/hostapd.log.keep"
+printf '%s\n' '1001.1: bcawl0: interface state UNINITIALIZED->COUNTRY_UPDATE' '1001.2: bcawl0: interface state COUNTRY_UPDATE->HT_SCAN' \
+	'1001.3: bcawl0: interface state HT_SCAN->DFS' '1001.4: bcawl3: STA 02:00:5e:00:53:01 IEEE 802.11: authenticated' \
+	'1001.5: DFS start_dfs_cac() failed, -1' '1001.6: Interface initialization failed' '1001.7: bcawl0: interface state DFS->DISABLED' \
+	'1001.8: bcawl0: AP-DISABLED ' '1002.1: bcawl0: interface state DISABLED->DISABLED' '1002.2: bcawl3: Failed to do something' >> "$T/hostapd.log"
+check "hap_reason: the cause lines + the failure, no other radio, not the REMOVE" \
+	"DFS start_dfs_cac() failed, -1; Interface initialization failed; bcawl0: interface state DFS->DISABLED" "$(hap_reason bcawl0)"
+check "hap_reason: an interface with no failure falls back to its own error lines" "bcawl3: Failed to do something " "$(hap_reason bcawl3)"
+check "hap_reason: no log line at all: empty" "" "$(HAP_LOG=$T/none hap_reason bcawl1)"
+cp "$T/hostapd.log.keep" "$T/hostapd.log"
 at 1020; check "1020: not due, nothing sent" "1 -" "$rc -$cmds"
 nadd=0; tried() { nadd=$((nadd + $(echo "$cmds" | grep -c '^ADD bss_config=phy0:'))); }
 at 1031; tried
@@ -554,7 +566,7 @@ check "given up: no more command, exactly 3 retries (ADDs) in all, never a comma
 check "given up: no second syslog line" "1" "$(grep -c 'after 3 retries' "$T/slog")"
 : > "$T/out"; ( status ) >> "$T/out" 2>&1; src=$?
 check "status: an error naming bcawl0, given up, the reason; non-zero" "yes 1" \
-	"$(grep -q ' E radio bcawl0 FAILED to start (DISABLED), given up after 3 retries: .*AP-DISABLED' "$T/out" && echo yes || echo no) $src"
+	"$(grep -q ' E radio bcawl0 FAILED to start (DISABLED), given up after 3 retries: .*interface state COUNTRY_UPDATE->DISABLED' "$T/out" && echo yes || echo no) $src"
 # a new config of that radio: a new count, restarted at once
 sed -i '1i radio=5gl\nchannel=44' "$T/nets"
 at 9001
@@ -591,6 +603,21 @@ check "dead hostapd: rc 0, the process started again, both radios added, said" \
 	"0 start yes ADD bss_config=phy3:$G/hostapd-bcawl3.conf|ADD bss_config=phy0:$G/hostapd-bcawl0.conf yes" \
 	"$rc $(cut -d' ' -f1 "$T/daemon" | tr '\n' '|' | sed 's/|$//') $(hap_running && echo yes || echo no) $(echo "$cmds" | tr '\n' '|' | sed 's/|$//') $(grep -q '! hostapd had died' "$T/out" && echo yes || echo no)"
 : > "$T/nets"; apply
+
+# 22. the 6 GHz band of the country, read from the 6 GHz wiphy (iw phy): the
+# generator's -6, so a 320 MHz block never runs past it (owner 11-10: 320 is
+# the 6 GHz default; DE/FR end at channel 93, 6425 MHz)
+rm -f "$T/slots" "$T"/iw-phy*
+{ printf 'country=US\nradio=6g\nchannel=65\n'; net 1 a sae password1 6g 1; } > "$T/nets"
+apply
+check "no iw channel list: no -6 (country US: band 233), ch 65 at 320 -> centre 95" "0 95" "$rc $(sed -n 's/^eht_oper_centr_freq_seg0_idx=//p' "$G/hostapd-bcawl2.conf")"
+{ printf '\tFrequencies:\n'; for c in 1 33 61 65 93; do printf '\t\t\t* %s.0 MHz [%s] (23.0 dBm)\n' $((5950 + 5 * c)) $c; done
+  printf '\t\t\t* 6475.0 MHz [105] (disabled)\n\t\t\t* 5180.0 MHz [36] (20.0 dBm)\n'; } > "$T/iw-phy2"
+check "six_top: the last enabled 6 GHz channel (93), not the disabled 105, not a 5 GHz one" "93" "$(six_top)"
+apply
+check "iw lists 1-93: -6 93 -> ch 65 at 320 takes centre 63 (33-93), the radio restarts" "0 63 REMOVE bcawl2" \
+	"$rc $(sed -n 's/^eht_oper_centr_freq_seg0_idx=//p' "$G/hostapd-bcawl2.conf") $(echo "$cmds" | head -n1)"
+rm -f "$T"/iw-phy*; : > "$T/nets"; apply
 
 if [ $fail = 0 ]; then echo "ALL OK ($n checks)"; else echo "FAILED"; cat "$T/out"; fi
 exit $fail
