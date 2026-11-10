@@ -3,7 +3,7 @@
 # hwsim test of board/gt-be98-mainline/patches/hostapd/0002-mld-failed-add-keeps-the-process.patch
 # (a failed AP MLD ADD must not kill a -g hostapd and every interface it runs). On a Linux BUILD host with
 # mac80211_hwsim, as root; touches no real radio and no network (hwsim radios are virtual):
-#   sudo sh test/hostapd-mld-hwsim-test.sh HOSTAPD_SRC WORKDIR
+#   sudo sh test/hostapd-mld-hwsim-test.sh HOSTAPD_SRC WORKDIR   (WORKDIR: e.g. <lane dir>/hwsim-0002, removed first)
 # HOSTAPD_SRC: the OS's hostapd-2.12 tree (<buildroot output>/build/hostapd-2.12) with or without 0002: it is
 # copied twice to WORKDIR (scratch, delete it afterwards), built host-native once WITHOUT 0002 ("before") and once
 # WITH it ("after"; needs libnl-3/libnl-genl-3 and OpenSSL headers on the host), and both builds run:
@@ -20,6 +20,10 @@ patch=$here/../../../board/gt-be98-mainline/patches/hostapd/0002-mld-failed-add-
 [ -f "$src/hostapd/main.c" ] && [ -f "$patch" ] || { echo "no hostapd tree at $src or no patch at $patch"; exit 2; }
 modinfo mac80211_hwsim > /dev/null 2>&1 || /sbin/modinfo mac80211_hwsim > /dev/null 2>&1 || { echo "no mac80211_hwsim"; exit 2; }
 PATH=$PATH:/sbin:/usr/sbin
+# WORKDIR is removed and rebuilt: refuse anything but an absolute, dedicated
+# scratch path (its last component must name this test)
+case "$w" in /*/*hwsim*) ;; *) echo "refusing WORKDIR '$w': give an absolute scratch path whose last component contains 'hwsim'"; exit 2 ;; esac
+case "${w##*/}" in *hwsim*) ;; *) echo "refusing WORKDIR '$w': the last component must contain 'hwsim'"; exit 2 ;; esac
 rm -rf "$w"; mkdir -p "$w/lib"
 [ -e /usr/lib/x86_64-linux-gnu/libnl-genl-3.so ] || ln -sf /usr/lib/x86_64-linux-gnu/libnl-genl-3.so.200 "$w/lib/libnl-genl-3.so"
 build() {	# build NAME PATCHED(0|1)
