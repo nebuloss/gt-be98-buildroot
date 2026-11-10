@@ -81,3 +81,21 @@ backtrace; a use-after-free in the shared-context teardown is the hypothesis). N
 upstream tree (whether the check moved before hapd_init or into config validation). A reproduction without this
 hardware for the report: mac80211_hwsim with MLO support off (its `mlo` module parameter), `hostapd -g`, ADD a
 plain BSS, then ADD an `mld_ap=1` config on the same phy.
+
+## Design rules for the MLO launcher (lane mlo-prod's finding, 11-10: nothing to build until MLO ships)
+
+hostapd 2.12 dies whenever an MLD link ADD fails inside a running `-g` hostapd: a non-first link the driver refuses
+(R4s2: `APSTA-JOIN -ENETDOWN` on a radio with no running primary), or any MLD on a driver without MLO (hazard 2).
+Every network of the process goes with it. Rules the generator + service must follow:
+
+1. **Primaries first.** Start (ADD and wait for ENABLED) the primary BSS of every radio an MLD has a link on,
+   before any link ADD of that MLD.
+2. **No link on a radio without a running primary.** If a link radio's primary is not ENABLED (failed, given up,
+   scheduled off, monitor, station-only), that MLD is not ADDed at all — reported, never tried.
+3. **Capability gate.** Every MLD ADD is gated on the driver's MLO capability per wiphy (hazard 2's gate).
+4. **Supervision.** A hostapd that dies during/after an MLD ADD is an MLD-CONFIG failure, not a radio failure: the
+   reload that restarts the process must NOT ADD that MLD again (record it, e.g. `$STATE/failed/mld-<name>`, given up
+   at once — one try, not three: each try kills every network). The bounded-retry budget of a radio (3 per config)
+   does not apply to MLDs; a new MLD config (checksum) gets one new try.
+5. **Order of a reload:** plain radios and their BSSes first (as today), MLDs last, each MLD in its own ADD unit
+   (label = the MLD name), so a failure is attributed to it.
