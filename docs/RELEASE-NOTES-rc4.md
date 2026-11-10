@@ -157,6 +157,14 @@ Image #39 regression (q148), unless a row says otherwise. Rows marked
   rebind exists but is off and was never measured on hardware). The OS
   restarts a radio whose start fails and a dead hostapd, not a radio
   whose firmware stopped.
+- **A radio can be re-probed once at an early start** (INV-PAGER-RACE,
+  found on image #39, not fixed in RC4): if hostapd starts an AP within
+  about 1 s of the driver registering that radio (an early service start,
+  or one triggered by the radio supervision), the driver's pager check
+  can misread it, and the driver briefly removes and re-probes the radio.
+  Cost: about 11 s and one AP start retry; the radio then comes up. The
+  normal boot order does not hit it. The fix is on open-wifi
+  `om-pager-race-2026-11-10`, not in RC4.
 - **CSA onto a DFS channel** (FCSA-N2): whether the firmware then runs
   its own CAC and silences the networks for about a minute is not read on
   silicon.
