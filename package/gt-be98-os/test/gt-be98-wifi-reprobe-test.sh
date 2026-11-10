@@ -12,7 +12,7 @@ here=$(cd "$(dirname "$0")" && pwd)
 R="$here/../src/sbin/gt-be98-wifi-reprobe"
 SH=${SH:-sh}
 T=$(mktemp -d)
-trap 'rm -rf "$T"' EXIT
+trap 'kill "${hapd_live:-}" 2>/dev/null; rm -rf "$T"' EXIT
 fail=0 n=0
 check() {
 	n=$((n + 1))
@@ -98,6 +98,8 @@ chmod +x "$T/bin/hostapd_cli"
 rm -rf "$I" "$T/run/gt-be98-wifi/reprobe"; S="$T/run/gt-be98-wifi"
 mkdir -p "$S/want" "$S/applied"
 for d in bcawl0 bcawl3; do printf 'conf x\nfirst %s\nradio k-%s\n' "$d" "$d" > "$S/want/$d"; cp "$S/want/$d" "$S/applied/$d"; echo ENABLED > "$T/state-$d"; done
+# hostapd itself alive (its pid file names a live process) for the radio cases
+sleep 1000 & hapd_live=$!; echo "$hapd_live" > "$T/run/hostapd-wifi.pid"
 check "supervision: both radios ENABLED: no reload" "0 0" "$(at 1000)"
 echo DISABLED > "$T/state-bcawl0"
 check "bcawl0 DISABLED, seen at 1001: not yet (REPROBE_DISABLED 10 s)" "0 0" "$(at 1001)"
@@ -127,6 +129,7 @@ check "given up: never again" "0 0|0 0" "$(at 2000)|$(at 9000)"
 check "bcawl3 (ENABLED) never named by the supervision" "0" "$(grep -cE 'supervision: .*bcawl3|bcawl3: hostapd reports' "$T/log")"
 # the hostapd process died
 rm -rf "$S/failed"; echo ENABLED > "$T/state-bcawl0"
+kill "$hapd_live" 2>/dev/null
 sleep 0 & dead=$!; wait $dead
 echo "$dead" > "$T/run/hostapd-wifi.pid"
 check "hostapd died (its pid is gone): one reload" "0 1" "$(at 10000)"
@@ -137,6 +140,11 @@ check "600 s after the first death: reloads again" "0 1" "$(at 10601)"
 sleep 1000 & alive=$!; echo "$alive" > "$T/run/hostapd-wifi.pid"
 check "hostapd alive: nothing" "0 0" "$(at 11000)"
 kill "$alive" 2>/dev/null
+# a hostapd gone WITH its pid file (a clean exit removes it) while radios are applied
+rm -f "$T/run/hostapd-wifi.pid"; rm -rf "$S/reprobe"
+check "no pid file, radios applied: one reload" "0 1" "$(at 12000)"
+rm -f "$S"/applied/*
+check "no pid file, nothing applied (the service is driver-only): nothing" "0 0" "$(at 12100)"
 
 if [ $fail = 0 ]; then echo "ALL OK ($n checks)"; else echo "FAILED"; cat "$T/log"; fi
 exit $fail
