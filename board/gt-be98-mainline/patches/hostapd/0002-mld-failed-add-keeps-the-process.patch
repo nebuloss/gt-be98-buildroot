@@ -1,0 +1,61 @@
+From: gt-be98-buildroot <noreply@example.invalid>
+Subject: [PATCH] AP MLD: a failed MLD ADD no longer kills a -g hostapd and every
+ interface it runs
+
+Two crashes, both reproduced on mac80211_hwsim with hostapd 2.12 and with
+upstream hostap 6d3d778 (2026-11-10), both on the global control interface's
+ADD (hostapd_add_iface) while other interfaces run in the same process:
+
+1. An AP MLD on a driver without MLO support (WPA_DRIVER_FLAGS2_MLO unset):
+   hostapd_driver_init() returns -1 after hapd_init() but before any link is
+   added. On a wiphy whose nl80211 driver context is shared with a running
+   interface, hostapd_cleanup_driver() takes the MLD link-removal path,
+   driver_nl80211_link_remove() removes the BSS and then delivers
+   EVENT_MLD_INTERFACE_FREED to a NULL context: SEGV in
+   wpa_supplicant_event() (drv_callbacks.c). Fix: clear conf->mld_ap on that
+   failure, so the BSS is torn down as the plain BSS it still is.
+
+2. A non-first link the driver refuses (start_ap -EBUSY): the setup failure
+   already removed the link from the MLD (hostapd_mld_remove_link), then
+   hostapd_add_iface()'s cleanup (hostapd_bss_link_deinit) removes it again;
+   dl_list_del() on the cleared node dereferences NULL. Fix: make
+   hostapd_mld_remove_link() a no-op for a BSS that is not on the list.
+
+After the fix the ADD answers FAIL, the process and its other interfaces
+keep running (an MLD's surviving first link included).
+Test: package/gt-be98-os/test/hostapd-mld-hwsim-test.sh.
+
+diff -ru a/hostapd/main.c b/hostapd/main.c
+--- a/hostapd/main.c
++++ b/hostapd/main.c
+@@ -371,6 +371,13 @@
+ 		if (!(iface->drv_flags2 & WPA_DRIVER_FLAGS2_MLO)) {
+ 			wpa_printf(MSG_INFO,
+ 				   "MLD: Not supported by the driver");
++			/* No link was added: let the caller tear this BSS down
++			 * as a plain BSS. As an MLD link, a driver context shared
++			 * with the other interfaces of the wiphy takes the
++			 * link-removal path, which then delivers
++			 * EVENT_MLD_INTERFACE_FREED to a NULL context and the
++			 * whole process dies. */
++			hapd->conf->mld_ap = 0;
+ 			return -1;
+ 		}
+ 
+diff -ru a/src/ap/hostapd.c b/src/ap/hostapd.c
+--- a/src/ap/hostapd.c
++++ b/src/ap/hostapd.c
+@@ -5317,6 +5317,13 @@
+ 	if (!mld)
+ 		return -1;
+ 
++	/* Not on the list: never added, or already removed (dl_list_del()
++	 * clears the pointers). A non-first link whose setup failed is
++	 * removed by that failure and again by the cleanup of
++	 * hostapd_add_iface(); the second dl_list_del() dereferenced NULL. */
++	if (!hapd->link.next || !hapd->link.prev)
++		return 0;
++
+ 	dl_list_del(&hapd->link);
+ 	mld->num_links--;
+ 
