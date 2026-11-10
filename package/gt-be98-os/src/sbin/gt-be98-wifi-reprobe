@@ -186,7 +186,7 @@ cmd_check() {
 	[ -z "$due" ] || log "re-probed radio(s)${due}: reloading gt-be98-wifi (restarts them alone)"
 	[ -z "$why" ] || log "supervision: ${why% }: reloading gt-be98-wifi"
 	${GT_BE98_RELOAD:-rc-service gt-be98-wifi reload} > /dev/null 2>&1 ||
-		log "gt-be98-wifi reload failed: retried in ${MIN}s"
+		log "gt-be98-wifi reload reported a failed radio (see service log)"
 	return 0
 }
 

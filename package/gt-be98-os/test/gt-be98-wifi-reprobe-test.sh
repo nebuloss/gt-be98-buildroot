@@ -106,6 +106,14 @@ check "bcawl0 DISABLED, seen at 1001: not yet (REPROBE_DISABLED 10 s)" "0 0" "$(
 check "  said so" "yes" "$(grep -q 'bcawl0: hostapd reports it DISABLED' "$T/log" && echo yes || echo no)"
 check "1011 (10 s DISABLED, no record): one reload" "0 1" "$(at 1011)"
 check "  the log names it" "yes" "$(grep -q 'supervision: failed:bcawl0: reloading' "$T/log" && echo yes || echo no)"
+# a reload that exits non-zero (the service recorded the radio's failure): said as such, no promise of a retry in 20 s
+printf '#!/bin/sh\necho reload >> "$FAKE/reloads"\nexit 1\n' > "$T/bin/reload-rc1"; chmod +x "$T/bin/reload-rc1"
+: > "$S/reprobe/last.keep"; cp "$S/reprobe/last" "$S/reprobe/last.keep"; rm -f "$S/reprobe/last" "$S/reprobe/bcawl0.dis"; echo DISABLED > "$T/state-bcawl0"
+n0=$(grep -c 'reload reported a failed radio' "$T/log")
+GT_BE98_RELOAD="$T/bin/reload-rc1" GT_BE98_NOW=2500 $SH "$R" check; GT_BE98_RELOAD="$T/bin/reload-rc1" GT_BE98_NOW=2510 $SH "$R" check
+check "a reload exiting non-zero: one 'reload reported a failed radio (see service log)', never 'retried in'" "1 0" \
+	"$(( $(grep -c 'gt-be98-wifi reload reported a failed radio (see service log)' "$T/log") - n0 )) $(grep -c 'retried in' "$T/log")"
+cp "$S/reprobe/last.keep" "$S/reprobe/last"
 # the service recorded the failure: retry due at next=
 printf 'dev=bcawl0\nkey=k-bcawl0\nstate=DISABLED\nreason=r\ntries=0\nnext=1041\ngiven_up=0\nsince=1011\n' > "$S/failed.tmp"; mkdir -p "$S/failed"; mv "$S/failed.tmp" "$S/failed/bcawl0"
 check "record, next=1041: at 1035 nothing" "0 0" "$(at 1035)"

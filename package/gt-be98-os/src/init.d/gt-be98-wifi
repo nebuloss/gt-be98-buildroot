@@ -539,11 +539,34 @@ slog() {
 # field $2 of the failure record of radio $1
 fail_get() { sed -n "s/^$2=//p" "$STATE/failed/$1" 2>/dev/null | head -n1; }
 
-# hostapd's last words about interface $1, one line (the failure's reason)
+# hostapd's last words about interface $1, one line (the failure's reason):
+# the error lines of the 8 log lines before its last real failure
+# ("$1: interface state X->DISABLED", X not DISABLED: a REMOVE of a radio
+# already down logs DISABLED->DISABLED) and that line. hostapd names no
+# interface in many cause lines ("DFS start_dfs_cac() failed, -1",
+# "Interface initialization failed"); lines naming ANOTHER interface are
+# left out. No such failure in the log: its last error lines naming $1
 hap_reason() {
-	grep -a "$1" "$HAP_LOG" 2>/dev/null |
+	local r
+	r=$(awk -v i="$1" '
+		{ l[NR] = $0 }
+		index($0, i ": interface state ") && /->DISABLED/ && !/DISABLED->DISABLED/ { last = NR }
+		END {
+			if (!last) exit
+			out = ""
+			for (k = (last > 8 ? last - 8 : 1); k <= last; k++) {
+				s = l[k]
+				if (s ~ /bcawl[0-9]/ && !index(s, i)) continue
+				if (k < last && s !~ /initialization failed|Could not|[Ff]ailed|refused|not supported|Invalid|DFS-/) continue
+				sub(/^[0-9.]+: /, "", s)
+				out = out (out == "" ? "" : "; ") s
+			}
+			print out
+		}' "$HAP_LOG" 2>/dev/null)
+	[ -n "$r" ] || r=$(grep -a "$1" "$HAP_LOG" 2>/dev/null |
 		grep -aE 'AP-DISABLED|initialization failed|Could not|[Ff]ailed|refused|DFS-|not supported|Invalid' |
-		tail -n 2 | sed 's/^[0-9.]*: //' | tr -d '\000-\010\013-\037' | tr '\n' ' ' | cut -c1-200
+		tail -n 2 | sed 's/^[0-9.]*: //' | tr '\n' ' ')
+	printf '%s' "$r" | tr -d '\000-\010\013-\037' | tr '\n' ' ' | cut -c1-200
 }
 
 # the delay before the retry that follows try $1 (0: the first retry)
