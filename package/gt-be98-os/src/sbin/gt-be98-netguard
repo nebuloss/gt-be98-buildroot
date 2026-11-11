@@ -46,7 +46,16 @@ WIFI_STATIONS=${GT_BE98_WIFI_STATIONS:-/run/gt-be98-wifi/stations}
 WIFI_REPEATERS=${GT_BE98_WIFI_REPEATERS:-/run/gt-be98-wifi/repeaters}
 LAN_CONF=${GT_BE98_LAN_CONF:-/etc/conf.d/gt-be98-lan}
 
-log() { logger -t gt-be98-netguard -- "$*" 2>/dev/null; echo "gt-be98-netguard: $*" > /dev/kmsg 2>/dev/null; }
+NL='
+'
+SYSNET=${GT_BE98_SYSNET:-/sys/class/net}	# (GT_BE98_*: the offline tests only)
+
+log() { logger -t gt-be98-netguard -- "$*" 2>/dev/null; echo "gt-be98-netguard: $*" 2>/dev/null > /dev/kmsg; }
+# A sweep forks nothing unless it changes something (img40: lane tx-cpu
+# measured 0.03 of a core for this daemon on img39, about 30 forks per 5 s
+# sweep): files and sysfs are read with `read`, the bridges' ports are
+# listed from <bridge>/brif, the verdict is a variable, not a command
+# substitution. Same rules, same order of the checks per port.
 # the patterns are matched, never expanded as file names (set -f)
 protected() {
 	local p r=1
@@ -58,30 +67,60 @@ protected() {
 	set +f
 	return $r
 }
-# is $1 a Wi-Fi station of gt-be98-wifi?
-station() { grep -qx "$1" "$WIFI_STATIONS" 2>/dev/null; }
+# the Wi-Fi stations and repeaters of gt-be98-wifi, read once per sweep:
+# STA_LIST one name per line, REP_LIST "<dev> <bridge>" per line
+load_lists() {
+	local a b
+	STA_LIST=$NL REP_LIST=$NL
+	if [ -r "$WIFI_STATIONS" ]; then
+		while IFS= read -r a || [ -n "$a" ]; do STA_LIST="$STA_LIST$a$NL"; done < "$WIFI_STATIONS"
+	fi
+	if [ -r "$WIFI_REPEATERS" ]; then
+		while read -r a b _ || [ -n "${a:-}" ]; do
+			[ -n "${a:-}" ] && REP_LIST="$REP_LIST$a ${b:-}$NL"
+		done < "$WIFI_REPEATERS"
+	fi
+}
+# is $1 a Wi-Fi station of gt-be98-wifi? (a whole line of the list)
+station() { case "$STA_LIST" in *"$NL$1$NL"*) return 0 ;; esac; return 1; }
 # is $1 the repeater station of bridge $2 (both given: a brwifi bridge)?
 repeater_of() {
 	case "$2" in brwifi[0-9]*) ;; *) return 1 ;; esac
-	awk -v d="$1" -v b="$2" '$1 == d && $2 == b { f = 1 } END { exit !f }' "$WIFI_REPEATERS" 2>/dev/null
+	case "$REP_LIST" in *"$NL$1 $2$NL"*) return 0 ;; esac
+	return 1
 }
 # does bridge $1 hold a repeater station (listed for it)?
 repeater_bridge() {
 	case "$1" in brwifi[0-9]*) ;; *) return 1 ;; esac
-	awk -v b="$1" '$2 == b { f = 1 } END { exit !f }' "$WIFI_REPEATERS" 2>/dev/null
+	case "$REP_LIST" in *" $1$NL"*) return 0 ;; esac
+	return 1
+}
+# cfg_last FILE KEY CHARS: the value of the LAST line KEY=value, KEY="value"
+# of FILE whose value holds only CHARS (a case bracket set), into CFG; ""
+# when none (the same lines the former sed -n 's/^KEY="\{0,1\}\([CHARS]*\)"\{0,1\}$/\1/p' | tail -n1 took)
+cfg_last() {
+	local l v
+	CFG=
+	[ -r "$1" ] || return 0
+	while IFS= read -r l || [ -n "$l" ]; do
+		case "$l" in "$2="*) ;; *) continue ;; esac
+		v=${l#"$2="}; v=${v#\"}; v=${v%\"}
+		# shellcheck disable=SC2254 # $3 is a pattern
+		case "$v" in *[!$3]*) continue ;; esac
+		CFG=$v
+	done < "$1"
 }
 # Wi-Fi network settings as gt-be98-wifi applies them: its effective file
 # while it runs (it adds the VLANs and isolation of its network list,
 # WIFI_NETWORKS), else the web UI's file when present, else the defaults
 # (WIFI_TRUNK defaults to rnr0)
 wifi_conf() {
-	local f=$WIFI_DEF t
+	local f=$WIFI_DEF
 	[ -f "$WIFI_AP" ] && f=$WIFI_AP
 	[ -f "$WIFI_L2" ] && f=$WIFI_L2
-	VLANS=$(sed -n 's/^WIFI_VLANS="\{0,1\}\([A-Za-z0-9: ]*\)"\{0,1\}$/\1/p' "$f" 2>/dev/null | tail -n1)
-	ISOLATE=$(sed -n 's/^WIFI_ISOLATE="\{0,1\}\([A-Za-z0-9 ]*\)"\{0,1\}$/\1/p' "$f" 2>/dev/null | tail -n1)
-	t=$(sed -n 's/^WIFI_TRUNK="\{0,1\}\([A-Za-z0-9]*\)"\{0,1\}$/\1/p' "$f" 2>/dev/null | tail -n1)
-	TRUNK=${t:-rnr0}
+	cfg_last "$f" WIFI_VLANS 'A-Za-z0-9: '; VLANS=$CFG
+	cfg_last "$f" WIFI_ISOLATE 'A-Za-z0-9 '; ISOLATE=$CFG
+	cfg_last "$f" WIFI_TRUNK 'A-Za-z0-9'; TRUNK=${CFG:-rnr0}
 	case "$TRUNK" in rnr[0-3]) ;; *) TRUNK= ;; esac
 }
 # is sub-interface $1 the listed trunk VLAN of bridge $2?
@@ -98,9 +137,8 @@ wifi_vlan_ok() {
 }
 # wired LAN settings (gt-be98-lan): LAN_PORTS, LAN_BRIDGE, parsed not sourced
 lan_conf() {
-	LPORTS=$(sed -n 's/^LAN_PORTS="\{0,1\}\([A-Za-z0-9 ]*\)"\{0,1\}$/\1/p' "$LAN_CONF" 2>/dev/null | tail -n1)
-	LBRIDGE=$(sed -n 's/^LAN_BRIDGE="\{0,1\}\([A-Za-z0-9_-]*\)"\{0,1\}$/\1/p' "$LAN_CONF" 2>/dev/null | tail -n1)
-	LBRIDGE=${LBRIDGE:-br-lan}
+	cfg_last "$LAN_CONF" LAN_PORTS 'A-Za-z0-9 '; LPORTS=$CFG
+	cfg_last "$LAN_CONF" LAN_BRIDGE 'A-Za-z0-9_-'; LBRIDGE=${CFG:-br-lan}
 }
 # may bare port $1 be a port of bridge $2 as a wired LAN port?
 lan_port_ok() {
@@ -112,40 +150,45 @@ lan_port_ok() {
 	for p in $LPORTS; do [ "$p" = "$1" ] && return 0; done
 	return 1
 }
-# the verdict on bridge port $1 of bridge $2: keep, or why it is detached
+# the verdict on bridge port $1 of bridge $2 into VERDICT: keep, or why it is detached
 verdict() {
+	VERDICT=keep
 	case "$1" in
 	*.*)	# 802.1Q sub-interface of a protected port: listed trunk VLANs only
 		if protected "${1%%.*}" && ! wifi_vlan_ok "$1" "$2"; then
-			echo "not a listed Wi-Fi VLAN of $2"; return
+			VERDICT="not a listed Wi-Fi VLAN of $2"; return
 		fi
 		if protected "${1%%.*}" && repeater_bridge "$2"; then
-			echo "$2 is a repeater bridge (Wi-Fi uplink): no wired VLAN in it"; return
+			VERDICT="$2 is a repeater bridge (Wi-Fi uplink): no wired VLAN in it"; return
 		fi ;;
 	*)	if protected "$1" && ! lan_port_ok "$1" "$2"; then
-			echo "protected port: never bridged except a LAN_PORTS port in $LBRIDGE"; return
+			VERDICT="protected port: never bridged except a LAN_PORTS port in $LBRIDGE"; return
 		fi
 		if station "$1" && ! repeater_of "$1" "$2"; then
-			echo "a Wi-Fi station: never bridged (a repeater only into its own repeated bridge)"; return
+			VERDICT="a Wi-Fi station: never bridged (a repeater only into its own repeated bridge)"; return
 		fi ;;
 	esac
-	echo keep
 }
 sweep() {
-	local n i m f v
+	local b m pp i n f v
 	wifi_conf
 	lan_conf
-	for n in /sys/class/net/*; do
-		i=${n##*/}
-		if [ -e "$n/brport" ]; then
-			m=$(readlink "$n/master" 2>/dev/null); m=${m##*/}
-			v=$(verdict "$i" "$m")
-			if [ "$v" != keep ]; then
+	load_lists
+	for b in "$SYSNET"/*/brif; do
+		[ -d "$b" ] || continue
+		m=${b%/brif}; m=${m##*/}
+		for pp in "$b"/*; do
+			[ -e "$pp" ] || [ -L "$pp" ] || continue
+			i=${pp##*/}; n=$SYSNET/$i
+			[ -e "$n/brport" ] || continue
+			verdict "$i" "$m"
+			if [ "$VERDICT" != keep ]; then
 				ip link set "$i" nomaster &&
-					log "detached $i from bridge $m ($v)"
+					log "detached $i from bridge $m ($VERDICT)"
 				continue
 			fi
-			if [ "$(cat "$n/brport/hairpin_mode" 2>/dev/null)" = 1 ]; then
+			v=; { read -r v < "$n/brport/hairpin_mode"; } 2>/dev/null
+			if [ "$v" = 1 ]; then
 				echo 0 > "$n/brport/hairpin_mode" &&
 					log "hairpin turned off on $i (bridge $m)"
 			fi
@@ -156,11 +199,12 @@ sweep() {
 				case "$i" in bcawl*) case " $ISOLATE " in *" $m "*) f=1 ;; esac ;; esac
 				# the repeater's uplink port is the way out: never isolated
 				repeater_of "$i" "$m" && f=0
-				[ "$(cat "$n/brport/isolated" 2>/dev/null)" = "$f" ] ||
+				v=; { read -r v < "$n/brport/isolated"; } 2>/dev/null
+				[ "$v" = "$f" ] ||
 					{ echo "$f" > "$n/brport/isolated" 2>/dev/null &&
 						log "isolated=$f on $i (bridge $m)"; } ;;
 			esac
-		fi
+		done
 	done
 }
 
@@ -172,7 +216,7 @@ selftest() {
 	WIFI_REPEATERS=$(mktemp); echo 'bcawl6 brwifi60' > "$WIFI_REPEATERS"
 	check() {	# <expect keep|detach> <port> <bridge> <LAN_PORTS> <trunk> <vlans>
 		LPORTS=$4; LBRIDGE=br-lan; TRUNK=$5; VLANS=$6
-		c=$(verdict "$2" "$3"); [ "$c" = keep ] || c=detach
+		load_lists; verdict "$2" "$3"; c=$VERDICT; [ "$c" = keep ] || c=detach
 		n=$((n + 1))
 		if [ "$c" = "$1" ]; then echo "ok   $1 $2 in $3 (LAN_PORTS='$4' trunk=$5)"
 		else echo "FAIL want $1, got $c: $2 in $3 (LAN_PORTS='$4' trunk=$5)"; fail=$((fail + 1)); fi
@@ -205,11 +249,23 @@ selftest() {
 	[ $fail -eq 0 ]
 }
 [ "${1:-}" = --selftest ] && { selftest; exit $?; }
+[ "${1:-}" = --sweep ] && { sweep; exit 0; }	# one sweep (the offline tests)
 
 sweep
 log "guarding: never bridged: $NETGUARD_PROTECT (sub-interfaces: listed Wi-Fi VLANs in brwifi* only; wired LAN: LAN_PORTS of rnr1-3 in ${LBRIDGE:-br-lan} only, never rnr0); hairpin never on"
 # one event stream: every link change from the kernel, plus a periodic tick
+# (the tick waits with `read -t` on a FIFO nobody writes: no sleep fork;
+# sleep where the shell has no `read -t`)
+TICK=${GT_BE98_RUN:-/run}/gt-be98-netguard.tick
 {
 	ip -o monitor link &
-	while :; do sleep "$NETGUARD_SWEEP"; echo tick; done
+	t=sleep
+	if (read -t 0 _ < /dev/null) 2>/dev/null || [ $? = 1 ]; then
+		[ -p "$TICK" ] || { rm -f "$TICK"; mkfifo -m 600 "$TICK"; } 2>/dev/null
+		[ -p "$TICK" ] && exec 4<> "$TICK" && t=fifo
+	fi
+	while :; do
+		if [ "$t" = fifo ]; then read -t "$NETGUARD_SWEEP" _ <&4; else sleep "$NETGUARD_SWEEP"; fi
+		echo tick
+	done
 } | while read -r _; do sweep; done
