@@ -99,3 +99,18 @@ Every network of the process goes with it. Rules the generator + service must fo
    does not apply to MLDs; a new MLD config (checksum) gets one new try.
 5. **Order of a reload:** plain radios and their BSSes first (as today), MLDs last, each MLD in its own ADD unit
    (label = the MLD name), so a failure is attributed to it.
+6. **Link ids are the firmware's, not the host's (R10; lane mlo-prod read it out of the firmware, 11-10).** The
+   firmware gives each MLD link the radio's `mlo_unit` as its link id: 6 GHz = 0, 5 GHz-high = 1, 2.4 GHz = 2.
+   The host cannot set it. hostapd numbers the links of an MLD in ADD order and never reuses a number.
+   Consequences:
+   - **ADD order = `mlo_unit` order:** the 6 GHz link first, then 5 GHz-high, then 2.4 GHz.
+   - **Only link sets contiguous from unit 0 can be served:** {6G}, {6G, 5gh}, {6G, 5gh, 2.4G}. Any other set
+     (e.g. {6G, 2.4G}, {5gh, 2.4G}, any MLD without 6 GHz, any set with 5 GHz-low) is REFUSED by the generator and
+     by the web UI with a message naming the rule ("an MLO network needs 6 GHz, then 5 GHz-high, then 2.4 GHz, in
+     that order: <set> leaves a gap"), never rendered and tried.
+   - **No partial membership change:** a removed link cannot be re-ADDed under its old number, so adding or
+     removing a link of a running MLD is a teardown of the whole MLD and a fresh ADD of every link in order
+     (one MLD-CONFIG change for rule 4's checksum). Removing a radio's primary (rule 2) therefore takes the whole
+     MLD down, not just that link.
+   - The web UI's later MLO options follow from this: offer only the three sets above, and only when the 6 GHz
+     radio is enabled.
