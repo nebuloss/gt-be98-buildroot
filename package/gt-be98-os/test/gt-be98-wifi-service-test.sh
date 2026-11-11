@@ -19,7 +19,20 @@
 set -u
 here=$(cd "$(dirname "$0")" && pwd)
 T=$(mktemp -d)
-trap 'for f in $(find "$T" -name "*.pid"); do kill "$(cat "$f")" 2>/dev/null; done; rm -rf "$T"' EXIT
+trap 'for f in $(find "$T" -name "*.pid"); do kill "$(cat "$f")" 2>/dev/null; done; kill $(fakes pids) 2>/dev/null; rm -rf "$T"' EXIT
+# the fake daemons/hostapd still running, from /proc (never from a pid
+# file): "fakes" = their names sorted, "fakes pids" = their pids. Only
+# processes started by this test match ($T/bin/fakeproc in the command line)
+fakes() {
+	local c a p
+	for c in /proc/[0-9]*/cmdline; do
+		a=$(tr '\0' ' ' < "$c" 2>/dev/null) || continue
+		case "$a" in *" $T/bin/fakeproc "*) ;; *) continue ;; esac
+		p=${c#/proc/}; p=${p%/cmdline}
+		if [ "${1:-}" = pids ]; then echo "$p"; continue; fi
+		a=${a#*" $T/bin/fakeproc "}; a=${a%% *}; echo "${a##*/}"
+	done | LC_ALL=C sort | tr '\n' ' ' | sed 's/ $//'
+}
 export GT_BE98_RUN="$T/run" GT_BE98_SYSNET="$T/net" GT_BE98_HAP_LOG="$T/hostapd.log" \
 	GT_BE98_WIFI_GEN="$here/../src/sbin/gt-be98-wifi-gen" FAKE="$T" \
 	GT_BE98_WIFI_STA="$T/bin/gt-be98-wifi-sta"
@@ -70,8 +83,10 @@ X
 cat > "$T/bin/ssd" <<'X'
 #!/bin/sh
 case " $* " in
-*" --start "*)	pf=; while [ $# -gt 0 ]; do [ "$1" = --pidfile ] && pf=$2; [ "$1" = -- ] && { shift; break; }; shift; done
-	sleep 1000 & echo $! > "$pf"
+*" --start "*)	pf=; x=; while [ $# -gt 0 ]; do [ "$1" = --pidfile ] && pf=$2; [ "$1" = --exec ] && x=$2; [ "$1" = -- ] && { shift; break; }; shift; done
+	# a process whose command line is the real one's (<sh> fakeproc <exec>
+	# <args>): what the service finds by command line, and the arms' check
+	sh "$FAKE/bin/fakeproc" "$x" "$@" > /dev/null 2>&1 < /dev/null & echo $! > "$pf"
 	case "$pf" in *hostapd*) rm -f "$FAKE/hapd"; echo "start $*" >> "$FAKE/daemon" ;; *) echo "start $pf" >> "$FAKE/stalog" ;; esac ;;
 *" --stop "*)	pf=; while [ $# -gt 0 ]; do [ "$1" = --pidfile ] && pf=$2; shift; done
 	kill "$(cat "$pf")" 2>/dev/null
@@ -79,6 +94,8 @@ case " $* " in
 esac
 exit 0
 X
+# a daemon or hostapd: runs until killed (its command line carries the real one's)
+printf '#!/bin/sh\nwhile :; do sleep 1; done\n' > "$T/bin/fakeproc"
 # iw: "phy <phy> info" prints $FAKE/iw-<phy> when present (the interface
 # combination), nothing otherwise; a monitor add/del creates/removes its
 # netdev (logged to $FAKE/iwlog with every set freq); the rest succeeds
@@ -127,7 +144,9 @@ ebegin() { :; }; eend() { return "${1:-0}"; }
 einfo() { echo "  * $*" >> "$T/out"; }; ewarn() { echo "  ! $*" >> "$T/out"; }
 eerror() { echo "  E $*" >> "$T/out"; }
 # shellcheck disable=SC1091
-. "$here/../src/init.d/gt-be98-wifi"
+# (SVC=<an init script>: the same test of another version, e.g. img40's for
+# the positive control of section 23)
+. "${SVC:-$here/../src/init.d/gt-be98-wifi}"
 # busybox sh runs its ip applet before PATH: the fake as a function
 ip() { "$T/bin/ip" "$@"; }
 br_create() { echo "$1" >> "$T/brlog"; return 0; }; vlan_attach() { return 0; }
@@ -618,6 +637,76 @@ apply
 check "iw lists 1-93: -6 93 -> ch 65 at 320 takes centre 63 (33-93), the radio restarts" "0 63 REMOVE bcawl2" \
 	"$rc $(sed -n 's/^eht_oper_centr_freq_seg0_idx=//p' "$G/hostapd-bcawl2.conf") $(echo "$cmds" | head -n1)"
 rm -f "$T"/iw-phy*; : > "$T/nets"; apply
+
+# 23. the lifecycle under OpenRC (img40, q180: hostapd + both daemons ran
+# under a service OpenRC called stopped; `stop` stopped nothing). openrc-run
+# 0.56's gate, modelled from its source: start marks the service started
+# iff start() returns 0, else stopped (svc_start_real); stop of a stopped
+# service runs nothing ("already stopped", svc_stop); reload runs only when
+# started (openrc-run.sh extra_started_commands) and takes no lock. The
+# checks read /proc (fakes), never a pid file. Positive control: SVC=<the
+# img40 script> fails the "partial failure" and "reload behind a stop" checks
+RCS=stopped
+service_started() { [ "$RCS" = started ]; }
+rc() {	# rc start|stop|reload|status: openrc-run's gate; RC = rc + the state after (no subshell: RCS)
+	local r=0
+	case $1 in
+	start) if [ "$RCS" != started ]; then RCS=starting; ( start ) >> "$T/out" 2>&1; r=$?
+		if [ $r = 0 ]; then RCS=started; else RCS=stopped; fi; fi ;;
+	stop) if [ "$RCS" != stopped ]; then RCS=stopping; ( stop ) >> "$T/out" 2>&1; RCS=stopped; fi ;;
+	reload) if [ "$RCS" = started ]; then ( reload ) >> "$T/out" 2>&1; r=$?; else r=1; fi ;;
+	status) if [ "$RCS" = started ]; then ( status ) >> "$T/out" 2>&1; r=$?; else r=3; fi ;;
+	esac
+	RC="$r $RCS"
+}
+wifi_loaded() { return 0; }; WIFI_UNLOAD_ON_STOP=no; leds_apply() { :; }
+WIFI_SCHED="$here/../src/sbin/gt-be98-wifi-sched"; WIFI_REPROBE="$here/../src/sbin/gt-be98-wifi-reprobe"
+kill $(fakes pids) 2>/dev/null; rm -f "$T"/run/*.pid "$T/fail" "$T"/state-*; rm -rf "$T/run/gt-be98-wifi" "$T/slots"
+{ net 1 a sae password1 "2g 5gl" 1; } > "$T/nets"; : > "$T/out"
+rc start; check "lifecycle control: a clean start: started, hostapd + both daemons" "0 started|gt-be98-wifi-reprobe gt-be98-wifi-sched hostapd" "$RC|$(fakes)"
+rc status; r=$RC; rc stop
+check "lifecycle control: status rc 0; stop leaves nothing" "0 started|0 stopped|" "$r|$RC|$(fakes)"
+# one radio fails inside its ADD at start (q180: bcawl3 ADD-FAILED)
+echo 'hostapd-bcawl3' > "$T/fail"; : > "$T/out"
+rc start; check "partial failure at start: STARTED (degraded), hostapd + both daemons run" "0 started|gt-be98-wifi-reprobe gt-be98-wifi-sched hostapd" "$RC|$(fakes)"
+r=$(grep -q 'started DEGRADED' "$T/out" && echo yes || echo no); rc status
+check "  said DEGRADED; status non-zero, naming bcawl3" "yes 1 started yes" \
+	"$r $RC $(grep -q ' E radio bcawl3 FAILED to start' "$T/out" && echo yes || echo no)"
+rc stop; sleep 1
+check "  stop: stopped, NOTHING left (checked by /proc)" "0 stopped|" "$RC|$(fakes)"
+rm -f "$T/fail"
+# a start that runs nothing (the network list missing): failed, and nothing left
+WIFI_NETWORKS="$T/missing"; : > "$T/out"
+rc start; check "hard failure at start (list missing): rc 1, stopped, nothing running" "1 stopped|" "$RC|$(fakes)"
+WIFI_NETWORKS="$T/nets"
+# a reload that passed OpenRC's gate before a stop and runs after it (no
+# OpenRC lock on reload): it must start nothing
+rc start; RCS=stopping; ( stop ) >> "$T/out" 2>&1; RCS=stopped
+: > "$T/out"; ( reload ) >> "$T/out" 2>&1
+check "reload behind a stop: starts no daemon and no hostapd" "" "$(fakes)"
+# what an earlier version left running without pid files: the next start stops it
+sh "$T/bin/fakeproc" "$WIFI_REPROBE" run > /dev/null 2>&1 < /dev/null &
+sh "$T/bin/fakeproc" /usr/sbin/hostapd -B -g "$(hap_global)" > /dev/null 2>&1 < /dev/null &
+sleep 1; : > "$T/out"; o1=$(fakes)
+check "orphans control: 2 running before the start" "gt-be98-wifi-reprobe hostapd" "$o1"
+rc start; r=$RC; sleep 1
+check "orphans: start stops them (said), then runs exactly one of each" "0 started|2|gt-be98-wifi-reprobe gt-be98-wifi-sched hostapd" \
+	"$r|$(grep -c 'ran without a pid file naming it: stopped' "$T/out")|$(fakes)"
+rc stop
+# the lock: a live holder makes the next one wait (taken over after
+# SVC_LOCK_WAIT s, said); a dead holder's is taken at once
+if command -v svc_lock > /dev/null 2>&1; then
+	sleep 0 & dl=$!; wait $dl; mkdir -p "$SVC_LOCK"; echo "$dl" > "$SVC_LOCK/pid"; : > "$T/out"
+	t0=$(date +%s); ( svc_lock; svc_unlock ); t1=$(date +%s)
+	check "lock: a dead holder's lock taken at once, released" "yes no" "$([ $((t1 - t0)) -le 1 ] && echo yes || echo no) $([ -d "$SVC_LOCK" ] && echo yes || echo no)"
+	sleep 30 & ll=$!; mkdir -p "$SVC_LOCK"; echo "$ll" > "$SVC_LOCK/pid"; : > "$T/out"
+	t0=$(date +%s); ( SVC_LOCK_WAIT=2; svc_lock; svc_unlock ); t1=$(date +%s); kill $ll 2>/dev/null
+	check "lock: a live holder waited for (2 s), then taken over, said" "yes 1" "$([ $((t1 - t0)) -ge 2 ] && echo yes || echo no) $(grep -c 'lock held by pid' "$T/out")"
+	rm -rf "$SVC_LOCK"
+else
+	check "lock: svc_lock exists" "yes" "no"
+fi
+kill $(fakes pids) 2>/dev/null
 
 if [ $fail = 0 ]; then echo "ALL OK ($n checks)"; else echo "FAILED"; cat "$T/out"; fi
 exit $fail
