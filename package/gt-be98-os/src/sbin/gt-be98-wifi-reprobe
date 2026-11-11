@@ -48,7 +48,24 @@
 #
 # Settings (environment, defaults): REPROBE_POLL 2, REPROBE_SETTLE 5,
 # REPROBE_GONE 90, REPROBE_MIN 20, REPROBE_TRIES 3, REPROBE_DISABLED 10,
-# HAP_DEATHS 3, HOSTAPD_CTRL /run/hostapd. State: $STATE/reprobe.
+# REPROBE_SAFETY 30, HAP_DEATHS 3, HOSTAPD_CTRL /run/hostapd. State:
+# $STATE/reprobe.
+#
+# COST (img40, measured on img39: 0.085 of a core, ~36 forks per 2 s pass):
+# a pass forks NOTHING in the steady state. Files and sysfs are read with
+# the shell's `read`, the clock is $EPOCHSECONDS (bash, the image's
+# /bin/sh; `date` only where the shell lacks it), the wait between passes
+# is `read -t` on a FIFO (no `sleep`), and a file is removed only when it
+# exists. The one remaining fork is `hostapd_cli status`, and only where
+# the answer can matter:
+#   - a radio with a failure record, or whose first BSS has no carrier
+#     (starting, CAC, DISABLED, down): asked every pass, as before;
+#   - a radio seen ENABLED whose first BSS keeps its carrier: asked again
+#     after REPROBE_SAFETY s (a hostapd that drops a BSS takes its carrier
+#     down, so the carrier is the event; the safety ask covers a BSS that
+#     went DISABLED with its carrier up: detected at most REPROBE_SAFETY s
+#     later than before, then the same REPROBE_DISABLED wait).
+# Every decision (what is due, when, how often) is the one above.
 set -u
 # (GT_BE98_*: the offline test harness only)
 RUNDIR=${GT_BE98_RUN:-/run}
@@ -56,16 +73,19 @@ SYSNET=${GT_BE98_SYSNET:-/sys/class/net}
 STATE=$RUNDIR/gt-be98-wifi
 W=$STATE/reprobe
 
-num() { case "$1" in ''|*[!0-9]*) echo "$2" ;; *) echo "$1" ;; esac; }
-POLL=$(num "${REPROBE_POLL:-}" 2)
-SETTLE=$(num "${REPROBE_SETTLE:-}" 5)
-GONE=$(num "${REPROBE_GONE:-}" 90)
-MIN=$(num "${REPROBE_MIN:-}" 20)
-TRIES=$(num "${REPROBE_TRIES:-}" 3)
-DISW=$(num "${REPROBE_DISABLED:-}" 10)
-DEATHS=$(num "${HAP_DEATHS:-}" 3)
+num() { case "$1" in ''|*[!0-9]*) N=$2 ;; *) N=$1 ;; esac; }
+num "${REPROBE_POLL:-}" 2; POLL=$N
+num "${REPROBE_SETTLE:-}" 5; SETTLE=$N
+num "${REPROBE_GONE:-}" 90; GONE=$N
+num "${REPROBE_MIN:-}" 20; MIN=$N
+num "${REPROBE_TRIES:-}" 3; TRIES=$N
+num "${REPROBE_DISABLED:-}" 10; DISW=$N
+num "${REPROBE_SAFETY:-}" 30; SAFETY=$N
+num "${HAP_DEATHS:-}" 3; DEATHS=$N
 CTRL=${HOSTAPD_CTRL:-$RUNDIR/hostapd}
 HAP_PID=$RUNDIR/hostapd-wifi.pid
+NL='
+'
 
 log() {
 	if [ -n "${GT_BE98_LOG:-}" ]; then echo "$*" >> "$GT_BE98_LOG"
@@ -73,32 +93,76 @@ log() {
 	else echo "gt-be98-wifi-reprobe: $*" >&2; fi
 }
 
-now() { echo "${GT_BE98_NOW:-$(date +%s)}"; }
+# the time of this pass, read once and only when a decision needs it
+T=
+tnow() { [ -n "$T" ] || T=${GT_BE98_NOW:-${EPOCHSECONDS:-$(date +%s)}}; }
 
-# the ifindex of netdev $1 ("" = absent)
-ifidx() { cat "$SYSNET/$1/ifindex" 2>/dev/null; }
+# rd VAR FILE: the first line of FILE into VAR ("" = absent / unreadable)
+rd() {
+	RD=
+	[ -r "$2" ] && { IFS= read -r RD < "$2"; } 2>/dev/null
+	eval "$1=\$RD"
+}
+
+# rmx FILE..: remove the files that exist (no fork otherwise)
+rmx() { for RX in "$@"; do [ -e "$RX" ] && rm -f "$RX"; done; return 0; }
 
 valid_dev() { case "$1" in bcawl[0-9]|bcawl[0-9][0-9]) return 0 ;; esac; return 1; }
 
-# hostapd's state of BSS $1
-hstate() { hostapd_cli -p "$CTRL" -i "$1" status 2>/dev/null | sed -n 's/^state=//p' | head -n1; }
+# HS: hostapd's state of BSS $1 (one hostapd_cli)
+hstate() {
+	HS=$(hostapd_cli -p "$CTRL" -i "$1" status 2>/dev/null)
+	HS="$NL$HS"
+	case "$HS" in
+	*"${NL}state="*) HS=${HS#*"${NL}state="}; HS=${HS%%"$NL"*} ;;
+	*) HS= ;;
+	esac
+}
 
-# field $2 of the failure record of radio $1
-fget() { sed -n "s/^$2=//p" "$STATE/failed/$1" 2>/dev/null | head -n1; }
+# R_given_up R_next: the failure record of radio $1 ("" = absent)
+rec_load() {
+	local k v
+	R_given_up= R_next=
+	[ -r "$STATE/failed/$1" ] || return 0
+	while IFS= read -r k || [ -n "$k" ]; do
+		v=${k#*=}
+		case "$k" in
+		given_up=*) [ -n "$R_given_up" ] || R_given_up=$v ;;
+		next=*) [ -n "$R_next" ] || R_next=$v ;;
+		esac
+	done < "$STATE/failed/$1"
+}
 
-# the supervision half of a pass (header): prints the due reasons
+# FIRST: the first BSS of applied radio $1
+first_bss() {
+	local l
+	FIRST=
+	while IFS= read -r l || [ -n "$l" ]; do
+		case "$l" in "first "*) FIRST=${l#first }; return 0 ;; esac
+	done < "$STATE/applied/$1"
+}
+
+# the supervision half of a pass (header): appends the due reasons to WHY
 health() {
-	local t=$1 f d st since p n
+	local f d st since p n c ok any=0
 	# the hostapd process died: its pid file names a dead process, or there
 	# is no pid file while the service has radios applied (a hostapd that
 	# exited cleanly removes its own pid file; the service removes it only
 	# together with $STATE/applied)
-	p=$(cat "$HAP_PID" 2>/dev/null)
-	if { [ -n "$p" ] && ! kill -0 "$p" 2>/dev/null; } ||
-	   { [ -z "$p" ] && ls "$STATE"/applied/* > /dev/null 2>&1; }; then
+	rd p "$HAP_PID"
+	if [ -z "$p" ]; then
+		for f in "$STATE"/applied/*; do [ -e "$f" ] && { any=1; break; }; done
+	fi
+	if { [ -n "$p" ] && ! kill -0 "$p" 2>/dev/null; } || [ "$any" = 1 ]; then
 		# deaths in the last 600 s
-		n=$(awk -v t="$t" '$1 > t - 600' "$W/deaths" 2>/dev/null | wc -l | tr -d ' ')
-		if [ "$n" -lt "$DEATHS" ]; then rm -f "$W/deaths.said"; echo "hostapd-died"
+		tnow; n=0
+		if [ -r "$W/deaths" ]; then
+			while read -r c _ || [ -n "${c:-}" ]; do
+				case "$c" in ''|*[!0-9]*) continue ;; esac
+				[ "$c" -gt $((T - 600)) ] && n=$((n + 1))
+			done < "$W/deaths"
+		fi
+		if [ "$n" -lt "$DEATHS" ]; then rmx "$W/deaths.said"; WHY="${WHY}hostapd-died "
 		elif [ ! -f "$W/deaths.said" ]; then
 			log "hostapd died $n times in 10 min: no more reloads for it (see /var/log/hostapd.log); a manual restart of gt-be98-wifi retries"
 			: > "$W/deaths.said"
@@ -108,63 +172,83 @@ health() {
 		[ -f "$f" ] || continue
 		d=${f##*/}
 		valid_dev "$d" || continue
+		rec_load "$d"
 		if [ -f "$STATE/failed/$d" ]; then
-			if [ "$(fget "$d" given_up)" = 1 ]; then rm -f "$W/$d.dis"; continue; fi
-			n=$(fget "$d" next)
-			if [ -n "$n" ]; then
-				rm -f "$W/$d.dis"
-				[ "$t" -ge "$n" ] && echo "retry:$d"
+			if [ "$R_given_up" = 1 ]; then rmx "$W/$d.dis" "$W/$d.ok"; continue; fi
+			if [ -n "$R_next" ]; then
+				rmx "$W/$d.dis" "$W/$d.ok"
+				tnow; [ "$T" -ge "$R_next" ] && WHY="${WHY}retry:$d "
 				continue
 			fi
 			# a retry ran (next empty): due again once it is DISABLED again,
 			# so the reload counts the failed retry and schedules the next
 		fi
 		[ -f "$STATE/applied/$d" ] || continue
-		st=$(hstate "$(sed -n 's/^first //p' "$STATE/applied/$d" | head -n1)")
+		first_bss "$d"
+		# seen ENABLED, no record, carrier kept: not asked again before
+		# REPROBE_SAFETY s (header: COST)
+		if [ ! -f "$STATE/failed/$d" ] && [ -f "$W/$d.ok" ]; then
+			rd c "$SYSNET/$FIRST/carrier"
+			if [ "$c" = 1 ]; then
+				rd ok "$W/$d.ok"; tnow
+				case "$ok" in ''|*[!0-9]*) ok=0 ;; esac
+				[ $((T - ok)) -lt "$SAFETY" ] && [ "$T" -ge "$ok" ] && continue
+			fi
+		fi
+		hstate "$FIRST"; st=$HS
+		if [ "$st" = ENABLED ]; then
+			tnow; echo "$T" > "$W/$d.ok"
+		else
+			rmx "$W/$d.ok"
+		fi
 		# a retry that worked: the reload clears the record (says recovered)
-		if [ "$st" = ENABLED ] && [ -f "$STATE/failed/$d" ]; then rm -f "$W/$d.dis"; echo "recovered:$d"; continue; fi
-		if [ "$st" != DISABLED ]; then rm -f "$W/$d.dis"; continue; fi
-		[ -f "$W/$d.dis" ] || { echo "$t" > "$W/$d.dis"; log "$d: hostapd reports it DISABLED (its setup failed)"; }
-		since=$(cat "$W/$d.dis")
-		[ $((t - since)) -ge "$DISW" ] && echo "failed:$d"
+		if [ "$st" = ENABLED ] && [ -f "$STATE/failed/$d" ]; then rmx "$W/$d.dis"; WHY="${WHY}recovered:$d "; continue; fi
+		if [ "$st" != DISABLED ]; then rmx "$W/$d.dis"; continue; fi
+		tnow
+		[ -f "$W/$d.dis" ] || { echo "$T" > "$W/$d.dis"; log "$d: hostapd reports it DISABLED (its setup failed)"; }
+		rd since "$W/$d.dis"
+		[ $((T - since)) -ge "$DISW" ] && WHY="${WHY}failed:$d "
 	done
+	return 0
 }
 
 cmd_check() {
-	local f d rec cur t due='' hold=0 s since n tr why
-	mkdir -p "$W" 2>/dev/null || return 0
-	t=$(now)
-	why=$(health "$t" | tr '\n' ' ')
+	local f d rec cur due='' hold=0 s since n tr why
+	T=
+	[ -d "$W" ] || mkdir -p "$W" 2>/dev/null || return 0
+	WHY=; health; why=$WHY
 	[ -d "$STATE/ids" ] || [ -n "$why" ] || return 0	# the service runs no radio
 	for f in "$STATE"/ids/*; do
 		[ -f "$f" ] || continue
 		d=${f##*/}
 		valid_dev "$d" || continue
-		rec=$(cat "$f" 2>/dev/null)
-		cur=$(ifidx "$d")
+		rd rec "$f"
+		rd cur "$SYSNET/$d/ifindex"
 		if [ -z "$cur" ]; then
 			# absent: a re-probe under way (or a rebind that failed)
-			[ -f "$W/$d.gone" ] || { echo "$t" > "$W/$d.gone"; log "$d: netdev gone (ifindex $rec): waiting for the driver's re-probe"; }
-			since=$(cat "$W/$d.gone")
-			[ $((t - since)) -lt "$GONE" ] && hold=1
-			rm -f "$W/$d.seen"
+			tnow
+			[ -f "$W/$d.gone" ] || { echo "$T" > "$W/$d.gone"; log "$d: netdev gone (ifindex $rec): waiting for the driver's re-probe"; }
+			rd since "$W/$d.gone"
+			[ $((T - since)) -lt "$GONE" ] && hold=1
+			rmx "$W/$d.seen"
 			continue
 		fi
-		rm -f "$W/$d.gone"
+		rmx "$W/$d.gone"
 		if [ "$cur" = "$rec" ]; then
-			rm -f "$W/$d.seen" "$W/$d.tries"
+			rmx "$W/$d.seen" "$W/$d.tries"
 			continue
 		fi
 		# re-probed: a new netdev; due once its ifindex is stable
-		s=$(cat "$W/$d.seen" 2>/dev/null)
+		tnow
+		rd s "$W/$d.seen"
 		if [ "${s%% *}" != "$cur" ]; then
-			echo "$cur $t" > "$W/$d.seen"
+			echo "$cur $T" > "$W/$d.seen"
 			log "$d: re-probed by the driver (ifindex $rec -> $cur)"
-			s="$cur $t"
+			s="$cur $T"
 		fi
 		since=${s#* }
-		if [ $((t - since)) -lt "$SETTLE" ]; then hold=1; continue; fi
-		tr=$(cat "$W/$d.tries" 2>/dev/null)
+		if [ $((T - since)) -lt "$SETTLE" ]; then hold=1; continue; fi
+		rd tr "$W/$d.tries"
 		n=0; [ "${tr%% *}" = "$cur" ] && n=${tr#* }
 		if [ "$n" -ge "$TRIES" ]; then
 			[ "$n" = "$TRIES" ] && { log "$d: still not restarted after $TRIES reloads: left (see gt-be98-wifi's log)"; echo "$cur $((n + 1))" > "$W/$d.tries"; }
@@ -174,15 +258,16 @@ cmd_check() {
 	done
 	[ -n "$due" ] && [ "$hold" = 1 ] && due=''	# re-probes wait; supervision does not
 	[ -n "$due" ] || [ -n "$why" ] || return 0
-	s=$(cat "$W/last" 2>/dev/null)
-	[ -n "$s" ] && [ $((t - s)) -lt "$MIN" ] && return 0
-	echo "$t" > "$W/last"
+	tnow
+	rd s "$W/last"
+	[ -n "$s" ] && [ $((T - s)) -lt "$MIN" ] && return 0
+	echo "$T" > "$W/last"
 	for d in $due; do
-		tr=$(cat "$W/$d.tries" 2>/dev/null); cur=$(ifidx "$d")
+		rd tr "$W/$d.tries"; rd cur "$SYSNET/$d/ifindex"
 		n=0; [ "${tr%% *}" = "$cur" ] && n=${tr#* }
 		echo "$cur $((n + 1))" > "$W/$d.tries"
 	done
-	case " $why " in *" hostapd-died "*) echo "$t" >> "$W/deaths" ;; esac
+	case " $why " in *" hostapd-died "*) echo "$T" >> "$W/deaths" ;; esac
 	[ -z "$due" ] || log "re-probed radio(s)${due}: reloading gt-be98-wifi (restarts them alone)"
 	[ -z "$why" ] || log "supervision: ${why% }: reloading gt-be98-wifi"
 	${GT_BE98_RELOAD:-rc-service gt-be98-wifi reload} > /dev/null 2>&1 ||
@@ -190,10 +275,20 @@ cmd_check() {
 	return 0
 }
 
+# the wait between passes: `read -t` on a FIFO nobody writes (no fork);
+# `sleep` where the shell has no `read -t` (dash: the offline tests)
 cmd_run() {
+	local passes=0 tick=sleep
+	[ -d "$W" ] || mkdir -p "$W" 2>/dev/null
+	if (read -t 0 _ < /dev/null) 2>/dev/null || [ $? = 1 ]; then
+		[ -p "$W/tick" ] || { rmx "$W/tick"; mkfifo -m 600 "$W/tick"; } 2>/dev/null
+		[ -p "$W/tick" ] && exec 3<> "$W/tick" && tick=fifo
+	fi
 	while :; do
-		sleep "$POLL"
+		if [ "$tick" = fifo ]; then read -t "$POLL" _ <&3; else sleep "$POLL"; fi
 		cmd_check
+		passes=$((passes + 1))
+		[ -n "${GT_BE98_PASSES:-}" ] && [ "$passes" -ge "$GT_BE98_PASSES" ] && return 0
 	done
 }
 

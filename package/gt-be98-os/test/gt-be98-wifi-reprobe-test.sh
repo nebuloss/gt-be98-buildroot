@@ -91,7 +91,8 @@ check "usage: exit 2" 2 "$($SH "$R" bogus > /dev/null 2>&1; echo $?)"
 cat > "$T/bin/hostapd_cli" <<'X'
 #!/bin/sh
 while [ $# -gt 0 ]; do case $1 in -i) i=$2; shift 2 ;; -p) shift 2 ;; *) break ;; esac; done
-[ "$1" = status ] && [ -f "$FAKE/state-$i" ] && echo "state=$(cat "$FAKE/state-$i")"
+echo "$i" >> "$FAKE/hcalls"
+[ "$1" = status ] && [ -f "$FAKE/state-$i" ] && { read -r st < "$FAKE/state-$i"; printf 'freq=5180\nstate=%s\nphy=x\n' "$st"; }
 exit 0
 X
 chmod +x "$T/bin/hostapd_cli"
@@ -153,6 +154,70 @@ rm -f "$T/run/hostapd-wifi.pid"; rm -rf "$S/reprobe"
 check "no pid file, radios applied: one reload" "0 1" "$(at 12000)"
 rm -f "$S"/applied/*
 check "no pid file, nothing applied (the service is driver-only): nothing" "0 0" "$(at 12100)"
+
+# ---- img40: the cost of a pass (header: COST) ----
+# the carrier of a radio seen ENABLED is the event; hostapd is asked again after REPROBE_SAFETY s
+rm -rf "$S/failed" "$S/reprobe"; for d in bcawl0 bcawl3; do printf 'conf x\nfirst %s\nradio k-%s\n' "$d" "$d" > "$S/applied/$d"; echo ENABLED > "$T/state-$d"; echo 1 > "$T/net/$d/carrier"; done
+echo 10 > "$I/bcawl0" 2>/dev/null || { mkdir -p "$I"; echo 10 > "$I/bcawl0"; }; dev bcawl0 10; echo 1 > "$T/net/bcawl0/carrier"
+sleep 1000 & alive=$!; echo "$alive" > "$T/run/hostapd-wifi.pid"
+hc() { : > "$T/hcalls"; at "$1" > /dev/null; wc -l < "$T/hcalls" | tr -d ' '; }
+check "cost: first pass asks hostapd for each radio" "2" "$(hc 20000)"
+check "cost: ENABLED + carrier, 2 s later: hostapd not asked" "0" "$(hc 20002)"
+check "cost: 29 s after: still not asked" "0" "$(hc 20029)"
+check "cost: 30 s after (REPROBE_SAFETY): asked again" "2" "$(hc 20030)"
+echo 0 > "$T/net/bcawl0/carrier"
+check "cost: bcawl0 loses its carrier: bcawl0 asked at once, bcawl3 not" "1 bcawl0" "$(hc 20032) $(cat "$T/hcalls")"
+echo DISABLED > "$T/state-bcawl0"
+check "cost: no carrier, DISABLED at 20033: seen (not due yet)" "0 0" "$(at 20033)"
+check "cost:   due at 20043 (REPROBE_DISABLED 10 s, as before)" "0 1" "$(at 20043)"
+# DISABLED with the carrier still up: found by the safety ask, then the same 10 s wait
+rm -rf "$S/reprobe"; echo ENABLED > "$T/state-bcawl0"; echo 1 > "$T/net/bcawl0/carrier"
+at 30000 > /dev/null; echo DISABLED > "$T/state-bcawl0"
+check "cost: DISABLED with carrier up at 30001..30029: not seen" "0 0|0 0" "$(at 30001)|$(at 30029)"
+check "cost:   the safety ask at 30030 sees it (no reload yet)" "0 0 yes" "$(at 30030) $([ -f "$S/reprobe/bcawl0.dis" ] && echo yes)"
+check "cost:   due 10 s later" "0 1" "$(at 30040)"
+# a failure record: asked every pass whatever the carrier (as before)
+rm -rf "$S/reprobe"; mkdir -p "$S/failed"; printf 'dev=bcawl0\nnext=\ngiven_up=0\n' > "$S/failed/bcawl0"; echo COUNTRY_UPDATE > "$T/state-bcawl0"
+at 40000 > /dev/null
+check "cost: a radio with a record is asked every pass" "1|1" "$(hc 40002 | head -1)|$(: > "$T/hcalls"; at 40004 > /dev/null; grep -c bcawl0 "$T/hcalls")"
+rm -rf "$S/failed"
+# no fork in the steady state: every external command the daemon runs is counted (PATH = counting wrappers only)
+mkdir -p "$T/cnt"; : > "$T/execs"
+for c in date cat sed awk head tr wc ls rm mkdir mkfifo sleep logger grep rc-service; do
+	r=$(command -v "$c" 2>/dev/null) || continue
+	printf '#!/bin/sh\necho %s >> "%s"\nexec %s "$@"\n' "$c" "$T/execs" "$r" > "$T/cnt/$c"
+done
+printf '#!/bin/sh\necho hostapd_cli >> "%s"\nexec %s "$@"\n' "$T/execs" "$T/bin/hostapd_cli" > "$T/cnt/hostapd_cli"
+chmod +x "$T/cnt/"*
+rm -rf "$S/reprobe"; echo ENABLED > "$T/state-bcawl0"; echo 1 > "$T/net/bcawl0/carrier"
+for B in bash busybox; do
+	command -v "$B" > /dev/null 2>&1 || { echo "skip $B (not installed)"; continue; }
+	BS=$(command -v "$B"); [ "$B" = busybox ] && BS="$BS sh"
+	ex() {	# ex PASSES: the external commands a run of that many steady passes started
+		rm -rf "$S/reprobe"; : > "$T/execs"
+		PATH="$T/cnt" GT_BE98_NOW=50000 GT_BE98_PASSES=$1 REPROBE_POLL=0 $BS "$R" run 2> "$T/run.err"
+		cp "$T/execs" "$T/execs.$1"; sort "$T/execs" | uniq -c | tr -s ' \n' ' '; echo "err=$(wc -c < "$T/run.err" | tr -d ' ')"
+	}
+	e1=$(ex 1); e21=$(ex 21)
+	check "forks ($B): pass 1 asks hostapd once per radio" "2" "$(grep -c '^hostapd_cli$' "$T/execs.1")"
+	check "forks ($B): 20 more steady passes run no external command" "$e1" "$e21"
+	mv "$T/net/bcawl0/carrier" "$T/carrier.keep"; e1=$(ex 1); e21=$(ex 21); mv "$T/carrier.keep" "$T/net/bcawl0/carrier"
+	check "forks ($B) control: bcawl0 without a carrier: 20 more hostapd_cli" "20" "$(( $(grep -c '^hostapd_cli$' "$T/execs.21") - $(grep -c '^hostapd_cli$' "$T/execs.1") ))"
+	if ST=$(command -v strace 2>/dev/null); then
+		sf() {	# sf PASSES: the forks of a run of that many steady passes
+			rm -rf "$S/reprobe"
+			PATH="$T/cnt" GT_BE98_NOW=50000 GT_BE98_PASSES=$1 REPROBE_POLL=0 $ST -f -qq -e trace=clone,clone3,fork,vfork -o "$T/st" $BS "$R" run 2>/dev/null
+			grep -cE '^[0-9]+ +(clone|clone3|fork|vfork)\(' "$T/st"
+		}
+		f1=$(sf 1); f21=$(sf 21)
+		check "forks ($B, strace): 20 more steady passes fork nothing" "0" "$((f21 - f1))"
+		mv "$T/net/bcawl0/carrier" "$T/carrier.keep"
+		f1=$(sf 1); f21=$(sf 21)
+		check "forks ($B, strace) control: bcawl0 without a carrier is asked every pass (>= 20 forks more)" "yes" "$([ $((f21 - f1)) -ge 20 ] && echo yes || echo "no ($((f21 - f1)))")"
+		mv "$T/carrier.keep" "$T/net/bcawl0/carrier"
+	fi
+done
+kill "$alive" 2>/dev/null
 
 if [ $fail = 0 ]; then echo "ALL OK ($n checks)"; else echo "FAILED"; cat "$T/log"; fi
 exit $fail
