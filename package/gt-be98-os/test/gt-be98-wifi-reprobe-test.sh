@@ -19,6 +19,8 @@ check() {
 	if [ "$2" = "$3" ]; then echo "ok   $1"; else echo "FAIL $1: want [$2] got [$3]"; fail=1; fi
 }
 export GT_BE98_RUN="$T/run" GT_BE98_SYSNET="$T/net" FAKE="$T" REPROBE_SETTLE=5 REPROBE_GONE=90 REPROBE_MIN=20 REPROBE_TRIES=3
+# the module list (GT_BE98_MODULES): the driver loaded unless a check unloads it
+export GT_BE98_MODULES="$T/modules"; echo 'bca_pcie_ipc 4194304 0 - Live 0x0' > "$T/modules"
 I="$T/run/gt-be98-wifi/ids"
 mkdir -p "$T/bin" "$T/net"
 cat > "$T/bin/reload" <<'X'
@@ -155,6 +157,36 @@ check "no pid file, radios applied: one reload" "0 1" "$(at 12000)"
 rm -f "$S"/applied/*
 check "no pid file, nothing applied (the service is driver-only): nothing" "0 0" "$(at 12100)"
 
+# ---- img41: OWNERSHIP (header) ----
+# hostapd dead, its netdevs present: due (as above); the same with a netdev
+# absent (an unload or a re-probe under way): held, both kinds of reason
+printf 'conf x\nfirst bcawl0\nradio k\n' > "$S/applied/bcawl0"; rm -rf "$S/reprobe"
+echo "$dead" > "$T/run/hostapd-wifi.pid"; mkdir -p "$I"; echo 10 > "$I/bcawl0"; dev bcawl0 10
+check "own control: hostapd dead, netdevs present: one reload" "0 1" "$(at 13000)"
+rm -rf "$S/reprobe"; gone bcawl0
+check "own: hostapd dead, bcawl0's netdev absent: held (no reload)" "0 0|0 0" "$(at 13100)|$(at 13150)"
+dev bcawl0 20
+check "own: bcawl0 back re-probed: still held while it settles, then ONE reload" "0 0|0 1" "$(at 13152)|$(at 13157)"
+# the driver not loaded: no reload whatever is due, said once; loaded again: due again
+rm -rf "$S/reprobe"; echo 10 > "$I/bcawl0"; dev bcawl0 10; : > "$T/log"; : > "$T/modules"
+check "own: driver unloaded, hostapd dead: no reload, said once" "0 0|0 0|1" \
+	"$(at 14000)|$(at 14100)|$(grep -c 'the Wi-Fi driver is not loaded: no reload' "$T/log")"
+echo 'bca_pcie_ipc 4194304 0 - Live 0x0' > "$T/modules"
+check "own control: driver loaded again: one reload" "0 1" "$(at 14200)"
+rm -f "$S/applied/bcawl0"; rm -rf "$S/reprobe"; echo 10 > "$I/bcawl0"
+# run: exits once its pid file no longer names it (the service stopped it,
+# or started another); positive control: a pid file naming it keeps it
+P="$T/run/gt-be98-wifi-reprobe.pid"
+own_run() {	# own_run PASSES PIDFILE-CONTENT: rc + passes the run made (reloads unused)
+	: > "$T/log"; rm -f "$P"
+	GT_BE98_NOW=15000 GT_BE98_PASSES=$1 REPROBE_POLL=0 $SH -c 'case "$1" in self) echo $$ > "$0" ;; none) ;; *) echo "$1" > "$0" ;; esac; shift 2; exec "$@"' \
+		"$P" "$2" x $SH "$R" run 2>/dev/null
+	echo "$? $(grep -c 'exiting' "$T/log")"
+}
+check "own control: its own pid in the pid file: runs its 3 passes, no exit line" "0 0" "$(own_run 3 self)"
+check "own: no pid file: exits at its first pass, said" "0 1" "$(own_run 1000 none)"
+check "own: the pid file names another process: exits, said" "0 1" "$(own_run 1000 1)"
+
 # ---- img40: the cost of a pass (header: COST) ----
 # the carrier of a radio seen ENABLED is the event; hostapd is asked again after REPROBE_SAFETY s
 rm -rf "$S/failed" "$S/reprobe"; for d in bcawl0 bcawl3; do printf 'conf x\nfirst %s\nradio k-%s\n' "$d" "$d" > "$S/applied/$d"; echo ENABLED > "$T/state-$d"; echo 1 > "$T/net/$d/carrier"; done
@@ -195,7 +227,7 @@ for B in bash busybox; do
 	BS=$(command -v "$B"); [ "$B" = busybox ] && BS="$BS sh"
 	ex() {	# ex PASSES: the external commands a run of that many steady passes started
 		rm -rf "$S/reprobe"; : > "$T/execs"
-		PATH="$T/cnt" GT_BE98_NOW=50000 GT_BE98_PASSES=$1 REPROBE_POLL=0 $BS "$R" run 2> "$T/run.err"
+		PATH="$T/cnt" GT_BE98_NOW=50000 GT_BE98_PASSES=$1 REPROBE_POLL=0 $BS -c 'echo $$ > "$0"; exec "$@"' "$T/run/gt-be98-wifi-reprobe.pid" $BS "$R" run 2> "$T/run.err"
 		cp "$T/execs" "$T/execs.$1"; sort "$T/execs" | uniq -c | tr -s ' \n' ' '; echo "err=$(wc -c < "$T/run.err" | tr -d ' ')"
 	}
 	e1=$(ex 1); e21=$(ex 21)
@@ -206,7 +238,7 @@ for B in bash busybox; do
 	if ST=$(command -v strace 2>/dev/null); then
 		sf() {	# sf PASSES: the forks of a run of that many steady passes
 			rm -rf "$S/reprobe"
-			PATH="$T/cnt" GT_BE98_NOW=50000 GT_BE98_PASSES=$1 REPROBE_POLL=0 $ST -f -qq -e trace=clone,clone3,fork,vfork -o "$T/st" $BS "$R" run 2>/dev/null
+			PATH="$T/cnt" GT_BE98_NOW=50000 GT_BE98_PASSES=$1 REPROBE_POLL=0 $ST -f -qq -e trace=clone,clone3,fork,vfork -o "$T/st" $BS -c 'echo $$ > "$0"; exec "$@"' "$T/run/gt-be98-wifi-reprobe.pid" $BS "$R" run 2>/dev/null
 			grep -cE '^[0-9]+ +(clone|clone3|fork|vfork)\(' "$T/st"
 		}
 		f1=$(sf 1); f21=$(sf 21)

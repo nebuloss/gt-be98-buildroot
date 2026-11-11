@@ -66,6 +66,20 @@
 #     went DISABLED with its carrier up: detected at most REPROBE_SAFETY s
 #     later than before, then the same REPROBE_DISABLED wait).
 # Every decision (what is due, when, how often) is the one above.
+#
+# OWNERSHIP (img41; img40 measured this daemon running under a service
+# OpenRC called stopped, its reloads refused every 20 s for minutes):
+#   - `run` exits once its pid file ($RUNDIR/gt-be98-wifi-reprobe.pid, which
+#     the service's start-stop-daemon writes before it runs this) no longer
+#     names it: the service stopped it, or started another one;
+#   - no reload while the driver is not loaded (an unload is the operator's
+#     or the service's, never a radio's failure: logged once);
+#   - no reload while a recorded radio's netdev is absent (held up to
+#     REPROBE_GONE s) or settling after a re-probe: that holds the
+#     supervision reasons too (hostapd-died, retry, failed), since a reload
+#     then races the driver (img40, 04:19: 2.4 GHz ADD-FAILED "Could not
+#     connect to kernel driver" while its netdev was being unregistered).
+#     hostapd dying with its netdevs present is never held.
 set -u
 # (GT_BE98_*: the offline test harness only)
 RUNDIR=${GT_BE98_RUN:-/run}
@@ -84,6 +98,8 @@ num "${REPROBE_SAFETY:-}" 30; SAFETY=$N
 num "${HAP_DEATHS:-}" 3; DEATHS=$N
 CTRL=${HOSTAPD_CTRL:-$RUNDIR/hostapd}
 HAP_PID=$RUNDIR/hostapd-wifi.pid
+MY_PID=$RUNDIR/gt-be98-wifi-reprobe.pid
+MODULES=${GT_BE98_MODULES:-/proc/modules}
 NL='
 '
 
@@ -212,6 +228,14 @@ health() {
 	return 0
 }
 
+# the driver is loaded (one read of the module list, no fork)
+drv_loaded() {
+	local m
+	[ -r "$MODULES" ] || return 0
+	while read -r m _; do [ "$m" = bca_pcie_ipc ] && return 0; done < "$MODULES"
+	return 1
+}
+
 cmd_check() {
 	local f d rec cur due='' hold=0 s since n tr why
 	T=
@@ -256,8 +280,14 @@ cmd_check() {
 		fi
 		due="$due $d"
 	done
-	[ -n "$due" ] && [ "$hold" = 1 ] && due=''	# re-probes wait; supervision does not
 	[ -n "$due" ] || [ -n "$why" ] || return 0
+	# a netdev absent or settling: everything waits (header: OWNERSHIP)
+	[ "$hold" = 1 ] && return 0
+	if ! drv_loaded; then
+		[ -f "$W/unloaded.said" ] || { log "the Wi-Fi driver is not loaded: no reload (${due:+re-probed:$due }${why% })"; : > "$W/unloaded.said"; }
+		return 0
+	fi
+	rmx "$W/unloaded.said"
 	tnow
 	rd s "$W/last"
 	[ -n "$s" ] && [ $((T - s)) -lt "$MIN" ] && return 0
@@ -278,7 +308,7 @@ cmd_check() {
 # the wait between passes: `read -t` on a FIFO nobody writes (no fork);
 # `sleep` where the shell has no `read -t` (dash: the offline tests)
 cmd_run() {
-	local passes=0 tick=sleep
+	local passes=0 tick=sleep p
 	[ -d "$W" ] || mkdir -p "$W" 2>/dev/null
 	if (read -t 0 _ < /dev/null) 2>/dev/null || [ $? = 1 ]; then
 		[ -p "$W/tick" ] || { rmx "$W/tick"; mkfifo -m 600 "$W/tick"; } 2>/dev/null
@@ -286,6 +316,9 @@ cmd_run() {
 	fi
 	while :; do
 		if [ "$tick" = fifo ]; then read -t "$POLL" _ <&3; else sleep "$POLL"; fi
+		# still the service's daemon (header: OWNERSHIP)
+		rd p "$MY_PID"
+		[ "$p" = $$ ] || { log "pid file ${p:+names $p}${p:-gone}: exiting (pid $$)"; return 0; }
 		cmd_check
 		passes=$((passes + 1))
 		[ -n "${GT_BE98_PASSES:-}" ] && [ "$passes" -ge "$GT_BE98_PASSES" ] && return 0

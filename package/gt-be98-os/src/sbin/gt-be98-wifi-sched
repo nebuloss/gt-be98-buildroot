@@ -32,6 +32,7 @@ CONFD=${GT_BE98_CONFD:-/etc/conf.d}
 RUNDIR=${GT_BE98_RUN:-/run}
 WIFI_GEN=${GT_BE98_WIFI_GEN:-/usr/sbin/gt-be98-wifi-gen}
 STATE=$RUNDIR/gt-be98-wifi
+MY_PID=$RUNDIR/gt-be98-wifi-sched.pid
 
 log() {
 	if command -v logger > /dev/null 2>&1; then logger -t gt-be98-wifi-sched -- "$*"
@@ -93,11 +94,16 @@ cmd_check() {
 	return 0
 }
 
+# `run` exits once its pid file (written by the service's start-stop-daemon
+# before it runs this) no longer names it: the service stopped it, or
+# started another one (img40: one ran on under a stopped service)
 cmd_run() {
-	local s
+	local s p
 	while :; do
 		s=$(date +%S); s=${s#0}
 		sleep $((60 - s))
+		p=$(cat "$MY_PID" 2>/dev/null)
+		[ "$p" = $$ ] || { log "pid file ${p:+names $p}${p:-gone}: exiting (pid $$)"; return 0; }
 		cmd_check
 	done
 }

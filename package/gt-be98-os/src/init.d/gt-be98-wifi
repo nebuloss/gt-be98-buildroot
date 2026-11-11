@@ -91,6 +91,23 @@
 # gt-be98-wifi-reprobe runs the due reloads (and one when the hostapd
 # process died).
 #
+# Lifecycle (img41; img40 measured: daemons running under a service OpenRC
+# called stopped, a stop that stopped nothing, reloads refused forever):
+#   - start succeeds whenever this service runs something: a radio, a
+#     config line or a station that fails leaves the service STARTED and
+#     DEGRADED (said, `status` non-zero and lists it, the failed radios
+#     retried as above). A failed start (OpenRC marks the service stopped,
+#     and then never runs stop) is only one that runs nothing: the network
+#     list refused, or hostapd not starting; it leaves nothing running.
+#   - start, stop and reload never overlap (OpenRC locks start against
+#     stop, never reload: a reload run by a daemon could restart hostapd
+#     and the daemons under a stop). The lock is the directory
+#     /run/gt-be98-wifi.lock (its holder's pid inside; a dead holder's lock
+#     is taken over); a reload that finds the service stopping does nothing.
+#   - start and stop also stop what runs of this service WITHOUT a pid file
+#     naming it (its daemons and hostapd, found by their command line), and
+#     each daemon exits by itself once its pid file no longer names it.
+#
 # LEDs (led=0|1 of a radio in the list): $STATE/leds lists the radios whose
 # LED is off (WIFI_LEDS_OFF="bcawlN ..."); gt-be98-leds reads it, and is run
 # after every start and reload.
@@ -157,6 +174,7 @@ REPROBE_PID=$RUNDIR/gt-be98-wifi-reprobe.pid
 STA_MON_PID=$RUNDIR/gt-be98-wifi-sta.pid
 SCHED_PID=$RUNDIR/gt-be98-wifi-sched.pid
 STATE=$RUNDIR/gt-be98-wifi
+SVC_LOCK=$RUNDIR/gt-be98-wifi.lock
 HAP_PID=$RUNDIR/hostapd-wifi.pid
 HAP_LOG=${GT_BE98_HAP_LOG:-/var/log/hostapd.log}
 
@@ -1108,7 +1126,10 @@ apply_hostapd() {
 	[ "$REPROBED" = ' ' ] || ewarn "re-probed by the Wi-Fi driver:${REPROBED% }: restarting those radios"
 	ap_override
 	stop_legacy
-	gen_networks || return 1
+	# APPLY_HARD=1: nothing of the configuration runs (start: a failed
+	# start, header: Lifecycle); any other failure is one part of it
+	APPLY_HARD=0
+	gen_networks || { APPLY_HARD=1; return 1; }
 	t=${WIFI_TRUNK:-rnr0}
 	valid_trunk "$t" || { eerror "trunk '$t' refused (rnr0..rnr3): no Wi-Fi network bridged"; t=; rc=1; }
 	check_vlans || rc=1
@@ -1211,7 +1232,7 @@ apply_hostapd() {
 	   [ "$(hap_cmd PING)" != PONG ]; then
 		[ -f "$HAP_PID" ] && ! hap_running && ewarn "hostapd had died"
 		hap_daemon_stop
-		hap_daemon_start || { vlan_prune "$subs"; br_prune "$brs"; return 1; }
+		hap_daemon_start || { APPLY_HARD=1; vlan_prune "$subs"; br_prune "$brs"; return 1; }
 	fi
 	# radios no longer configured
 	for p in "$STATE"/applied/*; do
@@ -1285,6 +1306,84 @@ reprobe_stop() {
 	rm -f "$REPROBE_PID"
 }
 
+# ---- the service's lifecycle (header: Lifecycle) ----
+
+# the lock start, stop and reload hold (OpenRC never locks a reload). A
+# directory, atomically made; a holder that died leaves it to the next one
+svc_lock() {
+	local n=0 o
+	while ! mkdir "$SVC_LOCK" 2>/dev/null; do
+		o=$(cat "$SVC_LOCK/pid" 2>/dev/null)
+		if [ -n "$o" ] && ! kill -0 "$o" 2>/dev/null; then
+			rm -rf "$SVC_LOCK"; continue
+		fi
+		sleep 1
+		n=$((n + 1))
+		if [ $n -ge "${SVC_LOCK_WAIT:-120}" ]; then
+			ewarn "gt-be98-wifi: lock held by pid ${o:-?} for $n s: taken over"
+			slog "lock held by pid ${o:-?} for $n s: taken over by ${RC_CMD:-?}"
+			rm -rf "$SVC_LOCK"; n=0
+		fi
+	done
+	echo $$ > "$SVC_LOCK/pid"
+}
+
+svc_unlock() {
+	[ "$(cat "$SVC_LOCK/pid" 2>/dev/null)" = $$ ] && rm -rf "$SVC_LOCK"
+	return 0
+}
+
+# OpenRC: this service is started (not starting, stopping or stopped)
+svc_started() {
+	command -v service_started > /dev/null 2>&1 || return 0
+	service_started
+}
+
+# the processes of this service, from their command lines (a pid file can
+# be stale or gone): "<what> <pid>" per line. The daemons as start-stop-
+# daemon runs them (<shell> <daemon> <command>), hostapd by its global
+# control socket (no other hostapd uses it)
+svc_procs() {
+	local c p a g
+	g=$(hap_global)
+	for c in /proc/[0-9]*/cmdline; do
+		p=${c#/proc/}; p=${p%/cmdline}
+		[ "$p" = $$ ] && continue
+		a=$(tr '\0' ' ' < "$c" 2>/dev/null) || continue
+		case "$a" in
+		*" $WIFI_REPROBE run ") echo "gt-be98-wifi-reprobe $p" ;;
+		*" $WIFI_SCHED run ") echo "gt-be98-wifi-sched $p" ;;
+		*" $WIFI_STA monitor ") echo "gt-be98-wifi-sta $p" ;;
+		*hostapd" "*" -g $g "*) echo "hostapd $p" ;;
+		esac
+	done
+}
+
+# stop every process of this service still running once its pid files were
+# used (stop), or before anything starts (start): TERM, KILL after 5 s.
+# Each one found is said: none should be (a pid file names each)
+orphans_stop() {
+	local l p w left='' n=0
+	l=$(svc_procs)
+	[ -n "$l" ] || return 0
+	while read -r w p; do
+		[ -n "$p" ] || continue
+		ewarn "$w (pid $p) ran without a pid file naming it: stopped"
+		slog "$w (pid $p) ran without a pid file naming it (${RC_CMD:-?}): stopped"
+		kill "$p" 2>/dev/null
+		left="$left $p"
+	done <<-EOF
+	$l
+	EOF
+	while [ -n "$left" ] && [ $n -lt 5 ]; do
+		sleep 1; n=$((n + 1)); l=$left; left=
+		for p in $l; do kill -0 "$p" 2>/dev/null && left="$left $p"; done
+	done
+	# shellcheck disable=SC2086 # pid list
+	[ -z "$left" ] || kill -9 $left 2>/dev/null
+	return 0
+}
+
 stop_hostapd() {
 	local d
 	stop_legacy
@@ -1305,6 +1404,9 @@ stop_hostapd() {
 }
 
 start() {
+	svc_lock
+	# what an earlier failed start, or anything else, left running
+	orphans_stop
 	# cfg80211 loads regulatory.db at boot from the initramfs (post-image.sh).
 	# The reload checks that a database is in use (REGDB_OK gates
 	# country_code: without one hostapd would hang in COUNTRY_UPDATE) and
@@ -1320,42 +1422,74 @@ start() {
 		# shellcheck disable=SC2086 # WIFI_ARGS: module parameters
 		if [ -n "${WIFI_KO:-}" ]; then insmod "$WIFI_KO" $WIFI_ARGS
 		else modprobe bca_pcie_ipc $WIFI_ARGS; fi
-		eend $? || return 1
+		eend $? || { svc_unlock; return 1; }
 	fi
 	WAIT_RADIOS=1 apply_hostapd
 	local rc=$?
+	if [ "${APPLY_HARD:-0}" = 1 ]; then
+		# a failed start: OpenRC marks the service stopped and will never
+		# run stop, so nothing of it may stay running
+		eerror "gt-be98-wifi not started: nothing of the configuration runs (above)"
+		stop_hostapd
+		sched_stop
+		reprobe_stop
+		orphans_stop
+		svc_unlock
+		return 1
+	fi
 	sched_stop
 	sched_start
 	reprobe_stop
 	reprobe_start
 	# the radios' LEDs come with the driver (gt-be98-leds)
 	leds_apply
-	return $rc
+	if [ $rc != 0 ]; then
+		# started, degraded: a failed start here would leave hostapd and the
+		# daemons running under a service OpenRC calls stopped (img40)
+		ewarn "gt-be98-wifi started DEGRADED: a part of the configuration failed (above); \`rc-service gt-be98-wifi status\` lists it, a failed radio is retried"
+		slog "started DEGRADED: a part of the configuration failed (rc-service gt-be98-wifi status)"
+	fi
+	svc_unlock
+	return 0
 }
 
 # new settings without reloading the driver: only what changed
 reload() {
 	local rc
+	svc_lock
+	# a reload queued behind a stop (or run while one runs): nothing to do,
+	# and it must not start hostapd or a daemon again
+	if ! svc_started; then
+		ewarn "gt-be98-wifi is stopping or stopped: reload skipped"
+		svc_unlock
+		return 0
+	fi
 	if iw reg reload 2>/dev/null; then REGDB_OK=1; else REGDB_OK=0; fi
 	apply_hostapd
 	rc=$?
 	sched_start
 	reprobe_start
 	leds_apply	# led= of the list may have changed
+	svc_unlock
 	return $rc
 }
 
 stop() {
+	# after a reload in flight (it may have started hostapd or a daemon)
+	svc_lock
 	sched_stop
 	# first: an unload must not look like a re-probe
 	reprobe_stop
 	stop_hostapd
+	# anything of this service its pid files did not name
+	orphans_stop
 	if [ "${WIFI_UNLOAD_ON_STOP:-yes}" = yes ] && wifi_loaded; then
 		ebegin "Unloading bca_pcie_ipc"
 		rmmod bca_pcie_ipc
 		eend $?
 		rm -f "$STATE/radio-macs"
 	fi
+	svc_unlock
 }
 
 status() {
