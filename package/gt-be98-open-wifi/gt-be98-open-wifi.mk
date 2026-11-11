@@ -17,7 +17,9 @@
 #  TXPWR-AUTO, INV-C2C, BSSDEL, UAPSD; on top of cb1c8952)
 # main 2026-11-10 b2a70da3 (img39: PUNCT (bench), CSA notices, INV-BCME-ERRNO, INV-6G-MBSSID-GUARD, RX-LOOKUP, MLO R4 step 2
 #  (bench/group only); on top of eead8fbb)
-GT_BE98_OPEN_WIFI_VERSION = b2a70da3267712111c51d70f3311b1bb1d37e28d
+# main 2026-11-11 24edcb68 (img40: INV-PAGER-RACE (shipped fix), ledger/docs; MLO R4 step 3 + R5 bench/group only;
+#  on top of b2a70da3)
+GT_BE98_OPEN_WIFI_VERSION = 24edcb6815d5a0e3a3070ddb94cafce84be4451a
 GT_BE98_OPEN_WIFI_SITE = git@github.com:nebuloss/gt-be98-open-wifi.git
 GT_BE98_OPEN_WIFI_SITE_METHOD = git
 GT_BE98_OPEN_WIFI_LICENSE = GPL-2.0-only
