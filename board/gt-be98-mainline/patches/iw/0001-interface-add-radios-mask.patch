@@ -1,0 +1,73 @@
+From: guillaume <guillaume.chaye@zeetim.com>
+Subject: [PATCH] iw: interface add: radios <mask> (NL80211_ATTR_VIF_RADIO_MASK)
+
+On a multi-radio wiphy the kernel takes the radios an interface may use
+from NL80211_ATTR_VIF_RADIO_MASK (u32) on NL80211_CMD_NEW_INTERFACE; iw
+6.17 cannot send it. "radios <mask>" (decimal or 0x hex, non-zero, 32
+bits) puts it on the message. Checked with iw --debug: attribute 333
+(0x14d), u32, on the NEW_INTERFACE message.
+
+Signed-off-by: guillaume <guillaume.chaye@zeetim.com>
+---
+--- a/interface.c
++++ b/interface.c
+@@ -237,6 +237,8 @@
+ 	int tpset;
+ 	unsigned char mac_addr[ETH_ALEN];
+ 	int found_mac = 0;
++	unsigned long radio_mask = 0;
++	int found_radios = 0;
+ 
+ 	if (argc < 1)
+ 		return 1;
+@@ -271,6 +273,23 @@
+ 			argv++;
+ 			found_mac = 1;
+ 			goto try_another;
++		} else if (strcmp(argv[0], "radios") == 0) {
++			char *end;
++
++			argc--;
++			argv++;
++			if (!argc)
++				return 1;
++			errno = 0;
++			radio_mask = strtoul(argv[0], &end, 0);
++			if (errno || *end || !radio_mask || radio_mask > 0xffffffffUL) {
++				fprintf(stderr, "Invalid radio mask\n");
++				return 2;
++			}
++			argc--;
++			argv++;
++			found_radios = 1;
++			goto try_another;
+ 		} else if (strcmp(argv[0], "4addr") == 0) {
+ 			argc--;
+ 			argv++;
+@@ -301,19 +320,23 @@
+ 		NLA_PUT(msg, NL80211_ATTR_MESH_ID, strlen(mesh_id), mesh_id);
+ 	if (found_mac)
+ 		NLA_PUT(msg, NL80211_ATTR_MAC, ETH_ALEN, mac_addr);
++	if (found_radios)
++		NLA_PUT_U32(msg, NL80211_ATTR_VIF_RADIO_MASK, radio_mask);
+ 
+ 	return 0;
+  nla_put_failure:
+ 	return -ENOBUFS;
+ }
+-COMMAND(interface, add, "<name> type <type> [mesh_id <meshid>] [4addr on|off] [flags <flag>*] [addr <mac-addr>]",
++COMMAND(interface, add, "<name> type <type> [mesh_id <meshid>] [4addr on|off] [flags <flag>*] [addr <mac-addr>] [radios <mask>]",
+ 	NL80211_CMD_NEW_INTERFACE, 0, CIB_PHY, handle_interface_add,
+ 	"Add a new virtual interface with the given configuration.\n"
+ 	IFACE_TYPES "\n\n"
+ 	"The flags are only used for monitor interfaces, valid flags are:\n"
+ 	VALID_FLAGS "\n\n"
+-	"The mesh_id is used only for mesh mode.");
+-COMMAND(interface, add, "<name> type <type> [mesh_id <meshid>] [4addr on|off] [flags <flag>*] [addr <mac-addr>]",
++	"The mesh_id is used only for mesh mode.\n"
++	"radios: the bitmask of the wiphy radios the interface may use\n"
++	"(NL80211_ATTR_VIF_RADIO_MASK, e.g. radios 0x3), on a multi-radio wiphy.");
++COMMAND(interface, add, "<name> type <type> [mesh_id <meshid>] [4addr on|off] [flags <flag>*] [addr <mac-addr>] [radios <mask>]",
+ 	NL80211_CMD_NEW_INTERFACE, 0, CIB_NETDEV, handle_interface_add, NULL);
+ 
+ static int handle_interface_del(struct nl80211_state *state,
