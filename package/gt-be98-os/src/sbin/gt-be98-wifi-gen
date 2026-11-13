@@ -255,13 +255,30 @@
 #                                   (airtime=1); the key repeats, at most
 #                                   64 per network
 #     kv=0|1                        802.11k/v roaming help: hostapd
-#                                   rrm_neighbor_report=1 + bss_transition=1
-#                                   (neighbor reports, BSS transition
-#                                   management). Rendered only while KV=1
-#                                   (below; -F feature kv): until the driver
-#                                   passes the RRM/WNM action frames through
+#                                   rrm_neighbor_report=1 +
+#                                   rrm_beacon_report=1 + bss_transition=1
+#                                   (neighbor reports, beacon reports, BSS
+#                                   transition management) and a plan line
+#                                   "kv <id> <steer>": gt-be98-wifi-steer
+#                                   then writes each BSS of the network
+#                                   into the neighbor database of its other
+#                                   BSSes (hostapd itself knows only its
+#                                   own). Rendered only while KV=1 (below;
+#                                   -F feature kv): until the driver passes
+#                                   the RRM/WNM action frames through
 #                                   (open-wifi INV-T6) kv=1 is DROPPED with
 #                                   a warning, never written
+#     steer=0|1                     client steering by 802.11v BSS
+#                                   transition requests (gt-be98-wifi-steer:
+#                                   2.4 GHz -> 5/6 GHz band upgrade of
+#                                   strong stations, roaming assist of weak
+#                                   idle ones; stations without BSS
+#                                   transition are never disconnected).
+#                                   Default 0. Needs kv=1 in the same
+#                                   network (refused without it); nothing
+#                                   in the hostapd configs changes, only
+#                                   the plan's kv line. Dropped with kv=1
+#                                   while KV=0 (-F feature steer)
 #     twt=0|1  wds=0|1              network level: refused (-F: feature
 #                                   twt 0, feature wds 0). TWT is radio-wide
 #                                   in hostapd (radio twt=, feature
@@ -392,6 +409,8 @@
 #                                               repeated network is rendered)
 #   monitor <band> <dev> <MHz> <width> <centre MHz>   (monitor=1 radios)
 #   led <band> <dev> 0|1                       (every radio of -d)
+#   kv <id> <steer 0|1>                        (kv=1 networks on >= 1 radio,
+#                                               KV=1 only: gt-be98-wifi-steer)
 #   skipped <id>                               (-S: a network left out, see -S)
 # and sched (also -Q's output), one line per network/radio that has a
 # schedule, in list/band order: net <id> on|off, radio <band> on|off
@@ -417,7 +436,10 @@ HT40_2G=${GT_BE98_HT40_2G:-0}
 # CONFIG_WNM (BR2_PACKAGE_GT_BE98_OS_HOSTAPD_WNM=y, off today): without it
 # hostapd 2.12 does not know bss_transition= ("unknown configuration item",
 # config_file.c #ifdef CONFIG_WNM_AP) and refuses the WHOLE radio config.
-# -F: feature kv 0|1 (the web UI offers the option only on 1).
+# Both flip TOGETHER, in the commit that pins the driver with the frames:
+# KV stays 0 here until then (and with it steer=, the plan's kv lines and
+# so the gt-be98-wifi-steer daemon).
+# -F: feature kv 0|1, feature steer 0|1 (the web UI offers them only on 1).
 # (GT_BE98_KV: the offline test harness only)
 KV=${GT_BE98_KV:-0}
 NETS='' OUT='' SLOTS='' MACS='' DEVS='' CAP=4 CTRL=/run/hostapd CC=0 RNR=1 KEEP=0 DRY=0
@@ -459,6 +481,7 @@ features() {
 	EOF
 	echo "feature ht40_2g $HT40_2G"
 	echo "feature kv $KV"
+	echo "feature steer $KV"
 }
 while getopts n:o:s:m:d:C:x:cR:K:NT:QFU:X:SB:6: o; do
 	case $o in
@@ -821,7 +844,7 @@ k == "network" {
 	aw[ci] = ""; alim[ci] = 0; nasw[ci] = 0
 	nb[ci] = 0; nra[ci] = 0
 	rs[ci] = ""; rp[ci] = ""; rk[ci] = ""; as[ci] = ""; ap[ci] = ""; ak[ci] = ""
-	rtd[ci] = ""; rep[ci] = 0; kv[ci] = 0
+	rtd[ci] = ""; rep[ci] = 0; kv[ci] = 0; steer[ci] = 0
 	next
 }
 k == "radio" {
@@ -897,6 +920,7 @@ cur == "n" {
 	else if (k == "hidden" && (v == "0" || v == "1")) hid[ci] = v + 0
 	else if (k == "isolate" && (v == "0" || v == "1")) iso[ci] = v + 0
 	else if (k == "kv" && (v == "0" || v == "1")) kv[ci] = v + 0
+	else if (k == "steer" && (v == "0" || v == "1")) steer[ci] = v + 0
 	else if (k == "max_clients" && isnum(v) && v + 0 >= 1 && v + 0 <= 2007) maxc[ci] = v + 0
 	else if (k == "schedule" && (v == "" || schedok(v))) nsch[ci] = v
 	else if (k == "airtime_weight" && isnum(v) && v + 0 >= 1 && v + 0 <= 1000) aw[ci] = v + 0
@@ -910,7 +934,7 @@ cur == "n" {
 	# a custom address (checked in END): bssid= (one band) or bssid.<band>=
 	else if (k == "bssid" && parsemac(v, tmo)) cmac0[ci] = tolower(v)
 	else if (k ~ /^bssid\./ && validband(substr(k, 7)) && parsemac(v, tmo)) cmac[ci, substr(k, 7)] = tolower(v)
-	else if (k ~ /^(repeated|hidden|isolate|kv|max_clients|schedule|airtime_weight|airtime_limit|airtime_sta_weight|slot\.[0-9a-z]+|mac\.[0-9a-z]+|bssid|bssid\.[0-9a-z]+)$/) nerrf(ci, "network " net[ci] ": " k "=" v " refused")
+	else if (k ~ /^(repeated|hidden|isolate|kv|steer|max_clients|schedule|airtime_weight|airtime_limit|airtime_sta_weight|slot\.[0-9a-z]+|mac\.[0-9a-z]+|bssid|bssid\.[0-9a-z]+)$/) nerrf(ci, "network " net[ci] ": " k "=" v " refused")
 	else nerrf(ci, "network " net[ci] ": unknown key " k)	# never echo a value that may be a secret
 	next
 }
@@ -986,6 +1010,8 @@ END {
 		} else if (!isnum(vlan[i]) || vlan[i] + 0 < 1 || vlan[i] + 0 > 4094) nerrf(i, tag ": vlan 1..4094 is required (or routed=)")
 		else if (vlan[i] in vseen) nerrf(i, tag ": vlan " vlan[i] " also used by network " vseen[vlan[i]])
 		else vseen[vlan[i]] = id
+		# steering asks clients to move by 802.11v BSS transition requests: kv=1
+		if (steer[i] && !kv[i]) nerrf(i, tag ": steer=1 needs kv=1 (client steering uses the 802.11v BSS transition of kv=1)")
 	}
 	# -S: a skipped network is no longer in the list (no band: no BSS, no
 	# slot, no net/routed/repeated line; no schedule)
@@ -995,8 +1021,8 @@ END {
 	}
 	# [open-wifi INV-T6] KV=0 (header): kv=1 dropped, said once per network
 	for (i = 1; i <= nnet; i++) if (kv[i] && !(kvon + 0) && !(i in bad)) {
-		warn("network " net[i] ": kv=1 ignored: 802.11k/v (neighbor reports, BSS transition) waits for the Wi-Fi driver to pass the RRM/WNM action frames (open-wifi INV-T6); rrm_neighbor_report/bss_transition are not written")
-		kv[i] = 0
+		warn("network " net[i] ": kv=1 ignored: 802.11k/v (neighbor reports, BSS transition) waits for the Wi-Fi driver to pass the RRM/WNM action frames (open-wifi INV-T6); rrm_neighbor_report/rrm_beacon_report/bss_transition are not written" (steer[i] ? ", steer=1 (client steering) is ignored with it" : ""))
+		kv[i] = 0; steer[i] = 0
 	}
 	# the station (uplink): never echo its passphrase
 	if (nsta) {
@@ -1398,8 +1424,9 @@ END {
 			if (hid[i]) print "ignore_broadcast_ssid=1" > f
 			if (iso[i]) print "ap_isolate=1" > f
 			if (maxc[i] != "") print "max_num_sta=" maxc[i] > f
-			# 802.11k/v (kv=1, KV=1 only): neighbor reports + BSS transition management
-			if (kv[i]) { print "rrm_neighbor_report=1" > f; print "bss_transition=1" > f }
+			# 802.11k/v (kv=1, KV=1 only): neighbor reports, beacon reports
+			# (the AP may ask a client what it hears), BSS transition management
+			if (kv[i]) { print "rrm_neighbor_report=1" > f; print "rrm_beacon_report=1" > f; print "bss_transition=1" > f }
 			# airtime: only on a radio whose airtime mode is on (hostapd ignores them at 0)
 			if (rair[b]) {
 				if (aw[i] != "") print "airtime_bss_weight=" aw[i] > f
@@ -1474,6 +1501,8 @@ END {
 		else if (rtd[i] != "") print "routed " net[i] " brwifi" net[i] " " rtd[i] " " iso[i] > plan
 		else print "net " net[i] " brwifi" net[i] " " vlan[i] " " iso[i] > plan
 	}
+	# 802.11k/v networks: gt-be98-wifi-steer syncs their neighbor lists (and steers with steer=1)
+	for (i = 1; i <= nnet; i++) if ((net[i] in onradio) && kv[i]) print "kv " net[i] " " steer[i] > plan
 	# the station: its wpa_supplicant config (0600, umask) and plan line
 	for (bi = 1; bi <= nbands; bi++) {
 		b = BANDS[bi]
@@ -1560,6 +1589,7 @@ while read -r t a b c d e f g h; do
 	monitor) echo "$t $a $b $c $d $e" >> "$OUT/plan" ;;
 	led)	echo "$t $a $b $c" >> "$OUT/plan" ;;
 	skipped) echo "$t $a" >> "$OUT/plan" ;;
+	kv)	echo "$t $a $b" >> "$OUT/plan" ;;
 	esac
 done < "$OUT/plan.raw"
 rm -f "$OUT/plan.raw"

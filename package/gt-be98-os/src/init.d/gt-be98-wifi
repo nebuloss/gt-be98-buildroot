@@ -54,6 +54,11 @@
 # stopped with this service, pid /run/gt-be98-wifi-sched.pid) checks at
 # every minute boundary and reloads when the schedule state changed.
 # WIFI_SCHED_TZ (same files): the schedules' POSIX TZ string, empty = UTC.
+# 802.11k/v (kv=1 networks, while the generator's KV=1): the daemon
+# gt-be98-wifi-steer (pid /run/gt-be98-wifi-steer.pid) runs while the
+# applied plan has a kv line: it writes each kv BSS into the neighbour
+# database of its sibling BSSes (same network, other radios) and, for the
+# steer=1 networks, sends 802.11v BSS transition requests (its header).
 #
 # Monitor radios (monitor=1 of a radio in the list): the radio carries no
 # BSS; once hostapd released it the radio netdev is set down (the driver
@@ -170,6 +175,8 @@ WIFI_GEN=${GT_BE98_WIFI_GEN:-/usr/sbin/gt-be98-wifi-gen}
 WIFI_SCHED=${GT_BE98_WIFI_SCHED:-/usr/sbin/gt-be98-wifi-sched}
 WIFI_STA=${GT_BE98_WIFI_STA:-/usr/sbin/gt-be98-wifi-sta}
 WIFI_REPROBE=${GT_BE98_WIFI_REPROBE:-/usr/sbin/gt-be98-wifi-reprobe}
+WIFI_STEER=${GT_BE98_WIFI_STEER:-/usr/sbin/gt-be98-wifi-steer}
+STEER_PID=$RUNDIR/gt-be98-wifi-steer.pid
 REPROBE_PID=$RUNDIR/gt-be98-wifi-reprobe.pid
 STA_MON_PID=$RUNDIR/gt-be98-wifi-sta.pid
 SCHED_PID=$RUNDIR/gt-be98-wifi-sched.pid
@@ -1306,6 +1313,33 @@ reprobe_stop() {
 	rm -f "$REPROBE_PID"
 }
 
+# the 802.11k/v daemon (gt-be98-wifi-steer run: neighbour lists of the kv=1
+# networks, steering of the steer=1 ones): runs while the applied plan has a
+# kv line, stopped otherwise (no kv network: nothing for it to do)
+steer_running() {
+	local p
+	p=$(cat "$STEER_PID" 2>/dev/null) || return 1
+	[ -n "$p" ] && kill -0 "$p" 2>/dev/null
+}
+
+steer_stop() {
+	[ -f "$STEER_PID" ] || return 0
+	start-stop-daemon --stop --pidfile "$STEER_PID" --retry TERM/5/KILL/2 > /dev/null 2>&1
+	rm -f "$STEER_PID"
+	rm -f "$RUNDIR"/gt-be98-wifi-steer/*	# its samples and neighbour records
+}
+
+steer_apply() {
+	[ -x "$WIFI_STEER" ] || return 0
+	if grep -q '^kv ' "$STATE/gen/plan" 2>/dev/null; then
+		steer_running && return 0
+		start-stop-daemon --start --background --make-pidfile --pidfile "$STEER_PID" \
+			--exec "$WIFI_STEER" -- run
+	else
+		steer_stop
+	fi
+}
+
 # ---- the service's lifecycle (header: Lifecycle) ----
 
 # the lock start, stop and reload hold (OpenRC never locks a reload). A
@@ -1353,6 +1387,7 @@ svc_procs() {
 		case "$a" in
 		*" $WIFI_REPROBE run ") echo "gt-be98-wifi-reprobe $p" ;;
 		*" $WIFI_SCHED run ") echo "gt-be98-wifi-sched $p" ;;
+		*" $WIFI_STEER run ") echo "gt-be98-wifi-steer $p" ;;
 		*" $WIFI_STA monitor ") echo "gt-be98-wifi-sta $p" ;;
 		*hostapd" "*" -g $g "*) echo "hostapd $p" ;;
 		esac
@@ -1433,6 +1468,7 @@ start() {
 		stop_hostapd
 		sched_stop
 		reprobe_stop
+		steer_stop
 		orphans_stop
 		svc_unlock
 		return 1
@@ -1441,6 +1477,8 @@ start() {
 	sched_start
 	reprobe_stop
 	reprobe_start
+	steer_stop
+	steer_apply
 	# the radios' LEDs come with the driver (gt-be98-leds)
 	leds_apply
 	if [ $rc != 0 ]; then
@@ -1469,6 +1507,7 @@ reload() {
 	rc=$?
 	sched_start
 	reprobe_start
+	steer_apply	# a kv network added or gone
 	leds_apply	# led= of the list may have changed
 	svc_unlock
 	return $rc
@@ -1478,6 +1517,7 @@ stop() {
 	# after a reload in flight (it may have started hostapd or a daemon)
 	svc_lock
 	sched_stop
+	steer_stop
 	# first: an unload must not look like a re-probe
 	reprobe_stop
 	stop_hostapd

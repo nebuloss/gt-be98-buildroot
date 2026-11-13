@@ -1,0 +1,376 @@
+#!/bin/sh
+# shellcheck shell=busybox
+# SPDX-License-Identifier: GPL-2.0
+# gt-be98-wifi-steer: 802.11k neighbour lists and 802.11v client steering of
+# the Wi-Fi networks with kv=1 (see /usr/sbin/gt-be98-wifi-gen).
+#
+#   gt-be98-wifi-steer once    one pass: neighbour sync, then one steering
+#                              sample of every steer=1 BSS, and exit
+#   gt-be98-wifi-steer sync    the neighbour sync alone, and exit
+#   gt-be98-wifi-steer run     one pass every STEER_PERIOD s, forever (the
+#                              daemon gt-be98-wifi starts while the running
+#                              plan has a kv network, and stops)
+#
+# What it reads: the plan gt-be98-wifi applied ($STATE/gen/plan: the "radio",
+# "bss" and "kv <id> <steer 0|1>" lines) and hostapd's per-BSS control
+# sockets (HOSTAPD_CTRL, default /run/hostapd). Without a kv line it does
+# nothing. kv=1 is rendered only while the generator's KV=1, i.e. once the
+# driver passes the RRM/WNM action frames AND the image's hostapd has
+# CONFIG_WNM (BR2_PACKAGE_GT_BE98_OS_HOSTAPD_WNM=y): until then no plan
+# carries a kv line and this daemon is never started.
+#
+# 1. Neighbour sync (every kv network). With rrm_neighbor_report=1 hostapd
+#    puts ONE entry in a BSS's neighbour database, its own; the BSSes of one
+#    network on the other radios are unknown to it. Each pass reads every kv
+#    BSS's own entry (SHOW_NEIGHBOR: "<bssid> ssid=<hex> nr=<hex> ...", the
+#    line of its own BSSID) and writes it into each sibling BSS of the same
+#    network (SET_NEIGHBOR <bssid> ssid=<hex> nr=<hex>) when missing or
+#    changed (a channel change changes the nr). An entry this daemon wrote
+#    whose BSS left the network is removed (REMOVE_NEIGHBOR). Entries it did
+#    not write are left alone. hostapd's own nr is used verbatim: the BSSID
+#    information, operating class, channel and PHY type are hostapd's own
+#    encoding, never derived here.
+#
+# 2. Steering (steer=1 networks only; a model of stock's bsd + roamast).
+#    Every STEER_PERIOD s each station of each steer BSS is sampled: `iw dev
+#    <if> station dump` (signal avg, else signal; rx + tx bytes). A station
+#    is asked to move only by an 802.11v BSS Transition Management request
+#    (BSS_TM_REQ), and only when it advertises BSS Transition (hostapd `STA
+#    <mac>` ext_capab, bit 19 = octet 2 bit 3). A station without it is
+#    NEVER disassociated or deauthenticated: it is skipped (logged).
+#    (a) upgrade (bsd band steering): a station on a 2.4 GHz BSS whose signal
+#        is >= UPGRADE_RSSI for STEER_SAMPLES consecutive samples, while its
+#        network has a 5 or 6 GHz BSS, gets
+#          BSS_TM_REQ <mac> pref=1 abridged=1 valid_int=255 neighbor=...
+#        listing those BSSes (5gl, 5gh, then 6g, preference 255 down)
+#    (b) assist (roamast roaming assistant): a station on any steer BSS
+#        whose signal is < ASSIST_RSSI and whose traffic is < ASSIST_IDLE_KBPS
+#        for STEER_SAMPLES consecutive samples gets
+#          BSS_TM_REQ <mac> pref=1 valid_int=255 neighbor=...
+#        listing the network's other BSSes, the lower band preferred (it
+#        reaches farther). Not abridged: a BSS of another AP the client
+#        finds stays acceptable (roamast's point). With no other BSS: the
+#        request carries no list (the client is asked to look for a better
+#        AP itself). The traffic is the bytes between two samples, so the
+#        first sample of a station only sets its baseline: assist fires at
+#        the (STEER_SAMPLES + 1)th sample of a newly seen station
+#    (c) one request per station per COOLDOWN s (keyed by the station's MAC,
+#        kept when it moves to another BSS); a skip (no BTM, no target,
+#        cooldown) is logged at most once per COOLDOWN s. After any decision
+#        the station's sample count starts again from 0.
+#    One syslog line per decision (logger -t gt-be98-steer), greppable:
+#      STEER kind=upgrade|assist if=<if> sta=<mac> rssi=<dBm> n=<samples> target=<bssid|-> rc=<hostapd reply>
+#      STEER-SKIP reason=no-btm|cooldown|no-target kind=upgrade|assist if=<if> sta=<mac> rssi=<dBm> n=<samples>
+#      NBR set if=<if> bssid=<sibling bssid> rc=<reply>
+#      NBR remove if=<if> bssid=<bssid> rc=<reply>
+#
+# Settings (parsed, not sourced; /etc/conf.d/gt-be98-wifi-ap wins over
+# /etc/conf.d/gt-be98-wifi): HOSTAPD_CTRL.
+set -u
+
+# ---- thresholds (stock provenance; stock's own values on this box) ----
+# sample period and consecutive samples: wl0_bsd_steering_policy=
+# "0 5 3 -82 0 0 0x20" (bsd: bw_util% sample_period consecutive_samples ...)
+STEER_PERIOD=5
+STEER_SAMPLES=3
+# band upgrade threshold. NOT a stock value: bsd's -82 (steering_policy
+# field 4, sta_select_policy "30 -82 ...") is its trigger to move a WEAK
+# station off a band; a 2.4 -> 5/6 GHz upgrade needs a strong one, and the
+# 5 GHz signal is a few dB below the 2.4 GHz one at the same spot
+UPGRADE_RSSI=-65
+# roaming assistant: wlN_user_rssi=-70 (the weak-station threshold, dBm) and
+# rast_idlrt=20 (the idle rate, kbit/s). Stock: rast_mode=1,
+# rast_sens_level=2; roamast_enable=0 / roamast_disable=1 on this box
+# (stock runs neither bsd steering nor roamast here: this is opt-in, steer=1)
+ASSIST_RSSI=-70
+ASSIST_IDLE_KBPS=20
+# per-station hold after a request (ours: stock's roamast has no BTM, it
+# deauths; bsd keeps a per-station "steered" timer of the same order)
+COOLDOWN=300
+
+# (GT_BE98_* / STEER_*: the offline test harness only)
+CONFD=${GT_BE98_CONFD:-/etc/conf.d}
+RUNDIR=${GT_BE98_RUN:-/run}
+IW=${GT_BE98_IW:-iw}
+HAPCLI=${GT_BE98_HOSTAPD_CLI:-hostapd_cli}
+LOGGER=${GT_BE98_LOGGER:-logger}
+SLEEP=${GT_BE98_SLEEP:-sleep}
+UPTIME=${GT_BE98_UPTIME:-/proc/uptime}
+STATE=$RUNDIR/gt-be98-wifi
+PLAN=$STATE/gen/plan
+SD=$RUNDIR/gt-be98-wifi-steer
+MY_PID=$RUNDIR/gt-be98-wifi-steer.pid
+
+log() { $LOGGER -t gt-be98-steer -- "$*" 2>/dev/null || echo "gt-be98-steer: $*" >&2; }
+
+# the last value of KEY="..." (or KEY=...) in the conf files, charset $2
+conf_get() {
+	local k=$1 cs=$2 f v r=''
+	for f in "$CONFD/gt-be98-wifi" "$CONFD/gt-be98-wifi-ap"; do
+		[ -f "$f" ] || continue
+		v=$(sed -n "s/^$k=\"\\{0,1\\}\\($cs*\\)\"\\{0,1\\}\$/\\1/p" "$f" | tail -n1)
+		grep -q "^$k=" "$f" && r=$v
+	done
+	echo "$r"
+}
+
+settings() {
+	CTRL=$(conf_get HOSTAPD_CTRL '[A-Za-z0-9/_.-]')
+	case "$CTRL" in /*) ;; *) CTRL=$RUNDIR/hostapd ;; esac
+}
+
+# seconds since boot (monotonic: no RTC, NTP may step the wall clock)
+now() { local u; read -r u _ < "$UPTIME" 2>/dev/null || u=0; echo "${u%%.*}"; }
+
+# hostapd control command on BSS $1: its reply, one line per line
+hap() { local i=$1; shift; $HAPCLI -p "$CTRL" -i "$i" raw "$@" 2>/dev/null; }
+
+# the kv BSSes of the plan: "<net> <steer> <band> <ifname> <bssid>" per line,
+# in plan order (radio order 2g 5gl 5gh 6g, slot order)
+kv_bsses() {
+	[ -f "$PLAN" ] || return 0
+	awk '
+		$1 == "radio" { band[$3] = $2 }
+		$1 == "bss" { n++; bd[n] = $2; bi[n] = $3; bn[n] = $5; bb[n] = tolower($7) }
+		$1 == "kv" && $2 ~ /^[0-9]+$/ { kv[$2] = ($3 == "1") ? 1 : 0 }
+		END {
+			for (i = 1; i <= n; i++)
+				if ((bn[i] in kv) && (bd[i] in band) && bi[i] ~ /^[A-Za-z0-9_.-]+$/ && bb[i] ~ /^[0-9a-f:]+$/)
+					print bn[i], kv[bn[i]], band[bd[i]], bi[i], bb[i]
+		}' "$PLAN"
+}
+
+band_rank() { case $1 in 2g) echo 1 ;; 5gl) echo 2 ;; 5gh) echo 3 ;; 6g) echo 4 ;; *) echo 9 ;; esac; }
+
+# ---- 1. neighbour sync ----
+
+# BSS $1 (BSSID $2): its own entry "<bssid> <ssid hex> <nr hex>" -> $SD/own.<if>
+own_entry() {
+	hap "$1" SHOW_NEIGHBOR | awk -v b="$2" '
+		tolower($1) == b {
+			s = ""; r = ""
+			for (i = 2; i <= NF; i++) {
+				if ($i ~ /^ssid=[0-9a-fA-F]*$/) s = substr($i, 6)
+				else if ($i ~ /^nr=[0-9a-fA-F]+$/) r = tolower(substr($i, 4))
+			}
+			if (r != "" && length(r) >= 26) { print b, tolower(s), r; exit }
+		}'
+}
+
+# hostapd's database (SHOW_NEIGHBOR output, stdin) holds BSSID $1 with ssid
+# $2 and nr $3, exactly
+nbr_has() {
+	awk -v b="$1" -v s="$2" -v r="$3" '
+		tolower($1) == b { f = 0
+			for (i = 2; i <= NF; i++) { if (tolower($i) == "ssid=" s) f++; if (tolower($i) == "nr=" r) f++ }
+			if (f == 2) found = 1 }
+		END { exit !found }'
+}
+
+nbr_sync() {
+	local net st band y yb n2 s2 b2 x xb cur want os onr ob rc o
+	mkdir -p "$SD"
+	kv_bsses > "$SD/bsses"
+	rm -f "$SD"/own.*
+	while read -r net st band x xb; do
+		o=$(own_entry "$x" "$xb")
+		[ -n "$o" ] && echo "$o" > "$SD/own.$x"
+	done < "$SD/bsses"
+	# each BSS y: the own entries of its siblings x (same network, other BSS)
+	while read -r net st band y yb; do
+		[ -f "$SD/own.$y" ] || continue	# y not running (or no 11k): next pass
+		cur=$(hap "$y" SHOW_NEIGHBOR)
+		want=
+		while read -r n2 s2 b2 x xb; do
+			[ "$n2" = "$net" ] && [ "$x" != "$y" ] || continue
+			# a sibling of the plan stays wanted while it does not answer
+			want="$want $xb"
+			[ -f "$SD/own.$x" ] || continue
+			read -r ob os onr < "$SD/own.$x"
+			echo "$cur" | nbr_has "$ob" "$os" "$onr" && continue
+			rc=$(hap "$y" SET_NEIGHBOR "$ob" "ssid=$os" "nr=$onr" | head -n1)
+			log "NBR set if=$y bssid=$ob rc=${rc:-none}"
+			if [ "$rc" = OK ]; then
+				{ grep -v "^$ob " "$SD/nbr.$y" 2>/dev/null; echo "$ob $os"; } > "$SD/nbr.$y.new"
+				mv -f "$SD/nbr.$y.new" "$SD/nbr.$y"
+			fi
+		done < "$SD/bsses"
+		# the entries this daemon wrote whose BSS is no longer a sibling
+		[ -f "$SD/nbr.$y" ] || continue
+		cp "$SD/nbr.$y" "$SD/nbr.cur"
+		while read -r ob os; do
+			case "$want " in *" $ob "*) continue ;; esac
+			rc=$(hap "$y" REMOVE_NEIGHBOR "$ob" "ssid=$os" | head -n1)
+			log "NBR remove if=$y bssid=$ob rc=${rc:-none}"
+			grep -v "^$ob " "$SD/nbr.$y" > "$SD/nbr.$y.new"; mv -f "$SD/nbr.$y.new" "$SD/nbr.$y"
+		done < "$SD/nbr.cur"
+		rm -f "$SD/nbr.cur"
+	done < "$SD/bsses"
+	# the records of BSSes gone from the plan (hostapd dropped their database)
+	for o in "$SD"/nbr.*; do
+		[ -f "$o" ] || continue
+		y=${o##*/nbr.}
+		awk -v i="$y" '$4 == i { f = 1 } END { exit !f }' "$SD/bsses" || rm -f "$o"
+	done
+	return 0
+}
+
+# ---- 2. steering ----
+
+# the BTM candidate of sibling BSS $1 (its own nr, hostapd's encoding) with
+# preference $2: "<bssid>,<bssid_info>,<op_class>,<chan>,<phy>,<subelements>"
+# (nr = BSSID(6) BSSID-info(4, LE) op-class(1) channel(1) PHY-type(1)
+# subelements; the candidate preference subelement 3 is put first)
+candidate() {
+	local onr
+	read -r _ _ onr < "$SD/own.$1" || return 1
+	echo "$onr" | awk -v p="$2" '{
+		b = substr($0, 1, 12); bi = substr($0, 13, 8)
+		printf "%s:%s:%s:%s:%s:%s,0x%s%s%s%s,%d,%d,%d,0301%02x%s\n",
+			substr(b, 1, 2), substr(b, 3, 2), substr(b, 5, 2), substr(b, 7, 2), substr(b, 9, 2), substr(b, 11, 2),
+			substr(bi, 7, 2), substr(bi, 5, 2), substr(bi, 3, 2), substr(bi, 1, 2),
+			h(substr($0, 21, 2)), h(substr($0, 23, 2)), h(substr($0, 25, 2)), p, substr($0, 27) }
+		function h(x) { return index("0123456789abcdef", substr(x, 1, 1)) * 16 + index("0123456789abcdef", substr(x, 2, 1)) - 17 }'
+}
+
+# "<ifname> <band rank>" of the siblings of $1 (net) other than $2 (ifname),
+# filtered by $3: up = higher bands only (5gl, 5gh, 6g order), all = every
+# other band, lowest first
+siblings() {
+	local net=$1 me=$2 how=$3 myr r n st band ifn bssid
+	myr=$(awk -v i="$me" '$4 == i { print $3 }' "$SD/bsses")
+	myr=$(band_rank "$myr")
+	while read -r n st band ifn bssid; do
+		[ "$n" = "$net" ] && [ "$ifn" != "$me" ] && [ -f "$SD/own.$ifn" ] || continue
+		r=$(band_rank "$band")
+		[ "$how" = up ] && [ "$r" -le "$myr" ] && continue
+		[ "$r" = "$myr" ] && continue	# another BSS of the same band: no help
+		echo "$r $ifn"
+	done < "$SD/bsses" | sort -n | awk '{ print $2 }'
+}
+
+# station dump of $1 -> "<mac> <signal|-> <bytes>" per station
+sta_dump() {
+	$IW dev "$1" station dump 2>/dev/null | awk '
+		function out() { if (m != "") print m, (sa != "" ? sa : (sg != "" ? sg : "-")), rx + tx }
+		$1 == "Station" { out(); m = tolower($2); sa = ""; sg = ""; rx = 0; tx = 0; next }
+		/^[ \t]*signal avg:/ { v = $3; if (v ~ /^-?[0-9]+$/) sa = v + 0; next }
+		/^[ \t]*signal:/ { v = $2; if (v ~ /^-?[0-9]+$/) sg = v + 0; next }
+		/^[ \t]*rx bytes:/ { rx = $3 + 0; next }
+		/^[ \t]*tx bytes:/ { tx = $3 + 0; next }
+		END { out() }'
+}
+
+# station $2 on BSS $1 advertises BSS Transition (Extended Capabilities bit 19)
+sta_btm() {
+	local x
+	x=$(hap "$1" STA "$2" | sed -n 's/^ext_capab=\([0-9a-fA-F]*\)$/\1/p' | head -n1)
+	[ ${#x} -ge 6 ] || return 1
+	x=$(echo "$x" | cut -c5-6)
+	[ $(( 0x$x & 8 )) != 0 ]
+}
+
+# per (if, station) sample state: $SD/s.<if>.<mac> = "<up> <low> <bytes|-> <t>"
+# per station hold: $SD/h.<mac> = "<no request before> <no skip log before>"
+steer_bss() {
+	local net=$1 ifn=$2 band=$3 t=$4 mac sig by f up low pb pt kbps kind n hu hq cands c tgt p rc args
+	sta_dump "$ifn" > "$SD/dump"
+	while read -r mac sig by; do
+		case "$mac" in [0-9a-f][0-9a-f]:*:*:*:*:[0-9a-f][0-9a-f]) ;; *) continue ;; esac
+		f="$SD/s.$ifn.$mac"
+		up=0 low=0 pb=- pt=0
+		[ -f "$f" ] && read -r up low pb pt < "$f"
+		touch "$SD/seen.$ifn.$mac"
+		# the rate since the last sample (unknown on the first one, or after a reset)
+		kbps=-
+		if [ "$pb" != - ] && [ "$by" -ge "$pb" ] && [ "$t" -gt "$pt" ]; then
+			kbps=$(( (by - pb) * 8 / ((t - pt) * 1000) ))
+		fi
+		if [ "$sig" = - ]; then up=0 low=0
+		else
+			if [ "$band" = 2g ] && [ "$sig" -ge "$UPGRADE_RSSI" ] && [ -n "$(siblings "$net" "$ifn" up)" ]; then
+				up=$((up + 1)); else up=0; fi
+			if [ "$sig" -lt "$ASSIST_RSSI" ] && [ "$kbps" != - ] && [ "$kbps" -lt "$ASSIST_IDLE_KBPS" ]; then
+				low=$((low + 1)); else low=0; fi
+		fi
+		kind=
+		if [ "$up" -ge "$STEER_SAMPLES" ]; then kind=upgrade n=$up
+		elif [ "$low" -ge "$STEER_SAMPLES" ]; then kind=assist n=$low; fi
+		if [ -n "$kind" ]; then
+			up=0 low=0
+			hu=0 hq=0
+			[ -f "$SD/h.$mac" ] && read -r hu hq < "$SD/h.$mac"
+			if [ "$t" -lt "$hu" ]; then
+				if [ "$t" -ge "$hq" ]; then log "STEER-SKIP reason=cooldown kind=$kind if=$ifn sta=$mac rssi=$sig n=$n"; hq=$hu; fi
+			elif ! sta_btm "$ifn" "$mac"; then
+				if [ "$t" -ge "$hq" ]; then log "STEER-SKIP reason=no-btm kind=$kind if=$ifn sta=$mac rssi=$sig n=$n"; hq=$((t + COOLDOWN)); fi
+			else
+				if [ "$kind" = upgrade ]; then
+					cands=$(siblings "$net" "$ifn" up); args="pref=1 abridged=1 valid_int=255"
+				else
+					cands=$(siblings "$net" "$ifn" all); args="valid_int=255"
+					[ -n "$cands" ] && args="pref=1 valid_int=255"
+				fi
+				tgt=- p=255
+				for c in $cands; do
+					c=$(candidate "$c" "$p") || continue
+					[ "$tgt" = - ] && tgt=${c%%,*}
+					args="$args neighbor=$c"; p=$((p - 1))
+				done
+				if [ "$kind" = upgrade ] && [ "$tgt" = - ]; then
+					if [ "$t" -ge "$hq" ]; then log "STEER-SKIP reason=no-target kind=$kind if=$ifn sta=$mac rssi=$sig n=$n"; hq=$((t + COOLDOWN)); fi
+				else
+					# shellcheck disable=SC2086 # the request's words
+					rc=$(hap "$ifn" BSS_TM_REQ "$mac" $args | head -n1)
+					log "STEER kind=$kind if=$ifn sta=$mac rssi=$sig n=$n target=$tgt rc=${rc:-none}"
+					# the hold; the first sample that meets a policy within it is logged once
+					hu=$((t + COOLDOWN)) hq=$t
+				fi
+			fi
+			echo "$hu $hq" > "$SD/h.$mac"
+		fi
+		echo "$up $low $by $t" > "$f"
+	done < "$SD/dump"
+}
+
+cmd_once() {
+	local net st band ifn bssid t f m hu hq
+	settings
+	nbr_sync
+	t=$(now)
+	rm -f "$SD"/seen.*
+	while read -r net st band ifn bssid; do
+		[ "$st" = 1 ] && steer_bss "$net" "$ifn" "$band" "$t"
+	done < "$SD/bsses"
+	# a station gone from a BSS: its samples go; a hold, once expired
+	for f in "$SD"/s.*; do
+		[ -f "$f" ] || continue
+		[ -f "$SD/seen.${f##*/s.}" ] || rm -f "$f"
+	done
+	for f in "$SD"/h.*; do
+		[ -f "$f" ] || continue
+		read -r hu hq < "$f"
+		[ "$t" -ge "$hu" ] && [ "$t" -ge "$hq" ] && rm -f "$f"
+	done
+	rm -f "$SD"/seen.* "$SD/dump"
+	return 0
+}
+
+# `run` exits once its pid file (written by the service's start-stop-daemon
+# before it runs this) no longer names it (gt-be98-wifi-sched's rule)
+cmd_run() {
+	local p
+	while :; do
+		p=$(cat "$MY_PID" 2>/dev/null)
+		[ "$p" = $$ ] || { log "pid file ${p:+names }${p:-gone}: exiting (pid $$)"; return 0; }
+		cmd_once
+		$SLEEP "$STEER_PERIOD"
+	done
+}
+
+case "${1:-}" in
+once) cmd_once ;;
+sync) settings; nbr_sync ;;
+run) cmd_run ;;
+*) sed -n '/^#   gt-be98-wifi-steer once/,/^#   *plan has a kv network/p' "$0" | sed 's/^# \{0,1\}//' >&2; exit 2 ;;
+esac

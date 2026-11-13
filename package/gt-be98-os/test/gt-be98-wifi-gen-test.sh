@@ -595,22 +595,29 @@ check "-B with an unknown band: refused, said why, slots untouched" "1 yes same"
 
 # ---- 10b7. 802.11k/v (network kv=1; open-wifi INV-T6, owner OD4 (a)):
 # prepared, disabled. KV=0 (the default): -F feature kv 0, kv=1 accepted and
-# DROPPED with a warning; KV=1: rrm_neighbor_report=1 + bss_transition=1 on
-# every BSS of the network, none elsewhere ----
+# DROPPED with a warning; KV=1: rrm_neighbor_report=1 + rrm_beacon_report=1 +
+# bss_transition=1 on every BSS of the network, none elsewhere, and a plan
+# line "kv <id> <steer>" (gt-be98-wifi-steer); steer=1 only with kv=1 ----
 check "-F: feature kv 0 (the default)" "feature kv 0" "$($SH "$G" -F | grep '^feature kv ')"
 check "-F with KV=1: feature kv 1" "feature kv 1" "$(GT_BE98_KV=1 $SH "$G" -F | grep '^feature kv ')"
 { net 1 a sae password1 "2g 5gl 6g" 1; printf 'kv=1\n'; net 2 b sae password2 "2g 5gl" 2; printf 'kv=0\n'; net 3 c psk2 password3 2g 3; } > "$T/kv"
-kvl() {	# the BSSes (net@ifname) whose section has both 11k/v lines
+kvl() {	# the BSSes (net@ifname) whose section has all three 11k/v lines
 	awk '$1 == "bss" { print $5 "@" $3 }' "$T/o/plan" | while read -r x; do
-		grep -qx 'rrm_neighbor_report=1' "$T/o/sec-${x#*@}" && grep -qx 'bss_transition=1' "$T/o/sec-${x#*@}" && printf '%s ' "$x"; done | sed 's/ $//'
+		grep -qx 'rrm_neighbor_report=1' "$T/o/sec-${x#*@}" && grep -qx 'rrm_beacon_report=1' "$T/o/sec-${x#*@}" &&
+			grep -qx 'bss_transition=1' "$T/o/sec-${x#*@}" && printf '%s ' "$x"; done | sed 's/ $//'
 }
+kvp() { awk '$1 == "kv" { printf "%s%s %s", s, $2, $3; s = "|" }' "$T/o/plan"; }	# the plan's kv lines
 rm -f "$T/slots"; gen "$T/kv"
 check "KV=0: kv=1 accepted, nothing written, one warning naming network 1 and INV-T6" "0 0 1" \
-	"$? $(cat "$T"/o/sec-* | grep -cE '^(rrm_neighbor_report|bss_transition)=') $(grep -c 'warning: network 1: kv=1 ignored: .*INV-T6' "$T/err")"
+	"$? $(cat "$T"/o/sec-* | grep -cE '^(rrm_neighbor_report|rrm_beacon_report|bss_transition)=') $(grep -c 'warning: network 1: kv=1 ignored: .*INV-T6' "$T/err")"
+check "KV=0: no kv line in the plan (no steering daemon)" "" "$(kvp)"
 check "KV=0: kv=0 says nothing" "0" "$(grep -c 'network 2: kv' "$T/err")"
 rm -f "$T/slots"; GT_BE98_KV=1 gen "$T/kv"
 check "KV=1: network 1 on its three radios only, no warning" "0 1@bcawl3 1@bcawl0 1@bcawl2 0" "$? $(kvl) $(grep -c 'kv=' "$T/err")"
-check "KV=1: only those two lines added (network 2, kv=0: neither)" "" "$(grep -hE '^(rrm_|bss_transition)' "$T/o/sec-bcawl3-1" "$T/o/sec-bcawl0-1")"
+check "KV=1: exactly three 11k/v lines per kv BSS (3 BSSes: 9)" "9" "$(cat "$T"/o/sec-* | grep -cE '^(rrm_|bss_transition)')"
+check "KV=1: only those lines added (network 2, kv=0: none)" "" "$(grep -hE '^(rrm_|bss_transition)' "$T/o/sec-bcawl3-1" "$T/o/sec-bcawl0-1")"
+check "KV=1: one plan line kv 1 0 (steer off by default), none for network 2" "1 0" "$(kvp)"
+cp "$T/o/plan" "$T/plan.kv0"
 # hostapd's own reading: bss_transition= exists only with CONFIG_WNM_AP (the
 # OS option BR2_PACKAGE_GT_BE98_OS_HOSTAPD_WNM, off today); a hostapd without
 # it refuses the whole config. So with the OS's hostapd the ONLY error must
@@ -631,6 +638,25 @@ rm -f "$T/slots"; GT_BE98_KV=1 gen "$T/kv" -S; check "KV=1 -S: the same" "0 1@bc
 { net 1 a sae password1 2g 1; printf 'kv=2\n'; } > "$T/r"; rm -f "$T/slots"; gen "$T/r"
 check "kv=2: refused, said why" "1 yes" "$? $(grep -q 'network 1: kv=2 refused' "$T/err" && echo yes || echo no)"
 check "KV=x: refused" "1" "$(GT_BE98_KV=x $SH "$G" -n "$T/kv" -o "$T/o" -s "$T/slots" -m "$M" > /dev/null 2>&1; echo $?)"
+# steer=1 (gt-be98-wifi-steer): only with kv=1; the hostapd configs do not
+# change, only the plan's kv line
+check "-F: feature steer follows KV (0 | 1)" "feature steer 0|feature steer 1" \
+	"$($SH "$G" -F | grep '^feature steer ')|$(GT_BE98_KV=1 $SH "$G" -F | grep '^feature steer ')"
+sed '/^kv=1$/a steer=1' "$T/kv" > "$T/kvs"
+rm -f "$T/slots"; GT_BE98_KV=1 gen "$T/kvs"
+check "KV=1 steer=1: plan line kv 1 1, the same three BSSes, no warning" "0 1 1 1@bcawl3 1@bcawl0 1@bcawl2 0" "$? $(kvp) $(kvl) $(grep -c 'steer' "$T/err")"
+check "KV=1 steer=1: every BSS line (and so every hostapd config) as with steer=0" \
+	"$(grep '^bss ' "$T/plan.kv0" | sed 's#/[^ ]*/##g')" "$(grep '^bss ' "$T/o/plan" | sed 's#/[^ ]*/##g')"
+rm -f "$T/slots"; gen "$T/kvs"
+check "KV=0 steer=1: dropped with kv=1, said in the same warning, no kv line" "0 1 " \
+	"$? $(grep -c 'network 1: kv=1 ignored: .*steer=1 (client steering) is ignored with it' "$T/err") $(kvp)"
+{ net 1 a sae password1 "2g 5gl" 1; printf 'steer=1\n'; net 2 b sae password2 2g 2; printf 'kv=1\nsteer=0\n'; } > "$T/r"
+rm -f "$T/slots"; GT_BE98_KV=1 gen "$T/r"
+check "KV=1 steer=1 without kv=1: refused, said why" "1 yes" "$? $(grep -q 'network 1: steer=1 needs kv=1' "$T/err" && echo yes || echo no)"
+rm -f "$T/slots"; GT_BE98_KV=1 gen "$T/r" -S
+check "  -S: that network skipped, the other runs (kv 2 0)" "0 yes 2 0" "$? $(grep -q 'network 1 skipped: steer=1 needs kv=1' "$T/err" && echo yes || echo no) $(kvp)"
+{ net 1 a sae password1 2g 1; printf 'kv=1\nsteer=2\n'; } > "$T/r"; rm -f "$T/slots"; GT_BE98_KV=1 gen "$T/r"
+check "steer=2: refused, said why" "1 yes" "$? $(grep -q 'network 1: steer=2 refused' "$T/err" && echo yes || echo no)"
 
 # ---- 10b8. U-APSD advertised on every BSS (open-wifi INV-UAPSD: the driver
 # follows hostapd's per-BSS setting, hostapd's default is off; stock on) ----
