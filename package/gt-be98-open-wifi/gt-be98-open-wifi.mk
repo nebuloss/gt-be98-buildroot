@@ -21,7 +21,10 @@
 #  on top of b2a70da3)
 # main 2026-11-11 20ef74c9 (img42: RXPOLL-IDLE: bcawl_rxpoll/evwr sleep TASK_IDLE, box-verified idle load
 #  4.0 -> 0.16; on top of 24edcb68)
-GT_BE98_OPEN_WIFI_VERSION = 20ef74c9fbc7d0b8b8c0011ab0120ceef1468d72
+# main 2026-11-13 4ec3bcd6 (img44: DFS-CAC-ABORT-WARN (shipped fix): a firmware CAC abort inside hostapd's
+#  radar-detection start no longer WARNs in cfg80211 and leaves the 5 GHz radio without an AP; MLO R5-2 v3-r3
+#  bench/group only; on top of 20ef74c9)
+GT_BE98_OPEN_WIFI_VERSION = 4ec3bcd6f2dfd3505ea49c9c8f2528ddff678fb8
 GT_BE98_OPEN_WIFI_SITE = git@github.com:nebuloss/gt-be98-open-wifi.git
 GT_BE98_OPEN_WIFI_SITE_METHOD = git
 GT_BE98_OPEN_WIFI_LICENSE = GPL-2.0-only
