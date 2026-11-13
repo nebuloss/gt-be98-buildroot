@@ -48,6 +48,8 @@ country=FR
 
 radio=2g
 channel=6
+# channel=auto: automatic channel selection (hostapd ACS) on 2g, 5gl, 5gh
+#channel=auto
 width=20
 radio=5gl
 channel=36

@@ -527,6 +527,68 @@ check "5gl default 160 on every 5gl channel: centre 50" "36:50 40:50 44:50 48:50
 { printf 'radio=5gl\nmonitor=1\nchannel=36\n'; net 1 a sae password1 2g 1; } > "$T/w5"
 rm -f "$T/slots"; gen "$T/w5" -c; check "5gl monitor no width: 20 MHz (unchanged)" "monitor 5gl bcawl0 5180 20 5180" "$(grep '^monitor ' "$T/o/plan")"
 
+# ---- 10b3c. channel=auto: hostapd ACS (channel=acs_survey) on 2g/5gl/5gh,
+# box-proven 1027-1233 (2.4 GHz ch 13, 5 GHz ch 48: ACS-COMPLETED, AP-ENABLED);
+# refused on 6g (no survey there, open-wifi ACS-1) ----
+ra() { grep -E '^(channel|acs_num_scans|ht_capab|vht_oper|he_oper_c|eht_oper_c|chanlist|ieee80211h)' "$T/o/hdr-$1" | tr '\n' ' ' | sed 's/ $//'; }
+{ printf 'radio=2g\nchannel=auto\nradio=5gl\nchannel=auto\nradio=5gh\nchannel=auto\nwidth=80\n'; net 1 a sae password1 "2g 5gl 5gh" 1; } > "$T/acs1"
+rm -f "$T/slots"; gen "$T/acs1" -c
+check "auto + -c: accepted, no warning" "0|" "$?|$(cat "$T/err")"
+check "2g auto: channel=acs_survey, acs_num_scans=2" "channel=acs_survey acs_num_scans=2" "$(ra bcawl3)"
+check "5gl auto (default 160): acs_survey, [HT40+], chwidth 2 with NO centre index (ACS sets it), chanlist 36-64, 11h" \
+	"channel=acs_survey ht_capab=[HT40+] vht_oper_chwidth=2 he_oper_chwidth=2 eht_oper_chwidth=2 chanlist=36-64 acs_num_scans=2 ieee80211h=1" "$(ra bcawl0)"
+check "5gl auto 160: [VHT160]" "yes" "$(grep -q '^vht_capab=.*\[VHT160\]' "$T/o/hdr-bcawl0" && echo yes || echo no)"
+check "5gh auto 80: acs_survey, chwidth 1, no centre index, its own chanlist" \
+	"channel=acs_survey ht_capab=[HT40+] vht_oper_chwidth=1 he_oper_chwidth=1 eht_oper_chwidth=1 chanlist=100-144 149-177 acs_num_scans=2 ieee80211h=1" "$(ra bcawl1)"
+check "auto: no centre index line anywhere" "" "$(grep -l 'centr_freq_seg0_idx' "$T"/o/hdr-bcawl3 "$T"/o/hdr-bcawl0 "$T"/o/hdr-bcawl1 | tr '\n' ' ')"
+conf_ok "channel=auto 2g/5gl/5gh"
+{ printf 'radio=5gl\nchannel=auto\nwidth=40\nradio=5gh\nchannel=auto\nwidth=20\n'; net 1 a sae password1 "5gl 5gh" 1; } > "$T/acs2"
+rm -f "$T/slots"; gen "$T/acs2" -c
+check "5gl auto 40: [HT40+], chwidth 0; 5gh auto 20: no ht_capab" \
+	"channel=acs_survey ht_capab=[HT40+] vht_oper_chwidth=0 he_oper_chwidth=0 eht_oper_chwidth=0 chanlist=36-64 acs_num_scans=2 ieee80211h=1|channel=acs_survey vht_oper_chwidth=0 he_oper_chwidth=0 eht_oper_chwidth=0 chanlist=100-144 149-177 acs_num_scans=2 ieee80211h=1" \
+	"$(ra bcawl0)|$(ra bcawl1)"
+conf_ok "channel=auto 40/20"
+# control: a numeric channel renders no ACS line
+{ printf 'radio=2g\nchannel=11\nradio=5gl\nchannel=44\nwidth=80\n'; net 1 a sae password1 "2g 5gl" 1; } > "$T/acs3"
+rm -f "$T/slots"; gen "$T/acs3" -c
+check "control: numeric channels: no acs_ line, 2g channel=11, 5gl 44 with its centre" "0 1 channel=44 ht_capab=[HT40+] vht_oper_chwidth=1 vht_oper_centr_freq_seg0_idx=42" \
+	"$(cat "$T"/o/hdr-* | grep -c acs_) $(grep -c '^channel=11$' "$T/o/hdr-bcawl3") $(ra bcawl0 | cut -d' ' -f1-4)"
+# the last channel= of a radio block wins
+{ printf 'radio=5gl\nchannel=auto\nchannel=44\nwidth=80\nradio=2g\nchannel=1\nchannel=auto\n'; net 1 a sae password1 "2g 5gl" 1; } > "$T/acs4"
+rm -f "$T/slots"; gen "$T/acs4" -c
+check "the last channel= wins: 5gl auto then 44 -> 44; 2g 1 then auto -> ACS" "channel=44|channel=acs_survey" \
+	"$(grep '^channel=' "$T/o/hdr-bcawl0")|$(grep '^channel=' "$T/o/hdr-bcawl3")"
+# without the country (no regdb): hostapd leaves the radar channels out
+{ printf 'radio=5gl\nchannel=auto\nradio=5gh\nchannel=auto\nwidth=80\n'; net 1 a sae password1 "5gl 5gh" 1; } > "$T/acs5"
+rm -f "$T/slots"; gen "$T/acs5"
+check "auto without -c: 5gl (default 80, 36-48 non-DFS) not warned; 5gh warned (every channel DFS); rc 0" "0 no yes" \
+	"$? $(grep -q 'radio 5gl:.*DFS' "$T/err" && echo yes || echo no) $(grep -q 'radio 5gh: channel=auto: every channel of this radio is a DFS (radar) channel' "$T/err" && echo yes || echo no)"
+{ printf 'radio=5gl\nchannel=auto\nwidth=160\n'; net 1 a sae password1 5gl 1; } > "$T/acs6"
+rm -f "$T/slots"; gen "$T/acs6"
+check "5gl auto width=160 without -c: warned (every 160 block holds DFS channels)" "0 yes" \
+	"$? $(grep -q 'radio 5gl: channel=auto at 160 MHz: every block holds DFS (radar) channels' "$T/err" && echo yes || echo no)"
+{ printf 'radio=6g\nchannel=auto\n'; net 1 a sae password1 6g 1; } > "$T/acs7"
+rm -f "$T/slots"; gen "$T/acs7" -c
+check "6g auto: refused (no survey on 6 GHz)" "1 yes" "$? $(grep -q 'radio 6g: channel=auto refused' "$T/err" && echo yes || echo no)"
+for v in Auto acs 0 -1 'auto 36'; do
+	{ printf 'radio=5gl\nchannel=%s\n' "$v"; net 1 a sae password1 5gl 1; } > "$T/acs8"
+	rm -f "$T/slots"; gen "$T/acs8" -c; printf '%s ' "$?"
+done > "$T/acs8.out"
+check "channel= values refused: Auto, acs, 0, -1, 'auto 36'" "1 1 1 1 1 " "$(cat "$T/acs8.out")"
+{ printf 'radio=5gl\nmonitor=1\nchannel=auto\n'; net 1 a sae password1 2g 1; } > "$T/acs9"
+rm -f "$T/slots"; gen "$T/acs9" -c
+check "monitor + auto: the default channel (36, 20 MHz), warned" "0 monitor 5gl bcawl0 5180 20 5180 yes" \
+	"$? $(grep '^monitor ' "$T/o/plan") $(grep -q 'radio 5gl: channel=auto on a monitor radio' "$T/err" && echo yes || echo no)"
+# a station radio: no ACS (its APs share the uplink channel)
+{ printf 'radio=5gh\nchannel=auto\nwidth=80\n'; printf 'station=5gh\nssid=up\nsecurity=sae\npassphrase=saepassword1\n'; net 1 a sae password1 5gh 1; } > "$T/acs10"
+rm -f "$T/slots"; gen "$T/acs10" -c -U "5gh=5600"
+check "station radio + auto, associated (-U 5600): the uplink channel 120, no ACS, warned" "0 channel=120 0 yes" \
+	"$? $(grep '^channel=' "$T/o/hdr-bcawl1") $(grep -c acs_ "$T/o/hdr-bcawl1") $(grep -q 'radio 5gh: channel=auto on a station radio: its APs run on the uplink channel 120' "$T/err" && echo yes || echo no)"
+rm -f "$T/slots"; gen "$T/acs10" -c
+check "station radio + auto, not associated: the default channel 100, no ACS, warned" "0 channel=100 0 yes" \
+	"$? $(grep '^channel=' "$T/o/hdr-bcawl1") $(grep -c acs_ "$T/o/hdr-bcawl1") $(grep -q 'radio 5gh: channel=auto on a station radio: its APs run on channel 100 until the uplink associates' "$T/err" && echo yes || echo no)"
+check "-F: feature acs 1, acs 2g 5gl 5gh" "feature acs 1|acs 2g 5gl 5gh" "$($SH "$G" -F | grep -E '^(feature acs|acs) ' | tr '\n' '|' | sed 's/|$//')"
+
 # ---- 10b4. 6 GHz secondaries = the anchor's nontransmitted BSSIDs (soak
 # 1102-1500: OWE on bcawl2-1 unreachable) ----
 { net 1 s sae password1 "5gl 6g" 1; printf 'network=2\nssid=o\nsecurity=owe\nbands=5gl 6g\nvlan=2\n'; } > "$T/m6"
