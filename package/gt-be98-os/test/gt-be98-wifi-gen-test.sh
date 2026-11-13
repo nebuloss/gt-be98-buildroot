@@ -486,6 +486,47 @@ rm -f "$T/slots"; gen "$T/d1"; check "country=DE without -c (no regdb): warned" 
 { printf 'radio=5gh\nchannel=100\nmonitor=1\n'; net 1 a sae password1 "5gl 5gh" 1; } > "$T/d2"
 rm -f "$T/slots"; gen "$T/d2" -c; check "a monitor on ch100: no DFS warning" "no" "$(grep -q 'DFS (radar)' "$T/err" && echo yes || echo no)"
 
+# ---- 10b3b. the 5 GHz-low default width (owner batch 1, 11-13): 160 MHz
+# (36-64, centre 50) when the country is written (-c), 80 without it (52-64
+# are DFS channels: hostapd disables them without ieee80211h); an explicit
+# width= is kept, 5gh/2g keep 20, a monitor keeps 20 ----
+r5() { grep -E '^(channel|ht_capab|vht_oper|vht_capab|he_oper_chwidth|he_oper_centr|eht_oper_chwidth|eht_oper_centr)' "$T/o/hdr-$1" | tr '\n' ' ' | sed 's/ $//'; }
+B5='[SU-BEAMFORMER][SU-BEAMFORMEE][MU-BEAMFORMER]'
+net 1 a sae password1 "5gl 5gh" 1 > "$T/w0"
+rm -f "$T/slots"; gen "$T/w0" -c
+check "5gl no width + -c: 160 MHz, centre 50, [VHT160], HE/EHT 160; no DFS warning" \
+	"0|channel=36 ht_capab=[HT40+] vht_oper_chwidth=2 vht_oper_centr_freq_seg0_idx=50 vht_capab=$B5[VHT160] he_oper_chwidth=2 he_oper_centr_freq_seg0_idx=50 eht_oper_chwidth=2 eht_oper_centr_freq_seg0_idx=50|no" \
+	"$?|$(r5 bcawl0)|$(grep -q 'DFS (radar)' "$T/err" && echo yes || echo no)"
+check "5gl default 160 + -c: country_code, 11d, 11h (the CAC of 52-64 runs)" "yes yes yes" \
+	"$(hdr_has bcawl0 country_code=FR) $(hdr_has bcawl0 ieee80211d=1) $(hdr_has bcawl0 ieee80211h=1)"
+check "5gh no width: still 20 MHz" "channel=100 vht_oper_chwidth=0 vht_capab=$B5 he_oper_chwidth=0 eht_oper_chwidth=0" "$(r5 bcawl1)"
+conf_ok "5gl default 160"
+rm -f "$T/slots"; gen "$T/w0"
+check "5gl no width, no -c (no regdb): 80 MHz on 36-48 (UNII-1, non-DFS), no DFS warning for 5gl" \
+	"0|channel=36 ht_capab=[HT40+] vht_oper_chwidth=1 vht_oper_centr_freq_seg0_idx=42 vht_capab=$B5 he_oper_chwidth=1 he_oper_centr_freq_seg0_idx=42 eht_oper_chwidth=1 eht_oper_centr_freq_seg0_idx=42|no" \
+	"$?|$(r5 bcawl0)|$(grep -q 'radio 5gl: .*DFS (radar)' "$T/err" && echo yes || echo no)"
+conf_ok "5gl default without -c"
+# the user override: an explicit width (what the web UI writes) is kept
+for w in 20 40 80 160; do
+	{ printf 'radio=5gl\nchannel=36\nwidth=%s\n' "$w"; net 1 a sae password1 5gl 1; } > "$T/w1"
+	rm -f "$T/slots"; gen "$T/w1" -c; printf '%s:%s ' "$w" "$(grep '^vht_oper_chwidth=' "$T/o/hdr-bcawl0")"
+done > "$T/w1.out"
+check "5gl explicit width kept with -c: 20/40 -> 0, 80 -> 1, 160 -> 2" \
+	"20:vht_oper_chwidth=0 40:vht_oper_chwidth=0 80:vht_oper_chwidth=1 160:vht_oper_chwidth=2 " "$(cat "$T/w1.out")"
+{ printf 'radio=5gl\nchannel=36\nwidth=160\n'; net 1 a sae password1 5gl 1; } > "$T/w2"
+rm -f "$T/slots"; gen "$T/w2"; check "5gl explicit width=160 without -c: kept (the user's), warned (DFS block, no country)" "0 vht_oper_chwidth=2 yes" \
+	"$? $(grep '^vht_oper_chwidth=' "$T/o/hdr-bcawl0") $(grep -q 'radio 5gl: the 160 MHz block of channel 36 (36-64) holds DFS' "$T/err" && echo yes || echo no)"
+{ printf 'radio=5gl\nchannel=52\n'; net 1 a sae password1 5gl 1; } > "$T/w3"
+rm -f "$T/slots"; gen "$T/w3" -c; check "5gl ch52 no width + -c: 160, centre 50" "0 channel=52 ht_capab=[HT40+] vht_oper_chwidth=2 vht_oper_centr_freq_seg0_idx=50" \
+	"$? $(r5 bcawl0 | cut -d' ' -f1-4)"
+for c in 36 40 44 48 52 56 60 64; do
+	{ printf 'radio=5gl\nchannel=%s\n' "$c"; net 1 a sae password1 5gl 1; } > "$T/w4"
+	rm -f "$T/slots"; gen "$T/w4" -c && printf '%s:%s ' "$c" "$(grep '^vht_oper_centr_freq_seg0_idx=' "$T/o/hdr-bcawl0" | cut -d= -f2)"
+done > "$T/w4.out"
+check "5gl default 160 on every 5gl channel: centre 50" "36:50 40:50 44:50 48:50 52:50 56:50 60:50 64:50 " "$(cat "$T/w4.out")"
+{ printf 'radio=5gl\nmonitor=1\nchannel=36\n'; net 1 a sae password1 2g 1; } > "$T/w5"
+rm -f "$T/slots"; gen "$T/w5" -c; check "5gl monitor no width: 20 MHz (unchanged)" "monitor 5gl bcawl0 5180 20 5180" "$(grep '^monitor ' "$T/o/plan")"
+
 # ---- 10b4. 6 GHz secondaries = the anchor's nontransmitted BSSIDs (soak
 # 1102-1500: OWE on bcawl2-1 unreachable) ----
 { net 1 s sae password1 "5gl 6g" 1; printf 'network=2\nssid=o\nsecurity=owe\nbands=5gl 6g\nvlan=2\n'; } > "$T/m6"

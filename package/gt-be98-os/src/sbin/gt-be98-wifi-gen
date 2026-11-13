@@ -136,7 +136,16 @@
 #                                   -> 31, ch 65-93 -> 63; no 320 block
 #                                   fits: rendered at 160 with a warning.
 #                                   6g default width: 320 (owner 11-10;
-#                                   160 with be=0); others 20
+#                                   160 with be=0); 5gl default width: 160
+#                                   (the 36-64 block, centre 50; owner
+#                                   batch 1, 11-13) when the country is
+#                                   written (-c: 52-64 are DFS channels,
+#                                   hostapd runs their CAC only with
+#                                   ieee80211h), else 80 (36-48 is
+#                                   non-DFS UNII-1, 52-64 a DFS block in
+#                                   any case; a monitor=1 radio: 20); a
+#                                   width= given is kept as given;
+#                                   others 20
 #     schedule=WINDOWS              optional: the radio runs only inside
 #                                   these windows (all its BSSes stop
 #                                   outside them; format below)
@@ -1043,8 +1052,22 @@ END {
 		if (b in rch) {
 			if (!chans(b, rch[b])) { err("radio " b ": channel " rch[b] " is not a channel of this radio"); continue }
 		} else rch[b] = (b == "2g") ? 6 : (b == "5gl") ? 36 : (b == "5gh") ? 100 : 37
-		# 6 GHz default: 320 MHz (owner 11-10), 160 without EHT; others 20
-		if (!(b in rw)) rw[b] = (b == "6g") ? (rbe[b] ? 320 : 160) : 20
+		# 6 GHz default: 320 MHz (owner 11-10), 160 without EHT; 5 GHz-low:
+		# 160 MHz (owner batch 1, 11-13: the driver and firmware run 160 on
+		# air, 1027-1404-perf-wide-RF) when the country is written, else 80;
+		# others 20. Only a radio WITHOUT width= takes a default: an explicit
+		# width= (the web UI writes one for every radio) is never changed.
+		# Why 80 without -c: 36-64 holds the DFS channels 52-64, which
+		# hostapd marks DISABLED without ieee80211h (no country_code), so a
+		# 160 MHz default would keep the radio dark; 80 MHz on 36-48 (the
+		# UNII-1 block) needs no DFS. The regulatory side: every country
+		# the driver serves gets the same rule table (open-wifi
+		# bca_cfg80211.c bca_regdom: UNII-1 + UNII-2A contiguous, AUTO_BW,
+		# no NO_160MHZ on 36-64) and ETSI EN 301 893 allows 160 MHz in
+		# 5150-5350 MHz (DE/FR included), DFS + 60 s CAC on 5250-5350.
+		# A monitor radio keeps 20 (its capture width was never measured
+		# wider on 5 GHz)
+		if (!(b in rw)) rw[b] = (b == "6g") ? (rbe[b] ? 320 : 160) : (b == "5gl" && !rmon[b]) ? ((ccok && country != "") ? 160 : 80) : 20
 		if (b == "6g" && rw[b] == 320 && !rbe[b]) err("radio 6g: 320 MHz needs EHT (be=1)")
 		# 320 MHz with no block inside the country band (T6): 160, said
 		if (b == "6g" && rw[b] == 320 && rbe[b] && c6(rch[b], 320) == 0 && c6(rch[b], 160) != 0) {
