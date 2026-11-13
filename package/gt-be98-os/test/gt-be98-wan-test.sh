@@ -107,8 +107,14 @@ check "  control: with user" 0 "$(ck $P PPPOE_USER=u@isp)"
 check "pppoe user with a quote refused" 1 "$(ck $P 'PPPOE_USER=a"b')"
 check "pppoe password with a backslash refused" 1 "$(ck $P PPPOE_USER=u 'PPPOE_PASS=a\b')"
 check "  control: password with spaces and # ;" 0 "$(ck $P PPPOE_USER=u 'PPPOE_PASS="a b#c;d"')"
-check "pppoe mtu 1500 refused" 1 "$(ck $P PPPOE_USER=u PPPOE_MTU=1500)"
+check "pppoe mtu 1501 refused (pppd's ceiling: 1500)" 1 "$(ck $P PPPOE_USER=u PPPOE_MTU=1501)"
+check "pppoe mtu 1279 refused" 1 "$(ck $P PPPOE_USER=u PPPOE_MTU=1279)"
 check "  control: 1480" 0 "$(ck $P PPPOE_USER=u PPPOE_MTU=1480)"
+check "  control: 1500 (RFC 4638)" 0 "$(ck $P PPPOE_USER=u PPPOE_MTU=1500)"
+check "WAN_MTU 10241 refused (the driver's max 10240)" 1 "$(ck WAN_MTU=10241)"
+check "WAN_MTU 1279 refused" 1 "$(ck WAN_MTU=1279)"
+check "  control: WAN_MTU 9000 and 10240 (jumbo)" "0 0" "$(ck WAN_MTU=9000) $(ck WAN_MTU=10240)"
+check "  control: static WAN_MTU 9000" 0 "$(ck WAN_PROTO=static WAN_ADDR=192.0.2.10/24 WAN_GW=192.0.2.1 WAN_MTU=9000)"
 check "WAN_MTU on pppoe refused" 1 "$(ck $P PPPOE_USER=u WAN_MTU=1400)"
 check "PPPOE_USER on dhcp refused" 1 "$(ck PPPOE_USER=u)"
 check "PD LANs without IPv6 refused" 1 "$(ck WAN_PD_LANS=brwifi1)"
@@ -198,6 +204,36 @@ printf 'WAN_VLAN=836\n' > "$T/etc/wan.conf"
 wan start 2>/dev/null; wan stop 2>/dev/null
 check "pre-existing VLAN kept" no "$(yes_no has "$FAKE/log" "ip link del rnr0.836")"
 check "  control: created VLAN removed" yes "$(reset; printf 'WAN_VLAN=837\n' > "$T/etc/wan.conf"; wan start 2>/dev/null; wan stop 2>/dev/null; yes_no has "$FAKE/log" "ip link del rnr0.837")"
+# MTU: WAN_MTU on the bare port; on a VLAN the port is raised first; PPPoE
+# above 1492 sets the lower link to PPPOE_MTU + 8 (RFC 4638); every change is
+# restored at stop, last first; the PPPoE default 1492 changes no MTU
+mtus() { grep -E '^ip link set [^ ]+ mtu ' "$FAKE/log" | sed 's/^ip link set //' | tr '\n' '|' | sed 's/|$//'; }
+reset; echo 1500 > "$T/net/rnr0/mtu"
+printf 'WAN_MTU=9000\n' > "$T/etc/wan.conf"
+wan start 2>/dev/null; a=$(mtus); : > "$FAKE/log"; wan stop 2>/dev/null
+check "WAN_MTU=9000 on rnr0: set at start, 1500 back at stop" "rnr0 mtu 9000|rnr0 mtu 1500" "$a|$(mtus)"
+reset; echo 1500 > "$T/net/rnr0/mtu"
+printf 'WAN_VLAN=835\nWAN_MTU=9000\n' > "$T/etc/wan.conf"
+wan start 2>/dev/null; a=$(mtus); : > "$FAKE/log"; wan stop 2>/dev/null
+check "WAN_MTU=9000 on rnr0.835: the port raised first, then the VLAN; stop: the VLAN, then the port" \
+	"rnr0 mtu 9000|rnr0.835 mtu 9000|rnr0.835 mtu 1500|rnr0 mtu 1500" "$a|$(mtus)"
+reset; echo 9000 > "$T/net/rnr0/mtu"
+printf 'WAN_VLAN=835\nWAN_MTU=9000\n' > "$T/etc/wan.conf"
+wan start 2>/dev/null; a=$(mtus); wan stop 2>/dev/null
+check "  control: the port already at 9000 is not touched" "rnr0.835 mtu 9000" "$a"
+echo 1500 > "$T/net/rnr0/mtu"
+reset; printf 'WAN_VLAN=835\nWAN_MTU=1400\n' > "$T/etc/wan.conf"
+wan start 2>/dev/null; a=$(mtus); wan stop 2>/dev/null
+check "  control: WAN_MTU=1400 on a VLAN lowers the VLAN only" "rnr0.835 mtu 1400" "$a"
+reset; printf 'WAN_PROTO=pppoe\nWAN_VLAN=835\nPPPOE_USER=u\nPPPOE_MTU=1500\n' > "$T/etc/wan.conf"
+wan start 2>/dev/null; a=$(mtus)
+check "PPPOE_MTU=1500 on rnr0.835: port and VLAN at 1508, pppd mtu/mru 1500" "rnr0 mtu 1508|rnr0.835 mtu 1508 yes yes" \
+	"$a $(yes_no grep -qx 'mtu 1500' "$FAKE/pppd.conf.seen") $(yes_no grep -qx 'mru 1500' "$FAKE/pppd.conf.seen")"
+: > "$FAKE/log"; wan stop 2>/dev/null
+check "  stop: 1500 back, VLAN first" "rnr0.835 mtu 1500|rnr0 mtu 1500" "$(mtus)"
+reset; printf 'WAN_PROTO=pppoe\nPPPOE_USER=u\n' > "$T/etc/wan.conf"
+wan start 2>/dev/null; a=$(mtus); wan stop 2>/dev/null
+check "  control: PPPoE default 1492: no MTU change, pppd mtu 1492" "|yes" "$a|$(yes_no grep -qx 'mtu 1492' "$FAKE/pppd.conf.seen")"
 # static on the bare port: dhcpcd's job, no nft, no input filter
 reset
 printf 'WAN_PROTO=static\nWAN_ADDR=192.0.2.10/24\nWAN_GW=192.0.2.1\n' > "$T/etc/wan.conf"

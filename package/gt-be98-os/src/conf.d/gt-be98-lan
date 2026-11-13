@@ -24,3 +24,8 @@ LAN_DHCP=""
 LAN_SWITCH_MONITOR="yes"
 # seconds to wait for each port at start (the Runner loads in gt-be98-drivers)
 LAN_IFACE_WAIT="20"
+# MTU of the LAN ports and the bridge, 1280..10240 (jumbo frames, e.g. 9000
+# for a NAS; the Runner driver's maximum is 10240), empty = unchanged (1500).
+# Every device on the LAN must use the same MTU. rnr1's jacks also go
+# through the RTL8372 switch, whose own frame size limit is not set here.
+LAN_MTU=""

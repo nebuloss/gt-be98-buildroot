@@ -16,7 +16,11 @@
 #     IPv4 multicast group: only a multicast routing daemon forwards those
 #     (router mode's igmpproxy, ROUTER_IGMP_PROXY=1, off by default), and only
 #     for a group a LAN host joined;
-#   - rtl8372.ko (read-only switch monitor) when rnr1 is a LAN port.
+#   - rtl8372.ko (read-only switch monitor) when rnr1 is a LAN port;
+#   - optional MTU (LAN_MTU, 1280..10240: jumbo frames, the Runner driver's
+#     max_mtu) on each LAN port and the bridge; restored at stop. Unset: the
+#     ports keep theirs (1500). rnr1's jacks also pass through the RTL8372,
+#     whose own maximum frame size this OS does not set (unread).
 # Settings: /etc/conf.d/gt-be98-lan (parsed, not sourced).
 description="Wired LAN: LAN ports (never rnr0) in one bridge, STP, optional DHCP"
 
@@ -55,6 +59,7 @@ load_conf() {
 	LAN_DHCP=$(conf_get LAN_DHCP 'A-Za-z0-9.,:')
 	LAN_SWITCH_MONITOR=$(conf_get LAN_SWITCH_MONITOR 'a-z')
 	LAN_IFACE_WAIT=$(conf_get LAN_IFACE_WAIT '0-9')
+	LAN_MTU=$(conf_get LAN_MTU '0-9')
 	[ -n "$LAN_PORTS" ] || { eerror "LAN_PORTS is empty: no wired LAN configured"; return 1; }
 	case "$LAN_BRIDGE" in
 	brwifi*|rnr*|eth*|bcawl*) eerror "LAN_BRIDGE '$LAN_BRIDGE' refused"; return 1 ;;
@@ -70,6 +75,12 @@ load_conf() {
 	done
 	[ -z "$LAN_ADDR" ] || echo "$LAN_ADDR" | grep -qE '^[0-9]{1,3}(\.[0-9]{1,3}){3}/[0-9]{1,2}$' ||
 		{ eerror "LAN_ADDR '$LAN_ADDR' refused"; return 1; }
+	case "$LAN_MTU" in
+	'') ;;
+	0*) eerror "LAN_MTU '$LAN_MTU' refused (1280..10240)"; return 1 ;;
+	*) [ "$LAN_MTU" -ge 1280 ] && [ "$LAN_MTU" -le 10240 ] ||
+		{ eerror "LAN_MTU '$LAN_MTU' refused (1280..10240)"; return 1; } ;;
+	esac
 }
 
 # replies and DNATed flows only, into the bridge
@@ -91,7 +102,7 @@ lan_nft() {
 }
 
 start() {
-	local p n
+	local p n m
 	load_conf || return 1
 	ebegin "Wired LAN: $LAN_PORTS in $LAN_BRIDGE (STP ${LAN_STP:-1})"
 	: > $APPLIED
@@ -121,8 +132,28 @@ start() {
 			continue
 		fi
 		echo "port $p" >> $APPLIED
+		if [ -n "$LAN_MTU" ]; then
+			m=$(cat "/sys/class/net/$p/mtu" 2>/dev/null)
+			if [ "$m" != "$LAN_MTU" ]; then
+				if ip link set "$p" mtu "$LAN_MTU"; then
+					echo "mtu $p $m" >> $APPLIED
+				else
+					ewarn "$p: MTU $LAN_MTU refused by the driver"
+				fi
+			fi
+		fi
 		ip link set "$p" up
 	done
+	# the bridge's MTU (set explicitly: the kernel then keeps it when a port
+	# with a smaller MTU, e.g. a Wi-Fi BSS, joins later)
+	if [ -n "$LAN_MTU" ]; then
+		m=$(cat "/sys/class/net/$LAN_BRIDGE/mtu" 2>/dev/null)
+		if ip link set "$LAN_BRIDGE" mtu "$LAN_MTU"; then
+			echo "mtu $LAN_BRIDGE $m" >> $APPLIED
+		else
+			ewarn "$LAN_BRIDGE: MTU $LAN_MTU refused (a port below it?)"
+		fi
+	fi
 	if [ -n "$LAN_ADDR" ]; then
 		ip addr replace "$LAN_ADDR" dev "$LAN_BRIDGE" &&
 			echo "addr $LAN_ADDR $LAN_BRIDGE" >> $APPLIED
@@ -155,6 +186,7 @@ stop() {
 		while read -r k v w; do
 			case "$k" in
 			port)	ip link set "$v" nomaster 2>/dev/null; ip link set "$v" down 2>/dev/null ;;
+			mtu)	[ -n "$w" ] && ip link set "$v" mtu "$w" 2>/dev/null ;;
 			addr)	ip addr del "$v" dev "$w" 2>/dev/null ;;
 			module)	rmmod "$v" 2>/dev/null ;;
 			nft)	nft delete table inet gt_be98_lan 2>/dev/null ;;

@@ -47,6 +47,27 @@ lan_case 1 "rnr1" brwifi1			# never a Wi-Fi network bridge
 lan_case 0 "rnr2" br-lan 192.168.50.1/24
 lan_case 1 "rnr2" br-lan 192.168.50.1		# not CIDR
 
+# 2a. LAN_MTU: 1280..10240 (jumbo, the Runner's max_mtu), empty = unchanged
+mtu_case() {
+	printf 'LAN_PORTS="rnr2"\nLAN_MTU="%s"\n' "$2" > "$T/lan.conf"
+	(
+		eerror() { :; }; ebegin() { :; }; eend() { :; }; ewarn() { :; }
+		LAN_CONF_FILE="$T/lan.conf"
+		. "$SRC/init.d/gt-be98-lan"
+		load_conf
+	)
+	r=$?; [ $r -ne 0 ] && r=1
+	if [ "$r" = "$1" ]; then ok "lan load_conf rc=$1: LAN_MTU='$2'"
+	else ko "lan load_conf want rc=$1 got $r: LAN_MTU='$2'"; fi
+}
+mtu_case 0 ""
+mtu_case 0 9000
+mtu_case 0 1280
+mtu_case 0 10240
+mtu_case 1 10241
+mtu_case 1 1279
+mtu_case 1 09000
+
 # 2b. gt-be98-lan forward filter: into the bridge only replies, DNAT, and UDP to
 # an IPv4 multicast group (forwarded only by router mode's igmpproxy), then drop
 r=$(

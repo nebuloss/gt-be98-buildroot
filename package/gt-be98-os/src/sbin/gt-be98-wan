@@ -35,8 +35,17 @@
 # on the saved config: a WAN change can never lock the box out for good.
 #   WAN_PROTO=dhcp|static|pppoe   WAN_PORT=rnr0..rnr3   WAN_VLAN=1..4094
 #   WAN_ADDR=a.b.c.d/p WAN_GW= WAN_DNS="d1 d2"          (static)
-#   PPPOE_USER= PPPOE_PASS= PPPOE_SERVICE= PPPOE_AC= PPPOE_MTU=1492
-#   WAN_MTU=1280..1500 (dhcp/static)   WAN_METRIC=1..9999
+#   PPPOE_USER= PPPOE_PASS= PPPOE_SERVICE= PPPOE_AC= PPPOE_MTU=1280..1500
+#                                 (default 1492; above it RFC 4638: the lower
+#                                 link is set to PPPOE_MTU + 8, pppd's
+#                                 pppoe.so then asks PPP-Max-Payload, and the
+#                                 server's answer decides; 1500 is pppd's own
+#                                 ceiling, ETH_JUMBO_LEN 1508)
+#   WAN_MTU=1280..10240 (dhcp/static; 10240 = the Runner driver's max_mtu,
+#                                 open-ethernet framesize.c: jumbo frames)
+#                                 WAN_METRIC=1..9999
+#   (an MTU above the port's on a VLAN WAN raises the port too: on rnr0 the
+#   management port's own MTU; every MTU set is restored at stop)
 #   WAN_IPV6=0|1   WAN_PD_LANS="brwifi1 br-lan"   WAN_PD_LEN=48..64
 # Settings: /etc/conf.d/gt-be98-wan (paths, IFACE_WAIT, WAN_TABLE6).
 set -u
@@ -72,6 +81,9 @@ PPP_IF=pppoe-wan
 TRIAL=$RUN/wan.trial.conf
 APPLIED=$RUN/applied
 NFT_TABLE=gt_be98_wan
+# the largest MTU of a WAN port (open-ethernet framesize.c: max_mtu with the
+# jumbo TX pool); the driver itself has the last word (ip link set mtu)
+MTU_MAX=10240
 
 log() { logger -t gt-be98-wan -- "$*" 2>/dev/null; echo "gt-be98-wan: $*" >&2; }
 die() { echo "gt-be98-wan: $*" >&2; exit 1; }
@@ -161,11 +173,11 @@ load() {
 		[ -z "$P_PASS" ] || pppstr_ok "$P_PASS" || { echo "PPPOE_PASS: up to 128 printable characters, no quote or backslash"; return 1; }
 		[ -z "$P_SERVICE" ] || pppstr_ok "$P_SERVICE" || { echo "PPPOE_SERVICE: printable, no quote or backslash"; return 1; }
 		[ -z "$P_AC" ] || pppstr_ok "$P_AC" || { echo "PPPOE_AC: printable, no quote or backslash"; return 1; }
-		num_in "$P_MTU" 1280 1492 || { echo "PPPOE_MTU '$P_MTU': 1280..1492"; return 1; }
+		num_in "$P_MTU" 1280 1500 || { echo "PPPOE_MTU '$P_MTU': 1280..1500 (above 1492: RFC 4638, the lower link at PPPOE_MTU + 8)"; return 1; }
 		[ -z "$W_MTU" ] || { echo "WAN_MTU is for dhcp/static (PPPoE: PPPOE_MTU)"; return 1; }
 	else
 		[ -z "$P_USER$P_PASS$P_SERVICE$P_AC" ] || { echo "PPPOE_* keys are for WAN_PROTO=pppoe"; return 1; }
-		[ -z "$W_MTU" ] || num_in "$W_MTU" 1280 1500 || { echo "WAN_MTU '$W_MTU': 1280..1500"; return 1; }
+		[ -z "$W_MTU" ] || num_in "$W_MTU" 1280 "$MTU_MAX" || { echo "WAN_MTU '$W_MTU': 1280..$MTU_MAX"; return 1; }
 	fi
 	[ -z "$W_METRIC" ] || num_in "$W_METRIC" 1 9999 || { echo "WAN_METRIC '$W_METRIC': 1..9999"; return 1; }
 	case "$W_IPV6" in 0|1) ;; *) echo "WAN_IPV6 '$W_IPV6': 0 or 1"; return 1 ;; esac
@@ -465,7 +477,7 @@ put() { echo "$1=$2" >> "$APPLIED"; }
 got() { sed -n "s/^$1=//p" "$APPLIED" 2>/dev/null | tail -n1; }
 
 cmd_start() {
-	local n=0 r v
+	local n=0 r v m
 	load_active
 	mkdir -p "$RUN"; chmod 700 "$RUN"
 	[ -f "$APPLIED" ] && cmd_stop
@@ -486,9 +498,23 @@ cmd_start() {
 		fi
 		ip link set "$W_LOWER" up
 	fi
-	if [ -n "$W_MTU" ]; then
+	# the lower link's MTU: WAN_MTU, or a PPPoE MTU above 1492 plus the
+	# 8-byte PPPoE header (RFC 4638: pppd's pppoe.so clamps its MRU to the
+	# interface MTU - 8 and asks PPP-Max-Payload above 1492). A VLAN's port
+	# below it is raised first (a VLAN never exceeds its port). Each change
+	# is recorded, restored at stop in reverse order
+	m=$W_MTU
+	[ "$W_PROTO" = pppoe ] && [ "$P_MTU" -gt 1492 ] && m=$((P_MTU + 8))
+	if [ -n "$m" ]; then
+		if [ "$W_LOWER" != "$W_PORT" ]; then
+			v=$(cat "$SYSNET/$W_PORT/mtu" 2>/dev/null)
+			if [ -n "$v" ] && [ "$v" -lt "$m" ] 2>/dev/null; then
+				put mtu "$W_PORT $v"
+				ip link set "$W_PORT" mtu "$m" || log "$W_PORT: MTU $m refused by the driver"
+			fi
+		fi
 		put mtu "$W_LOWER $(cat "$SYSNET/$W_LOWER/mtu" 2>/dev/null)"
-		ip link set "$W_LOWER" mtu "$W_MTU"
+		ip link set "$W_LOWER" mtu "$m" || log "$W_LOWER: MTU $m refused by the driver"
 	fi
 	if need_nft; then
 		render_nft > "$RUN/wan.nft"
@@ -546,7 +572,9 @@ cmd_stop() {
 	ip -6 rule show 2>/dev/null | sed -n "s/^[0-9]*:.*iif \([^ ]*\) lookup $WAN_TABLE6.*/\1/p" |
 		while read -r i; do ip -6 rule del iif "$i" table "$WAN_TABLE6" 2>/dev/null; done
 	ip -6 route flush table "$WAN_TABLE6" 2>/dev/null
-	m=$(got mtu); [ -n "$m" ] && [ -n "${m#* }" ] && ip link set "${m%% *}" mtu "${m#* }" 2>/dev/null
+	# every MTU this tool changed, last change first (a VLAN before its port)
+	sed -n 's/^mtu=//p' "$APPLIED" | awk '{ l[NR] = $0 } END { for (i = NR; i > 0; i--) print l[i] }' |
+		while read -r i v; do [ -n "$v" ] && ip link set "$i" mtu "$v" 2>/dev/null; done
 	v=$(got vlan); [ -n "$v" ] && ip link del "$v" 2>/dev/null
 	rm -f "$APPLIED"
 	return 0
