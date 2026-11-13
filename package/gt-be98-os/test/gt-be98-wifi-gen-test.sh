@@ -1231,6 +1231,45 @@ stref "routed beside a repeater station" "routed= needs the station repeater=0" 
 stref "repeater bad value" "repeater=yes refused (0, 4addr or multiap)" station=2g repeater=yes $(nl "$N1")
 stref "repeated=2" "network 1: repeated=2 refused" station=2g repeater=4addr $(nl "$N1") repeated=2
 
+# ---- WPS (network wps=1): off by default, push-button + enrollee PIN, never a
+# static AP PIN, never on a WPA3-only BSS, one network per list ----
+check "-F: feature wps 1" "feature wps 1" "$($SH "$G" -F | grep '^feature wps ')"
+rm -f "$T/slots"
+{ net 1 w psk2sae password1 "2g 5gl 6g" 10; printf 'wps=1\n'; net 2 x psk2 password2 "2g 5gl" 20; } > "$T/wps"
+gen "$T/wps"; check "wps=1 on a psk2sae network: accepted" 0 $?
+wpsl() { for x in $(awk '$1 == "bss" { print $5 "@" $3 }' "$T/o/plan"); do grep -qx 'wps_state=2' "$T/o/sec-${x#*@}" && printf '%s ' "$x"; done | sed 's/ $//'; }
+check "wps=1: the 2.4/5 GHz BSSes of network 1 only (6 GHz is pure SAE: none; network 2 none)" "1@bcawl3 1@bcawl0" "$(wpsl)"
+check "wps=1: the WPS lines of the 2.4 GHz BSS" "yes yes yes yes yes yes" \
+	"$(has bcawl3 eap_server=1) $(has bcawl3 'config_methods=virtual_push_button keypad') $(has bcawl3 ap_setup_locked=1) $(has bcawl3 wps_rf_bands=ag) $(has bcawl3 send_probe_response=0) $(has bcawl3 device_type=6-0050F204-1)"
+check "wps=1: no static AP PIN, no label/display method, anywhere" "" "$(cat "$T"/o/sec-* | grep -E '^ap_pin=|^config_methods=.*(label|display)')"
+check "wps=1: one UUID on both WPS BSSes, RFC 4122 shape" "1 yes" \
+	"$(cat "$T"/o/sec-* | grep '^uuid=' | sort -u | wc -l | tr -d ' ') $(grep -qE '^uuid=[0-9a-f]{8}-[0-9a-f]{4}-5[0-9a-f]{3}-8[0-9a-f]{3}-[0-9a-f]{12}$' "$T/o/sec-bcawl3" && echo yes || echo no)"
+check "wps=1: the single-BSS config carries it too" "1" "$(grep -c '^wps_state=2$' "$T/o/bss-bcawl0.conf")"
+conf_ok "wps=1 psk2sae"
+{ net 1 w psk2 password1 2g 10; printf 'wps=1\n'; } > "$T/wps2"
+gen "$T/wps2"; check "wps=1 on psk2 2.4 GHz only: wps_rf_bands=g" "0 yes" "$? $(has bcawl3 wps_rf_bands=g)"
+conf_ok "wps=1 psk2"
+net 1 w psk2 password1 "2g 5gl" 10 > "$T/wps0"
+gen "$T/wps0"; check "control: no wps= key = no WPS line on any BSS" "0 0" "$? $(cat "$T"/o/sec-* | grep -cE '^(wps_state|eap_server|ap_setup_locked|uuid|config_methods)=')"
+wpsref() {	# name expected-message list-lines
+	wn=$1 wm=$2; shift 2
+	printf '%s\n' "$@" > "$T/wr"
+	gen "$T/wr"
+	check "wps refused: $wn" "1 yes" "$? $(grep -qF "$wm" "$T/err" && echo yes || echo no)"
+}
+wpsref "WPA3-only (sae)" "wps=1 refused with security sae" network=1 ssid=a security=sae passphrase=password1 bands=2g vlan=1 wps=1
+wpsref "OWE" "wps=1 refused with security owe" network=1 ssid=a security=owe bands=2g vlan=1 wps=1
+wpsref "open" "wps=1 refused with security open" network=1 ssid=a security=open bands=2g vlan=1 wps=1
+wpsref "Enterprise" "wps=1 refused with security wpa2-eap" network=1 ssid=a security=wpa2-eap radius_server=192.0.2.1 radius_secret=s bands=2g vlan=1 wps=1
+wpsref "6 GHz only" "the network is on 6 GHz only" network=1 ssid=a security=psk2sae passphrase=password1 bands=6g vlan=1 wps=1
+wpsref "hidden" "wps=1 refused with hidden=1" network=1 ssid=a security=psk2 passphrase=password1 bands=2g vlan=1 hidden=1 wps=1
+wpsref "two WPS networks" "network 1 already runs WPS" network=1 ssid=a security=psk2 passphrase=password1 bands=2g vlan=1 wps=1 network=2 ssid=b security=psk2 passphrase=password2 bands=5gl vlan=2 wps=1
+wpsref "wps=2" "network 1: wps=2 refused" network=1 ssid=a security=psk2 passphrase=password1 bands=2g vlan=1 wps=2
+# -S: a WPA3-only network asking for WPS is skipped, the others run (no WPS anywhere)
+{ net 1 a sae password1 2g 1; printf 'wps=1\n'; net 2 b psk2 password2 5gl 2; } > "$T/wps3"
+gen "$T/wps3" -S; check "-S: sae + wps=1 skipped, network 2 runs without WPS" "0 skipped 1 0" \
+	"$? $(grep '^skipped ' "$T/o/plan") $(cat "$T"/o/sec-* | grep -c '^wps_state=')"
+
 # ---- -S: a network that fails its own checks is skipped, not the list ----
 # (the service passes -S: one bad network must not take every radio down;
 # run 1105-0223/0227: a network with no VLAN beside valid ones)

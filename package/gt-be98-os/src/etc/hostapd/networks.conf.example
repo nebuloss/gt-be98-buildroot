@@ -66,6 +66,9 @@ security=psk2sae
 passphrase=CHANGE-ME-NOW
 bands=2g 5gl 5gh
 vlan=10
+# WPS push-button / enrollee PIN (gt-be98-wps pbc | pin PIN): off unless set,
+# one network at most, psk2 or psk2sae only, never a static AP PIN
+#wps=1
 
 network=20
 ssid=iot

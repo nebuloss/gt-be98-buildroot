@@ -360,6 +360,27 @@ nftables, dnsmasq): no driver internals or module parameters.
   whose radio-wide lines, anchor BSS (slot 0) or ready-made config changed
   restarts alone; the process restarts only when it died or `HOSTAPD_ARGS`
   changed. hostapd log: `/var/log/hostapd.log`.
+- WPS (Wi-Fi Protected Setup, stock parity; owner directive 2026-11-13):
+  OFF unless a network sets `wps=1` (one network at most; `security=psk2`
+  or `psk2sae` only: a WPA3-only, OWE, open or Enterprise network, a hidden
+  one and a 6 GHz-only one are refused, and a `psk2sae` network's 6 GHz BSS,
+  pure SAE, carries none). The generator writes `wps_state=2`,
+  `eap_server=1`, `config_methods=virtual_push_button keypad`,
+  `ap_setup_locked=1`, one `uuid=` for the network's BSSes and
+  `send_probe_response=0`; there is never an `ap_pin` (no static AP PIN, no
+  external registrar: the WPS PIN brute-force class has nothing to attack).
+  `gt-be98-wps pbc` opens a 2-minute push-button session on every WPS BSS
+  of the network (one hostapd: a 2.4 and a 5 GHz BSS share it),
+  `gt-be98-wps pin <PIN>` admits the client showing that PIN for 2 minutes,
+  `cancel` and `status` as named. hostapd's push-button overlap check sees
+  the enrollees' probe requests through the driver (open-wifi WPS-PREQ).
+  ⚠The box's WPS BUTTON is not wired: stock maps it to SoC GPIO 12, active
+  low (nvram `btn_wps_gpio=4108` = 0x1000 active-low flag + pin 12; the
+  reset button is `btn_rst_gpio=4109`, GPIO 13). Wiring it needs a
+  `gpio-keys` node in the mainline DT (`gpio0` 12, `GPIO_ACTIVE_LOW`,
+  `KEY_WPS_BUTTON`), `CONFIG_INPUT_KEYBOARD`/`KEYBOARD_GPIO`/`INPUT_EVDEV`
+  in the kernel (all off today) and a small event reader that runs
+  `gt-be98-wps pbc`; the pin's mux on the mainline pinctrl is unread.
 - `gt-be98-router` (`need gt-be98-wifi`): from `/etc/gt-be98-router/`
   (`router.conf`: `ROUTER_WAN`, `ROUTER_LANS="bcawl3=192.168.83.1/24 ..."`;
   `router.nft`; `dnsmasq.conf`) it puts each address on its Wi-Fi interface,

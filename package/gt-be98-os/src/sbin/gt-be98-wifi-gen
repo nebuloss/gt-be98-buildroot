@@ -51,7 +51,8 @@
 #       UI's dry run does not (-N without -S), so a bad network is refused
 #       at the save. List-wide errors still refuse the list: country=,
 #       radio=/station= blocks, a network id or block listed twice, the
-#       per-radio limit, slot.<band>=, bssid.6g= on a secondary
+#       per-radio limit, slot.<band>=, bssid.6g= on a secondary, a second
+#       wps=1 network
 #   -T  the local time the schedules are evaluated at: D = ISO weekday
 #       (1 = Monday .. 7 = Sunday, `date +%u`), HH:MM. Without -T every
 #       schedule is checked but treated as on (the service passes -T only
@@ -262,6 +263,34 @@
 #                                   passes the RRM/WNM action frames through
 #                                   (open-wifi INV-T6) kv=1 is DROPPED with
 #                                   a warning, never written
+#     wps=0|1                       Wi-Fi Protected Setup, default 0 (off).
+#                                   1: hostapd's WPS registrar on this
+#                                   network (wps_state=2, configured):
+#                                   push-button (gt-be98-wps pbc) and an
+#                                   enrollee PIN typed on the box
+#                                   (gt-be98-wps pin PIN, valid 2 min);
+#                                   NEVER a static AP PIN (no ap_pin, no
+#                                   label/display method, ap_setup_locked=1:
+#                                   no external registrar, so the WPS PIN
+#                                   brute-force class has nothing to
+#                                   attack). Only security=psk2 or psk2sae
+#                                   (WPA3 forbids WPS on a WPA3-only BSS,
+#                                   and hostapd 2.12 would hand an SAE-only
+#                                   network's passphrase out as a WPA2-PSK
+#                                   credential the network refuses):
+#                                   sae, owe, open, Enterprise are refused,
+#                                   and a psk2sae network's 6 GHz BSS (pure
+#                                   SAE there) gets no WPS; a network with
+#                                   only 6 GHz is refused. Not with
+#                                   hidden=1 (hostapd turns WPS off on a
+#                                   hidden SSID). At most ONE network per
+#                                   list: all radios run in one hostapd,
+#                                   whose WPS commands reach every WPS BSS
+#                                   of the process (wps_independent=0), so
+#                                   one network's BSSes on 2.4 and 5 GHz
+#                                   share one push-button session, one UUID
+#                                   (a dual-band client sees one device, no
+#                                   false overlap) and one overlap check
 #     twt=0|1  wds=0|1              network level: refused (-F: feature
 #                                   twt 0, feature wds 0). TWT is radio-wide
 #                                   in hostapd (radio twt=, feature
@@ -455,6 +484,7 @@ features() {
 	feature routed 1
 	feature repeater 1
 	feature beacon_prot 1
+	feature wps 1
 	station_security psk2 sae
 	EOF
 	echo "feature ht40_2g $HT40_2G"
@@ -752,6 +782,18 @@ function schedon(s, dow, mn,    w, n, i, wd, prev) {
 	}
 	return 0
 }
+# WPS: one UUID per list (the one WPS network, all its BSSes): RFC 4122
+# layout, version nibble 5, from the network id and the address of the
+# first radio (band order) the box has
+function wpsuuid(    bi, m) {
+	m = ""
+	for (bi = 1; bi <= nbands; bi++) if (BANDS[bi] in bmac) { m = bmac[BANDS[bi]]; break }
+	gsub(/:/, "", m)
+	return sprintf("6774be98-%04x-5%03x-8000-%s", int(net[wpsi] / 4096), net[wpsi] % 4096, m)
+}
+# WPS RF bands of network i (hostapd wps_rf_bands): a (5 GHz), g (2.4
+# GHz), ag (both); 6 GHz runs no WPS
+function wpsbands(i) { return ((((i, "5gl") in hasb) || ((i, "5gh") in hasb)) ? "a" : "") (((i, "2g") in hasb) ? "g" : "") }
 function ssidline(s,    i, h) {
 	if (printable(s) && s !~ /^ / && s !~ / $/) return "ssid=" s
 	h = ""
@@ -821,7 +863,7 @@ k == "network" {
 	aw[ci] = ""; alim[ci] = 0; nasw[ci] = 0
 	nb[ci] = 0; nra[ci] = 0
 	rs[ci] = ""; rp[ci] = ""; rk[ci] = ""; as[ci] = ""; ap[ci] = ""; ak[ci] = ""
-	rtd[ci] = ""; rep[ci] = 0; kv[ci] = 0
+	rtd[ci] = ""; rep[ci] = 0; kv[ci] = 0; wps[ci] = 0
 	next
 }
 k == "radio" {
@@ -897,6 +939,7 @@ cur == "n" {
 	else if (k == "hidden" && (v == "0" || v == "1")) hid[ci] = v + 0
 	else if (k == "isolate" && (v == "0" || v == "1")) iso[ci] = v + 0
 	else if (k == "kv" && (v == "0" || v == "1")) kv[ci] = v + 0
+	else if (k == "wps" && (v == "0" || v == "1")) wps[ci] = v + 0
 	else if (k == "max_clients" && isnum(v) && v + 0 >= 1 && v + 0 <= 2007) maxc[ci] = v + 0
 	else if (k == "schedule" && (v == "" || schedok(v))) nsch[ci] = v
 	else if (k == "airtime_weight" && isnum(v) && v + 0 >= 1 && v + 0 <= 1000) aw[ci] = v + 0
@@ -910,7 +953,7 @@ cur == "n" {
 	# a custom address (checked in END): bssid= (one band) or bssid.<band>=
 	else if (k == "bssid" && parsemac(v, tmo)) cmac0[ci] = tolower(v)
 	else if (k ~ /^bssid\./ && validband(substr(k, 7)) && parsemac(v, tmo)) cmac[ci, substr(k, 7)] = tolower(v)
-	else if (k ~ /^(repeated|hidden|isolate|kv|max_clients|schedule|airtime_weight|airtime_limit|airtime_sta_weight|slot\.[0-9a-z]+|mac\.[0-9a-z]+|bssid|bssid\.[0-9a-z]+)$/) nerrf(ci, "network " net[ci] ": " k "=" v " refused")
+	else if (k ~ /^(repeated|hidden|isolate|kv|wps|max_clients|schedule|airtime_weight|airtime_limit|airtime_sta_weight|slot\.[0-9a-z]+|mac\.[0-9a-z]+|bssid|bssid\.[0-9a-z]+)$/) nerrf(ci, "network " net[ci] ": " k "=" v " refused")
 	else nerrf(ci, "network " net[ci] ": unknown key " k)	# never echo a value that may be a secret
 	next
 }
@@ -967,6 +1010,13 @@ END {
 		}
 		if (((i, "6g") in hasb) && (s == "open" || s == "psk2" || s == "wpa2-eap"))
 			nerrf(i, tag ": 6 GHz needs WPA3: SAE (sae, psk2sae), OWE (owe, open-owe) or WPA3-Enterprise (wpa3-eap, wpa2-wpa3-eap)")
+		# WPS (wps=1): WPA2-Personal or WPA2/WPA3 transition only, never hidden,
+		# never a 6 GHz-only network (header)
+		if (wps[i]) {
+			if (s != "psk2" && s != "psk2sae") nerrf(i, tag ": wps=1 refused with security " s ": WPS runs only on psk2 (WPA2) or psk2sae (WPA2/WPA3); WPA3-only, OWE, open and Enterprise networks never run WPS")
+			else if (nb[i] == 1 && ((i, "6g") in hasb)) nerrf(i, tag ": wps=1 refused: the network is on 6 GHz only, which is WPA3-only (no WPS)")
+			if (hid[i]) nerrf(i, tag ": wps=1 refused with hidden=1 (hostapd turns WPS off on a hidden SSID)")
+		}
 		if (rep[i]) {
 			if (vlan[i] != "" || rtd[i] != "") nerrf(i, tag ": repeated=1 excludes vlan= and routed= (the network is bridged to the Wi-Fi uplink)")
 			if (nrep++) nerrf(i, tag ": repeated=1: network " repid " is already repeated (one network per station uplink)")
@@ -992,6 +1042,12 @@ END {
 	for (i = 1; i <= nnet; i++) if (i in bad) {
 		for (bi = 1; bi <= nbands; bi++) delete hasb[i, BANDS[bi]]
 		nsch[i] = ""
+	}
+	# WPS: one network per list (header: one hostapd, one push-button session)
+	nw = 0
+	for (i = 1; i <= nnet; i++) if (wps[i] && !(i in bad)) {
+		if (nw) err("network " net[i] ": wps=1: network " wpsid " already runs WPS (one WPS network per list)")
+		else { nw = 1; wpsid = net[i]; wpsi = i }
 	}
 	# [open-wifi INV-T6] KV=0 (header): kv=1 dropped, said once per network
 	for (i = 1; i <= nnet; i++) if (kv[i] && !(kvon + 0) && !(i in bad)) {
@@ -1463,6 +1519,25 @@ END {
 					if (ishex64(pass[i])) print "wpa_psk=" tolower(pass[i]) > f
 					else print "wpa_passphrase=" pass[i] > f
 				}
+			}
+			# WPS (wps=1, header): the registrar of a configured AP; the 6 GHz
+			# BSS of a psk2sae network is pure SAE (s above) and gets none
+			if (wps[i] && (s == "psk2" || s == "psk2sae")) {
+				print "wps_state=2" > f
+				# EAP-WSC runs in the integrated EAP server of hostapd
+				print "eap_server=1" > f
+				# push-button and an enrollee PIN entered on the box; no
+				# label/display method: no static AP PIN exists
+				print "config_methods=virtual_push_button keypad" > f
+				# no external registrar may (re)configure the AP
+				print "ap_setup_locked=1" > f
+				print "uuid=" wpsuuid() > f
+				print "wps_rf_bands=" wpsbands(i) > f
+				print "device_name=GT-BE98" > f; print "manufacturer=open-wifi" > f
+				print "model_name=GT-BE98" > f; print "device_type=6-0050F204-1" > f
+				# the firmware answers probe requests itself: hostapd gets the
+				# WPS ones (open-wifi WPS-PREQ) for its PBC overlap check only
+				print "send_probe_response=0" > f
 			}
 			close(f)
 			print "bss " d " " ifn " " k " " id " " mi[b, id] " " a " " br " " out "/bss-" ifn ".conf" > plan
