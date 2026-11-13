@@ -47,6 +47,22 @@ lan_case 1 "rnr1" brwifi1			# never a Wi-Fi network bridge
 lan_case 0 "rnr2" br-lan 192.168.50.1/24
 lan_case 1 "rnr2" br-lan 192.168.50.1		# not CIDR
 
+# 2b. gt-be98-lan forward filter: into the bridge only replies, DNAT, and UDP to
+# an IPv4 multicast group (forwarded only by router mode's igmpproxy), then drop
+r=$(
+	eerror() { :; }; ebegin() { :; }; eend() { :; }; ewarn() { :; }
+	nft() { cat; }
+	LAN_CONF_FILE="$T/lan.conf"
+	. "$SRC/init.d/gt-be98-lan"
+	LAN_BRIDGE=br-lan; lan_nft
+)
+o=$(printf '%s\n' "$r" | sed -n 's/^[[:space:]]*\(oifname "br-lan" .*\)$/\1/p' | tr '\n' '|')
+if [ "$o" = 'oifname "br-lan" iifname "br-lan" accept|oifname "br-lan" ct state established,related accept|oifname "br-lan" ct status dnat accept|oifname "br-lan" ip daddr 224.0.0.0/4 meta l4proto udp accept|oifname "br-lan" counter drop|' ]; then
+	ok "lan forward filter: replies, DNAT, UDP multicast, then drop"
+else
+	ko "lan forward filter: got [$o]"
+fi
+
 # 3. gt-be98-router LAN names: <expect 0|1> <ROUTER_LANS>
 router_case() {
 	mkdir -p "$T/router"

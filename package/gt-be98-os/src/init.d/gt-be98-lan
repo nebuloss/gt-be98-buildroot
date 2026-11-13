@@ -12,7 +12,10 @@
 #     to the bridge only);
 #   - nft table inet gt_be98_lan: nothing is forwarded INTO the bridge but
 #     replies and DNATed flows (the router's NAT keeps the LAN unreachable
-#     from the uplink, whatever the web UI's own table says);
+#     from the uplink, whatever the web UI's own table says), and UDP to an
+#     IPv4 multicast group: only a multicast routing daemon forwards those
+#     (router mode's igmpproxy, ROUTER_IGMP_PROXY=1, off by default), and only
+#     for a group a LAN host joined;
 #   - rtl8372.ko (read-only switch monitor) when rnr1 is a LAN port.
 # Settings: /etc/conf.d/gt-be98-lan (parsed, not sourced).
 description="Wired LAN: LAN ports (never rnr0) in one bridge, STP, optional DHCP"
@@ -80,6 +83,7 @@ lan_nft() {
 			oifname "$LAN_BRIDGE" iifname "$LAN_BRIDGE" accept
 			oifname "$LAN_BRIDGE" ct state established,related accept
 			oifname "$LAN_BRIDGE" ct status dnat accept
+			oifname "$LAN_BRIDGE" ip daddr 224.0.0.0/4 meta l4proto udp accept
 			oifname "$LAN_BRIDGE" counter drop
 		}
 	}

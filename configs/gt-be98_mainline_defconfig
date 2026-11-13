@@ -110,6 +110,9 @@ BR2_PACKAGE_DNSMASQ=y
 # PPPoE WAN (gt-be98-wan WAN_PROTO=pppoe): pppd and its pppoe.so plugin
 # (the kernel's PPPoE, CONFIG_PPPOE). rp-pppoe is not needed for a client.
 BR2_PACKAGE_PPPD=y
+# IPTV over a routed WAN (gt-be98-router ROUTER_IGMP_PROXY=1, off by default):
+# the IGMP proxy that drives the kernel's multicast routing (CONFIG_IP_MROUTE)
+BR2_PACKAGE_IGMPPROXY=y
 
 # --- Wi-Fi userland ---------------------------------------------------------------
 BR2_PACKAGE_IW=y

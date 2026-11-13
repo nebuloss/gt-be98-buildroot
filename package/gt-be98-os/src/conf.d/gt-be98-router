@@ -6,3 +6,10 @@ IFACE_WAIT=20
 # routing table + ip rule priority for the Wi-Fi LANs (policy routing by
 # input interface to the WAN's default route)
 ROUTER_TABLE=180
+# IPTV / multicast over a routed WAN (off by default): 1 = igmpproxy runs
+# with the WAN (ROUTER_WAN) upstream and every router LAN (ROUTER_LANS)
+# downstream: a LAN client's IGMP join is relayed to the WAN and the group is
+# forwarded by the kernel's multicast routing (CONFIG_IP_MROUTE); IGMP is
+# then accepted on the WAN input. IPv4 only (no MLD proxy). Started once
+# the WAN has an IPv4 address, restarted when the WAN or its lease changes.
+ROUTER_IGMP_PROXY=0

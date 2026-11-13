@@ -40,6 +40,7 @@ case "$*" in
 "link del "*) rm -rf "$GT_BE98_SYSNET/$3" ;;
 "-6 route show default dev "*) cat "$FAKE/route6-$6" 2>/dev/null ;;
 "-4 route show default dev "*) cat "$FAKE/route4-$6" 2>/dev/null ;;
+"-4 -o addr show dev "*) cat "$FAKE/addr4-$6" 2>/dev/null ;;
 esac
 exit 0
 X
@@ -452,6 +453,13 @@ check "  control: 0.0.0.0/0 and ::/0 accepted" 0 "$($SH "$W" input-nft t rnr0 0.
 check "input-nft refuses interface 'rnr0 }'" 1 "$($SH "$W" input-nft t 'rnr0 }' >/dev/null 2>&1; echo $?)"
 check "input-nft refuses table 'a b'" 1 "$($SH "$W" input-nft 'a b' rnr0 >/dev/null 2>&1; echo $?)"
 check "input-nft refuses a missing interface" 1 "$($SH "$W" input-nft t >/dev/null 2>&1; echo $?)"
+# --igmp (router mode's igmpproxy): IGMP accepted after DHCP, before the allow-list and the drop
+$SH "$W" input-nft gt_be98_router_in rnr0 --igmp 192.0.2.0/24 > "$T/in3.nft" 2>/dev/null; r=$?
+check "input-nft --igmp: rc 0, IGMP accepted after DHCP, then the allow-list, then the drop" \
+	'0|iifname "rnr0" udp dport { 68, 546 } accept|iifname "rnr0" meta l4proto igmp accept|iifname "rnr0" ip saddr { 192.0.2.0/24 } accept|iifname "rnr0" drop' \
+	"$r|$(grep -E 'udp dport|igmp|saddr|drop' "$T/in3.nft" | sed 's/^[[:space:]]*//' | tr '\n' '|' | sed 's/|$//')"
+check "  control: without --igmp no IGMP rule (in.nft, in2.nft)" "no no" "$(yes_no grep -q igmp "$T/in.nft") $(yes_no grep -q igmp "$T/in2.nft")"
+check "  --igmp is not taken for a CIDR (refused only as one)" 1 "$($SH "$W" input-nft t rnr0 192.0.2.0/24 --igmp >/dev/null 2>&1; echo $?)"
 # the service: router mode on the bare uplink loads the filter BEFORE NAT and
 # forwarding; a filter that cannot be built keeps router mode down
 rsrc() {	# the router service's functions, its run files under $T
@@ -459,6 +467,7 @@ rsrc() {	# the router service's functions, its run files under $T
 	ROUTER_DIR="$T/router" GT_BE98_WAN="$SH $W" ROUTER_TABLE=180 ROUTER_INPUT_NFT="$T/router-in.nft"
 	. "$SRC/init.d/gt-be98-router"
 	APPLIED=$T/router.applied DNSMASQ_PID=$T/router-dnsmasq.pid IFACE_WAIT=0
+	IGMPPROXY=$T/bin/igmpproxy IGMPPROXY_CONF=$T/igmpproxy.conf IGMPPROXY_PID=$T/igmpproxy.pid
 }
 rstart() { ( rsrc; start; echo "rc=$?" ); }
 isrc() { printf '%s\n' "$1" | grep -qx "$2" && echo yes || echo no; }
@@ -495,6 +504,35 @@ printf 'ROUTER_WAN="wan"\nROUTER_LANS="bcawl3=192.168.83.1/24"\n' > "$T/router/r
 ( rsrc; reroute ) >/dev/null 2>&1
 check "router reroute: the filter re-applied on the WAN netdev (rnr0.835)" "yes yes" \
 	"$(yes_no has "$FAKE/log" "nft -f $T/router-in.nft") $(yes_no grep -q 'iifname "rnr0.835" drop' "$T/router-in.nft")"
+# multicast routing (ROUTER_IGMP_PROXY=1): IGMP on the WAN input, igmpproxy
+# with the WAN upstream and the router LANs that exist downstream; not
+# started while the WAN has no IPv4 address; off by default
+printf '#!/bin/sh\nexit 0\n' > "$T/bin/igmpproxy"; chmod +x "$T/bin/igmpproxy"
+mkdir -p "$T/net/bcawl3"
+reset; rm -f "$T/etc/wan.conf"
+printf 'ROUTER_WAN="rnr0"\nROUTER_LANS="bcawl3=192.168.83.1/24 bcawl0=192.168.80.1/24"\n' > "$T/router/router.conf"
+echo "2: rnr0    inet 198.51.100.2/24 brd 198.51.100.255 scope global rnr0" > "$FAKE/addr4-rnr0"
+r=$( ( rsrc; ROUTER_IGMP_PROXY=1; start; echo "rc=$?" ) 2>&1)
+check "router + ROUTER_IGMP_PROXY=1: rc 0, IGMP accepted on the WAN input" "yes yes" "$(isrc "$r" rc=0) $(yes_no grep -q 'iifname "rnr0" meta l4proto igmp accept' "$T/router-in.nft")"
+check "  igmpproxy started in the foreground under start-stop-daemon, with its config" yes \
+	"$(yes_no has "$FAKE/log" "start-stop-daemon --start --background --make-pidfile --pidfile $T/igmpproxy.pid --exec $T/bin/igmpproxy -- -n $T/igmpproxy.conf")"
+check "  its config: quickleave, rnr0 upstream (altnet 0.0.0.0/0), the existing LAN bcawl3 downstream (bcawl0 absent)" \
+	"quickleave|phyint rnr0 upstream ratelimit 0 threshold 1|altnet 0.0.0.0/0|phyint bcawl3 downstream ratelimit 0 threshold 1" \
+	"$(grep -v '^#' "$T/igmpproxy.conf" | sed 's/^[[:space:]]*//' | tr '\n' '|' | sed 's/|$//')"
+reset; rm -f "$FAKE/addr4-rnr0" "$T/igmpproxy.conf"
+r=$( ( rsrc; ROUTER_IGMP_PROXY=1; start; echo "rc=$?" ) 2>&1)
+check "  the WAN without an IPv4 address: router rc 0, no igmpproxy yet (its lease's reroute starts it)" "yes no no" \
+	"$(isrc "$r" rc=0) $(yes_no grep -q igmpproxy "$FAKE/log") $(yes_no test -f "$T/igmpproxy.conf")"
+echo "2: rnr0    inet 198.51.100.2/24 brd 198.51.100.255 scope global rnr0" > "$FAKE/addr4-rnr0"
+reset; ( rsrc; ROUTER_IGMP_PROXY=1; reroute ) >/dev/null 2>&1
+check "  reroute with the lease: igmpproxy started" yes "$(yes_no grep -q "start-stop-daemon --start .*igmpproxy" "$FAKE/log")"
+reset; echo 1 > "$T/igmpproxy.pid"; ( rsrc; stop ) >/dev/null 2>&1
+check "  stop: igmpproxy stopped (its pid file), its config removed" "yes no no" \
+	"$(yes_no grep -q "start-stop-daemon --stop --exec $T/bin/igmpproxy --pidfile $T/igmpproxy.pid" "$FAKE/log") $(yes_no test -f "$T/igmpproxy.pid") $(yes_no test -f "$T/igmpproxy.conf")"
+reset; r=$( ( rsrc; start; echo "rc=$?" ) 2>&1)
+check "  control: ROUTER_IGMP_PROXY unset (the default 0): no IGMP rule, no igmpproxy" "yes no no" \
+	"$(isrc "$r" rc=0) $(yes_no grep -q igmp "$T/router-in.nft") $(yes_no grep -q igmpproxy "$FAKE/log")"
+rm -f "$FAKE/addr4-rnr0"; rm -rf "$T/net/bcawl3"
 # AP mode: nothing in the WAN tool filters the bare uplink (rnr0 = management)
 reset; rm -f "$T/etc/wan.conf"
 wan start 2>/dev/null
