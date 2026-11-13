@@ -24,6 +24,10 @@
 #      sub-interface of a protected port: with a Wi-Fi uplink in it, a trunk
 #      VLAN would join the wired LAN to the uplink's segment (a loop when
 #      the uplink AP sits on that LAN).
+#   5. the BSS ports (bcawl*) of the brwifi bridges have multicast_to_unicast
+#      as gt-be98-wifi sets it (WIFI_MCAST_TO_UNICAST, default 1), the
+#      repeater's uplink port never (a port whose kernel lacks the
+#      attribute is left alone).
 # One exception to 1., the wired LAN (gt-be98-lan, off by default): a bare
 # port listed in LAN_PORTS may be a port of the bridge LAN_BRIDGE (br-lan),
 # and of no other bridge, when it is rnr1, rnr2 or rnr3 and not the Wi-Fi
@@ -121,6 +125,7 @@ wifi_conf() {
 	cfg_last "$f" WIFI_VLANS 'A-Za-z0-9: '; VLANS=$CFG
 	cfg_last "$f" WIFI_ISOLATE 'A-Za-z0-9 '; ISOLATE=$CFG
 	cfg_last "$f" WIFI_TRUNK 'A-Za-z0-9'; TRUNK=${CFG:-rnr0}
+	cfg_last "$f" WIFI_MCAST_TO_UNICAST '01'; M2U=${CFG:-1}
 	case "$TRUNK" in rnr[0-3]) ;; *) TRUNK= ;; esac
 }
 # is sub-interface $1 the listed trunk VLAN of bridge $2?
@@ -202,7 +207,16 @@ sweep() {
 				v=; { read -r v < "$n/brport/isolated"; } 2>/dev/null
 				[ "$v" = "$f" ] ||
 					{ echo "$f" > "$n/brport/isolated" 2>/dev/null &&
-						log "isolated=$f on $i (bridge $m)"; } ;;
+						log "isolated=$f on $i (bridge $m)"; }
+				# multicast-to-unicast on the BSS ports (rule 5)
+				case "$i" in
+				bcawl*)	f=$M2U
+					repeater_of "$i" "$m" && f=0
+					v=; { read -r v < "$n/brport/multicast_to_unicast"; } 2>/dev/null
+					[ -z "$v" ] || [ "$v" = "$f" ] ||
+						{ echo "$f" > "$n/brport/multicast_to_unicast" 2>/dev/null &&
+							log "multicast_to_unicast=$f on $i (bridge $m)"; } ;;
+				esac ;;
 			esac
 		done
 	done

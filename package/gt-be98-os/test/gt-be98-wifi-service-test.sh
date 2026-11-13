@@ -190,7 +190,7 @@ check "start: hostapd runs" "phy3 bcawl3 bcawl3-1 bcawl3-2
 phy0 bcawl0 bcawl0-1
 phy1 bcawl1 bcawl1-1
 phy2 bcawl2" "$(hapd)"
-check "start: netguard file" 'WIFI_TRUNK="rnr0" WIFI_VLANS="brwifi30:30 brwifi10:10 brwifi20:20" WIFI_ISOLATE="brwifi30"' \
+check "start: netguard file" 'WIFI_TRUNK="rnr0" WIFI_VLANS="brwifi30:30 brwifi10:10 brwifi20:20" WIFI_ISOLATE="brwifi30" WIFI_MCAST_TO_UNICAST="1"' \
 	"$(grep -v '^#' "$T/run/gt-be98-wifi/l2.conf" | tr '\n' ' ' | sed 's/ $//')"
 
 # 2. nothing changed: nothing sent
@@ -707,6 +707,35 @@ else
 	check "lock: svc_lock exists" "yes" "no"
 fi
 kill $(fakes pids) 2>/dev/null
+
+# 26. multicast (owner batch 1): the bridge's snooping/querier, multicast-to-
+# unicast on the BSS ports only (never a trunk VLAN, never a station), on a
+# fake sysfs; a port whose kernel has no such attribute is left alone
+if command -v mcast_bridge > /dev/null 2>&1 && command -v mcast_ports > /dev/null 2>&1; then
+	S9="$T/net"; mkdir -p "$S9/brwifi9/bridge" "$S9/brwifi9/brif"
+	for f in multicast_snooping multicast_querier multicast_igmp_version multicast_mld_version multicast_query_use_ifaddr; do echo 0 > "$S9/brwifi9/bridge/$f"; done
+	for p in bcawl0 rnr0.9 bcawl5 bcawl1-1; do
+		mkdir -p "$S9/$p/brport"; echo 0 > "$S9/$p/brport/multicast_to_unicast"; ln -sfn "../../$p/brport" "$S9/brwifi9/brif/$p"
+	done
+	mkdir -p "$S9/bcawl2-2/brport"; ln -sfn "../../bcawl2-2/brport" "$S9/brwifi9/brif/bcawl2-2"	# no attribute
+	mkdir -p "$STATE"; echo bcawl5 > "$STATE/stations"
+	bv() { for f in multicast_snooping multicast_querier multicast_igmp_version multicast_mld_version multicast_query_use_ifaddr; do printf '%s ' "$(cat "$S9/brwifi9/bridge/$f")"; done; }
+	pv() { for p in bcawl0 rnr0.9 bcawl5 bcawl1-1; do printf '%s=%s ' "$p" "$(cat "$S9/$p/brport/multicast_to_unicast")"; done; ls "$S9/bcawl2-2/brport" | tr '\n' ' '; }
+	mcast_bridge brwifi9 0; check "mcast_bridge (VLAN bridge, querier 0): snooping 1, querier 0, versions untouched" "1 0 0 0 0 " "$(bv)"
+	mcast_bridge brwifi9 1; check "mcast_bridge (routed, querier 1): snooping, querier, IGMPv3, MLDv2, query from the bridge address" "1 1 3 2 1 " "$(bv)"
+	mcast_bridge brwifi9 0; check "mcast_bridge back to 0: querier off" "1 0" "$(bv | cut -d' ' -f1-2)"
+	( unset WIFI_MCAST_TO_UNICAST; mcast_ports brwifi9 )
+	check "mcast_ports (default 1): BSS ports 1, trunk VLAN 0, station 0, no attribute created" "bcawl0=1 rnr0.9=0 bcawl5=0 bcawl1-1=1 " "$(pv)"
+	( WIFI_MCAST_TO_UNICAST=0; mcast_ports brwifi9 )
+	check "mcast_ports WIFI_MCAST_TO_UNICAST=0: every port 0 (control)" "bcawl0=0 rnr0.9=0 bcawl5=0 bcawl1-1=0 " "$(pv)"
+	( WIFI_MCAST_TO_UNICAST=yes; mcast_ports brwifi9 )
+	check "mcast_ports WIFI_MCAST_TO_UNICAST=yes (not 0): on" "bcawl0=1 bcawl1-1=1" "$(pv | cut -d' ' -f1,4)"
+	check "l2.conf value: 0 only for 0" "1 0 1" "$(WIFI_MCAST_TO_UNICAST=1 mcast_m2u) $(WIFI_MCAST_TO_UNICAST=0 mcast_m2u) $(WIFI_MCAST_TO_UNICAST= mcast_m2u)"
+	check "querier: 1 only for 1 (default 0)" "1 0 0" "$(WIFI_MCAST_QUERIER=1 mcast_querier) $(WIFI_MCAST_QUERIER=0 mcast_querier) $(WIFI_MCAST_QUERIER= mcast_querier)"
+	rm -rf "$S9/brwifi9" "$S9/bcawl0" "$S9/rnr0.9" "$S9/bcawl5" "$S9/bcawl1-1" "$S9/bcawl2-2" "$STATE/stations"
+else
+	check "multicast: mcast_bridge and mcast_ports exist" "yes" "no"
+fi
 
 if [ $fail = 0 ]; then echo "ALL OK ($n checks)"; else echo "FAILED"; cat "$T/out"; fi
 exit $fail
