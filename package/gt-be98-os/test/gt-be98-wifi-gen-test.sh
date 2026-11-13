@@ -587,6 +587,33 @@ check "station radio + auto, associated (-U 5600): the uplink channel 120, no AC
 rm -f "$T/slots"; gen "$T/acs10" -c
 check "station radio + auto, not associated: the default channel 100, no ACS, warned" "0 channel=100 0 yes" \
 	"$? $(grep '^channel=' "$T/o/hdr-bcawl1") $(grep -c acs_ "$T/o/hdr-bcawl1") $(grep -q 'radio 5gh: channel=auto on a station radio: its APs run on channel 100 until the uplink associates' "$T/err" && echo yes || echo no)"
+# 5gh ACS never picks a block holding the weather-radar channels 120-128 (600 s
+# CAC): freqlist= leaves out every channel of such a block at the width
+# (hostapd acs.c applies the list per primary only); chanlist (radar moves) unchanged
+fq() { grep '^freqlist=' "$T/o/hdr-bcawl1" 2>/dev/null; }
+for w in 20 40 80 160; do
+	{ printf 'radio=5gh\nchannel=auto\nwidth=%s\n' "$w"; net 1 a sae password1 5gh 1; } > "$T/acsw"
+	rm -f "$T/slots"; gen "$T/acsw" -c; printf '%s:%s:%s:%s ' "$w" "$?" "$(fq)" "$(grep '^vht_oper_chwidth=' "$T/o/hdr-bcawl1")"
+done > "$T/acsw.out"
+check "5gh auto: freqlist per width (20: 100-116; 40/80: 100-112; 160 -> 80), 132-144 and 149-177 kept" \
+	"20:0:freqlist=5500-5580,5660-5720,5745-5885:vht_oper_chwidth=0 40:0:freqlist=5500-5560,5660-5720,5745-5885:vht_oper_chwidth=0 80:0:freqlist=5500-5560,5660-5720,5745-5885:vht_oper_chwidth=1 160:0:freqlist=5500-5560,5660-5720,5745-5885:vht_oper_chwidth=1 " \
+	"$(cat "$T/acsw.out")"
+check "5gh auto 160: warned, no [VHT160], chanlist unchanged" "yes no chanlist=100-144 149-177" \
+	"$(grep -q 'radio 5gh: channel=auto at 160 MHz: the only 5gh 160 MHz block' "$T/err" && echo yes || echo no) $(grep -q 'VHT160' "$T/o/hdr-bcawl1" && echo yes || echo no) $(grep '^chanlist=' "$T/o/hdr-bcawl1")"
+conf_ok "5gh auto 160 -> 80 with freqlist"
+# the excluded set, re-derived from the 5 GHz block geometry: no freqlist channel
+# may share a 20/40/80 block with 120-128
+check "freqlist: no channel shares a block with 120-128 (20/40/80)" "" "$(for w in 20 40 80; do
+	case $w in 20) f=5500-5580 ;; *) f=5500-5560 ;; esac
+	lo=${f%-*}; hi=${f#*-}; c=$(( (lo - 5000) / 5 )); e=$(( (hi - 5000) / 5 ))
+	while [ $c -le $e ]; do
+		n=$((w / 20)); b=$(( 100 + ((c - 100) / (4 * n)) * 4 * n ))
+		[ $b -le 128 ] && [ $((b + 4 * n - 4)) -ge 120 ] && printf '%s@%s ' "$c" "$w"
+		c=$((c + 4))
+	done
+done)"
+check "control: 5gh numeric channel, 5gl auto: no freqlist" "0|0" \
+	"$({ printf 'radio=5gh\nchannel=116\nwidth=80\nradio=5gl\nchannel=auto\n'; net 1 a sae password1 "5gl 5gh" 1; } > "$T/acsx"; rm -f "$T/slots"; gen "$T/acsx" -c; cat "$T"/o/hdr-* | grep -c '^freqlist=')|$(grep -c 'weather' "$T/err")"
 check "-F: feature acs 1, acs 2g 5gl 5gh" "feature acs 1|acs 2g 5gl 5gh" "$($SH "$G" -F | grep -E '^(feature acs|acs) ' | tr '\n' '|' | sed 's/|$//')"
 
 # ---- 10b4. 6 GHz secondaries = the anchor's nontransmitted BSSIDs (soak

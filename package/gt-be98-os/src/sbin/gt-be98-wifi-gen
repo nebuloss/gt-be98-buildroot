@@ -116,7 +116,20 @@
 #                                   a DFS channel (a CAC follows, 60 s; 10
 #                                   min on 120-128 in ETSI), and without
 #                                   -c hostapd leaves the radar channels
-#                                   out (5gh then has none: warned). 6g:
+#                                   out (5gh then has none: warned).
+#                                   5gh: ACS never picks a block holding
+#                                   the weather-radar channels 120-128
+#                                   (their CAC is 600 s: the radio would
+#                                   stay dark 10 min after the pick):
+#                                   freqlist= (ACS only, not the radar
+#                                   move list) leaves out every channel
+#                                   of such a block at the width, so the
+#                                   block has no primary (hostapd acs.c
+#                                   checks the list per primary only);
+#                                   20: 100-116 132-144 149-177, 40/80:
+#                                   100-112 132-144 149-177; 160 (every
+#                                   5gh 160 block holds them): 80, warned.
+#                                   6g:
 #                                   refused (the driver's survey does not
 #                                   serve 6 GHz, open-wifi ACS-1 H2-H4).
 #                                   A station radio (station=) takes its
@@ -1350,6 +1363,21 @@ END {
 		# share the channel of the uplink (the driver refuses another, -EBUSY)
 		# and must not scan under the scans and join of the station
 		acs = racs[b] && !ista[b]
+		# 5gh ACS and the weather-radar channels 120-128 (owner/orchestrator
+		# 11-13): their CAC is 600 s in the driver rule table of EVERY
+		# country (open-wifi bca_regdom, 5590-5650 dfs_cac_ms 600000), so an
+		# ACS pick there leaves the radio dark 10 min. hostapd 2.12 acs.c
+		# acs_find_ideal_chan_mode applies chanlist/freqlist to a block only
+		# when choosing its PRIMARY (a channel outside them is skipped as
+		# primary, the block stays a candidate): freqlist= therefore lists no
+		# channel of a block that holds 120-128 at this width (then "No
+		# valid channel found in the segment"). freqlist is read by acs.c
+		# only (dfs.c moves after a radar read chanlist): radar moves keep
+		# the whole band. At 160 the only 5gh block (100-128) holds them: 80
+		if (acs && b == "5gh" && w == 160) {
+			warn("radio 5gh: channel=auto at 160 MHz: the only 5gh 160 MHz block (100-128) holds the weather-radar channels 120-128 (a 600 s CAC): automatic selection runs at 80 MHz")
+			w = 80
+		}
 		if (racs[b] && ista[b]) warn("radio " b ": channel=auto on a station radio: its APs run on " ((b in ufreq) ? "the uplink channel " ch : "channel " ch " until the uplink associates, then on its channel"))
 		hdr = out "/hdr-" d
 		print "driver=nl80211" > hdr
@@ -1433,6 +1461,8 @@ END {
 			# regulatory domain disables stay off.
 			# (no apostrophe in this program: it is a single-quoted string)
 			print "chanlist=" (b == "5gl" ? "36-64" : "100-144 149-177") > hdr
+			# ACS on 5gh: no block holding 120-128 (above), in MHz
+			if (acs && b == "5gh") print "freqlist=" (w == 20 ? "5500-5580" : "5500-5560") ",5660-5720,5745-5885" > hdr
 		}
 		# ACS: two survey passes, the count that completed on the box
 		# (1027-1233: 2.4 GHz channel 13, 5 GHz channel 48, AP-ENABLED)
