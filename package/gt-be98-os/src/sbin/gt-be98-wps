@@ -14,12 +14,16 @@
 #                           2 minutes (hostapd wps_pin any PIN 120). The box
 #                           has no PIN of its own: nothing to brute-force
 #   gt-be98-wps cancel      end a running push-button or PIN session
-#   gt-be98-wps status      hostapd's WPS state (PBC Status, Last WPS result)
+#   gt-be98-wps status      hostapd's WPS state of EVERY WPS BSS, each line
+#                           prefixed "<ifname>: " (PBC Status, Last WPS result:
+#                           hostapd keeps the result on the BSS the client
+#                           enrolled through, so one BSS alone can say None)
 #
 # The WPS BSSes are the ones whose generated config has wps_state= (the plan
 # of gt-be98-wifi, $STATE/gen/plan). All of them run in ONE hostapd, whose
-# WPS commands reach every WPS BSS of the process: the command is sent to the
-# first one only, and the network's 2.4 and 5 GHz BSSes share the session.
+# WPS commands reach every WPS BSS of the process: pbc/pin/cancel are sent to
+# the first one only, and the network's 2.4 and 5 GHz BSSes share the session;
+# status asks each of them.
 # Exit: 0 done, 1 refused (WPS off, or hostapd answered FAIL), 2 usage.
 set -u
 # (GT_BE98_*: the offline test harness only)
@@ -34,16 +38,16 @@ log() {
 	echo "gt-be98-wps: $*" >&2
 }
 
-# the first WPS BSS of the plan: "<ctrl dir> <ifname>", nothing when WPS is off
+# the WPS BSSes of the plan, one "<ctrl dir> <ifname>" per line, in plan order;
+# nothing when WPS is off
 # (plan: bss <dev> <ifname> <slot> <net> <index> <bssid> <bridge> <conf> <sum>)
-wps_bss() {
+wps_bsses() {
 	[ -f "$PLAN" ] || return 0
 	while read -r t _ ifn _ _ _ _ _ conf _; do
 		[ "$t" = bss ] && [ -f "$conf" ] || continue
 		grep -q '^wps_state=[12]$' "$conf" || continue
 		c=$(sed -n 's/^ctrl_interface=//p' "$conf" | head -n 1)
 		echo "${c:-/run/hostapd} $ifn"
-		return 0
 	done < "$PLAN"
 }
 
@@ -72,7 +76,8 @@ pin) [ $# = 1 ] || usage
 *) usage ;;
 esac
 
-b=$(wps_bss)
+all=$(wps_bsses)
+b=$(echo "$all" | head -n 1)
 if [ -z "$b" ]; then
 	log "$cmd refused: WPS is off (no network has wps=1, or the Wi-Fi service is not running)"
 	exit 1
@@ -82,7 +87,11 @@ case $cmd in
 pbc) a=$("$HOSTAPD_CLI" -p "$ctrl" -i "$ifn" wps_pbc 2>&1) ;;
 pin) a=$("$HOSTAPD_CLI" -p "$ctrl" -i "$ifn" wps_pin any "$1" 120 2>&1) ;;
 cancel) a=$("$HOSTAPD_CLI" -p "$ctrl" -i "$ifn" wps_cancel 2>&1) ;;
-status) "$HOSTAPD_CLI" -p "$ctrl" -i "$ifn" wps_get_status; exit $? ;;
+status)	rc=0
+	echo "$all" | while read -r c i; do
+		"$HOSTAPD_CLI" -p "$c" -i "$i" wps_get_status | sed "s/^/$i: /"
+	done || rc=$?
+	exit $rc ;;
 esac
 if [ "$a" = OK ]; then
 	if [ "$cmd" = cancel ]; then log "cancel: done on $ifn (and every WPS BSS of the network)"
