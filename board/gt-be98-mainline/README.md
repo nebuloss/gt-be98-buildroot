@@ -372,8 +372,16 @@ nftables, dnsmasq): no driver internals or module parameters.
   `gt-be98-wps pbc` opens a 2-minute push-button session on every WPS BSS
   of the network (one hostapd: a 2.4 and a 5 GHz BSS share it),
   `gt-be98-wps pin <PIN>` admits the client showing that PIN for 2 minutes,
-  `cancel` and `status` as named. hostapd's push-button overlap check sees
-  the enrollees' probe requests through the driver (open-wifi WPS-PREQ).
+  `cancel`, and `status` (every WPS BSS, `<ifname>:`-prefixed: hostapd keeps
+  the last result on the BSS the client enrolled through).
+  ⚠**No push-button overlap protection yet**: hostapd refuses two clients
+  pressing in the same 2 minutes only if it sees their probe requests, and
+  on this firmware none reach the host at its default event mask (open-wifi
+  ledger WPS-PREQ, silicon 2026-11-13: the driver path exists, the firmware
+  sends nothing to it). A stranger in range who presses within the window
+  the admin opened can enrol instead of, or as well as, the intended client.
+  Accepted only because WPS is off by default and each session is a
+  2-minute window opened by the admin; prefer `pin` when that matters.
   ⚠The box's WPS BUTTON is not wired: stock maps it to SoC GPIO 12, active
   low (nvram `btn_wps_gpio=4108` = 0x1000 active-low flag + pin 12; the
   reset button is `btn_rst_gpio=4109`, GPIO 13). Wiring it needs a
