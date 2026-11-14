@@ -16,7 +16,7 @@
 #     IPv4 multicast group: only a multicast routing daemon forwards those
 #     (router mode's igmpproxy, ROUTER_IGMP_PROXY=1, off by default), and only
 #     for a group a LAN host joined;
-#   - rtl8372.ko (read-only switch monitor) when rnr1 is a LAN port;
+#   - rtl8372.ko (configures the RTL8372: the four 2.5G LAN jacks) when rnr1 is a LAN port;
 #   - optional MTU (LAN_MTU, 1280..10240: jumbo frames, the Runner driver's
 #     max_mtu) on each LAN port and the bridge; restored at stop. Unset: the
 #     ports keep theirs (1500). rnr1's jacks also pass through the RTL8372,

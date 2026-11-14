@@ -35,11 +35,13 @@ config BR2_PACKAGE_GT_BE98_OPEN_ETHERNET_RUNNER
 	  service loads it. Its firmware comes from gt-be98-vendor-firmware.
 
 config BR2_PACKAGE_GT_BE98_OPEN_ETHERNET_RTL8372
-	bool "rtl8372.ko (LAN switch read-only monitor)"
+	bool "rtl8372.ko (LAN switch configurator + link monitor)"
 	help
-	  Build and install driver/rtl8372: the read-only SMI monitor of
-	  the RTL8372 LAN switch behind eth1 (chip ID, uplink SerDes
-	  status, link of each LAN jack; it configures nothing). The
+	  Build and install driver/rtl8372: it releases the RTL8372 LAN
+	  switch behind eth1 from reset, replays the stock bring-up over
+	  its SMI (uplink SerDes 10G, the 2.5G PHY patch, plain L2 switch
+	  with no CPU tag), starts its PHY poller once the LAN PHYs are up,
+	  then monitors the link of each LAN jack. The
 	  gt-be98-lan service loads it when rnr1 is a LAN port; nothing
 	  else does (no modalias autoload in this OS), and while it is not
 	  loaded the switch stays in reset. Building it here keeps it in
