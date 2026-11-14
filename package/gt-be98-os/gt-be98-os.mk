@@ -92,10 +92,8 @@ define GT_BE98_OS_FINALIZE
 	# names a target
 	# gt-be98-leds changes nothing until a LED exists (none yet)
 	# gt-be98-wan does nothing without /etc/gt-be98-wan/wan.conf (DHCP on rnr0)
-	# gt-be98-lan: the wired LAN (D41, RC8): br-lan with rnr1 (the RTL8372's
-	# four 2.5G jacks), 192.168.50.1/24, DHCP + DNS; never rnr0
 	for s in dhcpcd sshd chronyd gt-be98-drivers gt-be98-netconsole gt-be98-autosave \
-		gt-be98-boot-done gt-be98-leds gt-be98-wan gt-be98-lan; do \
+		gt-be98-boot-done gt-be98-leds gt-be98-wan; do \
 		ln -sfn /etc/init.d/$$s $(TARGET_DIR)/etc/runlevels/default/$$s; done
 	GT_BE98_LOCAL_CONF="$(GT_BE98_OS_LOCAL_CONF)" TARGET_DIR="$(TARGET_DIR)" \
 		GT_BE98_RELEASE="$(BR2_PACKAGE_GT_BE98_OS_RELEASE)" \
