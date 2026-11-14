@@ -26,11 +26,11 @@
 #  the offload (a WiFi-egress flow under a shaper stays offloaded through its netdev's qdisc); a routed flow
 #  through a VLAN WAN is offloaded by default (q216); driver/runner only, no kernel series change; on top of
 #  a9960de)
-# oe-rtl8372-landing-2026-11-14 2026-11-14 9b2903b (= origin/main + oe-rc7 6d922a8 + the RTL8372 configurator:
+# oe-rtl8372-landing-2026-11-14 2026-11-14 9e797fd (9b2903b merge + the landing-result docs; = origin/main + oe-rc7 6d922a8 + the RTL8372 configurator:
 #  driver/rtl8372 replays the stock bring-up and starts the PHY poller again once the LAN PHYs are up, so the four
 #  2.5G LAN jacks link and forward (q245 LANDING PASS: port 6 at 1G, 20/20 pings, 2 cold loads). Only driver/rtl8372,
 #  tools/rtl8372 and docs differ from 6d922a8: the kernel series is unchanged, no linux-dirclean needed.)
-GT_BE98_OPEN_ETHERNET_VERSION = 9b2903b531de2915bd4e4217c63b500e37b54fdf
+GT_BE98_OPEN_ETHERNET_VERSION = 9e797fd47d1fafedd07a7d15754ebae08c7a8eee
 GT_BE98_OPEN_ETHERNET_SITE = git@github.com:nebuloss/gt-be98-open-ethernet.git
 GT_BE98_OPEN_ETHERNET_SITE_METHOD = git
 GT_BE98_OPEN_ETHERNET_LICENSE = GPL-2.0
