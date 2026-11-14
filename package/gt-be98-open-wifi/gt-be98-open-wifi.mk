@@ -24,7 +24,10 @@
 # main 2026-11-13 4ec3bcd6 (img44: DFS-CAC-ABORT-WARN (shipped fix): a firmware CAC abort inside hostapd's
 #  radar-detection start no longer WARNs in cfg80211 and leaves the 5 GHz radio without an AP; MLO R5-2 v3-r3
 #  bench/group only; on top of 20ef74c9)
-GT_BE98_OPEN_WIFI_VERSION = 4ec3bcd6f2dfd3505ea49c9c8f2528ddff678fb8
+# main 2026-11-13 7c78601a (img47: WMM-EDCA: hostapd's EDCA parameters (tx_queue_* / wmm_ac_*) reach the
+#  firmware, box-verified q212/q217; INV-RECOVERY rebind give-up and trap-poll fixes, active only when
+#  radio_rebind > 0 (default stays 0); MLO r5-3 bench/group only; on top of 4ec3bcd6)
+GT_BE98_OPEN_WIFI_VERSION = 7c78601aedcd7b011a5ae60cb99b61d9a43861d0
 GT_BE98_OPEN_WIFI_SITE = git@github.com:nebuloss/gt-be98-open-wifi.git
 GT_BE98_OPEN_WIFI_SITE_METHOD = git
 GT_BE98_OPEN_WIFI_LICENSE = GPL-2.0-only
