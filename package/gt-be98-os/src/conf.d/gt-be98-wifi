@@ -43,6 +43,16 @@ WIFI_BRIDGES=
 WIFI_VLANS=
 WIFI_TRUNK=rnr0
 WIFI_ISOLATE=
+# multicast on the Wi-Fi bridges (they always snoop IGMP/MLD): 1 (default) =
+# each BSS port sends a multicast group to each of its listeners as unicast
+# frames (bridge multicast_to_unicast), 0 = as multicast at the basic rate.
+# The bridge converts only while a querier exists on the network: the
+# routed networks' bridges run their own; for the VLAN networks the LAN's
+# router normally queries. WIFI_MCAST_QUERIER=1 makes the VLAN bridges query
+# too (IGMPv3 from 0.0.0.0: they have no address; it can win the querier
+# election against the LAN router's, so only where the LAN has no querier).
+WIFI_MCAST_TO_UNICAST=1
+WIFI_MCAST_QUERIER=0
 # the one hostapd process: extra options, global control socket, and the
 # ctrl_interface of the generated BSSes
 HOSTAPD_ARGS=

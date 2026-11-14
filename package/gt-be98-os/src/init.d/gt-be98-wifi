@@ -157,6 +157,20 @@
 # $STATE/vlans) is ever deleted. Only bcawl* netdevs in the configs
 # (interface=, bss=). gt-be98-netguard allows exactly the listed
 # <trunk>.<vid> in their bridges and keeps the isolation flags.
+# Multicast (owner batch 1, 11-13): every brwifi bridge snoops IGMP/MLD
+# (multicast_snooping 1, the kernel default made explicit) and its BSS ports
+# (bcawl*, never a station) get multicast_to_unicast = WIFI_MCAST_TO_UNICAST
+# (default 1): a group with listeners behind a BSS is sent to each listener
+# as a unicast frame (its own rate, acknowledged) instead of one frame at
+# the basic rate. The bridge converts only along its snooping table, which
+# it uses only while a querier exists on the segment (else it floods, as
+# before): the routed bridges run their own (IGMPv3, from the bridge's
+# address); the VLAN bridges rely on the LAN's querier unless
+# WIFI_MCAST_QUERIER=1 (a 0.0.0.0-sourced IGMPv3 querier: the bridges carry no
+# address, IPv6 is off on them so no MLD querier). Off by default there: a
+# 0.0.0.0 query can win the IGMP querier election against the LAN router's and
+# silence it. The repeated network's bridge never queries (the uplink LAN
+# does). gt-be98-netguard keeps the port flags too.
 # Firmware: /lib/firmware/brcm/bca (gt-be98-vendor-firmware).
 # shellcheck disable=SC2034 # read by openrc-run
 description="Open Wi-Fi driver + hostapd (optional)"
@@ -313,7 +327,45 @@ valid_bridge() {
 
 br_owned() { grep -qx "$1" "$STATE/bridges" 2>/dev/null; }
 
-# create (or adopt an existing) bridge $1: no STP, forward_delay 0, up
+# the multicast settings of brwifi bridge $1 (header): snooping on; the
+# bridge's own querier when $2 = 1 (IGMPv3 / MLDv2 queries, from the bridge's
+# address when it has one), else off
+mcast_bridge() {
+	local s=$SYSNET/$1/bridge
+	[ -d "$s" ] || return 0
+	echo 1 > "$s/multicast_snooping" 2>/dev/null
+	if [ "$2" = 1 ]; then
+		echo 3 > "$s/multicast_igmp_version" 2>/dev/null
+		echo 2 > "$s/multicast_mld_version" 2>/dev/null
+		echo 1 > "$s/multicast_query_use_ifaddr" 2>/dev/null
+		echo 1 > "$s/multicast_querier" 2>/dev/null
+	else
+		echo 0 > "$s/multicast_querier" 2>/dev/null
+	fi
+	return 0
+}
+
+# multicast-to-unicast on the BSS ports of bridges $1 (WIFI_MCAST_TO_UNICAST,
+# default 1); a station port (the repeater's uplink) never
+mcast_ports() {
+	local b p f m
+	m=$(mcast_m2u)
+	for b in $1; do
+		for p in "$SYSNET/$b/brif"/*; do
+			[ -e "$p" ] || continue
+			p=${p##*/}
+			case "$p" in bcawl*) ;; *) continue ;; esac
+			f=$m
+			grep -qx "$p" "$STATE/stations" 2>/dev/null && f=0
+			[ -e "$SYSNET/$p/brport/multicast_to_unicast" ] &&
+				echo "$f" > "$SYSNET/$p/brport/multicast_to_unicast" 2>/dev/null
+		done
+	done
+	return 0
+}
+
+# create (or adopt an existing) bridge $1: no STP, forward_delay 0, up;
+# $2 = its multicast querier (mcast_bridge), default 0
 br_create() {
 	local b=$1
 	if [ -e "/sys/class/net/$b" ]; then
@@ -328,6 +380,7 @@ br_create() {
 		ip link set dev "$b" up; }; then
 		eerror "$b: setup failed"; return 1
 	fi
+	mcast_bridge "$b" "${2:-0}"
 	mkdir -p "$STATE"
 	br_owned "$b" || echo "$b" >> "$STATE/bridges"
 }
@@ -970,8 +1023,13 @@ write_l2() {
 		echo "WIFI_TRUNK=\"${WIFI_TRUNK:-rnr0}\""
 		echo "WIFI_VLANS=\"$vl\""
 		echo "WIFI_ISOLATE=\"$is\""
+		echo "WIFI_MCAST_TO_UNICAST=\"$(mcast_m2u)\""
 	} > "$STATE/l2.conf.new" && mv -f "$STATE/l2.conf.new" "$STATE/l2.conf"
 }
+
+# WIFI_MCAST_TO_UNICAST / WIFI_MCAST_QUERIER, 0 or 1 (header)
+mcast_m2u() { case "${WIFI_MCAST_TO_UNICAST:-1}" in 0) echo 0 ;; *) echo 1 ;; esac; }
+mcast_querier() { case "${WIFI_MCAST_QUERIER:-0}" in 1) echo 1 ;; *) echo 0 ;; esac; }
 
 # the per-config hostapd instances of the previous versions of this service
 stop_legacy() {
@@ -1152,7 +1210,7 @@ apply_hostapd() {
 		valid_bridge "$b" || { eerror "bridge '$b' refused (brwifiN only)"; rc=1; continue; }
 		v=$(br_vid "$b") || { eerror "$b has no VLAN (WIFI_VLANS): not bridged"; rc=1; continue; }
 		[ -n "$t" ] || { rc=1; continue; }
-		br_create "$b" || { rc=1; continue; }
+		br_create "$b" "$(mcast_querier)" || { rc=1; continue; }
 		vlan_attach "$t" "$v" "$b" || { rc=1; continue; }
 		brs="$brs $b"; subs="$subs $t.$v"
 	done
@@ -1162,7 +1220,8 @@ apply_hostapd() {
 		b=${p%%=*}
 		valid_bridge "$b" || { eerror "routed bridge '$b' refused"; rc=1; continue; }
 		case " $brs " in *" $b "*) eerror "$b: routed and bridged to a VLAN"; rc=1; continue ;; esac
-		br_create "$b" || { rc=1; continue; }
+		# the box is the router of a routed network: its bridge queries
+		br_create "$b" 1 || { rc=1; continue; }
 		brs="$brs $b"
 	done
 	# the repeated network's bridge (repeater): no VLAN, no trunk, no
@@ -1244,6 +1303,7 @@ apply_hostapd() {
 		unit_apply "$d" || rc=1
 	done
 	isolate_ports "$brs"
+	mcast_ports "$brs"
 	# virtual interfaces, VLANs and bridges no longer listed, now that no BSS
 	# uses them
 	vif_prune "${STA_FIRSTS:-}"

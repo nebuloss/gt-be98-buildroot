@@ -68,6 +68,30 @@ check "isolation: bcawl1 -> 1, rnr0.31 -> 0, bcawl6 (repeater) -> 0" \
 	"bcawl1/brport/isolated 1|bcawl6/brport/isolated 0|rnr0.31/brport/isolated 0" \
 	"$(grep -E '^(bcawl1|bcawl6|rnr0.31)/brport/isolated' "$T/new.txt" | tr '\n' '|' | sed 's/|$//')"
 check "every action logged (5 detached, 1 hairpin, 3 isolation)" "9" "$(grep -c '^log ' "$T/acts")"
+# 1b. multicast-to-unicast (rule 5): BSS ports follow WIFI_MCAST_TO_UNICAST
+# (default 1), the repeater's uplink is 0, a trunk VLAN is never touched, a
+# port without the attribute is left alone (none created)
+mtree() {
+	rm -rf "$S"; mkdir -p "$S/lo"
+	port brwifi1 bcawl0 0 0; echo 0 > "$S/bcawl0/brport/multicast_to_unicast"
+	port brwifi1 bcawl3 0 0					# no attribute
+	port brwifi1 rnr0.921 0 0; echo 0 > "$S/rnr0.921/brport/multicast_to_unicast"
+	port brwifi60 bcawl6 0 0; echo 1 > "$S/bcawl6/brport/multicast_to_unicast"
+	port brwifi60 bcawl2-1 0 0; echo 0 > "$S/bcawl2-1/brport/multicast_to_unicast"
+}
+mv_() { for p in bcawl0 rnr0.921 bcawl6 bcawl2-1; do printf '%s=%s ' "$p" "$(cat "$S/$p/brport/multicast_to_unicast")"; done; ls "$S/bcawl3/brport" | tr '\n' ' '; }
+mtree; : > "$T/acts"; PATH="$T/bin:$PATH" $SH "$G" --sweep
+check "m2u (l2.conf without the key: default 1): BSS ports 1, repeater uplink 0, trunk VLAN untouched, no attribute created" \
+	"bcawl0=1 rnr0.921=0 bcawl6=0 bcawl2-1=1 hairpin_mode isolated " "$(mv_)"
+check "m2u: each change logged (3)" "3" "$(grep -c '^log multicast_to_unicast=' "$T/acts")"
+cp "$T/l2.conf" "$T/l2.conf.keep"; echo 'WIFI_MCAST_TO_UNICAST="0"' >> "$T/l2.conf"
+: > "$T/acts"; PATH="$T/bin:$PATH" $SH "$G" --sweep
+check "m2u control: WIFI_MCAST_TO_UNICAST=0 turns the BSS ports off" "bcawl0=0 rnr0.921=0 bcawl6=0 bcawl2-1=0 " "$(mv_ | cut -d' ' -f1-4) "
+echo 'WIFI_MCAST_TO_UNICAST="1"' >> "$T/l2.conf"
+mtree; echo 1 > "$S/bcawl0/brport/multicast_to_unicast"; echo 0 > "$S/bcawl6/brport/multicast_to_unicast"; echo 1 > "$S/bcawl2-1/brport/multicast_to_unicast"
+: > "$T/acts"; PATH="$T/bin:$PATH" $SH "$G" --sweep
+check "m2u: a compliant tree changes nothing (the last WIFI_MCAST_TO_UNICAST line wins)" "0" "$(grep -c multicast_to_unicast "$T/acts")"
+cp "$T/l2.conf.keep" "$T/l2.conf"
 # 2. the same actions as a former version
 if [ -n "${1:-}" ]; then
 	sed "s|/sys/class/net|$S|g" "$1" > "$T/old"

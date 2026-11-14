@@ -40,6 +40,7 @@ case "$*" in
 "link del "*) rm -rf "$GT_BE98_SYSNET/$3" ;;
 "-6 route show default dev "*) cat "$FAKE/route6-$6" 2>/dev/null ;;
 "-4 route show default dev "*) cat "$FAKE/route4-$6" 2>/dev/null ;;
+"-4 -o addr show dev "*) cat "$FAKE/addr4-$6" 2>/dev/null ;;
 esac
 exit 0
 X
@@ -106,8 +107,14 @@ check "  control: with user" 0 "$(ck $P PPPOE_USER=u@isp)"
 check "pppoe user with a quote refused" 1 "$(ck $P 'PPPOE_USER=a"b')"
 check "pppoe password with a backslash refused" 1 "$(ck $P PPPOE_USER=u 'PPPOE_PASS=a\b')"
 check "  control: password with spaces and # ;" 0 "$(ck $P PPPOE_USER=u 'PPPOE_PASS="a b#c;d"')"
-check "pppoe mtu 1500 refused" 1 "$(ck $P PPPOE_USER=u PPPOE_MTU=1500)"
+check "pppoe mtu 1501 refused (pppd's ceiling: 1500)" 1 "$(ck $P PPPOE_USER=u PPPOE_MTU=1501)"
+check "pppoe mtu 1279 refused" 1 "$(ck $P PPPOE_USER=u PPPOE_MTU=1279)"
 check "  control: 1480" 0 "$(ck $P PPPOE_USER=u PPPOE_MTU=1480)"
+check "  control: 1500 (RFC 4638)" 0 "$(ck $P PPPOE_USER=u PPPOE_MTU=1500)"
+check "WAN_MTU 10241 refused (the driver's max 10240)" 1 "$(ck WAN_MTU=10241)"
+check "WAN_MTU 1279 refused" 1 "$(ck WAN_MTU=1279)"
+check "  control: WAN_MTU 9000 and 10240 (jumbo)" "0 0" "$(ck WAN_MTU=9000) $(ck WAN_MTU=10240)"
+check "  control: static WAN_MTU 9000" 0 "$(ck WAN_PROTO=static WAN_ADDR=192.0.2.10/24 WAN_GW=192.0.2.1 WAN_MTU=9000)"
 check "WAN_MTU on pppoe refused" 1 "$(ck $P PPPOE_USER=u WAN_MTU=1400)"
 check "PPPOE_USER on dhcp refused" 1 "$(ck PPPOE_USER=u)"
 check "PD LANs without IPv6 refused" 1 "$(ck WAN_PD_LANS=brwifi1)"
@@ -197,6 +204,36 @@ printf 'WAN_VLAN=836\n' > "$T/etc/wan.conf"
 wan start 2>/dev/null; wan stop 2>/dev/null
 check "pre-existing VLAN kept" no "$(yes_no has "$FAKE/log" "ip link del rnr0.836")"
 check "  control: created VLAN removed" yes "$(reset; printf 'WAN_VLAN=837\n' > "$T/etc/wan.conf"; wan start 2>/dev/null; wan stop 2>/dev/null; yes_no has "$FAKE/log" "ip link del rnr0.837")"
+# MTU: WAN_MTU on the bare port; on a VLAN the port is raised first; PPPoE
+# above 1492 sets the lower link to PPPOE_MTU + 8 (RFC 4638); every change is
+# restored at stop, last first; the PPPoE default 1492 changes no MTU
+mtus() { grep -E '^ip link set [^ ]+ mtu ' "$FAKE/log" | sed 's/^ip link set //' | tr '\n' '|' | sed 's/|$//'; }
+reset; echo 1500 > "$T/net/rnr0/mtu"
+printf 'WAN_MTU=9000\n' > "$T/etc/wan.conf"
+wan start 2>/dev/null; a=$(mtus); : > "$FAKE/log"; wan stop 2>/dev/null
+check "WAN_MTU=9000 on rnr0: set at start, 1500 back at stop" "rnr0 mtu 9000|rnr0 mtu 1500" "$a|$(mtus)"
+reset; echo 1500 > "$T/net/rnr0/mtu"
+printf 'WAN_VLAN=835\nWAN_MTU=9000\n' > "$T/etc/wan.conf"
+wan start 2>/dev/null; a=$(mtus); : > "$FAKE/log"; wan stop 2>/dev/null
+check "WAN_MTU=9000 on rnr0.835: the port raised first, then the VLAN; stop: the VLAN, then the port" \
+	"rnr0 mtu 9000|rnr0.835 mtu 9000|rnr0.835 mtu 1500|rnr0 mtu 1500" "$a|$(mtus)"
+reset; echo 9000 > "$T/net/rnr0/mtu"
+printf 'WAN_VLAN=835\nWAN_MTU=9000\n' > "$T/etc/wan.conf"
+wan start 2>/dev/null; a=$(mtus); wan stop 2>/dev/null
+check "  control: the port already at 9000 is not touched" "rnr0.835 mtu 9000" "$a"
+echo 1500 > "$T/net/rnr0/mtu"
+reset; printf 'WAN_VLAN=835\nWAN_MTU=1400\n' > "$T/etc/wan.conf"
+wan start 2>/dev/null; a=$(mtus); wan stop 2>/dev/null
+check "  control: WAN_MTU=1400 on a VLAN lowers the VLAN only" "rnr0.835 mtu 1400" "$a"
+reset; printf 'WAN_PROTO=pppoe\nWAN_VLAN=835\nPPPOE_USER=u\nPPPOE_MTU=1500\n' > "$T/etc/wan.conf"
+wan start 2>/dev/null; a=$(mtus)
+check "PPPOE_MTU=1500 on rnr0.835: port and VLAN at 1508, pppd mtu/mru 1500" "rnr0 mtu 1508|rnr0.835 mtu 1508 yes yes" \
+	"$a $(yes_no grep -qx 'mtu 1500' "$FAKE/pppd.conf.seen") $(yes_no grep -qx 'mru 1500' "$FAKE/pppd.conf.seen")"
+: > "$FAKE/log"; wan stop 2>/dev/null
+check "  stop: 1500 back, VLAN first" "rnr0.835 mtu 1500|rnr0 mtu 1500" "$(mtus)"
+reset; printf 'WAN_PROTO=pppoe\nPPPOE_USER=u\n' > "$T/etc/wan.conf"
+wan start 2>/dev/null; a=$(mtus); wan stop 2>/dev/null
+check "  control: PPPoE default 1492: no MTU change, pppd mtu 1492" "|yes" "$a|$(yes_no grep -qx 'mtu 1492' "$FAKE/pppd.conf.seen")"
 # static on the bare port: dhcpcd's job, no nft, no input filter
 reset
 printf 'WAN_PROTO=static\nWAN_ADDR=192.0.2.10/24\nWAN_GW=192.0.2.1\n' > "$T/etc/wan.conf"
@@ -452,6 +489,13 @@ check "  control: 0.0.0.0/0 and ::/0 accepted" 0 "$($SH "$W" input-nft t rnr0 0.
 check "input-nft refuses interface 'rnr0 }'" 1 "$($SH "$W" input-nft t 'rnr0 }' >/dev/null 2>&1; echo $?)"
 check "input-nft refuses table 'a b'" 1 "$($SH "$W" input-nft 'a b' rnr0 >/dev/null 2>&1; echo $?)"
 check "input-nft refuses a missing interface" 1 "$($SH "$W" input-nft t >/dev/null 2>&1; echo $?)"
+# --igmp (router mode's igmpproxy): IGMP accepted after DHCP, before the allow-list and the drop
+$SH "$W" input-nft gt_be98_router_in rnr0 --igmp 192.0.2.0/24 > "$T/in3.nft" 2>/dev/null; r=$?
+check "input-nft --igmp: rc 0, IGMP accepted after DHCP, then the allow-list, then the drop" \
+	'0|iifname "rnr0" udp dport { 68, 546 } accept|iifname "rnr0" meta l4proto igmp accept|iifname "rnr0" ip saddr { 192.0.2.0/24 } accept|iifname "rnr0" drop' \
+	"$r|$(grep -E 'udp dport|igmp|saddr|drop' "$T/in3.nft" | sed 's/^[[:space:]]*//' | tr '\n' '|' | sed 's/|$//')"
+check "  control: without --igmp no IGMP rule (in.nft, in2.nft)" "no no" "$(yes_no grep -q igmp "$T/in.nft") $(yes_no grep -q igmp "$T/in2.nft")"
+check "  --igmp is not taken for a CIDR (refused only as one)" 1 "$($SH "$W" input-nft t rnr0 192.0.2.0/24 --igmp >/dev/null 2>&1; echo $?)"
 # the service: router mode on the bare uplink loads the filter BEFORE NAT and
 # forwarding; a filter that cannot be built keeps router mode down
 rsrc() {	# the router service's functions, its run files under $T
@@ -459,6 +503,7 @@ rsrc() {	# the router service's functions, its run files under $T
 	ROUTER_DIR="$T/router" GT_BE98_WAN="$SH $W" ROUTER_TABLE=180 ROUTER_INPUT_NFT="$T/router-in.nft"
 	. "$SRC/init.d/gt-be98-router"
 	APPLIED=$T/router.applied DNSMASQ_PID=$T/router-dnsmasq.pid IFACE_WAIT=0
+	IGMPPROXY=$T/bin/igmpproxy IGMPPROXY_CONF=$T/igmpproxy.conf IGMPPROXY_PID=$T/igmpproxy.pid
 }
 rstart() { ( rsrc; start; echo "rc=$?" ); }
 isrc() { printf '%s\n' "$1" | grep -qx "$2" && echo yes || echo no; }
@@ -495,6 +540,35 @@ printf 'ROUTER_WAN="wan"\nROUTER_LANS="bcawl3=192.168.83.1/24"\n' > "$T/router/r
 ( rsrc; reroute ) >/dev/null 2>&1
 check "router reroute: the filter re-applied on the WAN netdev (rnr0.835)" "yes yes" \
 	"$(yes_no has "$FAKE/log" "nft -f $T/router-in.nft") $(yes_no grep -q 'iifname "rnr0.835" drop' "$T/router-in.nft")"
+# multicast routing (ROUTER_IGMP_PROXY=1): IGMP on the WAN input, igmpproxy
+# with the WAN upstream and the router LANs that exist downstream; not
+# started while the WAN has no IPv4 address; off by default
+printf '#!/bin/sh\nexit 0\n' > "$T/bin/igmpproxy"; chmod +x "$T/bin/igmpproxy"
+mkdir -p "$T/net/bcawl3"
+reset; rm -f "$T/etc/wan.conf"
+printf 'ROUTER_WAN="rnr0"\nROUTER_LANS="bcawl3=192.168.83.1/24 bcawl0=192.168.80.1/24"\n' > "$T/router/router.conf"
+echo "2: rnr0    inet 198.51.100.2/24 brd 198.51.100.255 scope global rnr0" > "$FAKE/addr4-rnr0"
+r=$( ( rsrc; ROUTER_IGMP_PROXY=1; start; echo "rc=$?" ) 2>&1)
+check "router + ROUTER_IGMP_PROXY=1: rc 0, IGMP accepted on the WAN input" "yes yes" "$(isrc "$r" rc=0) $(yes_no grep -q 'iifname "rnr0" meta l4proto igmp accept' "$T/router-in.nft")"
+check "  igmpproxy started in the foreground under start-stop-daemon, with its config" yes \
+	"$(yes_no has "$FAKE/log" "start-stop-daemon --start --background --make-pidfile --pidfile $T/igmpproxy.pid --exec $T/bin/igmpproxy -- -n $T/igmpproxy.conf")"
+check "  its config: quickleave, rnr0 upstream (altnet 0.0.0.0/0), the existing LAN bcawl3 downstream (bcawl0 absent)" \
+	"quickleave|phyint rnr0 upstream ratelimit 0 threshold 1|altnet 0.0.0.0/0|phyint bcawl3 downstream ratelimit 0 threshold 1" \
+	"$(grep -v '^#' "$T/igmpproxy.conf" | sed 's/^[[:space:]]*//' | tr '\n' '|' | sed 's/|$//')"
+reset; rm -f "$FAKE/addr4-rnr0" "$T/igmpproxy.conf"
+r=$( ( rsrc; ROUTER_IGMP_PROXY=1; start; echo "rc=$?" ) 2>&1)
+check "  the WAN without an IPv4 address: router rc 0, no igmpproxy yet (its lease's reroute starts it)" "yes no no" \
+	"$(isrc "$r" rc=0) $(yes_no grep -q igmpproxy "$FAKE/log") $(yes_no test -f "$T/igmpproxy.conf")"
+echo "2: rnr0    inet 198.51.100.2/24 brd 198.51.100.255 scope global rnr0" > "$FAKE/addr4-rnr0"
+reset; ( rsrc; ROUTER_IGMP_PROXY=1; reroute ) >/dev/null 2>&1
+check "  reroute with the lease: igmpproxy started" yes "$(yes_no grep -q "start-stop-daemon --start .*igmpproxy" "$FAKE/log")"
+reset; echo 1 > "$T/igmpproxy.pid"; ( rsrc; stop ) >/dev/null 2>&1
+check "  stop: igmpproxy stopped (its pid file), its config removed" "yes no no" \
+	"$(yes_no grep -q "start-stop-daemon --stop --exec $T/bin/igmpproxy --pidfile $T/igmpproxy.pid" "$FAKE/log") $(yes_no test -f "$T/igmpproxy.pid") $(yes_no test -f "$T/igmpproxy.conf")"
+reset; r=$( ( rsrc; start; echo "rc=$?" ) 2>&1)
+check "  control: ROUTER_IGMP_PROXY unset (the default 0): no IGMP rule, no igmpproxy" "yes no no" \
+	"$(isrc "$r" rc=0) $(yes_no grep -q igmp "$T/router-in.nft") $(yes_no grep -q igmpproxy "$FAKE/log")"
+rm -f "$FAKE/addr4-rnr0"; rm -rf "$T/net/bcawl3"
 # AP mode: nothing in the WAN tool filters the bare uplink (rnr0 = management)
 reset; rm -f "$T/etc/wan.conf"
 wan start 2>/dev/null

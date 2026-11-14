@@ -103,7 +103,42 @@
 #                                   at the radio's next start (open-wifi
 #                                   bca_reg.c: E0 locale + abbrev override)
 #   radio=2g|5gl|5gh|6g             radio-wide settings of one radio
-#     enabled=1  channel=N  width=20|40|80|160|320
+#     enabled=1  channel=N|auto  width=20|40|80|160|320
+#                                   channel=auto (2g, 5gl, 5gh): hostapd's
+#                                   automatic channel selection (ACS,
+#                                   channel=acs_survey, acs_num_scans=2:
+#                                   the driver's survey, box-proven runs
+#                                   1027-1233 2.4/5 GHz ACS-COMPLETED +
+#                                   AP-ENABLED, 1027-1348 5 GHz full band)
+#                                   at the radio's width, inside its
+#                                   chanlist (5gl 36-64, 5gh 100-144
+#                                   149-177); 2g 1-13. On 5 GHz it may pick
+#                                   a DFS channel (a CAC follows, 60 s; 10
+#                                   min on 120-128 in ETSI), and without
+#                                   -c hostapd leaves the radar channels
+#                                   out (5gh then has none: warned).
+#                                   5gh: ACS never picks a block holding
+#                                   the weather-radar channels 120-128
+#                                   (their CAC is 600 s: the radio would
+#                                   stay dark 10 min after the pick):
+#                                   freqlist= (ACS only, not the radar
+#                                   move list) leaves out every channel
+#                                   of such a block at the width, so the
+#                                   block has no primary (hostapd acs.c
+#                                   checks the list per primary only);
+#                                   20: 100-116 132-144 149-177, 40/80:
+#                                   100-112 132-144 149-177; 160 (every
+#                                   5gh 160 block holds them): 80, warned.
+#                                   6g:
+#                                   refused (the driver's survey does not
+#                                   serve 6 GHz, open-wifi ACS-1 H2-H4).
+#                                   A station radio (station=) takes its
+#                                   uplink's channel (-U), the default
+#                                   channel before it associates; a
+#                                   monitor=1 radio the default channel
+#                                   (both warned). Without channel=: the
+#                                   default channel (2g 6, 5gl 36, 5gh
+#                                   100, 6g 37)
 #                                   (a 5 GHz DFS channel, 52-144, needs
 #                                   -c: hostapd runs DFS only with
 #                                   ieee80211h, which needs the country_code;
@@ -136,7 +171,16 @@
 #                                   -> 31, ch 65-93 -> 63; no 320 block
 #                                   fits: rendered at 160 with a warning.
 #                                   6g default width: 320 (owner 11-10;
-#                                   160 with be=0); others 20
+#                                   160 with be=0); 5gl default width: 160
+#                                   (the 36-64 block, centre 50; owner
+#                                   batch 1, 11-13) when the country is
+#                                   written (-c: 52-64 are DFS channels,
+#                                   hostapd runs their CAC only with
+#                                   ieee80211h), else 80 (36-48 is
+#                                   non-DFS UNII-1, 52-64 a DFS block in
+#                                   any case; a monitor=1 radio: 20); a
+#                                   width= given is kept as given;
+#                                   others 20
 #     schedule=WINDOWS              optional: the radio runs only inside
 #                                   these windows (all its BSSes stop
 #                                   outside them; format below)
@@ -455,6 +499,8 @@ features() {
 	feature routed 1
 	feature repeater 1
 	feature beacon_prot 1
+	feature acs 1
+	acs 2g 5gl 5gh
 	station_security psk2 sae
 	EOF
 	echo "feature ht40_2g $HT40_2G"
@@ -858,7 +904,9 @@ cur == "s" {
 }
 cur == "r" {
 	if (k == "enabled" && (v == "0" || v == "1")) renab[cr] = v
-	else if (k == "channel" && isnum(v)) rch[cr] = v + 0
+	else if (k == "channel" && isnum(v)) { rch[cr] = v + 0; delete racs[cr] }
+	# channel=auto: ACS (hostapd channel=acs_survey); the last channel= wins
+	else if (k == "channel" && v == "auto") { racs[cr] = 1; delete rch[cr] }
 	else if (k == "width" && (v == "20" || v == "40" || v == "80" || v == "160" || v == "320")) rw[cr] = v + 0
 	else if (k == "schedule" && (v == "" || schedok(v))) rsch[cr] = v
 	# v is a STRING: store the number ("0" is TRUE in awk)
@@ -1043,8 +1091,32 @@ END {
 		if (b in rch) {
 			if (!chans(b, rch[b])) { err("radio " b ": channel " rch[b] " is not a channel of this radio"); continue }
 		} else rch[b] = (b == "2g") ? 6 : (b == "5gl") ? 36 : (b == "5gh") ? 100 : 37
-		# 6 GHz default: 320 MHz (owner 11-10), 160 without EHT; others 20
-		if (!(b in rw)) rw[b] = (b == "6g") ? (rbe[b] ? 320 : 160) : 20
+		# channel=auto (ACS): the width checks below read the default
+		# channel, whose blocks hold every width the radio offers (ACS
+		# itself only takes a channel whose block fits: hostapd acs.c
+		# chan_bw_allowed); 6 GHz is refused (no survey there: open-wifi
+		# ACS-1 H2-H4), a monitor takes the default channel
+		if (racs[b] && b == "6g") err("radio 6g: channel=auto refused: automatic channel selection needs the driver survey, which does not serve 6 GHz (open-wifi ACS-1); give a channel")
+		if (racs[b] && rmon[b]) {
+			if (renab[b] != "0") warn("radio " b ": channel=auto on a monitor radio: the monitor runs on channel " rch[b])
+			delete racs[b]
+		}
+		# 6 GHz default: 320 MHz (owner 11-10), 160 without EHT; 5 GHz-low:
+		# 160 MHz (owner batch 1, 11-13: the driver and firmware run 160 on
+		# air, 1027-1404-perf-wide-RF) when the country is written, else 80;
+		# others 20. Only a radio WITHOUT width= takes a default: an explicit
+		# width= (the web UI writes one for every radio) is never changed.
+		# Why 80 without -c: 36-64 holds the DFS channels 52-64, which
+		# hostapd marks DISABLED without ieee80211h (no country_code), so a
+		# 160 MHz default would keep the radio dark; 80 MHz on 36-48 (the
+		# UNII-1 block) needs no DFS. The regulatory side: every country
+		# the driver serves gets the same rule table (open-wifi
+		# bca_cfg80211.c bca_regdom: UNII-1 + UNII-2A contiguous, AUTO_BW,
+		# no NO_160MHZ on 36-64) and ETSI EN 301 893 allows 160 MHz in
+		# 5150-5350 MHz (DE/FR included), DFS + 60 s CAC on 5250-5350.
+		# A monitor radio keeps 20 (its capture width was never measured
+		# wider on 5 GHz)
+		if (!(b in rw)) rw[b] = (b == "6g") ? (rbe[b] ? 320 : 160) : (b == "5gl" && !rmon[b]) ? ((ccok && country != "") ? 160 : 80) : 20
 		if (b == "6g" && rw[b] == 320 && !rbe[b]) err("radio 6g: 320 MHz needs EHT (be=1)")
 		# 320 MHz with no block inside the country band (T6): 160, said
 		if (b == "6g" && rw[b] == 320 && rbe[b] && c6(rch[b], 320) == 0 && c6(rch[b], 160) != 0) {
@@ -1072,7 +1144,9 @@ END {
 		# 100-140 only) that is every channel. Said loudly; the web UI refuses
 		if (dfs5(b, rch[b], rw[b]) && renab[b] != "0" && !rmon[b] && !(ccok && country != "")) {
 			m = 0; for (i = 1; i <= nnet; i++) if ((i, b) in hasb) m++
-			if (m) warn("radio " b ": " (rch[b] >= 52 ? "channel " rch[b] " is a DFS (radar) channel" : "the 160 MHz block of channel " rch[b] " (36-64) holds DFS (radar) channels") " and the regulatory database is not loaded (no -c, so no country_code): hostapd cannot run DFS without a country_code, so the BSSes of this radio will not start")
+			if (m && racs[b] && b == "5gh") warn("radio 5gh: channel=auto: every channel of this radio is a DFS (radar) channel and the regulatory database is not loaded (no -c, so no country_code): hostapd leaves the radar channels out, ACS finds none and the BSSes of this radio will not start")
+			else if (m && racs[b]) warn("radio " b ": channel=auto at " rw[b] " MHz: every block holds DFS (radar) channels and the regulatory database is not loaded (no -c, so no country_code): hostapd leaves the radar channels out, ACS finds none and the BSSes of this radio will not start")
+			else if (m) warn("radio " b ": " (rch[b] >= 52 ? "channel " rch[b] " is a DFS (radar) channel" : "the 160 MHz block of channel " rch[b] " (36-64) holds DFS (radar) channels") " and the regulatory database is not loaded (no -c, so no country_code): hostapd cannot run DFS without a country_code, so the BSSes of this radio will not start")
 		}
 	}
 	if (nerr) exit 1
@@ -1285,10 +1359,30 @@ END {
 		b = BANDS[bi]
 		if (!live[b] || nmem[b] == 0) continue
 		d = dev[b]; ch = rch[b]; w = rw[b]
+		# channel=auto: hostapd ACS, except on a station radio, whose APs
+		# share the channel of the uplink (the driver refuses another, -EBUSY)
+		# and must not scan under the scans and join of the station
+		acs = racs[b] && !ista[b]
+		# 5gh ACS and the weather-radar channels 120-128 (owner/orchestrator
+		# 11-13): their CAC is 600 s in the driver rule table of EVERY
+		# country (open-wifi bca_regdom, 5590-5650 dfs_cac_ms 600000), so an
+		# ACS pick there leaves the radio dark 10 min. hostapd 2.12 acs.c
+		# acs_find_ideal_chan_mode applies chanlist/freqlist to a block only
+		# when choosing its PRIMARY (a channel outside them is skipped as
+		# primary, the block stays a candidate): freqlist= therefore lists no
+		# channel of a block that holds 120-128 at this width (then "No
+		# valid channel found in the segment"). freqlist is read by acs.c
+		# only (dfs.c moves after a radar read chanlist): radar moves keep
+		# the whole band. At 160 the only 5gh block (100-128) holds them: 80
+		if (acs && b == "5gh" && w == 160) {
+			warn("radio 5gh: channel=auto at 160 MHz: the only 5gh 160 MHz block (100-128) holds the weather-radar channels 120-128 (a 600 s CAC): automatic selection runs at 80 MHz")
+			w = 80
+		}
+		if (racs[b] && ista[b]) warn("radio " b ": channel=auto on a station radio: its APs run on " ((b in ufreq) ? "the uplink channel " ch : "channel " ch " until the uplink associates, then on its channel"))
 		hdr = out "/hdr-" d
 		print "driver=nl80211" > hdr
 		if (b == "2g") {
-			print "hw_mode=g" > hdr; print "channel=" ch > hdr; print "ieee80211n=1" > hdr
+			print "hw_mode=g" > hdr; print "channel=" (acs ? "acs_survey" : ch) > hdr; print "ieee80211n=1" > hdr
 			if (w == 40) print "ht_capab=[HT40" ht40(b, ch) "]" > hdr
 			# HE/EHT (header: ax=, be=); 20/40 MHz: no operation width lines
 			if (rax[b]) print "ieee80211ax=1" > hdr
@@ -1323,11 +1417,17 @@ END {
 			print "he_su_beamformer=1" > hdr; print "he_mu_beamformer=1" > hdr
 			if (w == 320 || rbe[b]) { print "eht_su_beamformer=1" > hdr; print "eht_mu_beamformer=1" > hdr }
 		} else {
-			print "hw_mode=a" > hdr; print "channel=" ch > hdr
+			print "hw_mode=a" > hdr; print "channel=" (acs ? "acs_survey" : ch) > hdr
 			print "ieee80211n=1" > hdr; print "ieee80211ac=1" > hdr
+			# ACS: HT40+ only says "40 MHz" (hostapd acs.c acs_adjust_secondary
+			# sets the side of the channel it picks) and no centre index is
+			# written (acs_adjust_center_freq sets the VHT/HE/EHT ones)
 			if (w == 20) print "vht_oper_chwidth=0" > hdr
-			else if (w == 40) { print "ht_capab=[HT40" ht40(b, ch) "]" > hdr; print "vht_oper_chwidth=0" > hdr }
-			else { print "ht_capab=[HT40" ht40(b, ch) "]" > hdr; print "vht_oper_chwidth=" chw5(w) > hdr; print "vht_oper_centr_freq_seg0_idx=" c5(ch, w) > hdr }
+			else if (w == 40) { print "ht_capab=[HT40" (acs ? "+" : ht40(b, ch)) "]" > hdr; print "vht_oper_chwidth=0" > hdr }
+			else {
+				print "ht_capab=[HT40" (acs ? "+" : ht40(b, ch)) "]" > hdr; print "vht_oper_chwidth=" chw5(w) > hdr
+				if (!acs) print "vht_oper_centr_freq_seg0_idx=" c5(ch, w) > hdr
+			}
 			# transmit beamformer, SU and MU on every generation: stock 5 GHz
 			# txbf_bfr_cap 255 (the driver clears each bit an element sent
 			# without it; hostapd defaults are all "no"). SU-BEAMFORMEE is
@@ -1340,13 +1440,13 @@ END {
 			# when be=1, from the HE lines when ax=1)
 			if (rax[b]) {
 				print "ieee80211ax=1" > hdr
-				if (w >= 80) { print "he_oper_chwidth=" chw5(w) > hdr; print "he_oper_centr_freq_seg0_idx=" c5(ch, w) > hdr }
+				if (w >= 80) { print "he_oper_chwidth=" chw5(w) > hdr; if (!acs) print "he_oper_centr_freq_seg0_idx=" c5(ch, w) > hdr }
 				else print "he_oper_chwidth=0" > hdr
 				print "he_su_beamformer=1" > hdr; print "he_mu_beamformer=1" > hdr
 			}
 			if (rbe[b]) {
 				print "ieee80211be=1" > hdr
-				if (w >= 80) { print "eht_oper_chwidth=" chw5(w) > hdr; print "eht_oper_centr_freq_seg0_idx=" c5(ch, w) > hdr }
+				if (w >= 80) { print "eht_oper_chwidth=" chw5(w) > hdr; if (!acs) print "eht_oper_centr_freq_seg0_idx=" c5(ch, w) > hdr }
 				else print "eht_oper_chwidth=0" > hdr
 				print "eht_su_beamformer=1" > hdr; print "eht_mu_beamformer=1" > hdr
 			}
@@ -1361,7 +1461,12 @@ END {
 			# regulatory domain disables stay off.
 			# (no apostrophe in this program: it is a single-quoted string)
 			print "chanlist=" (b == "5gl" ? "36-64" : "100-144 149-177") > hdr
+			# ACS on 5gh: no block holding 120-128 (above), in MHz
+			if (acs && b == "5gh") print "freqlist=" (w == 20 ? "5500-5580" : "5500-5560") ",5660-5720,5745-5885" > hdr
 		}
+		# ACS: two survey passes, the count that completed on the box
+		# (1027-1233: 2.4 GHz channel 13, 5 GHz channel 48, AP-ENABLED)
+		if (acs) print "acs_num_scans=2" > hdr
 		# TWT responder: on by hostapd default; rtwt[] holds numbers
 		if (!rtwt[b]) print "he_twt_responder=0" > hdr
 		if (ccok && country != "") {
