@@ -21,7 +21,12 @@
 #  peer-to-peer inbound windows, brcm_pcie_p2p_window_open/_close exported for the open-wifi MLO BRIDGE
 #  step; inert unless a driver calls them - no register write at probe or resume; no Kconfig change).
 #  The kernel series changed: an existing output tree needs linux-dirclean.
-GT_BE98_OPEN_ETHERNET_VERSION = a9960de5dfead2e62b4f3d8461142ad5b4264d92
+# oe-rc7-2026-11-14 2026-11-14 6d922a8 (img47: flow table 16384 offloaded directions / NAT-C 65536 buckets as
+#  stock; ip -s link counts Runner-forwarded frames from the MAC MIB; a shaped egress is no longer bypassed by
+#  the offload (a WiFi-egress flow under a shaper stays offloaded through its netdev's qdisc); a routed flow
+#  through a VLAN WAN is offloaded by default (q216); driver/runner only, no kernel series change; on top of
+#  a9960de)
+GT_BE98_OPEN_ETHERNET_VERSION = 6d922a83588d1ada660156b5358a61f71d90c34a
 GT_BE98_OPEN_ETHERNET_SITE = git@github.com:nebuloss/gt-be98-open-ethernet.git
 GT_BE98_OPEN_ETHERNET_SITE_METHOD = git
 GT_BE98_OPEN_ETHERNET_LICENSE = GPL-2.0
