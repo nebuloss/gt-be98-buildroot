@@ -44,6 +44,8 @@ define GT_BE98_OS_INSTALL_TARGET_CMDS
 		$(TARGET_DIR)/lib/dhcpcd/dhcpcd-hooks/06-gt-be98-router
 	$(INSTALL) -D -m 0644 $(@D)/dhcpcd-hooks/07-gt-be98-wan \
 		$(TARGET_DIR)/lib/dhcpcd/dhcpcd-hooks/07-gt-be98-wan
+	$(INSTALL) -D -m 0644 $(@D)/dhcpcd-hooks/08-gt-be98-lan \
+		$(TARGET_DIR)/lib/dhcpcd/dhcpcd-hooks/08-gt-be98-lan
 	mkdir -p $(TARGET_DIR)/etc/gt-be98-wan && chmod 0700 $(TARGET_DIR)/etc/gt-be98-wan
 	mkdir -p $(TARGET_DIR)/rom $(TARGET_DIR)/overlay $(TARGET_DIR)/data \
 		$(TARGET_DIR)/etc/ssh/authorized_keys $(TARGET_DIR)/etc/syslog.d

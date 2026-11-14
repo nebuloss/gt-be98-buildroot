@@ -356,9 +356,10 @@ unroute() {
 		rm -f "$S/routed.applied"
 	fi
 	ip route flush table "$STA_TABLE" 2>/dev/null
-	# ip_forward back to what it was, unless router mode (gt-be98-router) runs
+	# ip_forward back to what it was, unless router mode (gt-be98-router) or the
+	# routed wired LAN (gt-be98-lan NAT) runs
 	if [ -f "$S/ipfwd" ]; then
-		[ -f "$RUNDIR/gt-be98-router.applied" ] || sysctl -q -w "net.ipv4.ip_forward=$(cat "$S/ipfwd")"
+		[ -f "$RUNDIR/gt-be98-router.applied" ] || grep -qs '^nat ' "$RUNDIR/gt-be98-lan.applied" || sysctl -q -w "net.ipv4.ip_forward=$(cat "$S/ipfwd")"
 		rm -f "$S/ipfwd"
 	fi
 	rm -f "$D/dnsmasq.conf" "$S/$NFT_TABLE.nft"

@@ -1,0 +1,11 @@
+# dhcpcd hook (sourced): when the WAN uplink gets or changes its IPv4 lease,
+# re-apply the routed wired LAN (gt-be98-lan reroute: the policy route follows
+# the WAN's gateway, and the NAT is refused if the new WAN address falls inside
+# LAN_ADDR's subnet). Does nothing unless gt-be98-lan applied a routed LAN.
+case "$reason" in BOUND|RENEW|REBIND|REBOOT|STATIC|EXPIRE|NOCARRIER) ;; *) return 0 2>/dev/null || exit 0 ;; esac
+grep -qs '^\(nat\|natrefused\) ' /run/gt-be98-lan.applied || { return 0 2>/dev/null || exit 0; }
+_wan=$(/usr/sbin/gt-be98-wan ifname 2>/dev/null); _wan=${_wan:-rnr0}
+if [ "$interface" = "$_wan" ]; then
+	rc-service gt-be98-lan reroute >/dev/null 2>&1 &
+fi
+unset _wan

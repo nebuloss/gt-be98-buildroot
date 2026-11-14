@@ -13,8 +13,13 @@ LAN_BRIDGE="br-lan"
 # port is blocked instead of looping. The RTL8372's own jacks are switched
 # inside the switch, which runs no STP of ours.
 LAN_STP="1"
-# the bridge's address (CIDR), empty = none. In router mode leave it empty
-# and list LAN_BRIDGE in ROUTER_LANS instead (the router owns the address).
+# the bridge's address (CIDR), empty = none. Set = a routed wired LAN (D19):
+# its subnet is NATed out of the WAN uplink (gt-be98-wan's WAN, rnr0 without
+# one) and policy-routed to the WAN's default route; nothing else leaves the
+# bridge. Refused (the LAN stays local) when a WAN address or a Wi-Fi station
+# routed network overlaps it. In router mode leave it empty and list
+# LAN_BRIDGE in ROUTER_LANS instead (the router owns the address; router mode
+# refuses to start while this service owns one on a bridge it does not list).
 LAN_ADDR=""
 # DHCP on the bridge: dnsmasq --dhcp-range value, e.g.
 # "192.168.50.100,192.168.50.199,12h"; empty = no DHCP server

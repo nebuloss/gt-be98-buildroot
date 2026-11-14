@@ -49,6 +49,7 @@ extra_started_commands="reroute"
 ROUTER_DIR=${ROUTER_DIR:-/etc/gt-be98-router}
 DNSMASQ_PID=/run/gt-be98-router-dnsmasq.pid
 APPLIED=/run/gt-be98-router.applied
+LAN_APPLIED=${GT_BE98_LAN_APPLIED:-/run/gt-be98-lan.applied}
 ROUTER_TABLE=${ROUTER_TABLE:-180}
 INPUT_TABLE=gt_be98_router_in
 INPUT_NFT=${ROUTER_INPUT_NFT:-/run/gt-be98-router-in.nft}
@@ -91,6 +92,13 @@ load_conf() {
 	esac
 	[ -n "$ROUTER_LANS" ] || { eerror "no ROUTER_LANS"; return 1; }
 	lb=$(lan_bridge)
+	# one owner per LAN: gt-be98-lan owns an address on its bridge (LAN_ADDR,
+	# its own dnsmasq and NAT): router mode must list that bridge or not start
+	l=$(sed -n 's/^addr [0-9./]* \([A-Za-z0-9_-]*\)$/\1/p' "$LAN_APPLIED" 2>/dev/null | tail -n1)
+	if [ -n "$l" ] && ! printf ' %s ' "$ROUTER_LANS" | grep -q " $l="; then
+		eerror "gt-be98-lan owns an address on $l, which ROUTER_LANS does not list: router mode refused (one address owner per LAN)"
+		return 1
+	fi
 	for l in $ROUTER_LANS; do
 		case "${l%%=*}" in
 		bcawl[0-9]|bcawl[0-9][0-9])
@@ -235,8 +243,10 @@ stop() {
 		start-stop-daemon --stop --exec /usr/sbin/dnsmasq --pidfile $DNSMASQ_PID --retry TERM/5/KILL/2
 		rm -f $DNSMASQ_PID
 	fi
-	# forwarding stays on while the routed networks of a Wi-Fi station run
-	[ -s /run/gt-be98-wifi/sta/routed.applied ] || sysctl -q -w net.ipv4.ip_forward=0
+	# forwarding stays on while the routed networks of a Wi-Fi station or the
+	# routed wired LAN (gt-be98-lan's NAT) run
+	[ -s /run/gt-be98-wifi/sta/routed.applied ] || grep -qs '^nat ' "$LAN_APPLIED" ||
+		sysctl -q -w net.ipv4.ip_forward=0
 	nft delete table ip gt_be98_router 2>/dev/null
 	nft delete table inet $INPUT_TABLE 2>/dev/null
 	rm -f "$INPUT_NFT"

@@ -25,8 +25,25 @@
 description="Wired LAN: LAN ports (never rnr0) in one bridge, STP, optional DHCP"
 
 LAN_CONF=${LAN_CONF_FILE:-/etc/conf.d/gt-be98-lan}
-APPLIED=/run/gt-be98-lan.applied
+APPLIED=${GT_BE98_LAN_APPLIED:-/run/gt-be98-lan.applied}
 DNSMASQ_PID=/run/gt-be98-lan-dnsmasq.pid
+# routed wired LAN (owner D19: routed-only through the bridge, never an rnr0
+# member): when LAN_ADDR is set the bridge's IPv4 subnet is NATed out of the
+# WAN uplink (gt-be98-wan's WAN netdev, rnr0 without one), policy-routed by
+# input interface like router mode's table 180 (`ip rule iif <bridge> table
+# $LAN_TABLE`: the WAN's default route plus `throw` routes for the private
+# ranges and the WAN's own subnet), and nothing else leaves the bridge
+# (forwarded to the WAN, replies back; IPv6 to the WAN stays allowed for a
+# delegated prefix, gt-be98-wan WAN_PD_LANS). ip_forward is turned on only
+# while that rule set is loaded and only if it was off. Refused, with an
+# error, when a WAN address or a Wi-Fi station routed network
+# (gt-be98-wifi-sta) overlaps LAN_ADDR's subnet: the LAN then stays a local
+# island (DHCP/DNS from the box only). The dhcpcd hook 08-gt-be98-lan runs
+# `reroute` when the WAN's lease changes.
+LAN_TABLE=${LAN_TABLE:-183}
+NAT_TABLE=gt_be98_lan_nat
+STA_ROUTED=${GT_BE98_STA_ROUTED:-/run/gt-be98-wifi/sta/routed.applied}
+extra_started_commands="reroute"
 
 depend() {
 	need gt-be98-netguard
@@ -83,9 +100,58 @@ load_conf() {
 	esac
 }
 
-# replies and DNATed flows only, into the bridge
-lan_nft() {
-	nft -f - <<-EOF
+# the WAN uplink netdev (gt-be98-wan's; rnr0 when it reports none)
+lan_wan() {
+	local w
+	w=$(${GT_BE98_WAN:-/usr/sbin/gt-be98-wan} ifname 2>/dev/null)
+	case "$w" in ''|*[!A-Za-z0-9_.-]*) w=rnr0 ;; esac
+	echo "$w"
+}
+
+# the WAN's IPv4 addresses (CIDR), one per line
+wan_addrs() { ip -4 -o addr show dev "$1" 2>/dev/null | sed -n 's/.* inet \([0-9.]*\/[0-9]*\) .*/\1/p'; }
+
+# a.b.c.d -> integer; a.b.c.d/len -> "network len"
+ip2n() { local IFS=.; set -- $1; echo $(( ($1 << 24) + ($2 << 16) + ($3 << 8) + $4 )); }
+net_of() {
+	local n m l=${1#*/}
+	n=$(ip2n "${1%/*}"); m=$(( l ? (0xffffffff << (32 - l)) & 0xffffffff : 0 ))
+	echo "$(( n & m )) $l"
+}
+# 0 when the two CIDRs overlap
+cidr_overlap() {
+	local b1 l1 b2 l2 l m
+	set -- $(net_of "$1") $(net_of "$2"); b1=$1 l1=$2 b2=$3 l2=$4
+	l=$l1; [ "$l2" -lt "$l" ] && l=$l2
+	m=$(( l ? (0xffffffff << (32 - l)) & 0xffffffff : 0 ))
+	[ $(( b1 & m )) -eq $(( b2 & m )) ]
+}
+
+# why the NAT is refused (stdout), nothing when it may run
+nat_clash() {
+	local a b c
+	for a in $(wan_addrs "$1"); do
+		cidr_overlap "$a" "$LAN_ADDR" && { echo "the WAN address $a ($1) is inside $LAN_ADDR"; return; }
+	done
+	[ -f "$STA_ROUTED" ] || return 0
+	while read -r b c; do
+		[ -n "$c" ] && cidr_overlap "$c" "$LAN_ADDR" && { echo "the Wi-Fi station routed network $c ($b) overlaps $LAN_ADDR"; return; }
+	done < "$STA_ROUTED"
+}
+
+# the IPv4 subnet of LAN_ADDR (a.b.c.d/len)
+lan_subnet() {
+	local b l
+	set -- $(net_of "$LAN_ADDR"); b=$1 l=$2
+	echo "$(( (b >> 24) & 255 )).$(( (b >> 16) & 255 )).$(( (b >> 8) & 255 )).$(( b & 255 ))/$l"
+}
+
+# the rule set (stdout). $1 = WAN netdev or empty (no routed LAN: LAN_ADDR
+# unset), $2 = nat|refused. Into the bridge: replies and DNATed flows only.
+# Out of the bridge (routed LAN only): to the WAN, then drop; with the NAT
+# refused only IPv6 may go to the WAN (a delegated prefix: no NAT there).
+lan_nft_text() {
+	cat <<-EOF
 	table inet gt_be98_lan
 	delete table inet gt_be98_lan
 	table inet gt_be98_lan {
@@ -96,9 +162,89 @@ lan_nft() {
 			oifname "$LAN_BRIDGE" ct status dnat accept
 			oifname "$LAN_BRIDGE" ip daddr 224.0.0.0/4 meta l4proto udp accept
 			oifname "$LAN_BRIDGE" counter drop
-		}
-	}
 	EOF
+	if [ -n "${1:-}" ] && [ "${2:-}" = nat ]; then
+		echo "		iifname \"$LAN_BRIDGE\" oifname \"$1\" accept"
+		echo "		iifname \"$LAN_BRIDGE\" counter drop"
+	elif [ -n "${1:-}" ]; then
+		echo "		iifname \"$LAN_BRIDGE\" oifname \"$1\" meta nfproto ipv6 accept"
+		echo "		iifname \"$LAN_BRIDGE\" counter drop"
+	fi
+	echo "	}"
+	echo "}"
+	if [ -n "${1:-}" ] && [ "${2:-}" = nat ]; then
+		cat <<-EOF
+		table ip $NAT_TABLE
+		delete table ip $NAT_TABLE
+		table ip $NAT_TABLE {
+			chain postrouting {
+				type nat hook postrouting priority srcnat; policy accept;
+				oifname "$1" ip saddr $(lan_subnet) masquerade
+			}
+		}
+		EOF
+	else
+		printf 'table ip %s\ndelete table ip %s\n' "$NAT_TABLE" "$NAT_TABLE"
+	fi
+}
+
+lan_nft() {
+	local t
+	t=$(lan_nft_text "$@") || return 1
+	printf '%s\n' "$t" | nft -c -f - && printf '%s\n' "$t" | nft -f -
+}
+
+# the routed LAN's table: the WAN's default route, throw for local ranges
+lan_route_table() {
+	local gw n
+	gw=$(ip -4 route show default dev "$1" | sed -n 's/^default via \([0-9.]*\).*/\1/p' | head -n1)
+	ip route flush table "$LAN_TABLE" 2>/dev/null
+	if [ -n "$gw" ]; then
+		ip route replace default via "$gw" dev "$1" table "$LAN_TABLE"
+	elif ip -4 route show default dev "$1" | grep -q '^default'; then
+		ip route replace default dev "$1" table "$LAN_TABLE"
+	else
+		ewarn "$1 has no default route yet: the wired LAN reaches the internet with its lease"
+		ip route replace unreachable default table "$LAN_TABLE"
+	fi
+	for n in 10.0.0.0/8 172.16.0.0/12 192.168.0.0/16 \
+		$(ip -4 route show dev "$1" scope link | sed -n 's|^\([0-9.]*/[0-9]*\) .*|\1|p'); do
+		ip route replace throw "$n" table "$LAN_TABLE"
+	done
+}
+
+# (re)apply the routed LAN: NAT + policy route + forwarding, or refuse
+lan_routed_apply() {
+	local w why mode=nat
+	[ -n "$LAN_ADDR" ] || { lan_nft; return; }
+	w=$(lan_wan)
+	why=$(nat_clash "$w")
+	if [ -n "$why" ]; then
+		eerror "wired LAN NAT refused: $why (the LAN stays local: DHCP/DNS from the box only)"
+		mode=refused
+	fi
+	lan_nft "$w" $mode || return 1
+	sed -i '/^nat /d; /^natrefused /d' $APPLIED 2>/dev/null
+	ip rule del iif "$LAN_BRIDGE" table "$LAN_TABLE" priority "$LAN_TABLE" 2>/dev/null
+	if [ $mode = nat ]; then
+		lan_route_table "$w"
+		ip rule add iif "$LAN_BRIDGE" table "$LAN_TABLE" priority "$LAN_TABLE"
+		if [ "$(cat /proc/sys/net/ipv4/ip_forward 2>/dev/null)" = 0 ] && ! grep -q '^ipfwd ' $APPLIED; then
+			sysctl -q -w net.ipv4.ip_forward=1 && echo "ipfwd 0" >> $APPLIED
+		fi
+		echo "nat $w $(lan_subnet)" >> $APPLIED
+	else
+		ip route flush table "$LAN_TABLE" 2>/dev/null
+		echo "natrefused $w" >> $APPLIED
+	fi
+}
+
+reroute() {
+	load_conf || return 1
+	[ -f $APPLIED ] || { eerror "gt-be98-lan is not applied"; return 1; }
+	ebegin "Wired LAN: routing via $(lan_wan)"
+	lan_routed_apply
+	eend $?
 }
 
 start() {
@@ -157,6 +303,7 @@ start() {
 	if [ -n "$LAN_ADDR" ]; then
 		ip addr replace "$LAN_ADDR" dev "$LAN_BRIDGE" &&
 			echo "addr $LAN_ADDR $LAN_BRIDGE" >> $APPLIED
+		lan_routed_apply || { eend 1 "routed LAN rule set rejected"; return 1; }
 	fi
 	case " $LAN_PORTS " in
 	*" rnr1 "*)
@@ -183,13 +330,22 @@ stop() {
 		rm -f $DNSMASQ_PID
 	fi
 	if [ -f $APPLIED ]; then
+		LAN_BRIDGE_APPLIED=$(sed -n 's/^bridge \(.*\)$/\1/p; s/^port .*//' $APPLIED | head -n1)
+		[ -n "$LAN_BRIDGE_APPLIED" ] || LAN_BRIDGE_APPLIED=$(conf_get LAN_BRIDGE 'A-Za-z0-9_-')
+		LAN_BRIDGE_APPLIED=${LAN_BRIDGE_APPLIED:-br-lan}
 		while read -r k v w; do
 			case "$k" in
 			port)	ip link set "$v" nomaster 2>/dev/null; ip link set "$v" down 2>/dev/null ;;
 			mtu)	[ -n "$w" ] && ip link set "$v" mtu "$w" 2>/dev/null ;;
 			addr)	ip addr del "$v" dev "$w" 2>/dev/null ;;
 			module)	rmmod "$v" 2>/dev/null ;;
-			nft)	nft delete table inet gt_be98_lan 2>/dev/null ;;
+			nft)	nft delete table inet gt_be98_lan 2>/dev/null
+				nft delete table ip $NAT_TABLE 2>/dev/null ;;
+			nat)	ip rule del iif "$LAN_BRIDGE_APPLIED" table "$LAN_TABLE" priority "$LAN_TABLE" 2>/dev/null
+				ip route flush table "$LAN_TABLE" 2>/dev/null ;;
+			ipfwd)	# back off only if no other router needs forwarding
+				[ -f /run/gt-be98-router.applied ] || [ -s /run/gt-be98-wifi/sta/routed.applied ] ||
+					sysctl -q -w net.ipv4.ip_forward="$v" ;;
 			esac
 		done < $APPLIED
 		# the bridge last, and only when this service created it
