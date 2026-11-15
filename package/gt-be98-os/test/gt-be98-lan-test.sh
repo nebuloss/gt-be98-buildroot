@@ -420,7 +420,14 @@ o=$(grep -v '^ip link set rnr[13] up$\|^E ' "$T/svc/seq" | tr '\n' '|')
 [ "$o" = "nft -c -f -|nft -f -|l2 up lan brwifi8 rnr0 921|" ] && ok "reload with nothing changed: no move (the user re-asserted)" || ko "reload unchanged: [$o]"
 echo rnr1 > "$T/svc/tripped"
 : > "$T/svc/seq"; svcf reload
-grep -q '^bridge link set dev rnr1 state 0$' "$T/svc/seq" && ok "reload: a latched jack stays disabled" || ko "reload latched: [$(tr '\n' '|' < "$T/svc/seq")]"
+o=$(grep -v '^ip link set rnr1 down$\|^W \|^E ' "$T/svc/seq" | tr '\n' '|')
+if [ "$o" = "ip link set rnr1 nomaster|l2 down lan brwifi8|nft delete table bridge gt_be98_lan_guard|" ] && ! grep -q '^vport ' "$T/svc/applied" && grep -q '^W rnr1: latched off by the BPDU guard' "$T/svc/seq"; then
+	ok "reload with rnr1 latched: never re-attached (out of brwifi8, which is let go; no vport line; no jack left to guard)"
+else ko "reload latched: [$o] applied [$(tr '\n' '|' < "$T/svc/applied")]"; fi
+: > "$T/svc/seq"; svcf reload
+grep -q 'master brwifi' "$T/svc/seq" && ko "reload latched (again): re-attached" || ok "reload latched (again): still not attached"
+rm -f "$T/svc/tripped"; : > "$T/svc/seq"; svcf reload
+grep -q '^ip link set rnr1 master brwifi8$' "$T/svc/seq" && ok "control: the latch cleared (what restart does): the jack is attached again" || ko "latch cleared: [$(tr '\n' '|' < "$T/svc/seq")]"
 : > "$T/svc/seq"; svcf stop
 o=$(grep -v '^ip link set rnr1 down$' "$T/svc/seq" | tr '\n' '|')
 [ "$o" = "nft delete table bridge gt_be98_lan_guard|ip link set rnr1 nomaster|rmmod rtl8372|l2 down lan brwifi8|" ] &&

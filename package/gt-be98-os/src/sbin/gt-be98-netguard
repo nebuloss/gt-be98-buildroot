@@ -46,9 +46,14 @@
 # VLAN moved loses its jacks at once).
 # BPDU guard (gt-be98-lan's nft table bridge gt_be98_lan_guard): a VLAN jack
 # whose bpdu_in_<port> counter moved is added to /run/gt-be98-lan.tripped
-# (the kernel already drops all its traffic) and its bridge port set to
-# disabled (state 0), and kept so on every sweep. One `nft` per sweep, only
-# while the guard is loaded.
+# (the kernel already drops all its flooded traffic) and DETACHED from its
+# bridge (nomaster), and detached again whenever something re-attaches it.
+# Not a bridge port state: a port state is bridge-level policy, which the
+# Runner's offloaded bridged flows bypass (an offloaded unicast flow never
+# reaches the bridge: q254 B, ping 5/5 after the trip with state 0). The
+# detach is a netdev event: the bridge flushes the port's FDB and the Runner
+# flow cache removes every hardware flow of the port (NETDEV_CHANGEUPPER ->
+# fc_flush_dev). One `nft` per sweep, only while the guard is loaded.
 # Reacts to every link event (ip monitor) and sweeps every NETGUARD_SWEEP s.
 # Settings: /etc/conf.d/gt-be98-netguard, /etc/conf.d/gt-be98-lan.
 # `gt-be98-netguard --selftest` checks the bridge-port verdicts on fixed cases.
@@ -217,7 +222,10 @@ verdict() {
 		if protected "${1%%.*}" && repeater_bridge "$2"; then
 			VERDICT="$2 is a repeater bridge (Wi-Fi uplink): no wired VLAN in it"; return
 		fi ;;
-	*)	if protected "$1" && ! lan_port_ok "$1" "$2" && ! vport_ok "$1" "$2"; then
+	*)	if tripped "$1"; then
+			VERDICT="latched off by the BPDU guard (rc-service gt-be98-lan restart clears it)"; return
+		fi
+		if protected "$1" && ! lan_port_ok "$1" "$2" && ! vport_ok "$1" "$2"; then
 			VERDICT="protected port: never bridged except a LAN_PORTS port in $LBRIDGE or a VLAN jack in its native VLAN's network bridge"; return
 		fi
 		if station "$1" && ! repeater_of "$1" "$2"; then
@@ -254,15 +262,15 @@ guard() {
 		done < "$LAN_TRIPPED.seen"
 		rm -f "$LAN_TRIPPED.seen"
 	fi
-	# a latched port stays disabled in its bridge
+	# the latched ports, for verdict: never a bridge port (detached by the
+	# sweep below, at once after the trip and every time after)
+	TRIP_LIST=$NL
 	[ -r "$LAN_TRIPPED" ] || return 0
 	while read -r p _; do
-		[ -e "$SYSNET/$p/brport/state" ] || continue
-		c=; { read -r c < "$SYSNET/$p/brport/state"; } 2>/dev/null
-		[ "$c" = 0 ] || { bridge link set dev "$p" state 0 2>/dev/null &&
-			log "BPDU guard: bridge port $p disabled"; }
+		[ -n "$p" ] && TRIP_LIST="$TRIP_LIST$p$NL"
 	done < "$LAN_TRIPPED"
 }
+tripped() { case "${TRIP_LIST:-}" in *"$NL$1$NL"*) return 0 ;; esac; return 1; }
 sweep() {
 	local b m pp i n f v
 	wifi_conf
@@ -372,6 +380,12 @@ selftest() {
 	vcheck detach rnr1 brwifi1  921 921 rnr1 rnr1	# the trunk port itself
 	vcheck keep   rnr3 brwifi7  30  30  rnr0 rnr0	# rnr3 (a direct jack)
 	vcheck detach eth0 brwifi1  921 921 rnr0 rnr0	# the USB lifeline, never
+	# a jack latched by the BPDU guard: never a bridge port, profile or not
+	TRIP_LIST="${NL}rnr1$NL"
+	vcheck detach rnr1 brwifi1  921 921 rnr0 rnr0	# latched: detached in its own native bridge
+	TRIP_LIST="${NL}rnr2$NL"
+	vcheck keep   rnr1 brwifi1  921 921 rnr0 rnr0	# control: another port latched
+	TRIP_LIST=$NL
 	# the trunk VLAN of a bridge gt-be98-l2 runs (no WIFI_VLANS: Wi-Fi off)
 	vcheck keep   rnr0.921 brwifi1 "" 921 rnr0 rnr0
 	vcheck detach rnr0.922 brwifi1 "" 921 rnr0 rnr0	# another VLAN than it runs

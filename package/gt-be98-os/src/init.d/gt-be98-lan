@@ -21,9 +21,15 @@
 # trunk's own segment (a loop the VLAN bridge's STP could never see: the
 # upstream's BPDUs reach rnr0, not rnr0.<vid>). It is dropped and counted, the
 # port is latched off in the kernel at once (set "tripped": everything in or
-# out of it dropped) and gt-be98-netguard sets its bridge port disabled. The
-# box never sends BPDUs into a trunk VLAN either (dropped on <trunk>.<vid>
-# egress). A tripped port stays off until `rc-service gt-be98-lan restart`.
+# out of it dropped) and gt-be98-netguard DETACHES it from the bridge (a
+# netdev event: the FDB of the port is flushed and the Runner flow cache
+# drops the port's hardware flows; a bridge port state would not reach the
+# offloaded flows, q254). The box never sends BPDUs into a trunk VLAN either
+# (dropped on <trunk>.<vid> egress). A tripped port is never re-attached,
+# not by netguard, not by a reload, until `rc-service gt-be98-lan restart`.
+# The general rule: bridge-level L2 policy (port state, bridge nft rules) is
+# bypassed by Runner-offloaded bridged flows; enforce it through netdev
+# events (detach, link down), which flush the port's offloaded flows.
 # `reload` re-applies the VLAN jacks only (gt-be98-wifi runs it after its own
 # reload: a network whose VLAN changed or went away).
 #
@@ -395,6 +401,12 @@ vports_apply() {
 	t=$(wifi_trunk)
 	for p in $VPORTS; do
 		eval "v=\$VNATIVE_$p"
+		# latched by the BPDU guard: never re-attached (gt-be98-netguard
+		# detached it; a restart clears the latch)
+		if grep -qx "$p" "$TRIPPED" 2>/dev/null; then
+			ewarn "$p: latched off by the BPDU guard, not bridged (rc-service gt-be98-lan restart clears it)"
+			continue
+		fi
 		if ! b=$(lan_net_bridge "$v"); then
 			eerror "LAN_PORT_$p: no network on VLAN $v (the Wi-Fi network list / WIFI_VLANS): $p not bridged"
 			rc=1; continue
@@ -439,10 +451,6 @@ vports_apply() {
 				{ ewarn "$p: refused as a port of $b (a looped port is refused by the driver)"; rc=1; continue; }
 		fi
 		echo "vport $p $b $v" >> $APPLIED
-		if grep -qx "$p" "$TRIPPED" 2>/dev/null; then
-			bridge link set dev "$p" state 0 2>/dev/null
-			ewarn "$p: latched off by the BPDU guard (rc-service gt-be98-lan restart clears it)"
-		fi
 		ip link set "$p" up
 		einfo "$p: native VLAN $v, bridge $b"
 	done
