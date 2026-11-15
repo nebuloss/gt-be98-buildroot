@@ -27,7 +27,11 @@
 # main 2026-11-13 7c78601a (img47: WMM-EDCA: hostapd's EDCA parameters (tx_queue_* / wmm_ac_*) reach the
 #  firmware, box-verified q212/q217; INV-RECOVERY rebind give-up and trap-poll fixes, active only when
 #  radio_rebind > 0 (default stays 0); MLO r5-3 bench/group only; on top of 4ec3bcd6)
-GT_BE98_OPEN_WIFI_VERSION = 7c78601aedcd7b011a5ae60cb99b61d9a43861d0
+# main 2026-11-15 5378a951 (img48/RC8: WPS PBC (a9df21e0: probe-request event 44 to hostapd; overlap
+#  detection probabilistic, documented UNTESTED) + 802.11k/v (BSS-transition / action frames to and from
+#  hostapd, box-verified q249: BTM moved the client in 2 s; neighbour report blocked on fw RM-cap); on top
+#  of 7c78601a)
+GT_BE98_OPEN_WIFI_VERSION = 5378a95108c0b25c0822420614c1c1cf2638e084
 GT_BE98_OPEN_WIFI_SITE = git@github.com:nebuloss/gt-be98-open-wifi.git
 GT_BE98_OPEN_WIFI_SITE_METHOD = git
 GT_BE98_OPEN_WIFI_LICENSE = GPL-2.0-only
