@@ -31,7 +31,10 @@
 #  detection probabilistic, documented UNTESTED) + 802.11k/v (BSS-transition / action frames to and from
 #  hostapd, box-verified q249: BTM moved the client in 2 s; neighbour report blocked on fw RM-cap); on top
 #  of 7c78601a)
-GT_BE98_OPEN_WIFI_VERSION = 5378a95108c0b25c0822420614c1c1cf2638e084
+# main 2026-11-15 2456cda8 (RC9: DFS5GH-BAND: each 5 GHz radio advertises only its own half (dom0 5150-5350,
+#  dom3 5470-5895), so a post-radar firmware move can no longer land the 5 GHz-high AP on channel 36;
+#  box-verified q258 (CTL moved to 5180, FIX back up in band at 5580); on top of 5378a951)
+GT_BE98_OPEN_WIFI_VERSION = 2456cda8600cf6da2c3196eb53add8540a9c0a78
 GT_BE98_OPEN_WIFI_SITE = git@github.com:nebuloss/gt-be98-open-wifi.git
 GT_BE98_OPEN_WIFI_SITE_METHOD = git
 GT_BE98_OPEN_WIFI_LICENSE = GPL-2.0-only
