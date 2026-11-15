@@ -693,6 +693,22 @@ rc start; r=$RC; sleep 1
 check "orphans: start stops them (said), then runs exactly one of each" "0 started|2|gt-be98-wifi-reprobe gt-be98-wifi-sched hostapd" \
 	"$r|$(grep -c 'ran without a pid file naming it: stopped' "$T/out")|$(fakes)"
 rc stop
+# the 802.11k/v daemon (gt-be98-wifi-steer): runs only while the applied
+# plan has a kv line (generator KV=1, a kv=1 network); a reload starts or
+# stops it; stop leaves nothing. Control: the same list without kv=1
+WIFI_STEER="$here/../src/sbin/gt-be98-wifi-steer"; : > "$T/out"
+rc start; check "steer daemon: no kv network: not started" "0 started|gt-be98-wifi-reprobe gt-be98-wifi-sched hostapd" "$RC|$(fakes)"
+{ net 1 a sae password1 "2g 5gl" 1; printf 'kv=1\n'; } > "$T/nets"
+GT_BE98_KV=1; export GT_BE98_KV
+rc reload; check "steer daemon: a kv=1 network added (KV=1): reload starts it" "0 started|gt-be98-wifi-reprobe gt-be98-wifi-sched gt-be98-wifi-steer hostapd" "$RC|$(fakes)"
+rc reload; check "steer daemon: a reload with it running: still exactly one" "gt-be98-wifi-reprobe gt-be98-wifi-sched gt-be98-wifi-steer hostapd" "$(fakes)"
+{ net 1 a sae password1 "2g 5gl" 1; } > "$T/nets"
+rc reload; sleep 1; check "steer daemon: kv=1 gone: reload stops it" "0 started|gt-be98-wifi-reprobe gt-be98-wifi-sched hostapd" "$RC|$(fakes)"
+{ net 1 a sae password1 "2g 5gl" 1; printf 'kv=1\n'; } > "$T/nets"
+rc reload; rc stop; sleep 1
+check "steer daemon: stop leaves nothing" "0 stopped|" "$RC|$(fakes)"
+unset GT_BE98_KV; WIFI_STEER=/nonexistent
+{ net 1 a sae password1 "2g 5gl" 1; } > "$T/nets"
 # the lock: a live holder makes the next one wait (taken over after
 # SVC_LOCK_WAIT s, said); a dead holder's is taken at once
 if command -v svc_lock > /dev/null 2>&1; then
