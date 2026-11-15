@@ -1,6 +1,40 @@
 #!/sbin/openrc-run
 # SPDX-License-Identifier: GPL-2.0
-# The wired LAN (optional, NOT enabled by default): the LAN ports listed in
+# The wired LAN. In the default runlevel (D41), and a clean no-op while
+# nothing is configured (no LAN_PORTS, no LAN_PORT_<port> profile): the
+# RTL8372 then stays in reset and the jacks are dead, as before.
+#
+# VLAN JACKS (AP mode, UniFi-style port profile; owner 11-15, D19 Option B):
+# LAN_PORT_<port>="native=<vid> tagged=none" puts the bare port (rnr1 = the
+# four 2.5G jacks of the RTL8372, one profile for all four; rnr2; rnr3) into
+# the bridge of the network whose VLAN is <vid>, the brwifi<ID> its SSIDs use
+# (network=ID ... vlan=<vid> of the Wi-Fi network list, or WIFI_VLANS): a jack
+# and an SSID on one network share its L2, and the jack's clients get their
+# addresses from that VLAN's own DHCP upstream. The bridge and its trunk VLAN
+# (<WIFI_TRUNK>.<vid>) belong to gt-be98-l2, whose users are this service and
+# gt-be98-wifi: the bridge exists while either needs it. A VLAN no network
+# carries is refused (a profile names a network, as in UniFi). Step 1: only
+# tagged=none (the RTL8372 carries untagged frames only until its VLAN table
+# is programmed), and the profile of rnr1 is that of all four jacks.
+# BPDU guard (nft table bridge gt_be98_lan_guard): a BPDU (01:80:c2:00:00:00)
+# entering from a VLAN jack means the jack reaches a switch, i.e. possibly the
+# trunk's own segment (a loop the VLAN bridge's STP could never see: the
+# upstream's BPDUs reach rnr0, not rnr0.<vid>). It is dropped and counted, the
+# port is latched off in the kernel at once (set "tripped": everything in or
+# out of it dropped) and gt-be98-netguard DETACHES it from the bridge (a
+# netdev event: the FDB of the port is flushed and the Runner flow cache
+# drops the port's hardware flows; a bridge port state would not reach the
+# offloaded flows, q254). The box never sends BPDUs into a trunk VLAN either
+# (dropped on <trunk>.<vid> egress). A tripped port is never re-attached,
+# not by netguard, not by a reload, until `rc-service gt-be98-lan restart`.
+# The general rule: bridge-level L2 policy (port state, bridge nft rules) is
+# bypassed by Runner-offloaded bridged flows; enforce it through netdev
+# events (detach, link down), which flush the port's offloaded flows.
+# `reload` re-applies the VLAN jacks only (gt-be98-wifi runs it after its own
+# reload: a network whose VLAN changed or went away).
+#
+# ROUTED LAN (router mode / D19 Option A, dormant unless configured): the
+# LAN ports listed in
 # LAN_PORTS (rnr1 = the RTL8372's LAN jacks, rnr2, rnr3; never rnr0) become
 # ports of one bridge, LAN_BRIDGE (br-lan), with spanning tree on. Wi-Fi joins
 # it when a radio's hostapd config says bridge=br-lan. The bridge never holds
@@ -22,7 +56,7 @@
 #     ports keep theirs (1500). rnr1's jacks also pass through the RTL8372,
 #     whose own maximum frame size this OS does not set (unread).
 # Settings: /etc/conf.d/gt-be98-lan (parsed, not sourced).
-description="Wired LAN: LAN ports (never rnr0) in one bridge, STP, optional DHCP"
+description="Wired LAN: VLAN jacks in their networks' bridges, or a routed br-lan (never rnr0)"
 
 LAN_CONF=${LAN_CONF_FILE:-/etc/conf.d/gt-be98-lan}
 APPLIED=${GT_BE98_LAN_APPLIED:-/run/gt-be98-lan.applied}
@@ -43,7 +77,12 @@ DNSMASQ_PID=/run/gt-be98-lan-dnsmasq.pid
 LAN_TABLE=${LAN_TABLE:-183}
 NAT_TABLE=gt_be98_lan_nat
 STA_ROUTED=${GT_BE98_STA_ROUTED:-/run/gt-be98-wifi/sta/routed.applied}
-extra_started_commands="reroute"
+L2=${GT_BE98_L2:-/usr/sbin/gt-be98-l2}
+WIFI_L2CONF=${GT_BE98_WIFI_L2:-/run/gt-be98-wifi/l2.conf}
+WIFI_CONFS=${GT_BE98_WIFI_CONFS:-/etc/conf.d/gt-be98-wifi-ap /etc/conf.d/gt-be98-wifi}
+GUARD_TABLE=gt_be98_lan_guard
+TRIPPED=${GT_BE98_LAN_TRIPPED:-/run/gt-be98-lan.tripped}
+extra_started_commands="reroute reload"
 
 depend() {
 	need gt-be98-netguard
@@ -66,6 +105,70 @@ wifi_trunk() {
 	echo "${t:-rnr0}"
 }
 
+# 1..4094, decimal, no leading zero
+valid_vid() {
+	case "$1" in ''|0*|*[!0-9]*) return 1 ;; esac
+	[ ${#1} -le 4 ] && [ "$1" -ge 1 ] && [ "$1" -le 4094 ]
+}
+
+# the VLAN-jack profiles into VPORTS ("rnr1 rnr2") and VNATIVE_<port>; an
+# empty or enabled=0 profile is no jack. Step 1: tagged=none only.
+vports_conf() {
+	local p v k t w native tagged enabled
+	VPORTS=
+	t=$(wifi_trunk)
+	for p in rnr0 rnr1 rnr2 rnr3; do
+		v=$(conf_get "LAN_PORT_$p" 'a-z0-9=, ')
+		[ -n "$v" ] || { [ -z "$(conf_get "LAN_PORT_$p" '^"')" ] || { eerror "LAN_PORT_$p refused (native=<vid> tagged=none [enabled=0|1])"; return 1; }; continue; }
+		native= tagged=none enabled=1
+		for w in $v; do
+			k=${w%%=*}
+			case "$k=" in
+			native=) native=${w#*=} ;;
+			tagged=) tagged=${w#*=} ;;
+			enabled=) enabled=${w#*=} ;;
+			*) eerror "LAN_PORT_$p: '$w' refused (native=, tagged=, enabled=)"; return 1 ;;
+			esac
+		done
+		[ "$p" != rnr0 ] || { eerror "rnr0 is the uplink and management port: never a LAN port (LAN_PORT_rnr0 refused)"; return 1; }
+		case "$enabled" in 0) continue ;; 1) ;; *) eerror "LAN_PORT_$p: enabled=$enabled refused (0|1)"; return 1 ;; esac
+		valid_vid "$native" || { eerror "LAN_PORT_$p: native=$native refused (a VLAN id 1-4094)"; return 1; }
+		[ "$tagged" = none ] || { eerror "LAN_PORT_$p: tagged=$tagged refused: only tagged=none for now (tagged VLANs need the RTL8372 VLAN table)"; return 1; }
+		[ "$p" != "$t" ] || { eerror "$p is the Wi-Fi trunk port (WIFI_TRUNK): refused as a VLAN jack"; return 1; }
+		VPORTS="${VPORTS:+$VPORTS }$p"
+		eval "VNATIVE_$p=\$native"
+	done
+	return 0
+}
+
+# the bridge of the network on VLAN $1 (stdout), rc 1 when none: the running
+# Wi-Fi service's effective list (l2.conf), else the configured WIFI_VLANS
+# and the network list (network=ID ... vlan=$1 -> brwifiID)
+lan_net_bridge() {
+	local f l b nl
+	if [ -f "$WIFI_L2CONF" ]; then
+		l=$(sed -n 's/^WIFI_VLANS="\{0,1\}\([A-Za-z0-9: ]*\)"\{0,1\}$/\1/p' "$WIFI_L2CONF" | tail -n1)
+		for b in $l; do [ "${b#*:}" = "$1" ] && { echo "${b%%:*}"; return 0; }; done
+		return 1
+	fi
+	# the web UI's file wins over the defaults file as a whole (gt-be98-wifi
+	# ap_override): the first one present decides
+	for f in $WIFI_CONFS; do
+		[ -f "$f" ] || continue
+		l=$(sed -n 's/^WIFI_VLANS="\{0,1\}\([A-Za-z0-9: ]*\)"\{0,1\}$/\1/p' "$f" | tail -n1)
+		for b in $l; do [ "${b#*:}" = "$1" ] && { echo "${b%%:*}"; return 0; }; done
+		nl=$(sed -n 's/^WIFI_NETWORKS="\{0,1\}\([A-Za-z0-9_./-]*\)"\{0,1\}$/\1/p' "$f" | tail -n1)
+		[ -n "$nl" ] && [ -r "$nl" ] || return 1
+		b=$(awk -v v="$1" '
+			/^network=[0-9]+[ \t]*$/ { id = $0; sub(/^network=/, "", id); sub(/[ \t]+$/, "", id); next }
+			/^(radio|station)=/ { id = ""; next }
+			id != "" && $0 ~ "^vlan=" v "[ \t]*$" { print "brwifi" id; exit }' "$nl")
+		[ -n "$b" ] && { echo "$b"; return 0; }
+		return 1
+	done
+	return 1
+}
+
 load_conf() {
 	local p t
 	LAN_PORTS=$(conf_get LAN_PORTS 'A-Za-z0-9 ')
@@ -77,7 +180,7 @@ load_conf() {
 	LAN_SWITCH_MONITOR=$(conf_get LAN_SWITCH_MONITOR 'a-z')
 	LAN_IFACE_WAIT=$(conf_get LAN_IFACE_WAIT '0-9')
 	LAN_MTU=$(conf_get LAN_MTU '0-9')
-	[ -n "$LAN_PORTS" ] || { eerror "LAN_PORTS is empty: no wired LAN configured"; return 1; }
+	vports_conf || return 1
 	case "$LAN_BRIDGE" in
 	brwifi*|rnr*|eth*|bcawl*) eerror "LAN_BRIDGE '$LAN_BRIDGE' refused"; return 1 ;;
 	esac
@@ -89,6 +192,7 @@ load_conf() {
 		*) eerror "LAN port '$p' refused: rnr1, rnr2 or rnr3 only"; return 1 ;;
 		esac
 		[ "$p" != "$t" ] || { eerror "$p is the Wi-Fi trunk port (WIFI_TRUNK): refused"; return 1; }
+		case " $VPORTS " in *" $p "*) eerror "$p has a VLAN profile (LAN_PORT_$p) and is in LAN_PORTS: one or the other"; return 1 ;; esac
 	done
 	[ -z "$LAN_ADDR" ] || echo "$LAN_ADDR" | grep -qE '^[0-9]{1,3}(\.[0-9]{1,3}){3}/[0-9]{1,2}$' ||
 		{ eerror "LAN_ADDR '$LAN_ADDR' refused"; return 1; }
@@ -247,11 +351,154 @@ reroute() {
 	eend $?
 }
 
-start() {
-	local p n m
+# ---- VLAN jacks (header) ----
+
+# the BPDU guard rule set (stdout): $1 the VLAN jacks, $2 their trunk VLANs,
+# $3 the ports latched off already (kept off across a reload)
+guard_nft_text() {
+	local p e=
+	for p in $3; do e="${e:+$e, }\"$p\""; done
+	echo "table bridge $GUARD_TABLE"
+	echo "delete table bridge $GUARD_TABLE"
+	echo "table bridge $GUARD_TABLE {"
+	for p in $1; do echo "	counter bpdu_in_$p { }"; done
+	for p in $2; do echo "	counter bpdu_out_$(echo "$p" | tr . _) { }"; done
+	echo "	set tripped {"
+	echo "		type ifname; flags dynamic;"
+	[ -n "$e" ] && echo "		elements = { $e }"
+	echo "	}"
+	echo "	chain jack_in {"
+	echo "		type filter hook prerouting priority -200; policy accept;"
+	echo "		iifname @tripped drop"
+	for p in $1; do
+		echo "		iifname \"$p\" ether daddr 01:80:c2:00:00:00 add @tripped { iifname } counter name \"bpdu_in_$p\" drop"
+	done
+	echo "	}"
+	echo "	chain jack_out {"
+	echo "		type filter hook forward priority -200; policy accept;"
+	echo "		oifname @tripped drop"
+	for p in $2; do
+		echo "		oifname \"$p\" ether daddr 01:80:c2:00:00:00 counter name \"bpdu_out_$(echo "$p" | tr . _)\" drop"
+	done
+	echo "	}"
+	echo "}"
+}
+
+guard_nft() {
+	local t
+	if [ -z "$1" ]; then nft delete table bridge $GUARD_TABLE 2>/dev/null; return 0; fi
+	t=$(guard_nft_text "$@") || return 1
+	printf '%s\n' "$t" | nft -c -f - && printf '%s\n' "$t" | nft -f -
+}
+
+master_of() { local m; m=$(readlink "/sys/class/net/$1/master" 2>/dev/null); echo "${m##*/}"; }
+
+# (re)apply the VLAN jacks of VPORTS: each in the bridge of its native VLAN's
+# network, the guard loaded before any jack joins; jacks no longer wanted (or
+# whose network moved) leave first; rc 1 when a jack could not be bridged
+vports_apply() {
+	local p v b t k w want= ports= subs= old rc=0 n
+	t=$(wifi_trunk)
+	for p in $VPORTS; do
+		eval "v=\$VNATIVE_$p"
+		# latched by the BPDU guard: never re-attached (gt-be98-netguard
+		# detached it; a restart clears the latch)
+		if grep -qx "$p" "$TRIPPED" 2>/dev/null; then
+			ewarn "$p: latched off by the BPDU guard, not bridged (rc-service gt-be98-lan restart clears it)"
+			continue
+		fi
+		if ! b=$(lan_net_bridge "$v"); then
+			eerror "LAN_PORT_$p: no network on VLAN $v (the Wi-Fi network list / WIFI_VLANS): $p not bridged"
+			rc=1; continue
+		fi
+		want="$want $p:$b:$v"; ports="$ports $p"
+		case " $subs " in *" $t.$v "*) ;; *) subs="$subs $t.$v" ;; esac
+	done
+	# the jacks applied before and no longer wanted as they were
+	old=$(sed -n 's/^vport \([a-z0-9]*\) \([a-z0-9]*\) \([0-9]*\)$/\1:\2:\3/p' $APPLIED 2>/dev/null)
+	k=
+	for w in $old; do
+		case " $want " in *" $w "*) continue ;; esac
+		p=${w%%:*}; b=${w#*:}; b=${b%%:*}
+		[ "$(master_of "$p")" = "$b" ] && ip link set "$p" nomaster
+		ip link set "$p" down 2>/dev/null
+		case " $want $k " in *":$b:"*|*" $b "*) ;; *) k="$k $b" ;; esac
+	done
+	# then the bridges no wanted jack uses (the last user deletes them)
+	for b in $k; do "$L2" down lan "$b"; done
+	sed -i '/^vport /d' $APPLIED 2>/dev/null
+	# the guard (none wanted and none loaded: nothing to do, no command)
+	if [ -n "$ports" ] || grep -qx guard $APPLIED 2>/dev/null; then
+		# shellcheck disable=SC2086 # word lists
+		guard_nft "$(echo $ports)" "$(echo $subs)" "$(cat "$TRIPPED" 2>/dev/null | tr '\n' ' ')" ||
+			{ eerror "BPDU guard rule set rejected: no VLAN jack bridged"; return 1; }
+	fi
+	if [ -n "$ports" ]; then grep -qx guard $APPLIED || echo guard >> $APPLIED
+	else sed -i '/^guard$/d' $APPLIED; fi
+	for w in $want; do
+		p=${w%%:*}; v=${w##*:}; b=${w#*:}; b=${b%%:*}
+		n=0
+		while [ ! -e "/sys/class/net/$p" ] && [ $n -lt "${LAN_IFACE_WAIT:-20}" ]; do
+			sleep 1; n=$((n + 1))
+		done
+		[ -e "/sys/class/net/$p" ] || { ewarn "$p: no such interface, skipped"; rc=1; continue; }
+		"$L2" up lan "$b" "$t" "$v" || { eerror "$p: the network bridge $b (VLAN $v on $t) is not available"; rc=1; continue; }
+		if [ "$(master_of "$p")" != "$b" ]; then
+			# a jack carries no address of its own
+			ip -4 addr flush dev "$p" 2>/dev/null
+			[ -z "$(master_of "$p")" ] || ip link set "$p" nomaster
+			ip link set "$p" master "$b" ||
+				{ ewarn "$p: refused as a port of $b (a looped port is refused by the driver)"; rc=1; continue; }
+		fi
+		echo "vport $p $b $v" >> $APPLIED
+		ip link set "$p" up
+		einfo "$p: native VLAN $v, bridge $b"
+	done
+	case " $ports " in
+	*" rnr1 "*) switch_load ;;
+	esac
+	return $rc
+}
+
+# the RTL8372 configurator, when a LAN port is rnr1
+switch_load() {
+	grep -qx 'module rtl8372' $APPLIED 2>/dev/null && return 0
+	if [ "${LAN_SWITCH_MONITOR:-yes}" = yes ] && ! grep -q '^rtl8372 ' /proc/modules &&
+		modprobe rtl8372 2>/dev/null; then
+		echo "module rtl8372" >> $APPLIED
+	fi
+}
+
+reload() {
 	load_conf || return 1
-	ebegin "Wired LAN: $LAN_PORTS in $LAN_BRIDGE (STP ${LAN_STP:-1})"
+	[ -f $APPLIED ] || { eerror "gt-be98-lan is not applied"; return 1; }
+	ebegin "Wired LAN: VLAN jacks ${VPORTS:-none}"
+	vports_apply
+	eend $?
+}
+
+start() {
+	load_conf || return 1
 	: > $APPLIED
+	rm -f "$TRIPPED"
+	if [ -z "$LAN_PORTS" ] && [ -z "$VPORTS" ]; then
+		einfo "Wired LAN: nothing configured (LAN_PORTS, LAN_PORT_<port>): the jacks stay off"
+		return 0
+	fi
+	if [ -n "$LAN_PORTS" ]; then brlan_start || return 1; fi
+	if [ -n "$VPORTS" ]; then
+		ebegin "Wired LAN: VLAN jacks $VPORTS"
+		# a jack that cannot be bridged yet (its network not configured)
+		# leaves the service started: a Wi-Fi reload re-runs this
+		vports_apply; eend $? "a VLAN jack is not bridged (above)"
+	fi
+	return 0
+}
+
+# the routed br-lan (LAN_PORTS)
+brlan_start() {
+	local p n m
+	ebegin "Wired LAN: $LAN_PORTS in $LAN_BRIDGE (STP ${LAN_STP:-1})"
 	if [ ! -e "/sys/class/net/$LAN_BRIDGE" ]; then
 		ip link add "$LAN_BRIDGE" type bridge stp_state "${LAN_STP:-1}" ||
 			{ eend 1 "cannot create $LAN_BRIDGE"; return 1; }
@@ -306,11 +553,7 @@ start() {
 		lan_routed_apply || { eend 1 "routed LAN rule set rejected"; return 1; }
 	fi
 	case " $LAN_PORTS " in
-	*" rnr1 "*)
-		if [ "${LAN_SWITCH_MONITOR:-yes}" = yes ] && ! grep -q '^rtl8372 ' /proc/modules &&
-			modprobe rtl8372 2>/dev/null; then
-			echo "module rtl8372" >> $APPLIED
-		fi ;;
+	*" rnr1 "*) switch_load ;;
 	esac
 	if [ -n "$LAN_DHCP" ]; then
 		start-stop-daemon --start --exec /usr/sbin/dnsmasq --pidfile $DNSMASQ_PID -- \
@@ -323,7 +566,7 @@ start() {
 }
 
 stop() {
-	local k v w
+	local k v w x mods=
 	ebegin "Stopping the wired LAN"
 	if [ -f $DNSMASQ_PID ]; then
 		start-stop-daemon --stop --exec /usr/sbin/dnsmasq --pidfile $DNSMASQ_PID --retry TERM/5/KILL/2
@@ -333,12 +576,15 @@ stop() {
 		LAN_BRIDGE_APPLIED=$(sed -n 's/^bridge \(.*\)$/\1/p; s/^port .*//' $APPLIED | head -n1)
 		[ -n "$LAN_BRIDGE_APPLIED" ] || LAN_BRIDGE_APPLIED=$(conf_get LAN_BRIDGE 'A-Za-z0-9_-')
 		LAN_BRIDGE_APPLIED=${LAN_BRIDGE_APPLIED:-br-lan}
-		while read -r k v w; do
+		while read -r k v w x; do
 			case "$k" in
 			port)	ip link set "$v" nomaster 2>/dev/null; ip link set "$v" down 2>/dev/null ;;
+			vport)	[ "$(master_of "$v")" = "$w" ] && ip link set "$v" nomaster 2>/dev/null
+				ip link set "$v" down 2>/dev/null ;;
+			guard)	nft delete table bridge $GUARD_TABLE 2>/dev/null ;;
 			mtu)	[ -n "$w" ] && ip link set "$v" mtu "$w" 2>/dev/null ;;
 			addr)	ip addr del "$v" dev "$w" 2>/dev/null ;;
-			module)	rmmod "$v" 2>/dev/null ;;
+			module)	mods="$mods $v" ;;	# after the ports left
 			nft)	nft delete table inet gt_be98_lan 2>/dev/null
 				nft delete table ip $NAT_TABLE 2>/dev/null ;;
 			nat)	ip rule del iif "$LAN_BRIDGE_APPLIED" table "$LAN_TABLE" priority "$LAN_TABLE" 2>/dev/null
@@ -348,11 +594,18 @@ stop() {
 					sysctl -q -w net.ipv4.ip_forward="$v" ;;
 			esac
 		done < $APPLIED
-		# the bridge last, and only when this service created it
-		while read -r k v w; do
+		for v in $mods; do rmmod "$v" 2>/dev/null; done
+		# the bridge last, and only when this service created it; the VLAN
+		# jacks' network bridges: this service lets go (gt-be98-l2 deletes
+		# one when no user is left)
+		while read -r k v w x; do
 			[ "$k" = bridge ] && ip link del "$v" 2>/dev/null
 		done < $APPLIED
+		for w in $(sed -n 's/^vport [a-z0-9]* \([a-z0-9]*\) [0-9]*$/\1/p' $APPLIED | sort -u); do
+			"$L2" down lan "$w"
+		done
 		rm -f $APPLIED
 	fi
+	rm -f "$TRIPPED"
 	eend 0
 }

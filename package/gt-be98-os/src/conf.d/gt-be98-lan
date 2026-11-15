@@ -1,7 +1,27 @@
-# /etc/conf.d/gt-be98-lan - the wired LAN (service gt-be98-lan, NOT enabled
-# by default: owner decision D16; nothing here acts until the service runs).
-# Parsed, not sourced. Saved to /jffs with the other network settings.
+# /etc/conf.d/gt-be98-lan - the wired LAN (service gt-be98-lan, in the default
+# runlevel: D41). Nothing here acts while it is all empty: the RTL8372 switch
+# then stays in reset and the jacks are dead. Parsed, not sourced. Saved to
+# /jffs with the other network settings.
 #
+# VLAN JACKS (AP mode, UniFi-style port profile): a jack joins the network
+# whose VLAN is its native VLAN, i.e. the bridge (brwifi<ID>) that network's
+# SSIDs use, and its devices get their addresses from that VLAN's own DHCP
+# upstream. The VLAN must belong to a network of the Wi-Fi network list
+# (network=ID ... vlan=<vid>) or WIFI_VLANS; another one is refused.
+#   LAN_PORT_<port>="native=<vid> tagged=none [enabled=0|1]"
+# <port>: rnr1 = the RTL8372's four 2.5G jacks (one profile for all four),
+# rnr2 (1G jack), rnr3 (10G jack); never rnr0 (the uplink), never the Wi-Fi
+# trunk port. tagged=: only none for now (untagged frames only: tagged VLANs
+# on the jacks need the RTL8372 VLAN table). enabled=0: the jack stays off.
+# A jack that receives a BPDU (it reaches a switch: a loop risk) is cut at
+# once (BPDU guard) until `rc-service gt-be98-lan restart`.
+# A port is a VLAN jack or in LAN_PORTS below, never both.
+#LAN_PORT_rnr1="native=921 tagged=none"
+LAN_PORT_rnr1=""
+LAN_PORT_rnr2=""
+LAN_PORT_rnr3=""
+#
+# ROUTED LAN (router mode / D19 Option A; unused unless set):
 # LAN ports bridged into LAN_BRIDGE, from: rnr1 (the RTL8372 switch's four
 # 2.5G LAN jacks), rnr2 (1G jack), rnr3 (10G jack). Never rnr0: it is the
 # uplink and the management port, and the service and gt-be98-netguard both
@@ -24,8 +44,8 @@ LAN_ADDR=""
 # DHCP on the bridge: dnsmasq --dhcp-range value, e.g.
 # "192.168.50.100,192.168.50.199,12h"; empty = no DHCP server
 LAN_DHCP=""
-# load the RTL8372 read-only monitor (rtl8372.ko: chip ID, link of each jack)
-# when rnr1 is a LAN port and the module is installed
+# load the RTL8372 configurator (rtl8372.ko: the switch's bring-up, then the
+# link of each jack) when rnr1 is a LAN port or a VLAN jack
 LAN_SWITCH_MONITOR="yes"
 # seconds to wait for each port at start (the Runner loads in gt-be98-drivers)
 LAN_IFACE_WAIT="20"

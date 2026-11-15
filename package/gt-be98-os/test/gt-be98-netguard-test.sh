@@ -120,5 +120,55 @@ if ST=$(command -v strace 2>/dev/null); then
 	clean; PATH="$T/cnt" $ST -f -qq -e trace=clone,clone3,fork,vfork -o "$T/st" $BS "$G" --sweep
 	check "cost (strace): a compliant sweep forks nothing" "0" "$(grep -cE '^[0-9]+ +(clone|clone3|fork|vfork)\(' "$T/st")"
 fi
+# 4. VLAN jacks (gt-be98-lan LAN_PORT_<port>) and the BPDU guard
+rm -rf "$S"; mkdir -p "$S/lo" "$T/run/gt-be98-l2"
+printf 'trunk rnr0\nvid 921\nmade_bridge 1\nmade_vlan 1\nuser lan\n' > "$T/run/gt-be98-l2/brwifi1"
+printf 'trunk rnr0\nvid 31\nmade_bridge 1\nmade_vlan 1\nuser wifi\n' > "$T/run/gt-be98-l2/brwifi2"
+port brwifi1 rnr0.921 0 0
+port brwifi1 rnr1 0 0		# native 921, the bridge on rnr0.921: kept
+port brwifi2 rnr2 0 0		# native 921, but brwifi2 runs VLAN 31: detached
+port brwifi1 rnr3 0 0		# enabled=0: no jack: detached
+printf 'LAN_PORT_rnr1="native=921 tagged=none"\nLAN_PORT_rnr2="native=921"\nLAN_PORT_rnr3="native=921 enabled=0"\n' > "$T/lan.conf"
+for p in rnr1 rnr2 rnr3; do echo 3 > "$S/$p/brport/state"; done
+cat > "$T/bin/nft" <<X
+#!/bin/sh
+echo "nft \$*" >> "$T/acts"
+cat "$T/counters" 2>/dev/null
+X
+cat > "$T/bin/bridge" <<X
+#!/bin/sh
+echo "bridge \$*" >> "$T/acts"
+[ "\$1 \$2 \$3" = "link set dev" ] && [ "\$5" = state ] && echo "\$6" > "$S/\$4/brport/state"
+exit 0
+X
+chmod +x "$T/bin/nft" "$T/bin/bridge"
+: > "$T/acts"; PATH="$T/bin:$PATH" sh "$G" --sweep
+check "VLAN jack in its native VLAN's bridge kept; another VLAN's bridge and a disabled profile detached" \
+	"ip link set rnr2 nomaster|ip link set rnr3 nomaster|" "$(grep '^ip ' "$T/acts" | sort | tr '\n' '|')"
+check "no guard loaded (gt-be98-lan applied nothing): nft never run" "0" "$(grep -c '^nft ' "$T/acts")"
+printf 'vport rnr1 brwifi1 921\nguard\n' > "$T/run/gt-be98-lan.applied"
+printf 'table bridge gt_be98_lan_guard {\n\tcounter bpdu_in_rnr1 {\n\t\tpackets 0 bytes 0\n\t}\n\tcounter bpdu_out_rnr0_921 {\n\t\tpackets 4 bytes 152\n\t}\n}\n' > "$T/counters"
+: > "$T/acts"; PATH="$T/bin:$PATH" sh "$G" --sweep
+check "guard loaded, counter 0 (an egress drop counts elsewhere): one nft, nothing latched, rnr1 kept" "1 no 0" \
+	"$(grep -c '^nft ' "$T/acts") $([ -s "$T/run/gt-be98-lan.tripped" ] && echo yes || echo no) $(grep -c '^ip link set rnr1 nomaster' "$T/acts")"
+sed -i 's/packets 0 bytes 0/packets 1 bytes 38/' "$T/counters"
+: > "$T/acts"; PATH="$T/bin:$PATH" sh "$G" --sweep
+check "the counter moved: rnr1 latched and DETACHED (nomaster: FDB flush + the Runner's flows of the port dropped), logged, no port-state call" "rnr1 1 yes 0" \
+	"$(cat "$T/run/gt-be98-lan.tripped") $(grep -c '^ip link set rnr1 nomaster' "$T/acts") $(grep -q 'log .*BPDU guard: a BPDU entered from rnr1' "$T/acts" && echo yes) $(grep -c '^bridge link set' "$T/acts")"
+: > "$T/acts"; PATH="$T/bin:$PATH" sh "$G" --sweep
+check "a latched port found in a bridge again (re-attached by anything): detached again, latched once" "1 1" "$(grep -c '^ip link set rnr1 nomaster' "$T/acts") $(grep -c . "$T/run/gt-be98-lan.tripped")"
+rm -f "$T/run/gt-be98-lan.tripped"; sed -i 's/packets 1 bytes 38/packets 0 bytes 0/' "$T/counters"
+: > "$T/acts"; PATH="$T/bin:$PATH" sh "$G" --sweep
+check "control: the latch cleared (gt-be98-lan restart), counter 0: rnr1 kept in its native bridge" "0" "$(grep -c '^ip link set rnr1 nomaster' "$T/acts")"
+# a conf saved by an older image: the LAN_PORT_* keys absent = no jack (rnr1 in a brwifi bridge detached), the rest untouched
+rm -f "$T/run/gt-be98-lan.applied" "$T/run/gt-be98-lan.tripped"
+grep -v '^LAN_PORT_' "$here/../src/conf.d/gt-be98-lan" > "$T/lan.conf"
+rm -rf "$S"; mkdir -p "$S/lo"; port brwifi1 rnr0.921 0 0; port brwifi1 rnr1 0 0; port brwifi1 bcawl0 0 0
+: > "$T/acts"; PATH="$T/bin:$PATH" sh "$G" --sweep
+check "older-image conf (LAN_PORT_* absent): rnr1 in brwifi1 detached, its trunk VLAN and the BSS kept, no nft" \
+	"ip link set rnr1 nomaster|0" "$(grep '^ip ' "$T/acts" | tr '\n' '|')$(grep -c '^nft ' "$T/acts")"
+rm -rf "$T/run/gt-be98-l2" "$T/run/gt-be98-lan.applied" "$T/run/gt-be98-lan.tripped" "$T/counters"
+printf 'LAN_PORTS="rnr1"\nLAN_BRIDGE=br-lan\n' > "$T/lan.conf"
+
 if [ $fail = 0 ]; then echo "ALL OK ($n checks)"; else echo "FAILED"; fi
 exit $fail
