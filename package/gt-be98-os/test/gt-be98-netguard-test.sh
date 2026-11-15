@@ -157,6 +157,13 @@ check "the counter moved: rnr1 latched, its bridge port disabled, logged" "rnr1 
 	"$(cat "$T/run/gt-be98-lan.tripped") $(cat "$S/rnr1/brport/state") $(grep -q 'log .*BPDU guard: a BPDU entered from rnr1' "$T/acts" && echo yes)"
 echo 3 > "$S/rnr1/brport/state"; : > "$T/acts"; PATH="$T/bin:$PATH" sh "$G" --sweep
 check "a latched port re-enabled by someone: disabled again, latched once" "0 1" "$(cat "$S/rnr1/brport/state") $(grep -c . "$T/run/gt-be98-lan.tripped")"
+# a conf saved by an older image: the LAN_PORT_* keys absent = no jack (rnr1 in a brwifi bridge detached), the rest untouched
+rm -f "$T/run/gt-be98-lan.applied" "$T/run/gt-be98-lan.tripped"
+grep -v '^LAN_PORT_' "$here/../src/conf.d/gt-be98-lan" > "$T/lan.conf"
+rm -rf "$S"; mkdir -p "$S/lo"; port brwifi1 rnr0.921 0 0; port brwifi1 rnr1 0 0; port brwifi1 bcawl0 0 0
+: > "$T/acts"; PATH="$T/bin:$PATH" sh "$G" --sweep
+check "older-image conf (LAN_PORT_* absent): rnr1 in brwifi1 detached, its trunk VLAN and the BSS kept, no nft" \
+	"ip link set rnr1 nomaster|0" "$(grep '^ip ' "$T/acts" | tr '\n' '|')$(grep -c '^nft ' "$T/acts")"
 rm -rf "$T/run/gt-be98-l2" "$T/run/gt-be98-lan.applied" "$T/run/gt-be98-lan.tripped" "$T/counters"
 printf 'LAN_PORTS="rnr1"\nLAN_BRIDGE=br-lan\n' > "$T/lan.conf"
 

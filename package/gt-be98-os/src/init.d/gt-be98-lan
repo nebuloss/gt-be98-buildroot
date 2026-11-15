@@ -415,9 +415,12 @@ vports_apply() {
 	# then the bridges no wanted jack uses (the last user deletes them)
 	for b in $k; do "$L2" down lan "$b"; done
 	sed -i '/^vport /d' $APPLIED 2>/dev/null
-	# shellcheck disable=SC2086 # word lists
-	guard_nft "$(echo $ports)" "$(echo $subs)" "$(cat "$TRIPPED" 2>/dev/null | tr '\n' ' ')" ||
-		{ eerror "BPDU guard rule set rejected: no VLAN jack bridged"; return 1; }
+	# the guard (none wanted and none loaded: nothing to do, no command)
+	if [ -n "$ports" ] || grep -qx guard $APPLIED 2>/dev/null; then
+		# shellcheck disable=SC2086 # word lists
+		guard_nft "$(echo $ports)" "$(echo $subs)" "$(cat "$TRIPPED" 2>/dev/null | tr '\n' ' ')" ||
+			{ eerror "BPDU guard rule set rejected: no VLAN jack bridged"; return 1; }
+	fi
 	if [ -n "$ports" ]; then grep -qx guard $APPLIED || echo guard >> $APPLIED
 	else sed -i '/^guard$/d' $APPLIED; fi
 	for w in $want; do

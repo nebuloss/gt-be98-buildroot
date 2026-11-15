@@ -226,6 +226,18 @@ r=$(
 )
 [ "$r" = "ok [] [] []" ] && ok "the shipped conf.d: loads, no LAN port, no VLAN jack, no address (start is the no-op)" || ko "the shipped conf.d: [$r]"
 
+# a conf saved by an older image (/jffs state.tgz restores it over the image
+# default at every boot): the LAN_PORT_* keys are ABSENT, not empty. Same as
+# empty: loads, no jack, and start runs no command at all
+grep -v '^LAN_PORT_' "$SRC/conf.d/gt-be98-lan" > "$T/old.conf"
+r=$(
+	eerror() { :; }; LAN_CONF_FILE="$T/old.conf"
+	. "$SRC/init.d/gt-be98-lan"
+	wifi_trunk() { echo rnr0; }
+	load_conf && echo "ok [$LAN_PORTS] [$VPORTS] keys=$(grep -c '^LAN_PORT_' "$T/old.conf")"
+)
+[ "$r" = "ok [] [] keys=0" ] && ok "older-image conf (LAN_PORT_* absent): loads, no LAN port, no VLAN jack" || ko "older-image conf: [$r]"
+
 # 4b. VLAN -> network bridge: the running Wi-Fi's l2.conf, else the web UI's
 # file as a whole (WIFI_VLANS, then its network list), else the defaults file
 nb() {
@@ -375,6 +387,14 @@ svcf start; r=$?
 if [ $r = 0 ] && [ ! -s "$T/svc/seq" ] && [ -f "$T/svc/applied" ] && [ ! -s "$T/svc/applied" ]; then
 	ok "empty conf: start rc 0, no command at all (no module, no bridge, no nft), an empty applied file"
 else ko "empty conf: rc $r, seq [$(tr '\n' '|' < "$T/svc/seq")]"; fi
+: > "$T/svc/seq"; cp "$T/old.conf" "$T/lan.conf"; rm -f "$T/svc/applied"
+svcf start; r=$?
+if [ $r = 0 ] && [ ! -s "$T/svc/seq" ] && [ -f "$T/svc/applied" ] && [ ! -s "$T/svc/applied" ]; then
+	ok "older-image conf (keys absent): start rc 0, no command at all, an empty applied file"
+else ko "older-image conf start: rc $r, seq [$(tr '\n' '|' < "$T/svc/seq")]"; fi
+: > "$T/svc/seq"; svcf reload
+[ ! -s "$T/svc/seq" ] || [ "$(cat "$T/svc/seq")" = "" ] && ok "older-image conf: reload runs no command" || ko "older-image conf reload: [$(tr '\n' '|' < "$T/svc/seq")]"
+printf 'LAN_PORTS=""\n' > "$T/lan.conf"
 : > "$T/svc/seq"; svcf stop
 [ ! -s "$T/svc/seq" ] && ok "empty conf: stop runs no command" || ko "empty conf stop: [$(tr '\n' '|' < "$T/svc/seq")]"
 printf 'WIFI_TRUNK="rnr0"\nWIFI_VLANS="brwifi7:921 brwifi8:30"\n' > "$T/svc/l2.conf"
