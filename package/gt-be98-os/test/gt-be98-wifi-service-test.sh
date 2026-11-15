@@ -151,6 +151,11 @@ eerror() { echo "  E $*" >> "$T/out"; }
 ip() { "$T/bin/ip" "$@"; }
 br_create() { echo "$1" >> "$T/brlog"; return 0; }; vlan_attach() { return 0; }
 vlan_prune() { :; }; br_prune() { :; }; isolate_ports() { :; }
+# the VLAN networks' bridges (gt-be98-l2, tested by gt-be98-l2-test.sh): the
+# calls are logged ($T/l2log), the bridge as br_create logged it
+net_up() { echo "$1" >> "$T/brlog"; echo "up $*" >> "$T/l2log"; return 0; }
+net_prune() { echo "prune $*" >> "$T/l2log"; }
+LAN_FOLLOW=
 ap_override() { :; }	# no web UI file: the settings below
 
 WIFI_NETWORKS="$T/nets" WIFI_SLOTS="$T/slots" WIFI_MAX_BSS=4 HOSTAPD_CONFS=''
@@ -752,6 +757,26 @@ if command -v mcast_bridge > /dev/null 2>&1 && command -v mcast_ports > /dev/nul
 else
 	check "multicast: mcast_bridge and mcast_ports exist" "yes" "no"
 fi
+
+# the VLAN bridges go through gt-be98-l2 (net_up/net_prune: this service is
+# one user), never through br_create; the real net_up/net_prune with a fake
+# gt-be98-l2 that logs its arguments
+check "VLAN bridges: net_up with bridge, trunk, VLAN (gt-be98-l2)" "yes" "$(grep -q '^up brwifi30 rnr0 30$' "$T/l2log" && echo yes || echo no)"
+check "the stop lets go of every VLAN bridge (net_prune of nothing)" "yes" "$(grep -qx 'prune ' "$T/l2log" && echo yes || echo no)"
+(
+	unset -f net_up net_prune
+	. "${SVC:-$here/../src/init.d/gt-be98-wifi}"
+	printf '#!/bin/sh\necho "$*" >> "%s/l2real"\n[ "$3" != brwifi99 ]\n' "$T" > "$T/bin/fake-l2"; chmod +x "$T/bin/fake-l2"
+	WIFI_L2="$T/bin/fake-l2"; STATE="$T/l2state"; rm -rf "$STATE"; mkdir -p "$STATE"
+	net_up brwifi1 rnr0 921; net_up brwifi2 rnr0 30; net_up brwifi1 rnr0 921
+	net_up brwifi99 rnr0 99 && echo "99 recorded"
+	echo "list $(tr '\n' ' ' < "$STATE/l2nets")"
+	net_prune "brwifi2"
+	echo "after $(tr '\n' ' ' < "$STATE/l2nets")"
+) > "$T/l2real.out" 2>&1
+check "net_up/net_prune: users recorded once, a refused bridge never, the unlisted let go" \
+	"list brwifi1 brwifi2 |after brwifi2 |up wifi brwifi1 rnr0 921|up wifi brwifi2 rnr0 30|up wifi brwifi1 rnr0 921|up wifi brwifi99 rnr0 99|down wifi brwifi1|" \
+	"$(grep -v '^$' "$T/l2real.out" | tr '\n' '|')$(tr '\n' '|' < "$T/l2real")"
 
 if [ $fail = 0 ]; then echo "ALL OK ($n checks)"; else echo "FAILED"; cat "$T/out"; fi
 exit $fail

@@ -9,7 +9,9 @@
 #      (rnr0 above all: the trunk and management port). An 802.1Q
 #      sub-interface of a protected port (<port>.<vid>) may be a bridge port
 #      only as a Wi-Fi network's trunk VLAN: <WIFI_TRUNK>.<vid> in bridge
-#      brwifiN, listed as brwifiN:<vid> in WIFI_VLANS (gt-be98-wifi);
+#      brwifiN, listed as brwifiN:<vid> in WIFI_VLANS (gt-be98-wifi), or
+#      the one gt-be98-l2 runs brwifiN on (its state; a network bridge kept
+#      for the VLAN jacks while Wi-Fi does not run);
 #      anything else is detached;
 #   2. no bridge port ever has hairpin mode on;
 #   3. the Wi-Fi ports (bcawl*) of the WIFI_ISOLATE bridges are isolated,
@@ -36,6 +38,17 @@
 # any kind (rnr0 is detached by 1., its sub-interfaces are allowed in
 # brwifiN only), so no bridge ever joins a LAN jack to rnr0's segment
 # (docs: open-ethernet docs/eth-lan-2026-11-02.md §3).
+# Second exception, the VLAN jacks (gt-be98-lan LAN_PORT_<port>="native=<vid>
+# ..."): bare rnr1, rnr2 or rnr3 (never rnr0, never the Wi-Fi trunk port) may
+# be a port of the brwifi bridge that gt-be98-l2 runs on <trunk>.<vid> with
+# that <vid> and the current trunk (its state /run/gt-be98-l2/<bridge>), and
+# of no other: a jack is never carried into another VLAN (a network whose
+# VLAN moved loses its jacks at once).
+# BPDU guard (gt-be98-lan's nft table bridge gt_be98_lan_guard): a VLAN jack
+# whose bpdu_in_<port> counter moved is added to /run/gt-be98-lan.tripped
+# (the kernel already drops all its traffic) and its bridge port set to
+# disabled (state 0), and kept so on every sweep. One `nft` per sweep, only
+# while the guard is loaded.
 # Reacts to every link event (ip monitor) and sweeps every NETGUARD_SWEEP s.
 # Settings: /etc/conf.d/gt-be98-netguard, /etc/conf.d/gt-be98-lan.
 # `gt-be98-netguard --selftest` checks the bridge-port verdicts on fixed cases.
@@ -49,6 +62,9 @@ WIFI_L2=${GT_BE98_WIFI_L2:-/run/gt-be98-wifi/l2.conf}
 WIFI_STATIONS=${GT_BE98_WIFI_STATIONS:-/run/gt-be98-wifi/stations}
 WIFI_REPEATERS=${GT_BE98_WIFI_REPEATERS:-/run/gt-be98-wifi/repeaters}
 LAN_CONF=${GT_BE98_LAN_CONF:-/etc/conf.d/gt-be98-lan}
+L2_STATE=${GT_BE98_L2_STATE:-${GT_BE98_RUN:-/run}/gt-be98-l2}
+LAN_APPLIED=${GT_BE98_LAN_APPLIED:-${GT_BE98_RUN:-/run}/gt-be98-lan.applied}
+LAN_TRIPPED=${GT_BE98_LAN_TRIPPED:-${GT_BE98_RUN:-/run}/gt-be98-lan.tripped}
 
 NL='
 '
@@ -138,12 +154,47 @@ wifi_vlan_ok() {
 		case "$v" in ''|0*|*[!0-9]*) continue ;; esac
 		[ "${p%%:*}" = "$2" ] && [ "$1" = "$TRUNK.$v" ] && return 0
 	done
-	return 1
+	# a network bridge gt-be98-l2 runs for the VLAN jacks alone (Wi-Fi not
+	# running: its effective list absent): its own trunk VLAN
+	l2_state "$2"
+	[ -n "$L2V" ] && [ "$L2T" = "$TRUNK" ] && [ "$1" = "$TRUNK.$L2V" ]
 }
-# wired LAN settings (gt-be98-lan): LAN_PORTS, LAN_BRIDGE, parsed not sourced
+# wired LAN settings (gt-be98-lan): LAN_PORTS, LAN_BRIDGE, the VLAN-jack
+# profiles' native VLANs (VN_rnr1..3: "" = no jack), parsed not sourced
 lan_conf() {
+	local p w n e
 	cfg_last "$LAN_CONF" LAN_PORTS 'A-Za-z0-9 '; LPORTS=$CFG
 	cfg_last "$LAN_CONF" LAN_BRIDGE 'A-Za-z0-9_-'; LBRIDGE=${CFG:-br-lan}
+	for p in rnr1 rnr2 rnr3; do
+		cfg_last "$LAN_CONF" "LAN_PORT_$p" 'a-z0-9=, '
+		n= e=1
+		for w in $CFG; do
+			case "$w" in native=*) n=${w#native=} ;; enabled=*) e=${w#enabled=} ;; esac
+		done
+		[ "$e" = 1 ] || n=
+		case "$n" in ''|0*|*[!0-9]*) n= ;; esac
+		eval "VN_$p=\$n"
+	done
+}
+# the VLAN gt-be98-l2 runs bridge $1 on, into L2V ("" none) and L2T (trunk)
+l2_state() {
+	local k v
+	L2V= L2T=
+	[ -r "$L2_STATE/$1" ] || return 0
+	while read -r k v _; do
+		case "$k" in vid) L2V=$v ;; trunk) L2T=$v ;; esac
+	done < "$L2_STATE/$1"
+}
+# may bare port $1 be a port of brwifi bridge $2 as a VLAN jack?
+vport_ok() {
+	local n
+	case "$1" in rnr[1-3]) ;; *) return 1 ;; esac
+	case "$2" in brwifi[0-9]*) ;; *) return 1 ;; esac
+	[ -n "$TRUNK" ] && [ "$1" != "$TRUNK" ] || return 1
+	eval "n=\${VN_$1:-}"
+	[ -n "$n" ] || return 1
+	l2_state "$2"
+	[ "$L2V" = "$n" ] && [ "$L2T" = "$TRUNK" ]
 }
 # may bare port $1 be a port of bridge $2 as a wired LAN port?
 lan_port_ok() {
@@ -166,19 +217,58 @@ verdict() {
 		if protected "${1%%.*}" && repeater_bridge "$2"; then
 			VERDICT="$2 is a repeater bridge (Wi-Fi uplink): no wired VLAN in it"; return
 		fi ;;
-	*)	if protected "$1" && ! lan_port_ok "$1" "$2"; then
-			VERDICT="protected port: never bridged except a LAN_PORTS port in $LBRIDGE"; return
+	*)	if protected "$1" && ! lan_port_ok "$1" "$2" && ! vport_ok "$1" "$2"; then
+			VERDICT="protected port: never bridged except a LAN_PORTS port in $LBRIDGE or a VLAN jack in its native VLAN's network bridge"; return
 		fi
 		if station "$1" && ! repeater_of "$1" "$2"; then
 			VERDICT="a Wi-Fi station: never bridged (a repeater only into its own repeated bridge)"; return
 		fi ;;
 	esac
 }
+# the BPDU guard (header): latch the VLAN jacks whose counter moved
+guard() {
+	local l p n c=
+	l=
+	if [ -r "$LAN_APPLIED" ]; then
+		while read -r l _; do [ "$l" = guard ] && break; done < "$LAN_APPLIED"
+	fi
+	if [ "$l" = guard ]; then
+		# "counter bpdu_in_<port> {" then "packets N bytes M"
+		nft list counters table bridge gt_be98_lan_guard 2>/dev/null | {
+			p=
+			while read -r a b _; do
+				case "$a $b" in
+				"counter bpdu_in_"*) p=${b#bpdu_in_} ;;
+				"packets "*) [ -n "$p" ] && [ "$b" != 0 ] && echo "$p"; p= ;;
+				*) p= ;;
+				esac
+			done
+		} > "$LAN_TRIPPED.seen" 2>/dev/null
+		while read -r p _; do
+			case "$p" in rnr[1-3]) ;; *) continue ;; esac
+			n=0
+			[ -r "$LAN_TRIPPED" ] && while read -r l _; do [ "$l" = "$p" ] && n=1; done < "$LAN_TRIPPED"
+			[ $n = 1 ] && continue
+			echo "$p" >> "$LAN_TRIPPED"
+			log "BPDU guard: a BPDU entered from $p (it reaches a switch: a loop risk): $p latched off (rc-service gt-be98-lan restart clears it)"
+		done < "$LAN_TRIPPED.seen"
+		rm -f "$LAN_TRIPPED.seen"
+	fi
+	# a latched port stays disabled in its bridge
+	[ -r "$LAN_TRIPPED" ] || return 0
+	while read -r p _; do
+		[ -e "$SYSNET/$p/brport/state" ] || continue
+		c=; { read -r c < "$SYSNET/$p/brport/state"; } 2>/dev/null
+		[ "$c" = 0 ] || { bridge link set dev "$p" state 0 2>/dev/null &&
+			log "BPDU guard: bridge port $p disabled"; }
+	done < "$LAN_TRIPPED"
+}
 sweep() {
 	local b m pp i n f v
 	wifi_conf
 	lan_conf
 	load_lists
+	guard
 	for b in "$SYSNET"/*/brif; do
 		[ -d "$b" ] || continue
 		m=${b%/brif}; m=${m##*/}
@@ -258,6 +348,37 @@ selftest() {
 	check detach rnr0.60 brwifi60 ""             rnr0 "brwifi60:60"	# a trunk VLAN in a repeater bridge, even listed
 	check keep   rnr0.61 brwifi61 ""             rnr0 "brwifi61:61"	# control: the same VLAN rule elsewhere
 	check keep   bcawl0  brwifi60 ""             rnr0 ""		# an AP of the repeated network
+	# VLAN jacks: <expect> <port> <bridge> <native of the port's profile> <l2 vid> <l2 trunk> <trunk>
+	L2_STATE=$(mktemp -d)
+	vcheck() {
+		LPORTS=; LBRIDGE=br-lan; TRUNK=$7; VLANS=; VN_rnr1= VN_rnr2= VN_rnr3=
+		case "$2" in *.*) ;; *) eval "VN_$2=\$4" ;; esac
+		rm -f "$L2_STATE"/*
+		[ -n "$5" ] && printf 'trunk %s\nvid %s\nmade_bridge 1\nmade_vlan 1\nuser lan\n' "$6" "$5" > "$L2_STATE/$3"
+		load_lists; verdict "$2" "$3"; c=$VERDICT; [ "$c" = keep ] || c=detach
+		n=$((n + 1))
+		if [ "$c" = "$1" ]; then echo "ok   $1 VLAN jack $2 in $3 (native '$4', bridge on $6.$5, trunk $7)"
+		else echo "FAIL want $1, got $c: VLAN jack $2 in $3 (native '$4', bridge on $6.$5, trunk $7)"; fail=$((fail + 1)); fi
+	}
+	vcheck keep   rnr1 brwifi1  921 921 rnr0 rnr0	# the jack in its native VLAN's bridge
+	vcheck detach rnr1 brwifi1  ""  921 rnr0 rnr0	# control: no profile
+	vcheck detach rnr1 brwifi1  922 921 rnr0 rnr0	# the bridge carries another VLAN
+	vcheck detach rnr1 brwifi1  921 ""  rnr0 rnr0	# a bridge gt-be98-l2 does not run
+	vcheck detach rnr1 brwifi1  921 921 rnr2 rnr0	# its VLAN on another trunk
+	vcheck detach rnr1 br-lan   921 921 rnr0 rnr0	# a profile never admits br-lan
+	vcheck detach rnr1 brx      921 921 rnr0 rnr0	# nor another bridge
+	vcheck detach rnr0 brwifi1  921 921 rnr0 rnr0	# the uplink, never
+	vcheck detach rnr0 brwifi1  921 921 rnr1 rnr1	# ... not even when rnr1 is the trunk
+	vcheck detach rnr1 brwifi1  921 921 rnr1 rnr1	# the trunk port itself
+	vcheck keep   rnr3 brwifi7  30  30  rnr0 rnr0	# rnr3 (a direct jack)
+	vcheck detach eth0 brwifi1  921 921 rnr0 rnr0	# the USB lifeline, never
+	# the trunk VLAN of a bridge gt-be98-l2 runs (no WIFI_VLANS: Wi-Fi off)
+	vcheck keep   rnr0.921 brwifi1 "" 921 rnr0 rnr0
+	vcheck detach rnr0.922 brwifi1 "" 921 rnr0 rnr0	# another VLAN than it runs
+	vcheck detach rnr0.921 brwifi1 "" ""  rnr0 rnr0	# a bridge it does not run
+	vcheck detach rnr0.921 brwifi1 "" 921 rnr0 rnr2	# the trunk moved
+	vcheck detach rnr0.921 br-lan  "" 921 rnr0 rnr0	# never outside brwifi
+	rm -rf "$L2_STATE"
 	rm -f "$WIFI_STATIONS" "$WIFI_REPEATERS"
 	echo "selftest: $((n - fail))/$n ok"
 	[ $fail -eq 0 ]
@@ -266,7 +387,7 @@ selftest() {
 [ "${1:-}" = --sweep ] && { sweep; exit 0; }	# one sweep (the offline tests)
 
 sweep
-log "guarding: never bridged: $NETGUARD_PROTECT (sub-interfaces: listed Wi-Fi VLANs in brwifi* only; wired LAN: LAN_PORTS of rnr1-3 in ${LBRIDGE:-br-lan} only, never rnr0); hairpin never on"
+log "guarding: never bridged: $NETGUARD_PROTECT (sub-interfaces: listed Wi-Fi VLANs in brwifi* only; wired LAN: LAN_PORTS of rnr1-3 in ${LBRIDGE:-br-lan} only, VLAN jacks rnr1-3 only in their native VLAN's network bridge, never rnr0; BPDU guard on the VLAN jacks); hairpin never on"
 # one event stream: every link change from the kernel, plus a periodic tick
 # (the tick waits with `read -t` on a FIFO nobody writes: no sleep fork;
 # sleep where the shell has no `read -t`)

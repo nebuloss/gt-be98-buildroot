@@ -190,6 +190,10 @@ WIFI_SCHED=${GT_BE98_WIFI_SCHED:-/usr/sbin/gt-be98-wifi-sched}
 WIFI_STA=${GT_BE98_WIFI_STA:-/usr/sbin/gt-be98-wifi-sta}
 WIFI_REPROBE=${GT_BE98_WIFI_REPROBE:-/usr/sbin/gt-be98-wifi-reprobe}
 WIFI_STEER=${GT_BE98_WIFI_STEER:-/usr/sbin/gt-be98-wifi-steer}
+WIFI_L2=${GT_BE98_L2:-/usr/sbin/gt-be98-l2}
+# after a reload the wired LAN's VLAN jacks re-resolve their networks (a
+# network's VLAN changed or went away: gt-be98-l2 evicted the jacks)
+LAN_FOLLOW=${GT_BE98_LAN_FOLLOW-rc-service --ifstarted gt-be98-lan reload}
 STEER_PID=$RUNDIR/gt-be98-wifi-steer.pid
 REPROBE_PID=$RUNDIR/gt-be98-wifi-reprobe.pid
 STA_MON_PID=$RUNDIR/gt-be98-wifi-sta.pid
@@ -412,6 +416,30 @@ br_remove() {
 	fi
 	grep -vx "$b" "$STATE/bridges" > "$STATE/bridges.new" 2>/dev/null
 	mv -f "$STATE/bridges.new" "$STATE/bridges"
+}
+
+# the VLAN networks' bridges and trunk VLANs belong to gt-be98-l2 (their one
+# owner, shared with the wired LAN jacks of gt-be98-lan): this service is one
+# USER of each ($STATE/l2nets). net_up <bridge> <trunk> <vid>: the bridge and
+# <trunk>.<vid> exist (created or adopted, the VLAN changed in place), this
+# service holds them. net_prune <list>: lets go of the ones not listed (the
+# last user deletes what gt-be98-l2 created; jacks keep it alive).
+net_up() {
+	"$WIFI_L2" up wifi "$1" "$2" "$3" || return 1
+	mkdir -p "$STATE"
+	grep -qx "$1" "$STATE/l2nets" 2>/dev/null || echo "$1" >> "$STATE/l2nets"
+}
+
+net_prune() {
+	local b
+	# shellcheck disable=SC2013 # one validated name per line
+	for b in $(cat "$STATE/l2nets" 2>/dev/null); do
+		case " $1 " in *" $b "*) continue ;; esac
+		"$WIFI_L2" down wifi "$b" || continue
+		grep -vx "$b" "$STATE/l2nets" > "$STATE/l2nets.new" 2>/dev/null
+		mv -f "$STATE/l2nets.new" "$STATE/l2nets"
+	done
+	return 0
 }
 
 # owned bridges not in the list $1
@@ -1217,8 +1245,8 @@ apply_hostapd() {
 		valid_bridge "$b" || { eerror "bridge '$b' refused (brwifiN only)"; rc=1; continue; }
 		v=$(br_vid "$b") || { eerror "$b has no VLAN (WIFI_VLANS): not bridged"; rc=1; continue; }
 		[ -n "$t" ] || { rc=1; continue; }
-		br_create "$b" "$(mcast_querier)" || { rc=1; continue; }
-		vlan_attach "$t" "$v" "$b" || { rc=1; continue; }
+		net_up "$b" "$t" "$v" || { rc=1; continue; }
+		mcast_bridge "$b" "$(mcast_querier)"
 		brs="$brs $b"; subs="$subs $t.$v"
 	done
 	# the routed networks' bridges: no VLAN, no trunk (gt-be98-wifi-sta
@@ -1286,7 +1314,7 @@ apply_hostapd() {
 		einfo "no Wi-Fi network or HOSTAPD_CONFS: driver only"
 		hap_daemon_stop
 		vif_prune ""
-		vlan_prune "$subs"; br_prune "$brs"
+		vlan_prune "$subs"; br_prune "$brs"; net_prune "$brs"
 		"$WIFI_STA" route || rc=1
 		sta_mon_apply
 		mon_apply || rc=1
@@ -1298,7 +1326,7 @@ apply_hostapd() {
 	   [ "$(hap_cmd PING)" != PONG ]; then
 		[ -f "$HAP_PID" ] && ! hap_running && ewarn "hostapd had died"
 		hap_daemon_stop
-		hap_daemon_start || { APPLY_HARD=1; vlan_prune "$subs"; br_prune "$brs"; return 1; }
+		hap_daemon_start || { APPLY_HARD=1; vlan_prune "$subs"; br_prune "$brs"; net_prune "$brs"; return 1; }
 	fi
 	# radios no longer configured
 	for p in "$STATE"/applied/*; do
@@ -1316,6 +1344,7 @@ apply_hostapd() {
 	vif_prune "${STA_FIRSTS:-}"
 	vlan_prune "$subs"
 	br_prune "$brs"
+	net_prune "$brs"
 	# the routed networks (address, DHCP/DNS, NAT out of the station)
 	"$WIFI_STA" route || rc=1
 	sta_mon_apply
@@ -1494,6 +1523,7 @@ stop_hostapd() {
 	rm -f "$STATE/leds"
 	vlan_prune ""
 	br_prune ""
+	net_prune ""
 	rm -f "$STATE/l2.conf"
 	rm -rf "$STATE/ids" "$STATE/reprobe" "$STATE/failed"
 }
@@ -1568,6 +1598,8 @@ reload() {
 	sched_start
 	reprobe_start
 	steer_apply	# a kv network added or gone
+	# shellcheck disable=SC2086 # a command line
+	[ -n "$LAN_FOLLOW" ] && $LAN_FOLLOW > /dev/null 2>&1
 	leds_apply	# led= of the list may have changed
 	svc_unlock
 	return $rc
@@ -1601,7 +1633,7 @@ status() {
 	iso=$(sed -n 's/^WIFI_ISOLATE="\(.*\)"$/\1/p' "$STATE/l2.conf" 2>/dev/null)
 	[ -f "$STATE/l2.conf" ] || iso=${WIFI_ISOLATE:-}
 	# shellcheck disable=SC2013 # one validated name per line
-	for i in $(cat "$STATE/bridges" 2>/dev/null); do
+	for i in $(cat "$STATE/bridges" "$STATE/l2nets" 2>/dev/null); do
 		if [ -d "/sys/class/net/$i/bridge" ]; then
 			ports=
 			for p in "/sys/class/net/$i/brif"/*; do [ -e "$p" ] && ports="$ports${p##*/} "; done

@@ -243,18 +243,38 @@ other bridge, when it is `rnr1`, `rnr2` or `rnr3` and not the Wi-Fi trunk
 port; `rnr0` never is, even listed (the uplink and management port, on the
 owner's LAN: open-ethernet `docs/eth-lan-2026-11-02.md` §3). br-lan holds no
 rnr0 member of any kind, so a LAN jack never shares a segment with the
-uplink. `gt-be98-netguard --selftest` checks the verdicts (23 cases).
+uplink. Second exception, the VLAN jacks: a bare `rnr1`/`rnr2`/`rnr3` with a
+profile `LAN_PORT_<port>="native=<vid> ..."` may be a port of the `brwifiN`
+that `gt-be98-l2` runs on `<WIFI_TRUNK>.<vid>` (its state in
+`/run/gt-be98-l2/`), and of no other: a jack is never carried into another
+VLAN. `gt-be98-netguard --selftest` checks the verdicts (40 cases).
 
-`gt-be98-lan` (NOT enabled by default, owner decision D16) builds the wired
-LAN from `/etc/conf.d/gt-be98-lan`: `LAN_PORTS` (empty by default; `rnr1` =
+`gt-be98-l2` is the one owner of the VLAN networks' bridges (`brwifiN` and
+`<trunk>.<vid>`), with users `wifi` (gt-be98-wifi: the BSSes) and `lan`
+(gt-be98-lan: the VLAN jacks): the bridge exists while either needs it, so a
+Wi-Fi restart never drops the jacks, and a network with jacks and no running
+SSID keeps its bridge. A bridge whose VLAN changes loses its jacks
+(`test/gt-be98-l2-test.sh`).
+
+`gt-be98-lan` (default runlevel, owner decision D41; a clean no-op while
+nothing is configured, the switch then stays in reset) puts each VLAN jack
+(`LAN_PORT_<port>="native=<vid> tagged=none"`, UniFi-style: the jack joins
+the network whose VLAN is `<vid>`, the bridge its SSIDs use, and its devices
+get their addresses from that VLAN's DHCP upstream) into its network's
+bridge, loads `rtl8372.ko` for `rnr1`, and arms a BPDU guard (nft `table
+bridge gt_be98_lan_guard`: a BPDU from a jack latches the jack off in the
+kernel and gt-be98-netguard disables its bridge port; no BPDU ever leaves on
+a trunk VLAN). Only `tagged=none` for now: tagged VLANs on the jacks need
+the RTL8372 VLAN table. `reload` re-applies the jacks (gt-be98-wifi runs it
+after its own reload). Router mode / D19 Option A, dormant unless set:
+`LAN_PORTS` (empty by default; `rnr1` =
 the RTL8372's four 2.5G jacks, `rnr2` 1G, `rnr3` 10G) in `LAN_BRIDGE` with
 STP on (`LAN_STP`), the ports' IPv4 addresses flushed, an optional
 `LAN_ADDR` and DHCP server (`LAN_DHCP`, its own dnsmasq bound to the bridge,
 never rnr0), the nft table `inet gt_be98_lan` (only replies, DNATed flows
 and bridge-to-bridge traffic are forwarded into the bridge), and the
-read-only switch monitor `rtl8372.ko` when rnr1 is a LAN port and the
-module is installed (`BR2_PACKAGE_GT_BE98_OPEN_ETHERNET_RTL8372`, off by
-default). The wired LAN leaves the box only routed: list the bridge in
+switch configurator `rtl8372.ko` when rnr1 is a LAN port. That routed LAN
+leaves the box only routed: list the bridge in
 `ROUTER_LANS` (`br-lan=192.168.50.1/24`) and a radio joins it with
 `bridge=br-lan` in its hostapd config. Not verified on silicon: the bench
 has only rnr0 cabled, and the RTL8372 is not set up by anything on mainline

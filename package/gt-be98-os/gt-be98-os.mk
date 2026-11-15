@@ -30,7 +30,7 @@ define GT_BE98_OS_INSTALL_TARGET_CMDS
 		gt-be98-macaddr gt-be98-netguard gt-be98-save gt-be98-nandcheck \
 		gt-be98-nandpage gt-be98-autosave gt-be98-wifi-gen gt-be98-wifi-sched \
 		gt-be98-leds gt-be98-wifi-sta gt-be98-wifi-reprobe gt-be98-wan \
-		gt-be98-wps gt-be98-wifi-steer; do \
+		gt-be98-wps gt-be98-wifi-steer gt-be98-l2; do \
 		$(INSTALL) -D -m 0755 $(@D)/sbin/$$f $(TARGET_DIR)/usr/sbin/$$f || exit 1; \
 	done
 	for s in $(GT_BE98_OS_SERVICES); do \
@@ -95,8 +95,10 @@ define GT_BE98_OS_FINALIZE
 	# names a target
 	# gt-be98-leds changes nothing until a LED exists (none yet)
 	# gt-be98-wan does nothing without /etc/gt-be98-wan/wan.conf (DHCP on rnr0)
+	# gt-be98-lan (D41) does nothing until /etc/conf.d/gt-be98-lan names a
+	# VLAN jack (LAN_PORT_<port>) or LAN_PORTS: the switch stays in reset
 	for s in dhcpcd sshd chronyd gt-be98-drivers gt-be98-netconsole gt-be98-autosave \
-		gt-be98-boot-done gt-be98-leds gt-be98-wan; do \
+		gt-be98-boot-done gt-be98-leds gt-be98-wan gt-be98-lan; do \
 		ln -sfn /etc/init.d/$$s $(TARGET_DIR)/etc/runlevels/default/$$s; done
 	GT_BE98_LOCAL_CONF="$(GT_BE98_OS_LOCAL_CONF)" TARGET_DIR="$(TARGET_DIR)" \
 		GT_BE98_RELEASE="$(BR2_PACKAGE_GT_BE98_OS_RELEASE)" \
