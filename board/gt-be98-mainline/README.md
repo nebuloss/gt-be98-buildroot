@@ -263,8 +263,14 @@ the network whose VLAN is `<vid>`, the bridge its SSIDs use, and its devices
 get their addresses from that VLAN's DHCP upstream) into its network's
 bridge, loads `rtl8372.ko` for `rnr1`, and arms a BPDU guard (nft `table
 bridge gt_be98_lan_guard`: a BPDU from a jack latches the jack off in the
-kernel and gt-be98-netguard disables its bridge port; no BPDU ever leaves on
-a trunk VLAN). Only `tagged=none` for now: tagged VLANs on the jacks need
+kernel and gt-be98-netguard detaches it from the bridge until a restart; no
+BPDU ever leaves on a trunk VLAN). ★ Bridge-level L2 policy (a bridge port
+state, bridge-family nft rules) is bypassed by Runner-offloaded bridged
+flows: an offloaded unicast flow never reaches the bridge (LAN3 q254: the
+jack's port at state 0, its ping still 5/5). Enforce L2 policy through
+netdev events (detach from the bridge, link down): the bridge flushes the
+port's FDB and the Runner flow cache drops the port's flows
+(NETDEV_CHANGEUPPER / NETDEV_DOWN -> fc_flush_dev). Only `tagged=none` for now: tagged VLANs on the jacks need
 the RTL8372 VLAN table. `reload` re-applies the jacks (gt-be98-wifi runs it
 after its own reload). Router mode / D19 Option A, dormant unless set:
 `LAN_PORTS` (empty by default; `rnr1` =

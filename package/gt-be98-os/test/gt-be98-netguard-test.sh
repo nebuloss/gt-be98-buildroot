@@ -149,14 +149,24 @@ check "no guard loaded (gt-be98-lan applied nothing): nft never run" "0" "$(grep
 printf 'vport rnr1 brwifi1 921\nguard\n' > "$T/run/gt-be98-lan.applied"
 printf 'table bridge gt_be98_lan_guard {\n\tcounter bpdu_in_rnr1 {\n\t\tpackets 0 bytes 0\n\t}\n\tcounter bpdu_out_rnr0_921 {\n\t\tpackets 4 bytes 152\n\t}\n}\n' > "$T/counters"
 : > "$T/acts"; PATH="$T/bin:$PATH" sh "$G" --sweep
-check "guard loaded, counter 0 (an egress drop counts elsewhere): one nft, nothing latched" "1 no 3" \
-	"$(grep -c '^nft ' "$T/acts") $([ -s "$T/run/gt-be98-lan.tripped" ] && echo yes || echo no) $(cat "$S/rnr1/brport/state")"
+check "guard loaded, counter 0 (an egress drop counts elsewhere): one nft, nothing latched, rnr1 kept" "1 no 0" \
+	"$(grep -c '^nft ' "$T/acts") $([ -s "$T/run/gt-be98-lan.tripped" ] && echo yes || echo no) $(grep -c '^ip link set rnr1 nomaster' "$T/acts")"
 sed -i 's/packets 0 bytes 0/packets 1 bytes 38/' "$T/counters"
 : > "$T/acts"; PATH="$T/bin:$PATH" sh "$G" --sweep
-check "the counter moved: rnr1 latched, its bridge port disabled, logged" "rnr1 0 yes" \
-	"$(cat "$T/run/gt-be98-lan.tripped") $(cat "$S/rnr1/brport/state") $(grep -q 'log .*BPDU guard: a BPDU entered from rnr1' "$T/acts" && echo yes)"
-echo 3 > "$S/rnr1/brport/state"; : > "$T/acts"; PATH="$T/bin:$PATH" sh "$G" --sweep
-check "a latched port re-enabled by someone: disabled again, latched once" "0 1" "$(cat "$S/rnr1/brport/state") $(grep -c . "$T/run/gt-be98-lan.tripped")"
+check "the counter moved: rnr1 latched and DETACHED (nomaster: FDB flush + the Runner's flows of the port dropped), logged, no port-state call" "rnr1 1 yes 0" \
+	"$(cat "$T/run/gt-be98-lan.tripped") $(grep -c '^ip link set rnr1 nomaster' "$T/acts") $(grep -q 'log .*BPDU guard: a BPDU entered from rnr1' "$T/acts" && echo yes) $(grep -c '^bridge link set' "$T/acts")"
+: > "$T/acts"; PATH="$T/bin:$PATH" sh "$G" --sweep
+check "a latched port found in a bridge again (re-attached by anything): detached again, latched once" "1 1" "$(grep -c '^ip link set rnr1 nomaster' "$T/acts") $(grep -c . "$T/run/gt-be98-lan.tripped")"
+rm -f "$T/run/gt-be98-lan.tripped"; sed -i 's/packets 1 bytes 38/packets 0 bytes 0/' "$T/counters"
+: > "$T/acts"; PATH="$T/bin:$PATH" sh "$G" --sweep
+check "control: the latch cleared (gt-be98-lan restart), counter 0: rnr1 kept in its native bridge" "0" "$(grep -c '^ip link set rnr1 nomaster' "$T/acts")"
+# a conf saved by an older image: the LAN_PORT_* keys absent = no jack (rnr1 in a brwifi bridge detached), the rest untouched
+rm -f "$T/run/gt-be98-lan.applied" "$T/run/gt-be98-lan.tripped"
+grep -v '^LAN_PORT_' "$here/../src/conf.d/gt-be98-lan" > "$T/lan.conf"
+rm -rf "$S"; mkdir -p "$S/lo"; port brwifi1 rnr0.921 0 0; port brwifi1 rnr1 0 0; port brwifi1 bcawl0 0 0
+: > "$T/acts"; PATH="$T/bin:$PATH" sh "$G" --sweep
+check "older-image conf (LAN_PORT_* absent): rnr1 in brwifi1 detached, its trunk VLAN and the BSS kept, no nft" \
+	"ip link set rnr1 nomaster|0" "$(grep '^ip ' "$T/acts" | tr '\n' '|')$(grep -c '^nft ' "$T/acts")"
 rm -rf "$T/run/gt-be98-l2" "$T/run/gt-be98-lan.applied" "$T/run/gt-be98-lan.tripped" "$T/counters"
 printf 'LAN_PORTS="rnr1"\nLAN_BRIDGE=br-lan\n' > "$T/lan.conf"
 
