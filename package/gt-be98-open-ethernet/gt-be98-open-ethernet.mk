@@ -30,7 +30,10 @@
 #  driver/rtl8372 replays the stock bring-up and starts the PHY poller again once the LAN PHYs are up, so the four
 #  2.5G LAN jacks link and forward (q245 LANDING PASS: port 6 at 1G, 20/20 pings, 2 cold loads). Only driver/rtl8372,
 #  tools/rtl8372 and docs differ from 6d922a8: the kernel series is unchanged, no linux-dirclean needed.)
-GT_BE98_OPEN_ETHERNET_VERSION = 9e797fd47d1fafedd07a7d15754ebae08c7a8eee
+# oe-rtl8372-vlan-2026-11-16 2026-11-16 6b8ec0b (on 9e797fd: driver/rtl8372 per-jack native VLANs - sysfs
+#  jack_profiles / jack_block / l2_lookup / jack_status, debugfs vlan + vlan_all, docs/rtl8372-vlan.md, a host test
+#  under tests/; no module parameter; only driver/rtl8372, tests and docs differ: no linux-dirclean needed)
+GT_BE98_OPEN_ETHERNET_VERSION = 6b8ec0bb3ef19fa076938305c0a440a968450c75
 GT_BE98_OPEN_ETHERNET_SITE = git@github.com:nebuloss/gt-be98-open-ethernet.git
 GT_BE98_OPEN_ETHERNET_SITE_METHOD = git
 GT_BE98_OPEN_ETHERNET_LICENSE = GPL-2.0
