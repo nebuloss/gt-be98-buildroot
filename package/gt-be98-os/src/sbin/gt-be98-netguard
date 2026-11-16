@@ -182,7 +182,8 @@ wifi_vlan_ok() {
 		[ "${p%%:*}" = "$2" ] && [ "$1" = "$TRUNK.$v" ] && return 0
 	done
 	# a network bridge gt-be98-l2 runs for the VLAN jacks alone (Wi-Fi not
-	# running: its effective list absent): its own trunk VLAN
+	# running, or a network without an SSID: brwifi<100000 + id> with no BSS
+	# port, gt-be98-lan its only user): its own trunk VLAN
 	l2_state "$2"
 	[ -n "$L2V" ] && [ "$L2T" = "$TRUNK" ] && [ "$1" = "$TRUNK.$L2V" ]
 }
@@ -504,7 +505,7 @@ selftest() {
 	# VLAN jacks: <expect> <port> <bridge> <native of the port's profile> <l2 vid> <l2 trunk> <trunk>
 	L2_STATE=$(mktemp -d)
 	vcheck() {
-		LPORTS=; LBRIDGE=br-lan; TRUNK=$7; VLANS=; VN_rnr1= VN_rnr2= VN_rnr3=
+		LPORTS=; LBRIDGE=br-lan; TRUNK=$7; VLANS=${VCV:-}; VN_rnr1= VN_rnr2= VN_rnr3=
 		case "$2" in *.*) ;; *) eval "VN_$2=\$4" ;; esac
 		rm -f "$L2_STATE"/*
 		[ -n "$5" ] && printf 'trunk %s\nvid %s\nmade_bridge 1\nmade_vlan 1\nuser lan\n' "$6" "$5" > "$L2_STATE/$3"
@@ -538,6 +539,10 @@ selftest() {
 	vcheck detach rnr0.921 brwifi1 "" ""  rnr0 rnr0	# a bridge it does not run
 	vcheck detach rnr0.921 brwifi1 "" 921 rnr0 rnr2	# the trunk moved
 	vcheck detach rnr0.921 br-lan  "" 921 rnr0 rnr0	# never outside brwifi
+	# a network without an SSID (gt-be98-lan's brwifi<100000 + id>, no BSS): its trunk VLAN while Wi-Fi runs too
+	VCV="brwifi7:921" vcheck keep   rnr0.930 brwifi100003 "" 930 rnr0 rnr0	# Wi-Fi running, 930 not in its WIFI_VLANS: gt-be98-l2 runs the bridge on 930
+	VCV="brwifi7:921" vcheck detach rnr0.931 brwifi100003 "" 930 rnr0 rnr0	# control: another VLAN
+	VCV="brwifi7:921" vcheck keep   rnr2     brwifi100003 930 930 rnr0 rnr0	# a bare jack (rnr2) native 930 in it
 	# the 2.5G jacks of VLAN V (rnr1.<V>): <expect> <port> <bridge> <l2 vid> <l2 trunk> <trunk> <l2 wired members>
 	jcheck() {
 		LPORTS=; LBRIDGE=br-lan; TRUNK=$6; VLANS=; VN_rnr1= VN_rnr2= VN_rnr3=
@@ -561,6 +566,8 @@ selftest() {
 	jcheck detach rnr2.921 brwifi1 921 rnr0 rnr0 "rnr2.921"	# only rnr1 carries tagged jacks
 	jcheck keep   rnr1.60  brwifi61 60 rnr0 rnr0 "rnr1.60"	# control for the next one
 	jcheck detach rnr1.60  brwifi60 60 rnr0 rnr0 "rnr1.60"	# a repeater bridge: no wired VLAN in it
+	jcheck keep   rnr1.930 brwifi100003 930 rnr0 rnr0 "rnr1.930"	# the jacks of a network without an SSID
+	jcheck detach rnr1.930 brwifi100003 930 rnr0 rnr0 ""		# control: not recorded
 	# a BPDU source on rnr1.<V> -> the jacks latched: <expect ATT> <V> <lookup answer> <jacks of V>
 	acheck() {
 		jack_attribute "$2" "$3" "$4"

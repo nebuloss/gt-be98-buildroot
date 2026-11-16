@@ -152,5 +152,18 @@ touch "$T/refuse-rnr1.7"
 L up lan brwifi15 rnr0 7 rnr1; check "enslave of rnr1.7 refused: rc 1, rnr1.7, rnr0.7 and the bridge undone" "1 no no no" "$? $(ex rnr1.7) $(ex rnr0.7) $(ex brwifi15)"
 rm -f "$T/refuse-rnr1.7"
 L up lan brwifi15 rnr0 7 rnr1; check "control: the same up once the enslave works" "0 brwifi15" "$? $(master rnr1.7)"
+# a network WITHOUT an SSID: gt-be98-lan's own bridge brwifi<100000 + id>, lan its only user
+L up lan brwifi100003 rnr0 930 rnr1; check "a network without an SSID: brwifi100003 on rnr0.930 with rnr1.930" "0 brwifi100003 brwifi100003 lan " "$? $(master rnr0.930) $(master rnr1.930) $(users brwifi100003)"
+port rnr3; ip link set dev rnr3 master brwifi100003
+# its SSID appears: the Wi-Fi's bridge takes VLAN 930 over (lan's reload re-attaches the jacks)
+L up wifi brwifi8 rnr0 930; check "the SSID's brwifi8 takes 930 over from the lan-only brwifi100003" "0 brwifi8 no no no -" \
+	"$? $(master rnr0.930) $(ex brwifi100003) $(ex rnr1.930) $([ -e "$T/run/gt-be98-l2/brwifi100003" ] && echo yes || echo no) $(master rnr3)-"
+check "... the move is logged" yes "$(grep -q 'rnr0.930 moves from brwifi100003' "$T/err" && echo yes || echo no)"
+L up lan brwifi8 rnr0 930 rnr1; check "... and lan joins brwifi8 with rnr1.930: one bridge, both users" "0 brwifi8 wifi lan " "$? $(master rnr1.930) $(users brwifi8)"
+# controls: no takeover by lan, of a Wi-Fi-numbered bridge, or of a bridge the Wi-Fi uses too
+L up lan brwifi100004 rnr0 931; L up lan brwifi100005 rnr0 931; check "control: lan asking for a VLAN another lan-only bridge holds: refused" 1 $?
+L up wifi brwifi100004 rnr0 931; L up wifi brwifi9 rnr0 931; check "control: a lan-only bridge the Wi-Fi also uses (users lan wifi): refused" 1 $?
+L down wifi brwifi100004
+L up lan brwifi20 rnr0 932; L up wifi brwifi21 rnr0 932; check "control: a lan-only brwifi20 (a Wi-Fi number, test 4's case): refused" 1 $?
 echo "gt-be98-l2-test: $pass ok, $fail failed"
 [ $fail -eq 0 ]

@@ -6,8 +6,10 @@
 # VLAN JACKS (AP mode, UniFi-style port profile): a jack joins the network
 # whose VLAN is its native VLAN, i.e. the bridge (brwifi<ID>) that network's
 # SSIDs use, and its devices get their addresses from that VLAN's own DHCP
-# upstream. The VLAN must belong to a network of the Wi-Fi network list
-# (network=ID ... vlan=<vid>) or WIFI_VLANS; another one is refused.
+# upstream. The VLAN must belong to a network: of the Wi-Fi network list
+# (network=ID ... vlan=<vid>) or WIFI_VLANS (the SSID's bridge), or of the
+# web UI's network list /etc/gt-be98-networks.conf (a network without an
+# SSID: its own bridge, brwifi<100000 + id>); another one is refused.
 #
 # The four 2.5G jacks (RTL8372 switch ports 4..7), each its own profile:
 #   LAN_JACK_<n>="native=<vid> tagged=<t> enabled=0|1"     (<n> = 4..7)
@@ -16,7 +18,7 @@
 # <t>, the VLANs the jack ALSO carries, tagged (a VLAN-aware device behind
 # it: a switch, an AP, a hypervisor), each into its own network's bridge:
 #   none            untagged native VLAN only
-#   all             every VLAN of a network of the Wi-Fi network list but 1
+#   all             every VLAN of a network (above) but 1
 #                   and the jack's native (re-read at every Wi-Fi reload)
 #   <vid>[,<vid>..] these VLANs: each 2..4094, a network's VLAN, not the
 #                   native, at most 32 per jack (the switch driver's cap)

@@ -33,6 +33,16 @@
 #       its own trunk VLAN is left in place, with a warning)
 #   gt-be98-l2 vid <bridge>       the VLAN id the bridge carries (rc 1: none)
 #   gt-be98-l2 list               "<bridge> <trunk> <vid> <user>..." per bridge
+# A NETWORK WITHOUT AN SSID (the web UI's /etc/gt-be98-networks.conf, a
+# wired-only network as in UniFi) has no Wi-Fi bridge: gt-be98-lan names its
+# bridge brwifi<100000 + network id> (never a Wi-Fi network's: those are
+# brwifi1..brwifi99999) and is its only user. When the Wi-Fi then bridges
+# that VLAN itself (an SSID bound to the network: `up wifi brwifiN` on a
+# VLAN such a lan-only bridge holds), the Wi-Fi's bridge takes the VLAN
+# over: the lan-only bridge is let go (its bare rnr* ports evicted, its
+# wired members and sub-interface removed, deleted when made here) and
+# gt-be98-lan's reload (gt-be98-wifi runs it after its own) puts the jacks
+# into brwifiN. One bridge per VLAN holds throughout.
 # State: /run/gt-be98-l2/<bridge> (trunk, vid, made_bridge, made_vlan, user
 # lines, and "wired <user> <dev> <made>" per wired member). gt-be98-netguard
 # reads it (a LAN port in a brwifi bridge only while the bridge carries the
@@ -147,6 +157,29 @@ sub_drop() {
 	fi
 }
 
+# is bridge $1 one gt-be98-lan names for a network without an SSID
+# (brwifi<100000 + id>, above every Wi-Fi network's brwifi1..99999)?
+wired_only_net() {
+	local n=${1#brwifi}
+	case "$n" in ''|0*|*[!0-9]*) return 1 ;; esac
+	[ ${#n} -ge 6 ]
+}
+# a lan-only bridge $1 lets its VLAN go: bare rnr* ports evicted, then lan's
+# down (wired members, sub-interface, the bridge made here)
+yield_bridge() {
+	local p
+	if [ -d "$SYSNET/$1/brif" ]; then
+		for p in "$SYSNET/$1/brif"/rnr*; do
+			[ -e "$p" ] || [ -L "$p" ] || continue
+			p=${p##*/}
+			case "$p" in *.*) continue ;; esac
+			ip link set dev "$p" nomaster || return 1
+		done
+	fi
+	cmd_down lan "$1"
+	[ ! -f "$L2/$1" ]
+}
+
 cmd_up() {
 	local u=$1 b=$2 t=$3 v=$4 s=$3.$4 w=${5:-} ws= f o p x made
 	valid_user "$u" || { err "user '$u' refused"; return 1; }
@@ -160,13 +193,20 @@ cmd_up() {
 	fi
 	[ -e "$SYSNET/$t" ] || { err "trunk $t not present: $b not bridged"; return 1; }
 	[ -z "$w" ] || [ -e "$SYSNET/$w" ] || { err "wired port $w not present: $b not bridged"; return 1; }
-	# one bridge per VLAN of a trunk
+	# one bridge per VLAN of a trunk (a lan-only bridge of a network
+	# without an SSID yields to the Wi-Fi's: header)
 	for f in "$L2"/brwifi*; do
 		[ -f "$f" ] || continue
 		o=${f##*/}; case "$o" in *.new) continue ;; esac
 		[ "$o" = "$b" ] && continue
 		st_read "$o"
-		[ "$S_TRUNK.$S_VID" = "$s" ] && { err "$s is bridged in $o already: $b refused"; return 1; }
+		[ "$S_TRUNK.$S_VID" = "$s" ] || continue
+		if [ "$u" = wifi ] && wired_only_net "$o" && [ "$S_USERS" = " lan" ]; then
+			yield_bridge "$o" || { err "$s: $o could not be let go: $b refused"; return 1; }
+			err "$s moves from $o (a network without an SSID, lan only) to $b (its SSID's bridge): gt-be98-lan's reload re-attaches the jacks"
+			continue
+		fi
+		err "$s is bridged in $o already: $b refused"; return 1
 	done
 	o=$(master_of "$s")
 	[ -z "$o" ] || [ "$o" = "$b" ] || { err "$s is a port of $o: $b refused"; return 1; }

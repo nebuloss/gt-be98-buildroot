@@ -16,6 +16,8 @@ here=$(cd "$(dirname "$0")" && pwd)
 SRC="$here/../src"
 T=$(mktemp -d)
 trap 'rm -rf "$T"' EXIT
+# the host's own /etc/gt-be98-networks.conf never reaches a case (4g sets its own)
+GT_BE98_NETWORKS=$T/no-networks.conf; export GT_BE98_NETWORKS
 pass=0 fail=0
 ok() { pass=$((pass + 1)); echo "ok   $*"; }
 ko() { fail=$((fail + 1)); echo "FAIL $*"; }
@@ -535,7 +537,8 @@ svcj() {
 		SVCT="$T/svc"; export SVCT; PATH="$T/svc/bin:$PATH"
 		LAN_CONF_FILE="$T/lan.conf" GT_BE98_L2="$T/svc/bin/l2" GT_BE98_LAN_APPLIED="$T/svc/applied" \
 			GT_BE98_LAN_TRIPPED="$T/svc/tripped" GT_BE98_WIFI_L2="$T/svc/l2.conf" GT_BE98_WIFI_CONFS="$T/svc/none" \
-			GT_BE98_RTL8372="$T/svc/rtl" GT_BE98_PROC_MODULES="$T/svc/modules" GT_BE98_SWITCH_WAIT=${SW:-3}
+			GT_BE98_RTL8372="$T/svc/rtl" GT_BE98_PROC_MODULES="$T/svc/modules" GT_BE98_SWITCH_WAIT=${SW:-3} \
+			GT_BE98_NETWORKS="$GT_BE98_NETWORKS"
 		. "$SRCLAN"
 		APPLIED="$T/svc/applied"
 		wifi_trunk() { echo rnr0; }
@@ -795,6 +798,49 @@ for c in tag ctl; do
 		[ "$r" = "jack4 |16" ] && ok "control: without jack 6's jacktag line only jack 4 (40 native) is latched" || ko "netguard tagged control: [$r]"
 	fi
 done
+
+# 4g. networks WITHOUT an SSID: the web UI's /etc/gt-be98-networks.conf
+netl() {	# lan_net_list with Wi-Fi running ($1 = its WIFI_VLANS, "-" = Wi-Fi stopped, no conf) and the networks file $T/nets.conf
+	(
+		eerror() { :; }; LAN_CONF_FILE="$T/lan.conf"; GT_BE98_NETWORKS="$T/nets.conf"; GT_BE98_WIFI_CONFS="$T/none"
+		if [ "$1" = - ]; then GT_BE98_WIFI_L2="$T/none"; else GT_BE98_WIFI_L2="$T/l2n.conf"; printf 'WIFI_VLANS="%s"\n' "$1" > "$T/l2n.conf"; fi
+		. "$SRC/init.d/gt-be98-lan"
+		shift; "$@"
+	)
+}
+printf '# /etc/gt-be98-networks.conf - written by the web UI\nnetwork=1 name=Default vlan=1 subnet=\nnetwork=3 name=Cameras%%20wired vlan=930 subnet=192.168.30.1/24\nnetwork=4 name=Office vlan=921 subnet=\nnetwork=5 name=x vlan=940 subnet= dhcp=1\nnetwork=06 name=lead vlan=950 subnet=\nnetwork=7 name=big vlan=4095 subnet=\nnetwork=123456 name=id vlan=960 subnet=\nvlan=970 network=8 name=order\n' > "$T/nets.conf"
+r=$(netl "brwifi7:921" lan_net_list | tr '\n' ' ')
+[ "$r" = "brwifi7:921 brwifi100003:930 brwifi100004:921 brwifi100005:940 brwifi100008:970 " ] &&
+	ok "networks file: each network brwifi<100000+id>, after the Wi-Fi's; VLAN 1, VID 4095, id 06, id 123456 skipped; an unknown key and any key order taken" || ko "networks file list: [$r]"
+r=$(netl "brwifi7:921" lan_net_bridge 921); [ "$r" = brwifi7 ] && ok "VLAN 921 has an SSID: its bridge is the SSID's brwifi7 (one bridge per VLAN), not brwifi100004" || ko "921 -> $r"
+r=$(netl "brwifi7:921" lan_net_bridge 930); [ "$r" = brwifi100003 ] && ok "VLAN 930, a network without an SSID: brwifi100003" || ko "930 -> $r"
+r=$(netl "brwifi7:921" lan_net_bridge 1 || echo none); [ "$r" = none ] && ok "VLAN 1 (Default, the untagged trunk): no bridge" || ko "1 -> $r"
+r=$(netl - lan_net_bridge 921); [ "$r" = brwifi100004 ] && ok "Wi-Fi stopped and no Wi-Fi conf: 921 from the networks file (brwifi100004)" || ko "stopped 921 -> $r"
+r=$(netl "brwifi7:921" eval 'JT=; jack_tagged 6 930 all; echo "$JT"'); [ "$r" = "6:brwifi7:921 6:brwifi100005:940 6:brwifi100008:970" ] &&
+	ok "tagged=all, native 930: every other network of the box (921 via its SSID's bridge, 940, 970), not 1, not 930" || ko "all from file: [$r]"
+mv "$T/nets.conf" "$T/nets.off"
+r=$(netl "brwifi7:921" lan_net_bridge 930 || echo none); [ "$r" = none ] && ok "control: without the networks file VLAN 930 has no network" || ko "control 930 -> $r"
+mv "$T/nets.off" "$T/nets.conf"
+r=$(
+	eerror() { :; }; LAN_CONF_FILE="$T/lan.conf"; . "$SRC/init.d/gt-be98-lan"
+	echo "$extra_commands|$(features)"
+)
+[ "$r" = "features|features tagged networks" ] && ok "rc-service gt-be98-lan features (an extra command: answers when stopped too): features tagged networks" || ko "features: [$r]"
+# the service: a jack on a network without an SSID, and one tagged with one
+printf 'WIFI_TRUNK="rnr0"\nWIFI_VLANS="brwifi9:921"\n' > "$T/svc/l2.conf"
+printf 'LAN_PORT_rnr1=""\nLAN_JACK_4="native=930"\nLAN_JACK_6="native=921 tagged=940"\n' > "$T/lan.conf"
+rm -f "$T/svc/applied" "$T/svc/tripped" "$T/svc/putn"; : > "$T/svc/modules"
+: > "$T/svc/seq"; GT_BE98_NETWORKS="$T/nets.conf" svcj start; r=$?
+o=$(seqf)
+[ $r = 0 ] && [ "$o" = "modprobe rtl8372|put jack_profiles 4=930 5=off 6=921+940 7=off|put jack_block 0|nft -c -f -|nft -f -|l2 up lan brwifi100003 rnr0 930 rnr1|l2 up lan brwifi9 rnr0 921 rnr1|l2 up lan brwifi100005 rnr0 940 rnr1|" ] &&
+	ok "service: jack 4 on a network without an SSID (brwifi100003 + rnr0.930, lan its user), jack 6 tagged 940 (brwifi100005), 921 the SSID's brwifi9" || ko "service no-SSID: rc $r [$o]"
+GT_BE98_NETWORKS="$T/nets.conf" svcj stop > /dev/null
+# persistence: the networks file is saved and restored (a cold boot does not wait for the web UI)
+for k in AUTOSAVE_WATCH ALLOW_PATHS; do
+	sed -n "s/^$k=\"\(.*\)\"$/ \1 /p" "$SRC/conf.d/gt-be98-jffs" | grep -q ' etc/gt-be98-networks.conf ' && ok "conf.d/gt-be98-jffs $k lists etc/gt-be98-networks.conf" || ko "$k lacks the networks file"
+done
+grep -q '^AUTOSAVE_WATCH=${AUTOSAVE_WATCH:-"[^"]* etc/gt-be98-networks.conf ' "$SRC/sbin/gt-be98-save" || grep -q 'AUTOSAVE_WATCH:-"etc/webui etc/gt-be98-networks.conf ' "$SRC/sbin/gt-be98-save" &&
+	ok "gt-be98-save's default watch list too" || ko "gt-be98-save default watch"
 
 echo "gt-be98-lan-test: $pass ok, $fail failed"
 [ $fail -eq 0 ]
