@@ -37,7 +37,10 @@
 #  learner offloads a jack <-> trunk flow, rnr1.V <-> rnr0.V with one VID over two Runner ports, as the tagged frame it
 #  arrived as (tagged L2 key + empty command list); every other Ethernet <-> Ethernet 802.1Q case is counted in
 #  `flows`; no module parameter; the kernel series is unchanged, no linux-dirclean needed)
-GT_BE98_OPEN_ETHERNET_VERSION = 6e0222d46b8223d5d174b3abe968dbca36c761cd
+# oe-runner-rx8023-2026-11-16 2026-11-16 645237a (on 6e0222d: driver/runner only - RUNNER-RX-TAG-8023: the
+#  XLMAC RXERR mask no longer carries the tag-unaware 802.3 frame-length check, so VLAN-tagged LLC frames (real
+#  BPDUs among them) reach the stack; dropstat rx_flr; no module parameter; kernel series unchanged)
+GT_BE98_OPEN_ETHERNET_VERSION = 645237aca492026ca5ab5bc3099565840bcfc574
 GT_BE98_OPEN_ETHERNET_SITE = git@github.com:nebuloss/gt-be98-open-ethernet.git
 GT_BE98_OPEN_ETHERNET_SITE_METHOD = git
 GT_BE98_OPEN_ETHERNET_LICENSE = GPL-2.0
