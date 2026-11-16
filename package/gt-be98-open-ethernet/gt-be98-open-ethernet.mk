@@ -40,7 +40,11 @@
 # oe-runner-rx8023-2026-11-16 2026-11-16 645237a (on 6e0222d: driver/runner only - RUNNER-RX-TAG-8023: the
 #  XLMAC RXERR mask no longer carries the tag-unaware 802.3 frame-length check, so VLAN-tagged LLC frames (real
 #  BPDUs among them) reach the stack; dropstat rx_flr; no module parameter; kernel series unchanged)
-GT_BE98_OPEN_ETHERNET_VERSION = 645237aca492026ca5ab5bc3099565840bcfc574
+# oe-rtl8372-vlan-tagged-2026-11-16 2026-11-16 befea83 (on main 17e5dfc = 645237a + the RUNNER-RX-TAG-8023 bench
+#  writer: driver/rtl8372 per-jack TAGGED VIDs - jack_profiles "<n>=<native>+<t>,..", a jack with tagged VIDs a
+#  tagged member of each and accept-all with the ingress filter on, jack_status tagged=; host test and docs; no
+#  module parameter; only driver/rtl8372, tests and docs differ from 17e5dfc: no linux-dirclean needed)
+GT_BE98_OPEN_ETHERNET_VERSION = befea834a5f94f1f0ff39d77df9b8514abffc2f7
 GT_BE98_OPEN_ETHERNET_SITE = git@github.com:nebuloss/gt-be98-open-ethernet.git
 GT_BE98_OPEN_ETHERNET_SITE_METHOD = git
 GT_BE98_OPEN_ETHERNET_LICENSE = GPL-2.0
