@@ -104,5 +104,53 @@ L up wifi brwifi6; check "usage error: rc 2" 2 $?
 touch "$T/refuse-rnr0.7"
 L up wifi brwifi7 rnr0 7; check "enslave refused: rc 1" 1 $?
 check "... the failed up undid what it created" "no no" "$([ -e "$N/brwifi7" ] && echo yes || echo no) $([ -e "$N/rnr0.7" ] && echo yes || echo no)"
+# 10. the wired member <wired>.<vid> (the RTL8372 jacks of VLAN V reach the
+# SoC tagged V on rnr1): created with the bridge, recorded as the user's,
+# removed when the user no longer names it; every check with its control
+rm -f "$T/refuse-rnr0.7" "$T/refuse-rnr1.7"
+wired() { sed -n 's/^wired //p' "$T/run/gt-be98-l2/$1" 2>/dev/null | tr '\n' '|'; }
+ex() { [ -e "$N/$1" ] && echo yes || echo no; }
+L up lan brwifi10 rnr0 921 rnr1; check "up lan with wired rnr1: rc 0" 0 $?
+check "... rnr1.921 created as VLAN 921 of rnr1, in brwifi10, next to rnr0.921" "brwifi10 brwifi10 1" \
+	"$(master rnr1.921) $(master rnr0.921) $(grep -c '^rnr1.921 | 921 | rnr1$' "$T/vlancfg")"
+check "... recorded as lan's, made here" "lan rnr1.921 1|" "$(wired brwifi10)"
+n=$(grep -c 'add ' "$T/iplog")
+L up lan brwifi10 rnr0 921 rnr1; check "the same up again: rc 0, nothing created, rnr1.921 kept (not deleted and re-made)" "0 $n brwifi10 lan rnr1.921 1|" \
+	"$? $(grep -c 'add ' "$T/iplog") $(master rnr1.921) $(wired brwifi10)"
+check "control: no 'del' of rnr1.921 so far" 0 "$(grep -c 'del dev rnr1.921' "$T/iplog")"
+L up wifi brwifi10 rnr0 921; check "another user's up (no wired): lan's rnr1.921 kept" "brwifi10 lan rnr1.921 1|" "$(master rnr1.921) $(wired brwifi10)"
+L up lan brwifi10 rnr0 921; check "lan's up WITHOUT wired: rnr1.921 deleted, the bridge and rnr0.921 stay (wifi, lan users)" "no brwifi10 |lan wifi " \
+	"$(ex rnr1.921) $(master rnr0.921) $(wired brwifi10)|$(users brwifi10)"
+L up lan brwifi10 rnr0 921 rnr1; L down lan brwifi10
+check "down lan: its rnr1.921 deleted, wifi keeps the bridge" "no yes wifi " "$(ex rnr1.921) $(ex brwifi10) $(users brwifi10)"
+L up lan brwifi10 rnr0 921 rnr1; L down wifi brwifi10
+check "control: down wifi keeps lan's rnr1.921" "brwifi10 lan " "$(master rnr1.921) $(users brwifi10)"
+L down lan brwifi10; check "the last down: rnr1.921, rnr0.921 and the bridge deleted, no warning about rnr1.921" "no no no 0" \
+	"$(ex rnr1.921) $(ex rnr0.921) $(ex brwifi10) $(grep -c 'has port rnr1.921' "$T/err")"
+# refusals (and nothing left behind); control: rnr2 as the wired port
+for a in "lan brwifi11 rnr0 55 rnr0" "lan brwifi11 rnr1 55 rnr1" "lan brwifi11 rnr0 55 eth0" "lan brwifi11 rnr0 55 rnr4" "lan brwifi11 rnr0 55 rnr3"; do
+	# shellcheck disable=SC2086
+	L up $a; check "refused: up $a (rnr0 / the trunk / not rnr1-3 / not present)" "1 no" "$? $(ex brwifi11)"
+done
+L up lan brwifi11 rnr0 55 rnr2; check "control: up lan brwifi11 rnr0 55 rnr2" "0 brwifi11" "$? $(master rnr2.55)"
+L down lan brwifi11
+# the bridge's VLAN moves: the wired member of the old VLAN goes
+L up lan brwifi12 rnr0 30 rnr1; L up wifi brwifi12 rnr0 31
+check "VLAN 30 -> 31: rnr1.30 deleted, no wired record, only wifi left" "no |wifi " "$(ex rnr1.30) $(wired brwifi12)|$(users brwifi12)"
+L down wifi brwifi12
+# adopted (existing before): released, never deleted
+ip link add link rnr1 name rnr1.40 type vlan id 40
+L up lan brwifi13 rnr0 40 rnr1; check "adopted rnr1.40: enslaved, recorded made 0" "brwifi13 lan rnr1.40 0|" "$(master rnr1.40) $(wired brwifi13)"
+L down lan brwifi13; check "... the last down releases it (no master), never deletes it" "yes -" "$(ex rnr1.40) $(master rnr1.40)-"
+ip link add link rnr2 name rnr1.43 type vlan id 43
+L up lan brwifi13 rnr0 43 rnr1; check "rnr1.43 exists as a VLAN of another port: refused, undone" "1 no no" "$? $(ex brwifi13) $(ex rnr0.43)"
+# the wired member is a port of another bridge: refused
+ip link add name brx type bridge stp_state 0; ip link add link rnr1 name rnr1.42 type vlan id 42; ip link set dev rnr1.42 master brx
+L up lan brwifi14 rnr0 42 rnr1; check "rnr1.42 is a port of brx: refused, nothing made" "1 no brx" "$? $(ex brwifi14) $(master rnr1.42)"
+# a failure after the wired member exists: the failed up deletes it
+touch "$T/refuse-rnr1.7"
+L up lan brwifi15 rnr0 7 rnr1; check "enslave of rnr1.7 refused: rc 1, rnr1.7, rnr0.7 and the bridge undone" "1 no no no" "$? $(ex rnr1.7) $(ex rnr0.7) $(ex brwifi15)"
+rm -f "$T/refuse-rnr1.7"
+L up lan brwifi15 rnr0 7 rnr1; check "control: the same up once the enslave works" "0 brwifi15" "$? $(master rnr1.7)"
 echo "gt-be98-l2-test: $pass ok, $fail failed"
 [ $fail -eq 0 ]

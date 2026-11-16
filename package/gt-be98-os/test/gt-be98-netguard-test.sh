@@ -120,16 +120,18 @@ if ST=$(command -v strace 2>/dev/null); then
 	clean; PATH="$T/cnt" $ST -f -qq -e trace=clone,clone3,fork,vfork -o "$T/st" $BS "$G" --sweep
 	check "cost (strace): a compliant sweep forks nothing" "0" "$(grep -cE '^[0-9]+ +(clone|clone3|fork|vfork)\(' "$T/st")"
 fi
-# 4. VLAN jacks (gt-be98-lan LAN_PORT_<port>) and the BPDU guard
+# 4. VLAN jacks (gt-be98-lan LAN_PORT_rnr2/3, LAN_JACK_4..7 as rnr1.<vid>) and the BPDU guard
 rm -rf "$S"; mkdir -p "$S/lo" "$T/run/gt-be98-l2"
-printf 'trunk rnr0\nvid 921\nmade_bridge 1\nmade_vlan 1\nuser lan\n' > "$T/run/gt-be98-l2/brwifi1"
+printf 'trunk rnr0\nvid 921\nmade_bridge 1\nmade_vlan 1\nuser lan\nwired lan rnr1.921 1\n' > "$T/run/gt-be98-l2/brwifi1"
 printf 'trunk rnr0\nvid 31\nmade_bridge 1\nmade_vlan 1\nuser wifi\n' > "$T/run/gt-be98-l2/brwifi2"
 port brwifi1 rnr0.921 0 0
-port brwifi1 rnr1 0 0		# native 921, the bridge on rnr0.921: kept
-port brwifi2 rnr2 0 0		# native 921, but brwifi2 runs VLAN 31: detached
-port brwifi1 rnr3 0 0		# enabled=0: no jack: detached
-printf 'LAN_PORT_rnr1="native=921 tagged=none"\nLAN_PORT_rnr2="native=921"\nLAN_PORT_rnr3="native=921 enabled=0"\n' > "$T/lan.conf"
-for p in rnr1 rnr2 rnr3; do echo 3 > "$S/$p/brport/state"; done
+port brwifi1 rnr2 0 0		# native 921, the bridge on rnr0.921: kept
+port brwifi2 rnr3 0 0		# native 921, but brwifi2 runs VLAN 31: detached
+port brwifi1 rnr1 0 0		# bare rnr1 (the RC9 way): never any more: detached
+port brwifi1 rnr1.921 0 0	# the 2.5G jacks of VLAN 921, gt-be98-l2's wired member: kept
+port brwifi2 rnr1.31 0 0	# not recorded by gt-be98-l2: detached
+printf 'LAN_PORT_rnr1="native=921 tagged=none"\nLAN_PORT_rnr2="native=921"\nLAN_PORT_rnr3="native=921"\nLAN_JACK_6="native=921 tagged=none enabled=1"\n' > "$T/lan.conf"
+for p in rnr2 rnr3; do echo 3 > "$S/$p/brport/state"; done
 cat > "$T/bin/nft" <<X
 #!/bin/sh
 echo "nft \$*" >> "$T/acts"
@@ -143,23 +145,75 @@ exit 0
 X
 chmod +x "$T/bin/nft" "$T/bin/bridge"
 : > "$T/acts"; PATH="$T/bin:$PATH" sh "$G" --sweep
-check "VLAN jack in its native VLAN's bridge kept; another VLAN's bridge and a disabled profile detached" \
-	"ip link set rnr2 nomaster|ip link set rnr3 nomaster|" "$(grep '^ip ' "$T/acts" | sort | tr '\n' '|')"
+check "VLAN jack rnr2 and the jacks' rnr1.921 kept; another VLAN's bridge, bare rnr1 and an unrecorded rnr1.31 detached" \
+	"ip link set rnr1 nomaster|ip link set rnr1.31 nomaster|ip link set rnr3 nomaster|" "$(grep '^ip ' "$T/acts" | sort | tr '\n' '|')"
 check "no guard loaded (gt-be98-lan applied nothing): nft never run" "0" "$(grep -c '^nft ' "$T/acts")"
-printf 'vport rnr1 brwifi1 921\nguard\n' > "$T/run/gt-be98-lan.applied"
-printf 'table bridge gt_be98_lan_guard {\n\tcounter bpdu_in_rnr1 {\n\t\tpackets 0 bytes 0\n\t}\n\tcounter bpdu_out_rnr0_921 {\n\t\tpackets 4 bytes 152\n\t}\n}\n' > "$T/counters"
+printf 'vport rnr2 brwifi1 921\nguard\njack 4 brwifi1 921\njack 6 brwifi1 921\njack 5 brwifi9 30\n' > "$T/run/gt-be98-lan.applied"
+# what `nft list table bridge gt_be98_lan_guard` prints ($1: the elements of bpdu_src_921, "" none)
+counters() {
+	printf 'table bridge gt_be98_lan_guard {\n\tcounter bpdu_in_rnr2 {\n\t\tpackets %s bytes 0\n\t}\n' "$1"
+	printf '\tcounter bpdu_in_rnr1_921 {\n\t\tpackets 0 bytes 0\n\t}\n\tcounter bpdu_out_rnr0_921 {\n\t\tpackets 4 bytes 152\n\t}\n'
+	printf '\tset tripped {\n\t\ttype ifname\n\t\tsize 65535\n\t\tflags dynamic\n\t}\n'
+	printf '\tset bpdu_src_30 {\n\t\ttype ether_addr\n\t\tsize 65535\n\t\tflags dynamic\n\t}\n'
+	printf '\tset bpdu_src_921 {\n\t\ttype ether_addr\n\t\tsize 65535\n\t\tflags dynamic\n'
+	[ -n "$2" ] && printf '\t\telements = { %s }\n' "$2"
+	printf '\t}\n\tchain jack_in {\n\t\ttype filter hook prerouting priority -200; policy accept;\n\t\tiifname @tripped drop\n\t}\n}\n'
+}
+counters 0 "" > "$T/counters"
 : > "$T/acts"; PATH="$T/bin:$PATH" sh "$G" --sweep
-check "guard loaded, counter 0 (an egress drop counts elsewhere): one nft, nothing latched, rnr1 kept" "1 no 0" \
-	"$(grep -c '^nft ' "$T/acts") $([ -s "$T/run/gt-be98-lan.tripped" ] && echo yes || echo no) $(grep -c '^ip link set rnr1 nomaster' "$T/acts")"
-sed -i 's/packets 0 bytes 0/packets 1 bytes 38/' "$T/counters"
+check "guard loaded, counters 0, no BPDU source: one nft (list table), nothing latched, rnr2 and rnr1.921 kept" "1 nft list table bridge gt_be98_lan_guard no 0" \
+	"$(grep -c '^nft ' "$T/acts") $(grep '^nft ' "$T/acts") $([ -s "$T/run/gt-be98-lan.tripped" ] && echo yes || echo no) $(grep -c '^ip link set rnr\(2\|1.921\) nomaster' "$T/acts")"
+counters 1 "" > "$T/counters"
 : > "$T/acts"; PATH="$T/bin:$PATH" sh "$G" --sweep
-check "the counter moved: rnr1 latched and DETACHED (nomaster: FDB flush + the Runner's flows of the port dropped), logged, no port-state call" "rnr1 1 yes 0" \
-	"$(cat "$T/run/gt-be98-lan.tripped") $(grep -c '^ip link set rnr1 nomaster' "$T/acts") $(grep -q 'log .*BPDU guard: a BPDU entered from rnr1' "$T/acts" && echo yes) $(grep -c '^bridge link set' "$T/acts")"
+check "the counter of rnr2 moved: rnr2 latched and DETACHED (nomaster: FDB flush + the Runner's flows of the port dropped), logged, no port-state call; rnr1.921 kept" "rnr2 1 yes 0 0" \
+	"$(cat "$T/run/gt-be98-lan.tripped") $(grep -c '^ip link set rnr2 nomaster' "$T/acts") $(grep -q 'log .*BPDU guard: a BPDU entered from rnr2' "$T/acts" && echo yes) $(grep -c '^bridge link set' "$T/acts") $(grep -c 'rnr1.921 nomaster' "$T/acts")"
 : > "$T/acts"; PATH="$T/bin:$PATH" sh "$G" --sweep
-check "a latched port found in a bridge again (re-attached by anything): detached again, latched once" "1 1" "$(grep -c '^ip link set rnr1 nomaster' "$T/acts") $(grep -c . "$T/run/gt-be98-lan.tripped")"
-rm -f "$T/run/gt-be98-lan.tripped"; sed -i 's/packets 1 bytes 38/packets 0 bytes 0/' "$T/counters"
+check "a latched port found in a bridge again (re-attached by anything): detached again, latched once" "1 1" "$(grep -c '^ip link set rnr2 nomaster' "$T/acts") $(grep -c . "$T/run/gt-be98-lan.tripped")"
+rm -f "$T/run/gt-be98-lan.tripped"; counters 0 "" > "$T/counters"
 : > "$T/acts"; PATH="$T/bin:$PATH" sh "$G" --sweep
-check "control: the latch cleared (gt-be98-lan restart), counter 0: rnr1 kept in its native bridge" "0" "$(grep -c '^ip link set rnr1 nomaster' "$T/acts")"
+check "control: the latch cleared (gt-be98-lan restart), counter 0: rnr2 kept in its native bridge" "0" "$(grep -c '^ip link set rnr2 nomaster' "$T/acts")"
+# 4b. a BPDU source on rnr1.921: attributed through the driver's l2_lookup
+# (a fake driver directory; its l2_lookup answers from a table), the jacks
+# latched into jack_block; rnr1.921 itself stays (the other jacks of the VLAN)
+R="$T/rtl"; mkdir -p "$R"; echo 0x0 > "$R/jack_block"; : > "$R/l2_lookup"; : > "$R/jack_profiles"
+sed -n '1,/^\[ "\${1:-}" = --selftest \]/p' "$G" | sed '$d' > "$T/ng.lib"
+cat > "$T/ng.run" <<X
+. "$T/ng.lib"
+# the driver's answer: the table's line for "<mac> <vid>", else "<mac> <vid> none"
+l2_lookup() { echo "\$1 \$2" >> "$T/lookups"; [ -e "$T/l2table" ] || return 1; lk_parse "\$(grep "^\$1 \$2 " "$T/l2table" || echo "\$1 \$2 none")" "\$2"; }
+sweep
+X
+NG() { : > "$T/acts"; GT_BE98_RTL8372="$R" PATH="$T/bin:$PATH" sh "$T/ng.run"; }
+latched() { grep '^jack' "$T/run/gt-be98-lan.tripped" 2>/dev/null | tr '\n' ' '; }
+clear_latch() { rm -f "$T/run/gt-be98-lan.tripped" "$T/run/gt-be98-lan.tripped.src" "$T/lookups"; echo 0x0 > "$R/jack_block"; }
+clear_latch; printf '02:00:00:00:0a:02 921 port=6\n02:00:00:00:0a:03 921 port=5\n02:00:00:00:0a:04 921 port=3\n' > "$T/l2table"
+counters 0 "02:00:00:00:0a:02" > "$T/counters"; NG
+check "a BPDU source learned on port 6 (a jack of VLAN 921): jack 6 only latched, jack_block 64 (bit 6), one lookup '<mac> 921', rnr1.921 kept" \
+	"jack6 |64|02:00:00:00:0a:02 921|0" "$(latched)|$(cat "$R/jack_block")|$(tr '\n' ' ' < "$T/lookups" | sed 's/ $//')|$(grep -c 'rnr1.921 nomaster' "$T/acts")"
+check "... one log line naming the jack and how it was attributed" "1" \
+	"$(grep -c 'log BPDU guard: a BPDU from 02:00:00:00:0a:02 entered on rnr1.921 .*jack(s) 6 latched off (attributed: the switch learned the source on port 6' "$T/acts")"
+NG
+check "the same source again: no second lookup, no second log, jack_block in step: not rewritten" "1 0 64" \
+	"$(grep -c . "$T/lookups") $(grep -c '^log BPDU' "$T/acts") $(cat "$R/jack_block")"
+echo 0x0 > "$R/jack_block"; NG
+check "jack_block reset (a module reload): written again from the latch" "64 1" "$(cat "$R/jack_block") $(grep -c 'jack_block was 0x0, written 64' "$T/acts")"
+clear_latch; counters 0 "02:00:00:00:0a:09" > "$T/counters"; NG
+check "control: a source the switch has not learned: EVERY jack of VLAN 921 (4, 6; not 5 of VLAN 30), jack_block 80" "jack4 jack6 |80" "$(latched)|$(cat "$R/jack_block")"
+check "... logged as not attributed" "1" "$(grep -c 'jack(s) 4 6 latched off (not attributed: the source is not in the switch.s L2 table on VLAN 921, so every jack of VLAN 921' "$T/acts")"
+clear_latch; counters 0 "02:00:00:00:0a:03" > "$T/counters"; NG
+check "a source learned on port 5 (a jack of VLAN 30): every jack of VLAN 921" "jack4 jack6 |80" "$(latched)|$(cat "$R/jack_block")"
+clear_latch; counters 0 "02:00:00:00:0a:04, 02:00:00:00:0a:02" > "$T/counters"; NG
+check "two sources, one on port 3 (the uplink) and one on jack 6: every jack of VLAN 921, two lookups, two log lines" "jack4 jack6 |80|2 2" \
+	"$(latched)|$(cat "$R/jack_block")|$(grep -c . "$T/lookups") $(grep -c '^log BPDU guard: a BPDU from' "$T/acts")"
+clear_latch; rm -f "$T/l2table"; counters 0 "02:00:00:00:0a:02" > "$T/counters"; NG
+check "the lookup fails (the driver answers nothing): every jack of VLAN 921" "jack4 jack6 |80" "$(latched)|$(cat "$R/jack_block")"
+# the real l2_lookup on a plain file (no driver behind it: it reads back what
+# it wrote): an answer it cannot parse, so every jack of the VLAN
+clear_latch; counters 0 "02:00:00:00:0a:02" > "$T/counters"
+: > "$T/acts"; GT_BE98_RTL8372="$R" PATH="$T/bin:$PATH" sh "$G" --sweep
+check "the real l2_lookup against a plain file: it wrote '<mac> <vid>', the answer is refused: every jack of VLAN 921" "02:00:00:00:0a:02 921|jack4 jack6 |80" \
+	"$(cat "$R/l2_lookup")|$(latched)|$(cat "$R/jack_block")"
+clear_latch; rm -f "$T/run/gt-be98-lan.applied"
 # a conf saved by an older image: the LAN_PORT_* keys absent = no jack (rnr1 in a brwifi bridge detached), the rest untouched
 rm -f "$T/run/gt-be98-lan.applied" "$T/run/gt-be98-lan.tripped"
 grep -v '^LAN_PORT_' "$here/../src/conf.d/gt-be98-lan" > "$T/lan.conf"

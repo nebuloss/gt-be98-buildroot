@@ -197,25 +197,73 @@ vp_case() {
 	if [ "$rc" = "$1" ] && { [ $rc = 1 ] || [ -z "${3:-}" ] || [ "$r" = "$3" ]; }; then ok "VLAN profile rc=$1: $(printf "$2" | tr '\n' ' ') ${3:-}"
 	else ko "VLAN profile want rc=$1 [${3:-}] got rc=$rc [$r]: $2"; fi
 }
-vp_case 0 'LAN_PORT_rnr1="native=921 tagged=none"' "ports=[rnr1] rnr1=921 "
-vp_case 0 'LAN_PORT_rnr1="native=921"' "ports=[rnr1] rnr1=921 "
-vp_case 0 'LAN_PORT_rnr1="native=921"\nLAN_PORT_rnr3="native=30"' "ports=[rnr1 rnr3] rnr1=921 rnr3=30 "
-vp_case 0 'LAN_PORT_rnr1="native=921 enabled=0"' "ports=[] "		# disabled: no jack
+vp_case 0 'LAN_PORT_rnr2="native=921 tagged=none"' "ports=[rnr2] rnr2=921 "
+vp_case 0 'LAN_PORT_rnr2="native=921"' "ports=[rnr2] rnr2=921 "
+vp_case 0 'LAN_PORT_rnr2="native=921"\nLAN_PORT_rnr3="native=30"' "ports=[rnr2 rnr3] rnr2=921 rnr3=30 "
+vp_case 0 'LAN_PORT_rnr2="native=921 enabled=0"' "ports=[] "		# disabled: no jack
 vp_case 0 '' "ports=[] "						# nothing at all: no error (the no-op)
-vp_case 1 'LAN_PORT_rnr1="native=921 tagged=all"'			# step 1: tagged=none only
-vp_case 1 'LAN_PORT_rnr1="native=921 tagged=30"'
-vp_case 1 'LAN_PORT_rnr1="native=0"'
-vp_case 1 'LAN_PORT_rnr1="native=4095"'
-vp_case 1 'LAN_PORT_rnr1="native=0921"'
-vp_case 1 'LAN_PORT_rnr1="tagged=none"'					# no native
-vp_case 1 'LAN_PORT_rnr1="native=921 enabled=2"'
-vp_case 1 'LAN_PORT_rnr1="native=921 foo=1"'
-vp_case 1 'LAN_PORT_rnr1="native=921;reboot"'				# characters outside the profile's
+vp_case 0 'LAN_PORT_rnr1="native=921"' "ports=[] "			# rnr1 is never a bare VLAN port any more (its jacks: 4b0)
+vp_case 1 'LAN_PORT_rnr2="native=921 tagged=all"'			# tagged=none only
+vp_case 1 'LAN_PORT_rnr2="native=921 tagged=30"'
+vp_case 1 'LAN_PORT_rnr2="native=0"'
+vp_case 1 'LAN_PORT_rnr2="native=4095"'
+vp_case 1 'LAN_PORT_rnr2="native=0921"'
+vp_case 1 'LAN_PORT_rnr2="tagged=none"'					# no native
+vp_case 1 'LAN_PORT_rnr2="native=921 enabled=2"'
+vp_case 1 'LAN_PORT_rnr2="native=921 foo=1"'
+vp_case 1 'LAN_PORT_rnr2="native=921;reboot"'				# characters outside the profile's
 vp_case 1 'LAN_PORT_rnr0="native=921"'					# the uplink, never
-vp_case 1 'LAN_PORT_rnr1="native=921"\nLAN_PORTS="rnr1"'		# one or the other
-vp_case 0 'LAN_PORT_rnr1="native=921"\nLAN_PORTS="rnr2"' "ports=[rnr1] rnr1=921 "
-TRUNK=rnr1 vp_case 1 'LAN_PORT_rnr1="native=921"'			# the Wi-Fi trunk port
-TRUNK=rnr2 vp_case 0 'LAN_PORT_rnr1="native=921"' "ports=[rnr1] rnr1=921 "
+vp_case 1 'LAN_PORT_rnr2="native=921"\nLAN_PORTS="rnr2"'		# one or the other
+vp_case 0 'LAN_PORT_rnr2="native=921"\nLAN_PORTS="rnr3"' "ports=[rnr2] rnr2=921 "
+TRUNK=rnr2 vp_case 1 'LAN_PORT_rnr2="native=921"'			# the Wi-Fi trunk port
+TRUNK=rnr3 vp_case 0 'LAN_PORT_rnr2="native=921"' "ports=[rnr2] rnr2=921 "
+
+# 4b0. the 2.5G jacks (RTL8372 ports 4..7): LAN_JACK_<n>, or RC9's
+# LAN_PORT_rnr1 for all four while no LAN_JACK_<n> line exists; a refused
+# jack is off (logged), the others unaffected; VLAN 1 never (the routed
+# LAN's bare rnr1). <expect rc> <conf lines> [expected "jacks=[..] n=V .."] [an error text expected]
+jk_case() {
+	printf "$2\n" > "$T/lan.conf"
+	: > "$T/jk.err"
+	r=$(
+		eerror() { echo "E $*" >> "$T/jk.err"; }; ebegin() { :; }; eend() { :; }; ewarn() { echo "W $*" >> "$T/jk.err"; }
+		LAN_CONF_FILE="$T/lan.conf"
+		. "$SRC/init.d/gt-be98-lan"
+		WIFI_TRUNK_T=${TRUNK:-rnr0}; wifi_trunk() { echo "$WIFI_TRUNK_T"; }
+		load_conf || exit 1
+		echo "jacks=[$JACKS] $(for n in $JACKS; do eval "printf '%s=%s ' $n \$JNATIVE_$n"; done)"
+	)
+	rc=$?; [ $rc -ne 0 ] && rc=1
+	e=ok; [ -z "${4:-}" ] || grep -q -- "$4" "$T/jk.err" || e="no error '$4' in [$(tr '\n' '|' < "$T/jk.err")]"
+	if [ "$rc" = "$1" ] && { [ $rc = 1 ] || [ "$r" = "$3" ]; } && [ "$e" = ok ]; then ok "2.5G jacks rc=$1: $(printf "$2" | tr '\n' ' ') -> ${3:-refused}${4:+ ($4)}"
+	else ko "2.5G jacks want rc=$1 [${3:-}] got rc=$rc [$r] $e: $2"; fi
+}
+jk_case 0 'LAN_JACK_6="native=921 tagged=none enabled=1"' "jacks=[6] 6=921 "
+jk_case 0 'LAN_JACK_4="native=921"\nLAN_JACK_6="native=30"' "jacks=[4 6] 4=921 6=30 "
+jk_case 0 'LAN_JACK_5="native=921 enabled=0"' "jacks=[] "				# disabled: off
+jk_case 0 'LAN_JACK_4=""\nLAN_JACK_5=""\nLAN_JACK_6=""\nLAN_JACK_7=""' "jacks=[] "	# the shipped empties
+jk_case 0 'LAN_PORT_rnr1="native=921 tagged=none enabled=1"' "jacks=[4 5 6 7] 4=921 5=921 6=921 7=921 "	# RC9 migration: all four
+jk_case 0 'LAN_PORT_rnr1="native=921 enabled=0"' "jacks=[] "
+jk_case 0 'LAN_PORT_rnr1="native=921"\nLAN_JACK_6="native=30"' "jacks=[6] 6=30 " "W LAN_PORT_rnr1 ignored"	# LAN_JACK_<n> wins
+jk_case 0 'LAN_PORT_rnr1=""\nLAN_JACK_6="native=30"' "jacks=[6] 6=30 "		# what the web UI writes: rnr1 emptied, a line per jack with a profile
+jk_case 0 'LAN_PORT_rnr1=""' "jacks=[] "						# ... no jack with a profile: all off
+jk_case 0 'LAN_PORT_rnr1="native=921"\nLAN_JACK_6=""' "jacks=[4 5 6 7] 4=921 5=921 6=921 7=921 "	# an EMPTY LAN_JACK_<n> is no profile: still the migration
+jk_case 0 'LAN_PORT_rnr1="native=921"\nLAN_JACK_8="native=30"' "jacks=[4 5 6 7] 4=921 5=921 6=921 7=921 "	# no jack 8: still the migration
+jk_case 0 'LAN_JACK_4="native=921 tagged=all"\nLAN_JACK_6="native=30"' "jacks=[6] 6=30 " "E LAN_JACK_4: tagged=all refused.*jack 4 off"	# one refused, the other kept
+for b in 'native=1' 'native=0' 'native=4095' 'native=0921' 'tagged=none' 'native=921 enabled=2' 'native=921 foo=1' 'native=921;reboot' 'native=921 tagged=30'; do
+	jk_case 0 "LAN_JACK_7=\"$b\"\nLAN_JACK_4=\"native=30\"" "jacks=[4] 4=30 " "jack 7 off"
+done
+jk_case 0 'LAN_JACK_7="native=1"' "jacks=[] " "VLAN 1 is the untagged LAN on bare rnr1"
+jk_case 0 'LAN_PORT_rnr1="native=1"' "jacks=[] " "VLAN 1 is the untagged LAN on bare rnr1"	# the migration too
+jk_case 0 'LAN_PORT_rnr1="native=921 tagged=all"' "jacks=[] " "the four 2.5G jacks are off"
+TRUNK=rnr1 jk_case 0 'LAN_JACK_6="native=921"' "jacks=[] " "rnr1 is the Wi-Fi trunk port"
+TRUNK=rnr2 jk_case 0 'LAN_JACK_6="native=921"' "jacks=[6] 6=921 "			# control: the trunk elsewhere
+# never mixed with the routed LAN's rnr1 (all four jacks untagged on bare rnr1, VLAN 1)
+jk_case 1 'LAN_PORTS="rnr1"\nLAN_JACK_6="native=921"' "" "rnr1 is in LAN_PORTS.*one or the other"
+jk_case 0 'LAN_PORTS="rnr1"\nLAN_JACK_6="native=921 enabled=0"' "jacks=[] "		# a disabled jack: no conflict
+jk_case 1 'LAN_PORTS="rnr1"\nLAN_PORT_rnr1="native=921"'				# the migration's profile
+jk_case 0 'LAN_PORTS="rnr1"\nLAN_JACK_6=""' "jacks=[] "				# control: no profile
+jk_case 0 'LAN_PORTS="rnr2"\nLAN_JACK_6="native=921"' "jacks=[6] 6=921 "		# control: another routed port
 
 # the shipped conf: nothing configured (the service in the default runlevel is a no-op)
 r=$(
@@ -280,9 +328,16 @@ then ok "BPDU guard rules: latched ports dropped both ways; a BPDU from the jack
 else ko "BPDU guard rules: got [$o]"; fi
 grep -q 'elements = { "rnr3" }' "$T/g2.nft" && ! grep -q elements "$T/g1.nft" &&
 	ok "BPDU guard: a latched port stays latched across a reload (elements), none otherwise" || ko "BPDU guard: latched elements"
+gt "" "rnr0.921 rnr0.30" "" "921 30" > "$T/g3.nft"
+o=$(sed -n 's/^[[:space:]]*\(i\|o\)ifname \(.*\)$/\1 \2/p' "$T/g3.nft" | tr '\n' '|')
+if [ "$o" = 'i @tripped drop|i "rnr1.921" ether daddr 01:80:c2:00:00:00 add @bpdu_src_921 { ether saddr }|i "rnr1.921" ether daddr 01:80:c2:00:00:00 counter name "bpdu_in_rnr1_921" drop|i "rnr1.30" ether daddr 01:80:c2:00:00:00 add @bpdu_src_30 { ether saddr }|i "rnr1.30" ether daddr 01:80:c2:00:00:00 counter name "bpdu_in_rnr1_30" drop|o @tripped drop|o "rnr0.921" ether daddr 01:80:c2:00:00:00 counter name "bpdu_out_rnr0_921" drop|o "rnr0.30" ether daddr 01:80:c2:00:00:00 counter name "bpdu_out_rnr0_30" drop|' ] &&
+	[ "$(grep -c 'type ether_addr; size 64; flags dynamic;' "$T/g3.nft")" = 2 ] && ! grep -q 'rnr1.921.*@tripped' "$T/g3.nft"
+then ok "BPDU guard rules (2.5G jacks, VLANs 921 30): a BPDU on rnr1.<vid> keeps its source (bpdu_src_<vid>, 64 max) and is dropped by its own rule (a full set never lets one through); rnr1.<vid> itself never latched"
+else ko "BPDU guard rules (2.5G jacks): got [$o]"; fi
 if [ $NFT_OK != 2 ]; then
 	nft_check "$T/g1.nft" && ok "BPDU guard (1 jack): nft -c accepts it" || { ko "BPDU guard (1 jack): nft -c"; cat "$T/nft.err"; }
 	nft_check "$T/g2.nft" && ok "BPDU guard (2 jacks, 1 latched): nft -c accepts it" || { ko "BPDU guard (2 jacks): nft -c"; cat "$T/nft.err"; }
+	nft_check "$T/g3.nft" && ok "BPDU guard (2.5G jacks on 2 VLANs): nft -c accepts it" || { ko "BPDU guard (2.5G jacks): nft -c"; cat "$T/nft.err"; }
 fi
 # 4d. the BPDU guard in a kernel (user + network namespace, veth): a BPDU from
 # the jack moves its counter and latches it, after which even a plain frame
@@ -344,6 +399,74 @@ if [ $NFT_OK != 2 ] && command -v python3 >/dev/null 2>&1; then
 else
 	echo "SKIP BPDU guard in a kernel: no nft/unshare/python3"
 fi
+# 4d'. the 2.5G jacks' guard in a kernel: jv stands for rnr1.921 (the jacks
+# of VLAN 921), tk for the trunk VLAN. A BPDU from jv is dropped (never
+# reaches the trunk), counted, its source kept in bpdu_src_921; jv itself is
+# NOT latched (a plain frame still forwards: the switch cuts the jack, not
+# the VLAN). Then gt-be98-netguard reads that very listing (the kernel's own
+# nft output format) and latches the jacks of VLAN 921.
+if [ $NFT_OK != 2 ] && command -v python3 >/dev/null 2>&1; then
+	sed 's/rnr1\.921/jv/g; s/rnr0\.921/tk/g; s/rnr0_921/tk/g' "$T/g3.nft" | sed 's/rnr1\.30/jw/g; s/rnr0\.30/tw/g; s/rnr0_30/tw/g' > "$T/gj.nft"
+	cat > "$T/gj.sh" <<-EOF
+	set -e
+	ip link add brwifi1 type bridge stp_state 0
+	ip link add jv type veth peer name xv
+	ip link add tk type veth peer name xt
+	for i in jv tk; do ip link set \$i master brwifi1; done
+	for i in brwifi1 jv xv tk xt; do ip link set \$i up; done
+	${NFT:-/sbin/nft} -f "$T/gj.nft"
+	python3 -I "$T/gj.py"
+	${NFT:-/sbin/nft} list table bridge gt_be98_lan_guard > "$T/gj.list"
+	EOF
+	cat > "$T/gj.py" <<-'EOF'
+	import socket, time
+	def tx(dev, frames):
+	    s = socket.socket(socket.AF_PACKET, socket.SOCK_RAW); s.bind((dev, 0))
+	    for f in frames: s.send(f)
+	def rx_on(dev, proto):
+	    s = socket.socket(socket.AF_PACKET, socket.SOCK_RAW, socket.htons(proto)); s.bind((dev, 0)); s.settimeout(0.5); return s
+	def got(s, mark):
+	    n = 0
+	    try:
+	        while True:
+	            if mark in s.recv(2048): n += 1
+	    except socket.timeout: pass
+	    return n
+	bpdu = bytes.fromhex("0180c2000000" "02000000a007" "0026424203") + b"BPDU" + b"\0" * 31
+	def plain(src, mark): return bytes.fromhex("ffffffffffff" + src + "88b5") + mark + b"\0" * 40
+	r = rx_on("xt", 0x88b5); ra = rx_on("xt", 0x0003)
+	tx("xv", [plain("020000000a01", b"PRE1")]); print("pre", got(r, b"PRE1"))
+	tx("xv", [bpdu]); time.sleep(0.2); print("bpdu", got(ra, b"BPDU"))
+	tx("xv", [plain("020000000a01", b"POST")]); print("post", got(r, b"POST"))
+	EOF
+	if unshare -rn sh "$T/gj.sh" > "$T/gj.out" 2>&1; then
+		o=$(tr '\n' '|' < "$T/gj.out"); l=$(tr -d '\n\t' < "$T/gj.list")
+		case "$o|$l" in
+		"pre 1|bpdu 0|post 1||"*"counter bpdu_in_rnr1_921 {packets 1 "*"set bpdu_src_921 {"*"02:00:00:00:a0:07"*)
+			ok "2.5G jacks' guard in a kernel: the BPDU from the jacks' VLAN dropped (0 on the trunk), counted, its source 02:00:00:00:a0:07 in bpdu_src_921; the VLAN itself not cut (a plain frame forwards before and after)" ;;
+		*) ko "2.5G jacks' guard in a kernel: [$o] [$l]" ;;
+		esac
+		# netguard reads the kernel's listing: the source, attributed (no driver: every jack of 921)
+		mkdir -p "$T/ngk/bin" "$T/ngk/run" "$T/ngk/net" "$T/ngk/rtl"
+		printf '#!/bin/sh\ncat "%s"\n' "$T/gj.list" > "$T/ngk/bin/nft"; printf '#!/bin/sh\nexit 0\n' > "$T/ngk/bin/logger"; chmod +x "$T/ngk/bin/"*
+		printf 'guard\njack 4 brwifi1 921\njack 6 brwifi1 921\njack 7 brwifi2 30\n' > "$T/ngk/run/gt-be98-lan.applied"
+		echo 0 > "$T/ngk/rtl/jack_block"; : > "$T/ngk/rtl/l2_lookup"
+		: > "$T/ngk/lan.conf"
+		GT_BE98_SYSNET="$T/ngk/net" GT_BE98_RUN="$T/ngk/run" GT_BE98_LAN_CONF="$T/ngk/lan.conf" GT_BE98_WIFI_L2="$T/ngk/none" \
+			GT_BE98_RTL8372="$T/ngk/rtl" PATH="$T/ngk/bin:$PATH" sh "$SRC/sbin/gt-be98-netguard" --sweep 2>/dev/null
+		r="$(cat "$T/ngk/run/gt-be98-lan.tripped.src" 2>/dev/null)|$(tr '\n' ' ' < "$T/ngk/run/gt-be98-lan.tripped" 2>/dev/null)|$(cat "$T/ngk/rtl/jack_block")"
+		[ "$r" = "02:00:00:00:a0:07 921|jack4 jack6 |80" ] &&
+			ok "netguard on the kernel's own listing: source 02:00:00:00:a0:07 on VLAN 921 read, jacks 4 and 6 (not 7 of VLAN 30) latched, jack_block 80" ||
+			ko "netguard on the kernel's listing: [$r]"
+	else
+		case "$(cat "$T/gj.out")" in
+		*"Operation not supported"*|*"not permitted"*|*"Unknown device type"*) echo "SKIP 2.5G jacks' guard in a kernel: $(head -n1 "$T/gj.out")" ;;
+		*) ko "2.5G jacks' guard in a kernel: the namespace setup failed: $(tr '\n' ' ' < "$T/gj.out")" ;;
+		esac
+	fi
+else
+	echo "SKIP 2.5G jacks' guard in a kernel: no nft/unshare/python3"
+fi
 
 # 4e. the service: apply, reload, stop with fakes (ip on a fake sysfs, the
 # gt-be98-l2 and nft calls logged): the guard is loaded before a jack joins,
@@ -397,42 +520,130 @@ else ko "older-image conf start: rc $r, seq [$(tr '\n' '|' < "$T/svc/seq")]"; fi
 printf 'LAN_PORTS=""\n' > "$T/lan.conf"
 : > "$T/svc/seq"; svcf stop
 [ ! -s "$T/svc/seq" ] && ok "empty conf: stop runs no command" || ko "empty conf stop: [$(tr '\n' '|' < "$T/svc/seq")]"
+# the 2.5G jacks: the driver's sysfs (a fake directory: plain files), every
+# write logged as "put <attr> <value>"; PUTFAIL="<attr>:<error text>:<n>"
+# makes the first n writes of <attr> fail with that text (what the shell
+# prints for the driver's errno)
+mkdir -p "$T/svc/rtl" "$T/svc/net/rnr2"
+printf '#!/bin/sh\necho "sleep $*" >> "$SVCT/seq"\n' > "$T/svc/bin/sleep"
+printf '#!/bin/sh\necho "modprobe $*" >> "$SVCT/seq"\necho "rtl8372 1 0 - Live" >> "$SVCT/modules"\n' > "$T/svc/bin/modprobe"
+printf '#!/bin/sh\necho "rmmod $*" >> "$SVCT/seq"\n: > "$SVCT/modules"\n' > "$T/svc/bin/rmmod"
+chmod +x "$T/svc/bin/"*
+svcj() {
+	(
+		eerror() { echo "E $*" >> "$SVCT/seq"; }; ebegin() { :; }; eend() { return "${1:-0}"; }; ewarn() { echo "W $*" >> "$SVCT/seq"; }; einfo() { :; }
+		SVCT="$T/svc"; export SVCT; PATH="$T/svc/bin:$PATH"
+		LAN_CONF_FILE="$T/lan.conf" GT_BE98_L2="$T/svc/bin/l2" GT_BE98_LAN_APPLIED="$T/svc/applied" \
+			GT_BE98_LAN_TRIPPED="$T/svc/tripped" GT_BE98_WIFI_L2="$T/svc/l2.conf" GT_BE98_WIFI_CONFS="$T/svc/none" \
+			GT_BE98_RTL8372="$T/svc/rtl" GT_BE98_PROC_MODULES="$T/svc/modules" GT_BE98_SWITCH_WAIT=${SW:-3}
+		. "$SRCLAN"
+		APPLIED="$T/svc/applied"
+		wifi_trunk() { echo rnr0; }
+		LAN_IFACE_WAIT=0
+		rtl_put() {
+			echo "put $1 $2" >> "$SVCT/seq"
+			if [ -n "${PUTFAIL:-}" ] && [ "${PUTFAIL%%:*}" = "$1" ]; then
+				c=$(cat "$SVCT/putn" 2>/dev/null || echo 0)
+				if [ "$c" -lt "${PUTFAIL##*:}" ]; then
+					echo $((c + 1)) > "$SVCT/putn"; RTL_ERR="sh: line 1: printf: write error: $(echo "$PUTFAIL" | cut -d: -f2)"; return 1
+				fi
+			fi
+			RTL_ERR=$( { printf '%s\n' "$2" > "$RTL_DIR/$1"; } 2>&1 )
+		}
+		"$@"
+	)
+}
+seqf() { grep -v '^ip link set rnr[123] \(up\|down\)$\|^ip -4 addr flush\|^W \|^E ' "$T/svc/seq" | tr '\n' '|'; }
+jp() { cat "$T/svc/rtl/jack_profiles"; }
+rm -f "$T/svc/applied" "$T/svc/tripped" "$T/svc/putn"; : > "$T/svc/modules"
+printf '4=1 5=1 6=1 7=1\n' > "$T/svc/rtl/jack_profiles"; echo 0x0 > "$T/svc/rtl/jack_block"; : > "$T/svc/rtl/l2_lookup"
 printf 'WIFI_TRUNK="rnr0"\nWIFI_VLANS="brwifi7:921 brwifi8:30"\n' > "$T/svc/l2.conf"
-printf 'LAN_PORT_rnr1="native=921 tagged=none"\nLAN_PORT_rnr3="native=55"\n' > "$T/lan.conf"
-: > "$T/svc/seq"; svcf start; r=$?
-o=$(grep -v '^ip link set rnr[13] up$\|^ip -4 addr flush' "$T/svc/seq" | tr '\n' '|')
-case "$o" in
-"E LAN_PORT_rnr3: no network on VLAN 55"*"|nft -c -f -|nft -f -|l2 up lan brwifi7 rnr0 921|ip link set rnr1 master brwifi7|modprobe rtl8372|")
-	ok "start: a jack without a network refused, the guard before the jack joins, rnr1 into brwifi7 (VLAN 921), then the switch" ;;
-*) ko "start sequence: [$o]" ;;
-esac
-[ $r = 0 ] && ok "start: rc 0 with a jack not bridged yet (a Wi-Fi reload retries)" || ko "start rc $r"
+printf 'LAN_PORT_rnr1=""\nLAN_JACK_4="native=921 tagged=none enabled=1"\nLAN_JACK_5="native=55"\nLAN_JACK_6="native=921"\nLAN_JACK_7="native=30"\nLAN_PORT_rnr2="native=30"\n' > "$T/lan.conf"
+: > "$T/svc/seq"; svcj start; r=$?
+o=$(seqf)
+[ "$o" = "modprobe rtl8372|put jack_profiles 4=921 5=off 6=921 7=30|put jack_block 0|nft -c -f -|nft -f -|l2 up lan brwifi8 rnr0 30 rnr1|l2 up lan brwifi7 rnr0 921 rnr1|ip link set rnr2 master brwifi8|" ] &&
+	ok "start: the module, the WHOLE set (jack 5 off: no network on VLAN 55), the latch (0), the guard, then each network bridge ONCE with rnr1 (rnr1.<vid>), then the bare rnr2" ||
+	ko "start sequence: [$o]"
+grep -q '^E LAN_JACK_5: no network on VLAN 55.*jack 5 off' "$T/svc/seq" && [ $r = 0 ] && ok "start: jack 5 refused (logged), rc 0 (a Wi-Fi reload retries)" || ko "start: jack 5 / rc $r"
 check_applied() { if [ "$(tr '\n' '|' < "$T/svc/applied")" = "$1" ]; then ok "applied: $1"; else ko "applied: want [$1] got [$(tr '\n' '|' < "$T/svc/applied")]"; fi; }
-check_applied "guard|vport rnr1 brwifi7 921|module rtl8372|"
-# the network of 921 becomes brwifi8's (the list changed): reload moves the jack
-printf 'WIFI_TRUNK="rnr0"\nWIFI_VLANS="brwifi8:921"\n' > "$T/svc/l2.conf"
-: > "$T/svc/seq"; svcf reload
-o=$(grep -v '^ip link set rnr[13] \(up\|down\)$\|^ip -4 addr flush\|^E ' "$T/svc/seq" | tr '\n' '|')
-[ "$o" = "ip link set rnr1 nomaster|l2 down lan brwifi7|nft -c -f -|nft -f -|l2 up lan brwifi8 rnr0 921|ip link set rnr1 master brwifi8|" ] &&
-	ok "reload: the jack leaves brwifi7, which is let go, and joins brwifi8; no module reload" || ko "reload: [$o]"
-: > "$T/svc/seq"; svcf reload
-o=$(grep -v '^ip link set rnr[13] up$\|^E ' "$T/svc/seq" | tr '\n' '|')
-[ "$o" = "nft -c -f -|nft -f -|l2 up lan brwifi8 rnr0 921|" ] && ok "reload with nothing changed: no move (the user re-asserted)" || ko "reload unchanged: [$o]"
-echo rnr1 > "$T/svc/tripped"
-: > "$T/svc/seq"; svcf reload
-o=$(grep -v '^ip link set rnr1 down$\|^W \|^E ' "$T/svc/seq" | tr '\n' '|')
-if [ "$o" = "ip link set rnr1 nomaster|l2 down lan brwifi8|nft delete table bridge gt_be98_lan_guard|" ] && ! grep -q '^vport ' "$T/svc/applied" && grep -q '^W rnr1: latched off by the BPDU guard' "$T/svc/seq"; then
-	ok "reload with rnr1 latched: never re-attached (out of brwifi8, which is let go; no vport line; no jack left to guard)"
-else ko "reload latched: [$o] applied [$(tr '\n' '|' < "$T/svc/applied")]"; fi
-: > "$T/svc/seq"; svcf reload
-grep -q 'master brwifi' "$T/svc/seq" && ko "reload latched (again): re-attached" || ok "reload latched (again): still not attached"
-rm -f "$T/svc/tripped"; : > "$T/svc/seq"; svcf reload
-grep -q '^ip link set rnr1 master brwifi8$' "$T/svc/seq" && ok "control: the latch cleared (what restart does): the jack is attached again" || ko "latch cleared: [$(tr '\n' '|' < "$T/svc/seq")]"
-: > "$T/svc/seq"; svcf stop
-o=$(grep -v '^ip link set rnr1 down$' "$T/svc/seq" | tr '\n' '|')
-[ "$o" = "nft delete table bridge gt_be98_lan_guard|ip link set rnr1 nomaster|rmmod rtl8372|l2 down lan brwifi8|" ] &&
-	ok "stop: guard table deleted, the jack out, its network bridge let go once" || ko "stop: [$o]"
+check_applied "module rtl8372|jacks 4=921 5=off 6=921 7=30|guard|vport rnr2 brwifi8 30|jack 4 brwifi7 921|jack 6 brwifi7 921|jack 7 brwifi8 30|"
+[ "$(jp)" = "4=921 5=off 6=921 7=30" ] && ok "the driver holds 4=921 5=off 6=921 7=30" || ko "driver set: $(jp)"
+# reload, nothing changed: the same set again (a no-op in the driver), the bridges re-asserted
+: > "$T/svc/seq"; svcj reload
+[ "$(seqf)" = "put jack_profiles 4=921 5=off 6=921 7=30|put jack_block 0|nft -c -f -|nft -f -|l2 up lan brwifi8 rnr0 30 rnr1|l2 up lan brwifi7 rnr0 921 rnr1|" ] &&
+	ok "reload unchanged: the same set (no-op), the bridges re-asserted, no module load, no move" || ko "reload unchanged: [$(seqf)]"
+# the web UI moves jack 7 to VLAN 921: brwifi8 keeps rnr2 but no longer rnr1.30
+printf 'LAN_PORT_rnr1=""\nLAN_JACK_4="native=921"\nLAN_JACK_6="native=921"\nLAN_JACK_7="native=921"\nLAN_PORT_rnr2="native=30"\n' > "$T/lan.conf"
+: > "$T/svc/seq"; svcj reload
+[ "$(seqf)" = "put jack_profiles 4=921 5=off 6=921 7=921|put jack_block 0|nft -c -f -|nft -f -|l2 up lan brwifi8 rnr0 30|l2 up lan brwifi7 rnr0 921 rnr1|" ] &&
+	ok "reload, jack 7 moved to VLAN 921: the switch first, then brwifi8 re-stated WITHOUT rnr1 (gt-be98-l2 removes rnr1.30), brwifi7 with it" || ko "reload jack 7 moved: [$(seqf)]"
+# the network of 921 moves to brwifi9: the jacks' bridge is let go, the new one taken
+printf 'WIFI_TRUNK="rnr0"\nWIFI_VLANS="brwifi9:921 brwifi8:30"\n' > "$T/svc/l2.conf"
+: > "$T/svc/seq"; svcj reload
+[ "$(seqf)" = "put jack_profiles 4=921 5=off 6=921 7=921|put jack_block 0|l2 down lan brwifi7|nft -c -f -|nft -f -|l2 up lan brwifi8 rnr0 30|l2 up lan brwifi9 rnr0 921 rnr1|" ] &&
+	ok "reload, VLAN 921's network now brwifi9: brwifi7 let go, brwifi9 taken with rnr1" || ko "reload network moved: [$(seqf)]"
+# the BPDU guard latched jack 6 (gt-be98-netguard): reload keeps its VLAN, writes the latch
+echo jack6 > "$T/svc/tripped"; echo 0x0 > "$T/svc/rtl/jack_block"
+: > "$T/svc/seq"; svcj reload
+[ "$(cat "$T/svc/rtl/jack_block")" = 64 ] && grep -q '^put jack_profiles 4=921 5=off 6=921 7=921$' "$T/svc/seq" && grep -q '^W 2.5G jacks latched off by the BPDU guard (jack_block 64)' "$T/svc/seq" &&
+	ok "latched jack 6: the set unchanged, jack_block 64 written after it (the latch survives a module reload: re-written at every set)" || ko "latch: block $(cat "$T/svc/rtl/jack_block") [$(tr '\n' '|' < "$T/svc/seq")]"
+# a latch that cannot be written: the latched jack written off instead
+: > "$T/svc/seq"; rm -f "$T/svc/putn"; PUTFAIL="jack_block:Input/output error:9" svcj reload
+[ "$(jp)" = "4=921 5=off 6=off 7=921" ] && ok "jack_block refused (-EIO): jack 6 written off instead (never left forwarding)" || ko "block refused: $(jp) [$(tr '\n' '|' < "$T/svc/seq")]"
+rm -f "$T/svc/tripped" "$T/svc/putn"
+# the configurator still running: -EAGAIN retried, then written
+: > "$T/svc/seq"; PUTFAIL="jack_profiles:Resource temporarily unavailable:2" svcj reload
+[ "$(grep -c '^sleep 1$' "$T/svc/seq") $(grep -c '^put jack_profiles' "$T/svc/seq") $(jp)" = "2 3 4=921 5=off 6=921 7=921" ] &&
+	ok "-EAGAIN twice: retried after 1 s each, written on the third try" || ko "EAGAIN: [$(tr '\n' '|' < "$T/svc/seq")]"
+rm -f "$T/svc/putn"; : > "$T/svc/seq"; PUTFAIL="jack_profiles:Resource temporarily unavailable:99" SW=3 svcj reload; r=$?
+[ "$(grep -c '^sleep 1$' "$T/svc/seq") $r" = "3 1" ] && grep -q '^E the RTL8372 is not configured after 3 s' "$T/svc/seq" && ! grep -q 'l2 up .* rnr1$' "$T/svc/seq" &&
+	ok "-EAGAIN for good: bounded (3 s here, 20 by default), rc 1, no jack bridged (no rnr1.<vid>)" || ko "EAGAIN bound: rc $r [$(tr '\n' '|' < "$T/svc/seq")]"
+rm -f "$T/svc/putn"; svcj reload; grep -q '^jack 4 brwifi9 921$' "$T/svc/applied" && ok "control: a reload once the switch answers bridges the jacks again" || ko "re-bridge after EAGAIN"
+rm -f "$T/svc/putn"; : > "$T/svc/seq"; PUTFAIL="jack_profiles:Invalid argument:1" svcj reload; r=$?
+[ "$(grep -c '^sleep' "$T/svc/seq") $r" = "0 1" ] && grep -q "^E the RTL8372 refused jack_profiles '4=921 5=off 6=921 7=921': Invalid argument" "$T/svc/seq" &&
+	! grep -q '^jack ' "$T/svc/applied" && grep -q '^vport rnr2 ' "$T/svc/applied" && grep -q '^l2 down lan brwifi9' "$T/svc/seq" &&
+	ok "control: -EINVAL is not retried; rc 1; the jacks' bridge let go, the bare rnr2 kept" || ko "EINVAL: rc $r [$(tr '\n' '|' < "$T/svc/seq")] applied [$(tr '\n' '|' < "$T/svc/applied")]"
+rm -f "$T/svc/putn"; : > "$T/svc/seq"; svcj reload
+grep -q '^l2 up lan brwifi9 rnr0 921 rnr1$' "$T/svc/seq" && ok "control: the next reload bridges the jacks again" || ko "re-bridge: [$(tr '\n' '|' < "$T/svc/seq")]"
+# the real rtl_put: an error the shell reports (here a directory) is captured, not retried
+r=$(
+	eerror() { echo "E $*"; }; ewarn() { :; }
+	LAN_CONF_FILE="$T/lan.conf"; . "$SRC/init.d/gt-be98-lan"
+	mkdir -p "$T/rtlx/jack_profiles"; RTL_GLOB="$T/rtlx"; SWITCH_WAIT=2
+	sleep() { echo slept; }
+	jacks_write "4=off 5=off 6=off 7=off"; echo "rc=$?"
+)
+case "$r" in "E the RTL8372 refused jack_profiles '4=off 5=off 6=off 7=off': Is a directory"*"rc=1") ok "the real rtl_put: the shell's error text captured (Is a directory), refused at once, no sleep" ;; *) ko "real rtl_put: [$r]" ;; esac
+# no driver bound and the module not loaded (LAN_SWITCH_MONITOR=no): refused at once
+mv "$T/svc/rtl" "$T/svc/rtl.off"; : > "$T/svc/modules"; : > "$T/svc/seq"; svcj reload; r=$?
+[ "$(grep -c '^sleep' "$T/svc/seq") $r" = "0 1" ] && grep -q '^E rtl8372 is not loaded' "$T/svc/seq" && ok "no driver and no module: refused at once, rc 1" || ko "no driver: rc $r [$(tr '\n' '|' < "$T/svc/seq")]"
+mv "$T/svc/rtl.off" "$T/svc/rtl"; echo "rtl8372 1 0 - Live" > "$T/svc/modules"; svcj reload >/dev/null
+# stop: every jack off FIRST, then the guard, the module, the bridges let go
+: > "$T/svc/seq"; svcj stop
+o=$(seqf)
+[ "$o" = "put jack_profiles 4=off 5=off 6=off 7=off|put jack_block 0|nft delete table bridge gt_be98_lan_guard|ip link set rnr2 nomaster|rmmod rtl8372|l2 down lan brwifi8|l2 down lan brwifi9|" ] &&
+	ok "stop: the four jacks off in the switch BEFORE anything else (no jack forwards into a bridge losing rnr1.<vid>), the guard, rnr2 out, the module, each bridge let go once" || ko "stop: [$o]"
 [ ! -e "$T/svc/applied" ] && [ ! -e "$T/svc/tripped" ] && ok "stop: applied state and the latch cleared" || ko "stop: state left"
+# restart clears the latch: stop + start (start removes it too)
+echo jack6 > "$T/svc/tripped"; echo "x 1" > "$T/svc/tripped.src"
+: > "$T/svc/seq"; svcj start
+[ ! -e "$T/svc/tripped" ] && [ ! -e "$T/svc/tripped.src" ] && grep -q '^put jack_block 0$' "$T/svc/seq" &&
+	ok "start (restart's second half): the latch and the seen sources cleared, jack_block 0 written" || ko "start clears: [$(tr '\n' '|' < "$T/svc/seq")]"
+svcj stop
+# the routed LAN (LAN_PORTS=rnr1): every jack untagged on bare rnr1 (VLAN 1); stop: off
+printf 'LAN_PORTS="rnr1"\nLAN_PORT_rnr1=""\n' > "$T/lan.conf"; echo "4=off 5=off 6=off 7=off" > "$T/svc/rtl/jack_profiles"
+: > "$T/svc/seq"; svcj start
+[ "$(jp)" = "4=1 5=1 6=1 7=1" ] && grep -q '^jacks 4=1 5=1 6=1 7=1$' "$T/svc/applied" && ! grep -q '^l2 ' "$T/svc/seq" &&
+	ok "LAN_PORTS=rnr1: the set 4=1 5=1 6=1 7=1 (a former VLAN set undone), no network bridge" || ko "routed rnr1: $(jp) [$(tr '\n' '|' < "$T/svc/seq")]"
+: > "$T/svc/seq"; svcj reload
+! grep -q '^put jack_profiles' "$T/svc/seq" && ok "LAN_PORTS=rnr1: reload never touches the set" || ko "routed reload: [$(tr '\n' '|' < "$T/svc/seq")]"
+svcj stop; [ "$(jp)" = "4=off 5=off 6=off 7=off" ] && ok "LAN_PORTS=rnr1: stop writes the jacks off" || ko "routed stop: $(jp)"
+# RC9's conf (LAN_PORT_rnr1 only): the migration, all four jacks on its VLAN
+printf 'LAN_PORT_rnr1="native=921 tagged=none enabled=1"\n' > "$T/lan.conf"
+: > "$T/svc/seq"; svcj start
+[ "$(jp)" = "4=921 5=921 6=921 7=921" ] && grep -q '^l2 up lan brwifi9 rnr0 921 rnr1$' "$T/svc/seq" && ! grep -q 'ip link set rnr1 master' "$T/svc/seq" &&
+	ok "RC9 conf (LAN_PORT_rnr1): all four jacks on VLAN 921 through rnr1.921, bare rnr1 never enslaved" || ko "migration: $(jp) [$(tr '\n' '|' < "$T/svc/seq")]"
+svcj stop
 
 echo "gt-be98-lan-test: $pass ok, $fail failed"
 [ $fail -eq 0 ]

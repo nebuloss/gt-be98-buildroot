@@ -8,26 +8,36 @@
 # created) when the last user lets go: a Wi-Fi restart never drops the wired
 # members, and a VLAN with jacks and no running SSID still has its bridge.
 #
-#   gt-be98-l2 up <user> <bridge> <trunk> <vid>
+#   gt-be98-l2 up <user> <bridge> <trunk> <vid> [<wired>]
 #       the bridge (created or adopted: no STP, forward_delay 0, IPv6 off,
 #       up), <trunk>.<vid> (created or adopted, IPv6 off, up, enslaved, not
 #       isolated; the trunk is brought up if down, never re-addressed); user
-#       recorded. A bridge whose trunk or VLAN changed loses the old
-#       sub-interface first (deleted when this tool created it) and its bare
-#       wired ports (rnr*: they joined the old VLAN), and forgets its other
-#       users (they come back with `up`). A failed up is undone (as by
-#       `down` of that user). Refused: a
+#       recorded. <wired> (rnr1..rnr3, never rnr0, never the trunk): the
+#       user's WIRED MEMBER <wired>.<vid> too, created or adopted like the
+#       trunk VLAN and recorded as that user's (the RTL8372 tags each jack's
+#       native VLAN V on rnr1, so the jacks of VLAN V reach the SoC on
+#       rnr1.V: gt-be98-lan passes rnr1). An `up` without <wired>, or with
+#       another one, drops the user's former wired member (deleted when
+#       this tool created it): one call states all the user wants.
+#       A bridge whose trunk or VLAN changed loses the old
+#       sub-interface first (deleted when this tool created it), its wired
+#       members and its bare wired ports (rnr*: they joined the old VLAN),
+#       and forgets its other users (they come back with `up`). A failed up
+#       is undone (as by `down` of that user). Refused: a
 #       VLAN another bridge holds, a name that is not brwifi<digits>,
-#       rnr0..rnr3, 1..4094.
+#       rnr0..rnr3, 1..4094, a wired port that is rnr0 or the trunk.
 #   gt-be98-l2 down <user> <bridge>
-#       the user let go; the last one deletes the sub-interface and the bridge
+#       the user let go (its wired member is removed: deleted when this
+#       tool created it); the last one deletes the sub-interface and the bridge
 #       this tool created (a bridge with a port other than a BSS (bcawl*) or
 #       its own trunk VLAN is left in place, with a warning)
 #   gt-be98-l2 vid <bridge>       the VLAN id the bridge carries (rc 1: none)
 #   gt-be98-l2 list               "<bridge> <trunk> <vid> <user>..." per bridge
 # State: /run/gt-be98-l2/<bridge> (trunk, vid, made_bridge, made_vlan, user
-# lines). gt-be98-netguard reads it (a LAN port in a brwifi bridge only while
-# the bridge carries the port's native VLAN).
+# lines, and "wired <user> <dev> <made>" per wired member). gt-be98-netguard
+# reads it (a LAN port in a brwifi bridge only while the bridge carries the
+# port's native VLAN; rnr1.<vid> only as a wired member recorded here on a
+# bridge that carries <vid>).
 set -u
 RUNDIR=${GT_BE98_RUN:-/run}
 L2=${GT_BE98_L2_STATE:-$RUNDIR/gt-be98-l2}
@@ -42,6 +52,7 @@ valid_bridge() {
 	case "${1#brwifi}" in *[!0-9]*) return 1 ;; esac
 }
 valid_trunk() { case "$1" in rnr[0-3]) return 0 ;; *) return 1 ;; esac; }
+valid_wired() { case "$1" in rnr[1-3]) return 0 ;; *) return 1 ;; esac; }
 valid_vid() {
 	case "$1" in ''|0*|*[!0-9]*) return 1 ;; esac
 	[ ${#1} -le 4 ] && [ "$1" -ge 1 ] && [ "$1" -le 4094 ]
@@ -62,26 +73,29 @@ lock() {
 }
 unlock() { rm -rf "$L2/.lock"; }
 
-# state of bridge $1 into S_TRUNK S_VID S_MB S_MV S_USERS ("" when none)
+# state of bridge $1 into S_TRUNK S_VID S_MB S_MV S_USERS S_WIRED ("" when
+# none; S_WIRED: "<user>:<dev>:<made>" words)
 st_read() {
-	local k v
-	S_TRUNK= S_VID= S_MB=0 S_MV=0 S_USERS=
+	local k v w x
+	S_TRUNK= S_VID= S_MB=0 S_MV=0 S_USERS= S_WIRED=
 	[ -f "$L2/$1" ] || return 1
-	while read -r k v; do
+	while read -r k v w x; do
 		case "$k" in
 		trunk) S_TRUNK=$v ;; vid) S_VID=$v ;;
 		made_bridge) S_MB=$v ;; made_vlan) S_MV=$v ;;
 		user) S_USERS="$S_USERS $v" ;;
+		wired) S_WIRED="$S_WIRED $v:$w:$x" ;;
 		esac
 	done < "$L2/$1"
 	return 0
 }
 st_write() {
-	local u
+	local u w
 	{
 		echo "trunk $S_TRUNK"; echo "vid $S_VID"
 		echo "made_bridge $S_MB"; echo "made_vlan $S_MV"
 		for u in $S_USERS; do echo "user $u"; done
+		for w in $S_WIRED; do u=${w#*:}; echo "wired ${w%%:*} ${u%%:*} ${u#*:}"; done
 	} > "$L2/$1.new" && mv -f "$L2/$1.new" "$L2/$1"
 }
 
@@ -93,6 +107,33 @@ vlan_is() {
 }
 ipv6_off() { echo 1 > "$PROCNET/ipv6/conf/$1/disable_ipv6" 2>/dev/null; return 0; }
 master_of() { local m; m=$(readlink "$SYSNET/$1/master" 2>/dev/null); echo "${m##*/}"; }
+
+# wired member $2 ("<user>:<dev>:<made>") of bridge $1 leaves it: deleted
+# when this tool created it, else only released
+wired_drop() {
+	local d=${2#*:} m
+	m=${d#*:}; d=${d%%:*}
+	[ -e "$SYSNET/$d" ] || return 0
+	if [ "$m" = 1 ]; then
+		ip link del dev "$d" || return 1
+	elif [ "$(master_of "$d")" = "$1" ]; then
+		ip link set dev "$d" nomaster || return 1
+	fi
+}
+# the wired members of bridge $1 of user $2 ("" = every user) except dev $3
+# leave it; S_WIRED keeps the others (and one whose removal failed)
+wired_prune() {
+	local w u d k=
+	for w in $S_WIRED; do
+		u=${w%%:*}; d=${w#*:}; d=${d%%:*}
+		if { [ -z "$2" ] || [ "$u" = "$2" ]; } && [ "$d" != "${3:-}" ]; then
+			wired_drop "$1" "$w" && continue
+			err "$1: wired member $d not removed"
+		fi
+		k="$k $w"
+	done
+	S_WIRED=$k
+}
 
 # the old sub-interface of bridge $1 (state S_*) leaves it
 sub_drop() {
@@ -107,12 +148,18 @@ sub_drop() {
 }
 
 cmd_up() {
-	local u=$1 b=$2 t=$3 v=$4 s=$3.$4 f o p
+	local u=$1 b=$2 t=$3 v=$4 s=$3.$4 w=${5:-} ws= f o p x made
 	valid_user "$u" || { err "user '$u' refused"; return 1; }
 	valid_bridge "$b" || { err "bridge '$b' refused (brwifiN only)"; return 1; }
 	valid_trunk "$t" || { err "trunk '$t' refused (rnr0..rnr3)"; return 1; }
 	valid_vid "$v" || { err "VLAN '$v' refused (1-4094)"; return 1; }
+	if [ -n "$w" ]; then
+		valid_wired "$w" || { err "wired port '$w' refused (rnr1..rnr3)"; return 1; }
+		[ "$w" != "$t" ] || { err "wired port $w is the trunk: refused"; return 1; }
+		ws=$w.$v
+	fi
 	[ -e "$SYSNET/$t" ] || { err "trunk $t not present: $b not bridged"; return 1; }
+	[ -z "$w" ] || [ -e "$SYSNET/$w" ] || { err "wired port $w not present: $b not bridged"; return 1; }
 	# one bridge per VLAN of a trunk
 	for f in "$L2"/brwifi*; do
 		[ -f "$f" ] || continue
@@ -123,11 +170,18 @@ cmd_up() {
 	done
 	o=$(master_of "$s")
 	[ -z "$o" ] || [ "$o" = "$b" ] || { err "$s is a port of $o: $b refused"; return 1; }
-	st_read "$b" || { S_TRUNK=$t S_VID=$v; S_MB=0 S_MV=0 S_USERS=; }
+	if [ -n "$ws" ]; then
+		o=$(master_of "$ws")
+		[ -z "$o" ] || [ "$o" = "$b" ] || { err "$ws is a port of $o: $b refused"; return 1; }
+	fi
+	st_read "$b" || { S_TRUNK=$t S_VID=$v; S_MB=0 S_MV=0 S_USERS= S_WIRED=; }
 	# the bridge's VLAN changed: the old one goes first
 	if [ "$S_TRUNK.$S_VID" != "$s" ]; then
 		sub_drop "$b" || { err "$b: the old VLAN $S_TRUNK.$S_VID could not be removed"; return 1; }
 		S_MV=0
+		# every user's wired members are of the old VLAN too
+		wired_prune "$b" "" ""
+		[ -z "$S_WIRED" ] || { err "$b: a wired member of the old VLAN could not be removed"; return 1; }
 		# the wired members joined the OLD VLAN: evicted (never carried
 		# into another VLAN), and their users must come back with `up`
 		if [ -d "$SYSNET/$b/brif" ]; then
@@ -167,6 +221,34 @@ cmd_up() {
 	[ "$(master_of "$s")" = "$b" ] || ip link set dev "$s" master "$b" ||
 		{ err "$s: enslave into $b failed"; return 1; }
 	bridge link set dev "$s" isolated off 2>/dev/null
+	# the user's wired member: what it named, and nothing else of its own
+	wired_prune "$b" "$u" "$ws"; st_write "$b"
+	[ -n "$ws" ] || return 0
+	made=
+	for x in $S_WIRED; do
+		o=${x#*:}
+		[ "${o%%:*}" = "$ws" ] || continue
+		[ "${x%%:*}" = "$u" ] || { err "$ws is the wired member of user ${x%%:*}: refused for $u"; return 1; }
+		made=${o#*:}
+	done
+	if [ $(( $(cat "$SYSNET/$w/flags" 2>/dev/null || echo 0) & 1 )) = 0 ]; then
+		ip link set dev "$w" up || { err "wired port $w: up failed"; return 1; }
+	fi
+	if [ -e "$SYSNET/$ws" ]; then
+		vlan_is "$ws" "$w" "$v" || { err "$ws exists and is not VLAN $v of $w"; return 1; }
+		made=${made:-0}
+	else
+		ip link add link "$w" name "$ws" type vlan id "$v" || { err "cannot create $ws"; return 1; }
+		made=1
+	fi
+	o=
+	for x in $S_WIRED; do [ "$x" = "$u:$ws:${x##*:}" ] || o="$o $x"; done
+	S_WIRED="$o $u:$ws:$made"; st_write "$b"
+	ipv6_off "$ws"
+	ip link set dev "$ws" up || { err "$ws: up failed"; return 1; }
+	[ "$(master_of "$ws")" = "$b" ] || ip link set dev "$ws" master "$b" ||
+		{ err "$ws: enslave into $b failed"; return 1; }
+	bridge link set dev "$ws" isolated off 2>/dev/null
 	return 0
 }
 
@@ -177,6 +259,7 @@ cmd_down() {
 	n=
 	for x in $S_USERS; do [ "$x" = "$u" ] || n="$n $x"; done
 	S_USERS=$n
+	wired_prune "$b" "$u" ""
 	if [ -n "$S_USERS" ]; then st_write "$b"; return 0; fi
 	if [ "$S_MB" = 1 ] && [ -d "$SYSNET/$b/brif" ]; then
 		for p in "$SYSNET/$b/brif"/*; do
@@ -205,7 +288,7 @@ cmd_list() {
 
 c=${1:-}; [ $# -gt 0 ] && shift
 case "$c" in
-up)	[ $# = 4 ] || { err "usage: up <user> <bridge> <trunk> <vid>"; exit 2; }
+up)	[ $# = 4 ] || [ $# = 5 ] || { err "usage: up <user> <bridge> <trunk> <vid> [<wired>]"; exit 2; }
 	# a failed up leaves nothing of this user (what it created is undone)
 	lock || exit 1; cmd_up "$@"; r=$?; [ $r = 0 ] || cmd_down "$1" "$2"; unlock; exit $r ;;
 down)	[ $# = 2 ] || { err "usage: down <user> <bridge>"; exit 2; }

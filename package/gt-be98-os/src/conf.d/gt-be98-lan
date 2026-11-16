@@ -8,15 +8,37 @@
 # SSIDs use, and its devices get their addresses from that VLAN's own DHCP
 # upstream. The VLAN must belong to a network of the Wi-Fi network list
 # (network=ID ... vlan=<vid>) or WIFI_VLANS; another one is refused.
+#
+# The four 2.5G jacks (RTL8372 switch ports 4..7), each its own profile:
+#   LAN_JACK_<n>="native=<vid> tagged=none enabled=0|1"     (<n> = 4..7)
+# The switch carries jack <n>'s VLAN tagged on rnr1 (rnr1.<vid> in the
+# bridge); jacks of one VLAN are switched to each other inside the RTL8372.
+# <vid>: 2..4094 (VLAN 1 is the untagged LAN on bare rnr1, LAN_PORTS=rnr1
+# below: never a jack's, and a jack with an enabled profile is refused while
+# rnr1 is in LAN_PORTS). An absent or empty line, enabled=0, or a refused
+# profile (logged) = the jack is off (isolated in the switch); the other
+# jacks are unaffected. RC9's LAN_PORT_rnr1="..." (one profile for all four)
+# is still read, as the profile of all four, while no LAN_JACK_<n> has a
+# value.
+# The bare ports, one profile each:
 #   LAN_PORT_<port>="native=<vid> tagged=none [enabled=0|1]"
-# <port>: rnr1 = the RTL8372's four 2.5G jacks (one profile for all four),
-# rnr2 (1G jack), rnr3 (10G jack); never rnr0 (the uplink), never the Wi-Fi
-# trunk port. tagged=: only none for now (untagged frames only: tagged VLANs
-# on the jacks need the RTL8372 VLAN table). enabled=0: the jack stays off.
-# A jack that receives a BPDU (it reaches a switch: a loop risk) is cut at
-# once (BPDU guard) until `rc-service gt-be98-lan restart`.
+# <port>: rnr2 (1G jack), rnr3 (10G jack); never rnr0 (the uplink), never
+# the Wi-Fi trunk port.
+# tagged=: only none for now. A jack that receives a BPDU (it reaches a
+# switch: a loop risk) is cut at once (BPDU guard; a 2.5G jack is cut inside
+# the switch, the one the BPDU's source was learned on, else every jack of
+# that VLAN) until `rc-service gt-be98-lan restart`; `reload` (after a
+# change here) keeps the cut.
 # A port is a VLAN jack or in LAN_PORTS below, never both.
-#LAN_PORT_rnr1="native=921 tagged=none"
+# Writers (the web UI): delete every line of a key, then append the new one
+# (a conf restored from an older image may lack the key: an in-place edit
+# would change nothing); write all the jack lines and LAN_PORT_rnr1="" in
+# one save.
+#LAN_JACK_6="native=921 tagged=none enabled=1"
+LAN_JACK_4=""
+LAN_JACK_5=""
+LAN_JACK_6=""
+LAN_JACK_7=""
 LAN_PORT_rnr1=""
 LAN_PORT_rnr2=""
 LAN_PORT_rnr3=""
@@ -45,7 +67,8 @@ LAN_ADDR=""
 # "192.168.50.100,192.168.50.199,12h"; empty = no DHCP server
 LAN_DHCP=""
 # load the RTL8372 configurator (rtl8372.ko: the switch's bring-up, then the
-# link of each jack) when rnr1 is a LAN port or a VLAN jack
+# link of each jack) when rnr1 is a LAN port or a 2.5G jack has a profile
+# (without it the jacks' VLANs cannot be set: they stay off)
 LAN_SWITCH_MONITOR="yes"
 # seconds to wait for each port at start (the Runner loads in gt-be98-drivers)
 LAN_IFACE_WAIT="20"
