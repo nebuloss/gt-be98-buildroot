@@ -33,7 +33,11 @@
 # oe-rtl8372-vlan-2026-11-16 2026-11-16 6b8ec0b (on 9e797fd: driver/rtl8372 per-jack native VLANs - sysfs
 #  jack_profiles / jack_block / l2_lookup / jack_status, debugfs vlan + vlan_all, docs/rtl8372-vlan.md, a host test
 #  under tests/; no module parameter; only driver/rtl8372, tests and docs differ: no linux-dirclean needed)
-GT_BE98_OPEN_ETHERNET_VERSION = 6b8ec0bb3ef19fa076938305c0a440a968450c75
+# oe-runner-e2e-vlan-2026-11-16 2026-11-16 6e0222d (on 6b8ec0b: driver/runner only - the bridge
+#  learner offloads a jack <-> trunk flow, rnr1.V <-> rnr0.V with one VID over two Runner ports, as the tagged frame it
+#  arrived as (tagged L2 key + empty command list); every other Ethernet <-> Ethernet 802.1Q case is counted in
+#  `flows`; no module parameter; the kernel series is unchanged, no linux-dirclean needed)
+GT_BE98_OPEN_ETHERNET_VERSION = 6e0222d46b8223d5d174b3abe968dbca36c761cd
 GT_BE98_OPEN_ETHERNET_SITE = git@github.com:nebuloss/gt-be98-open-ethernet.git
 GT_BE98_OPEN_ETHERNET_SITE_METHOD = git
 GT_BE98_OPEN_ETHERNET_LICENSE = GPL-2.0
