@@ -57,9 +57,10 @@
 # the 2.5G jacks of VLAN V) is dropped and its SOURCE MAC kept in the set
 # bpdu_src_<V>; each new source is ATTRIBUTED to a jack: the RTL8372 driver
 # looks the MAC up in the switch's L2 table on VLAN V (sysfs l2_lookup);
-# a port 4..7 that is a jack of VLAN V (gt-be98-lan's applied "jack" lines)
-# latches that jack, anything else (not found, another port, a failed
-# lookup) latches ALL the jacks of VLAN V. A latched jack is a "jack<N>"
+# a port 4..7 that carries VLAN V (gt-be98-lan's applied "jack" lines, its
+# native VLAN, and "jacktag" lines, its tagged ones: a BPDU tagged V on a
+# jack reaches rnr1.V too) latches that jack, anything else (not found,
+# another port, a failed lookup) latches ALL the jacks carrying VLAN V. A latched jack is a "jack<N>"
 # line of the same tripped file and a bit of the driver's jack_block (the
 # switch disables the port in every MSTI and flushes its learned entries:
 # the jack is cut inside the switch, the other jacks of VLAN V keep
@@ -362,7 +363,8 @@ guard() {
 		while read -r a b c d _; do
 			case "$a" in
 			guard) l=guard ;;
-			jack) [ -n "${d:-}" ] && JACKS_APPLIED="$JACKS_APPLIED $b:$d" ;;	# jack <n> <bridge> <vid>
+			# jack|jacktag <n> <bridge> <vid>: the VLANs each jack carries
+			jack|jacktag) [ -n "${d:-}" ] && JACKS_APPLIED="$JACKS_APPLIED $b:$d" ;;
 			esac
 		done < "$LAN_APPLIED"
 	fi
@@ -572,6 +574,9 @@ selftest() {
 	acheck "4 6" 921 3    "4 6"	# learned on the uplink: every jack of the VLAN
 	acheck "4 6" 921 ""   "4 6"	# no answer: every jack of the VLAN
 	acheck ""    921 none ""	# no jack applied on it: nothing to latch
+	# a VLAN jacks carry tagged ("jacktag" lines): the same rule over them
+	acheck "6"   40  6    "4 6"	# jack 6 carries 40 tagged, the source learned there
+	acheck "4 6" 40  7    "4 6"	# learned on jack 7, which does not carry 40
 	# the driver's lookup answer: <expect LK> <answer line> <vid asked>
 	lcheck() {
 		lk_parse "$2" "$3"
