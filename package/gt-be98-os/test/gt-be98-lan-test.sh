@@ -249,7 +249,7 @@ jk_case 0 'LAN_PORT_rnr1=""\nLAN_JACK_6="native=30"' "jacks=[6] 6=30 "		# what t
 jk_case 0 'LAN_PORT_rnr1=""' "jacks=[] "						# ... no jack with a profile: all off
 jk_case 0 'LAN_PORT_rnr1="native=921"\nLAN_JACK_6=""' "jacks=[4 5 6 7] 4=921 5=921 6=921 7=921 "	# an EMPTY LAN_JACK_<n> is no profile: still the migration
 jk_case 0 'LAN_PORT_rnr1="native=921"\nLAN_JACK_8="native=30"' "jacks=[4 5 6 7] 4=921 5=921 6=921 7=921 "	# no jack 8: still the migration
-jk_case 0 'LAN_JACK_4="native=921 tagged=all,30"\nLAN_JACK_6="native=30"' "jacks=[6] 6=30 " "E LAN_JACK_4: tagged=all,30 refused.*jack 4 off"	# one refused, the other kept
+jk_case 0 'LAN_JACK_4="native=921 tagged=all,30"\nLAN_JACK_6="native=30"' "jacks=[6] 6=30 " "E LAN_JACK_4: tagged VLAN 'all' refused.*jack 4 off"	# one refused, the other kept
 for b in 'native=1' 'native=0' 'native=4095' 'native=0921' 'tagged=none' 'native=921 enabled=2' 'native=921 foo=1' 'native=921;reboot' 'native=921 tagged=921' 'native=921 tagged=1'; do
 	jk_case 0 "LAN_JACK_7=\"$b\"\nLAN_JACK_4=\"native=30\"" "jacks=[4] 4=30 " "jack 7 off"
 done
