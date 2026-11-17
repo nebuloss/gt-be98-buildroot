@@ -34,12 +34,15 @@ fixes:
 
 ## Images
 
-To be filled when `imgint8` is built:
+Lab-mode candidate `imgint8` (the `RELEASE=1` release images are built from the same
+sources at tagging):
 
 | File | sha256 |
 |---|---|
-| `rootfs.squashfs` | *(imgint8)* |
-| `ml-bootfs.itb` | *(imgint8)* |
+| `rootfs.squashfs` | `d992b0df66c32ee9a339097cd01a52cc6b32433d701d4f586a3571599aebd763` |
+| `ml-bootfs.itb` | `67b32e79c29e8726ce8fd887d010cc8726a15f66c0c8c1d580c20265aa577e9e` |
+
+Build id (DT): `20261117T224716Z-241fcf498cfa-rw-jffs`
 
 **Candidate source state:** imgint7 is the image every q302 arm ran on.
 imgint8 = imgint7 + the PPPoE uplink length-bound fix (q303) + the IPv6 state past DAD.
@@ -52,7 +55,7 @@ imgint8 = imgint7 + the PPPoE uplink length-bound fix (q303) + the IPv6 state pa
 
 | Component | Commit |
 |---|---|
-| gt-be98-buildroot | `br-int8-2026-11-17` (= `br-int7` `ef45815` + `br-gw6-v6state` `6ed78d1` + the RC11 pin commit) |
+| gt-be98-buildroot | `br-int8-2026-11-17` `17e7a23` (= `br-int7` `ef45815` + `br-gw6-v6state` `6ed78d1` + the open-ethernet pin) |
 | open-wifi (`bca_pcie_ipc.ko`) | `om-mesh-int-2026-11-17` `4040667a` |
 | open-ethernet (Runner, kernel series, `rtl8372.ko`) | `oe-int2-2026-11-17` `8a18fa5` (= `oe-int` `199918f` + the PPPoE uplink bound `12183e8`) |
 | web UI (gt-be98-webui-go) | `wu-mesh-int-2026-11-17` `1cebbe7` |
