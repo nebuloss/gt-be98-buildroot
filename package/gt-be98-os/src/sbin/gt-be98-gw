@@ -26,7 +26,9 @@
 #   gt-be98-gw status     one line per network: "net <id> <state> <bridge|->
 #                         <cidr> <isolate> <mgmt> starts=<n> refusals=<n>
 #                         why=<text>", then per network "net6 <id> <mode>
-#                         <off|waiting|active|refused> <prefix/64|->
+#                         <off|waiting|starting|active|refused> <prefix/64|->
+#                         (starting: planned, its address not yet usable:
+#                         being added or in DAD; active only once it is)
 #                         id=<hex|auto> why=<text>", "pd6 <prefix/len|->",
 #                         "wan <netdev>", "forwarding 0|1", "forwarding6 0|1",
 #                         "dnsmasq pid=<pid|-> restarts=<n> hups=<n>
@@ -1334,8 +1336,22 @@ cmd_stop() {
 	return 0
 }
 
+# the state of active network $1's IPv6 address: up (applied and usable),
+# tentative (DAD running), dadfailed, or absent (not applied yet)
+v6_addr_state() {
+	local b a l
+	b=$(st_get "$1" bridge); a=$(st_get "$1" addr6)
+	grep -qxF "net6 $1 $b $a" "$GW/applied" 2>/dev/null || { echo absent; return; }
+	l=$(ip -6 -o addr show dev "$b" 2>/dev/null | grep -F " $a ")
+	case "$l" in
+	'') echo absent ;;
+	*dadfailed*) echo dadfailed ;;
+	*tentative*) echo tentative ;;
+	*) echo up ;;
+	esac
+}
 cmd_status() {
-	local f id m v p x
+	local f id m v p x w
 	for f in "$GW/net"/*; do
 		[ -f "$f" ] || continue
 		id=${f##*/}; case "$id" in *.new|*.tmp) continue ;; esac
@@ -1348,8 +1364,17 @@ cmd_status() {
 		case "$(st_get "$id" state)" in local|routed) ;; *) v=off ;; esac
 		case "$p" in ''|-) p=$(st_get "$id" pid) ;; esac
 		case "$p" in ''|-) p=auto ;; esac
-		x=$(st_get "$id" prefix6)
-		echo "net6 $id ${m:-off} ${v:-off} ${x:--} id=$p why=$(st_get "$id" why6)"
+		x=$(st_get "$id" prefix6); w=$(st_get "$id" why6)
+		# "active" is the PLAN until the address is up: applied, and past DAD
+		# (q300: a reader saw active while <p64>::1 was not usable yet)
+		if [ "$v" = active ]; then
+			case "$(v6_addr_state "$id")" in
+			up) ;;
+			dadfailed) v=refused w="duplicate address $(st_get "$id" addr6) on $(st_get "$id" bridge) (DAD failed): another host holds it" ;;
+			*) v=starting w="the address $(st_get "$id" addr6) is being added (DAD)" ;;
+			esac
+		fi
+		echo "net6 $id ${m:-off} ${v:-off} ${x:--} id=$p why=$w"
 	done
 	wan_ctx; pd6_ctx
 	echo "pd6 ${PD6:--}"

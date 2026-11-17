@@ -38,6 +38,7 @@ case "$*" in
 "addr del "*)	grep -vx "$5 $3" "$FAKE/addrs" > "$FAKE/a.new"; mv "$FAKE/a.new" "$FAKE/addrs" ;;
 "-4 route show default dev "*)	cat "$FAKE/route-$6" 2>/dev/null ;;
 "link set dev "*" address "*)	[ -f "$FAKE/refuse-mac" ] && exit 2; mkdir -p "$FAKE/sys/$4"; echo "$6" > "$FAKE/sys/$4/address" ;;
+"-6 -o addr show dev "*)	while read -r d c; do [ "$d" = "$6" ] || continue; fl=; [ -f "$FAKE/flags6-${c%/*}" ] && fl=" $(cat "$FAKE/flags6-${c%/*}")"; echo "1: $d    inet6 $c scope global$fl"; done < "$FAKE/addrs6" ;;
 "-6 -o addr show scope global")	n=1; while read -r d c; do echo "$n: $d    inet6 $c scope global"; n=$((n+1)); done < "$FAKE/addrs6" ;;
 "-6 addr replace "*)	[ -f "$FAKE/refuse-addr6" ] && exit 2; grep -vx "$6 $4" "$FAKE/addrs6" > "$FAKE/a6.new"; echo "$6 $4" >> "$FAKE/a6.new"; mv "$FAKE/a6.new" "$FAKE/addrs6" ;;
 "-6 addr del "*)	grep -vx "$6 $4" "$FAKE/addrs6" > "$FAKE/a6.new"; mv "$FAKE/a6.new" "$FAKE/addrs6" ;;
@@ -472,6 +473,17 @@ nftcheck "$N"; r=$?; [ $r = 2 ] || { check "nft -c (kernel parser): the IPv6 rul
 check "status: net6 lines, pd6, forwarding6" \
 	"net6 4 slaac active 2001:db8:aa00:7::/64 id=7 why=|net6 6 dhcpv6 active 2001:db8:aa00:1::/64 id=1 why=|pd6 2001:db8:aa00::/56|forwarding6 1" \
 	"$(sh "$GWT" status | grep -E '^(net6|pd6|forwarding6)' | tr '\n' '|' | sed 's/|$//')"
+echo tentative > "$T/flags6-2001:db8:aa00:7::1"
+check "status: net6 'starting' while the address is tentative (DAD), never 'active' before it is usable" "starting yes" \
+	"$(sh "$GWT" status | awk '$1 == "net6" && $2 == 4 { print $4 }') $(yn sh -c "sh '$GWT' status | grep -q '^net6 4 .*why=the address 2001:db8:aa00:7::1/64 is being added (DAD)'")"
+echo "tentative dadfailed" > "$T/flags6-2001:db8:aa00:7::1"
+check "status: a DAD failure is 'refused', said why" "refused yes" \
+	"$(sh "$GWT" status | awk '$1 == "net6" && $2 == 4 { print $4 }') $(yn sh -c "sh '$GWT' status | grep -q 'duplicate address 2001:db8:aa00:7::1/64'")"
+rm -f "$T/flags6-2001:db8:aa00:7::1"
+cp "$G/applied" "$T/applied.keep"; sed -i '/^net6 4 /d' "$G/applied"
+check "status: planned but not applied yet -> 'starting'" starting "$(sh "$GWT" status | awk '$1 == "net6" && $2 == 4 { print $4 }')"
+cp "$T/applied.keep" "$G/applied"
+check "control: applied and past DAD -> active" active "$(sh "$GWT" status | awk '$1 == "net6" && $2 == 4 { print $4 }')"
 check "status: the IPv4 line format unchanged (the web UI's parser)" "net 4 routed brwifi100004 192.168.40.1/24 isolate=0 mgmt=1" \
 	"$(sh "$GWT" status | grep '^net 4 ' | cut -d' ' -f1-7)"
 # c. a renew (same prefix, new lifetimes): the lifetimes follow, nothing else
