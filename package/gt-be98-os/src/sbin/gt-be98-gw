@@ -231,12 +231,16 @@ n2ip() { echo "$(( ($1 >> 24) & 255 )).$(( ($1 >> 16) & 255 )).$(( ($1 >> 8) & 2
 mask_of() { echo $(( $1 ? (0xffffffff << (32 - $1)) & 0xffffffff : 0 )); }
 # a.b.c.d/len -> its subnet a.b.c.0/len
 subnet_of() { local l=${1#*/} m; m=$(mask_of "$l"); echo "$(n2ip $(( $(ip2n "${1%/*}") & m )))/$l"; }
-# 0 when the two CIDRs overlap
+# 0 when the two CIDRs overlap; an operand without /len is one host (/32):
+# never read as a prefix (a bare address made l the whole address, mask_of
+# failed, the empty mask compared 0 with 0 and EVERY address "overlapped")
 cidr_overlap() {
-	local l m
-	l=${1#*/}; [ "${2#*/}" -lt "$l" ] && l=${2#*/}
+	local a=$1 b=$2 l m
+	case "$a" in */*) ;; *) a=$a/32 ;; esac
+	case "$b" in */*) ;; *) b=$b/32 ;; esac
+	l=${a#*/}; [ "${b#*/}" -lt "$l" ] && l=${b#*/}
 	m=$(mask_of "$l")
-	[ $(( $(ip2n "${1%/*}") & m )) -eq $(( $(ip2n "${2%/*}") & m )) ]
+	[ $(( $(ip2n "${a%/*}") & m )) -eq $(( $(ip2n "${b%/*}") & m )) ]
 }
 # a gateway CIDR (D-GW9): RFC 1918, /16../30, a host address; why on stdout
 cidr_why() {
@@ -439,8 +443,12 @@ pd6_ctx() {
 }
 # every global IPv6 address of the box: "<dev> <cidr>" per line
 box_addrs6() { ip -6 -o addr show scope global 2>/dev/null | awk '{ for (i = 1; i < NF; i++) if ($i == "inet6") { d = $2; sub(/@.*/, "", d); print d, $(i + 1) } }'; }
-# every IPv4 address of the box: "<dev> <cidr>" per line
-box_addrs() { ip -4 -o addr show 2>/dev/null | awk '{ for (i = 1; i < NF; i++) if ($i == "inet") { d = $2; sub(/@.*/, "", d); print d, $(i + 1) } }'; }
+# every IPv4 address of the box: "<dev> <cidr>" per line. A point-to-point
+# address (pppd's PPPoE WAN: "inet LOCAL peer PEER/32") is LOCAL/32: the
+# prefix after "peer" is the peer's, LOCAL itself carries none. Printed bare,
+# it made the WAN "inside" every gateway subnet (cidr_overlap), so on a PPPoE
+# WAN every gateway network ran local: no NAT (q294 pppoe-offload PU nat_ppp=0)
+box_addrs() { ip -4 -o addr show 2>/dev/null | awk '{ for (i = 1; i < NF; i++) if ($i == "inet") { d = $2; sub(/@.*/, "", d); a = $(i + 1); if (a !~ /\//) a = a "/32"; print d, a } }'; }
 # configured but maybe not up yet: br-lan's LAN_ADDR, the station's routed networks
 conf_nets() {
 	local a b c
