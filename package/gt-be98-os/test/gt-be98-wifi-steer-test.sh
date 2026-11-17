@@ -8,7 +8,12 @@
 #   hostapd_cli -p DIR -i IF raw CMD ...  per BSS: SHOW_NEIGHBOR prints its
 #       own entry ($T/hap/IF.own) then the entries set on it ($T/hap/IF.db);
 #       SET_NEIGHBOR / REMOVE_NEIGHBOR edit IF.db; STA <mac> prints
-#       ext_capab=$T/hap/sta.<mac>; BSS_TM_REQ answers OK. Every command is
+#       flags=$T/hap/sta.<mac>.flags (default [AUTH][ASSOC][AUTHORIZED]),
+#       ext_capab=$T/hap/sta.<mac> and the lines of $T/hap/sta.<mac>.x
+#       (AKMSuiteSelector=, supp_op_classes=: hostapd's own keys); GET_CONFIG
+#       prints bssid= and the key_mgmt= of the generator's own bss-IF.conf
+#       (hostapd's format: each name followed by a space); BSS_TM_REQ
+#       answers OK. Every command is
 #       logged to $T/cmds as "IF CMD ...". A BSS with $T/hap/IF.down does
 #       not answer (not running)
 #   iw dev IF station dump               prints $T/iw/IF
@@ -19,7 +24,7 @@ S="$here/../src/sbin/gt-be98-wifi-steer"
 G="$here/../src/sbin/gt-be98-wifi-gen"
 SH=${SH:-sh}
 T=$(mktemp -d)
-trap 'rm -rf "$T"' EXIT
+trap '[ -n "${KEEP:-}" ] || rm -rf "$T"' EXIT
 fail=0 n=0
 check() {
 	n=$((n + 1))
@@ -41,7 +46,12 @@ case "$1" in
 SHOW_NEIGHBOR) cat "$FAKE/hap/$ifn.own" "$db" ;;
 SET_NEIGHBOR) grep -v "^$2 " "$db" > "$db.n"; shift; echo "$*" >> "$db.n"; mv "$db.n" "$db"; echo OK ;;
 REMOVE_NEIGHBOR) if grep -q "^$2 " "$db"; then grep -v "^$2 " "$db" > "$db.n"; mv "$db.n" "$db"; echo OK; else echo FAIL; fi ;;
-STA) if [ -f "$FAKE/hap/sta.$2" ]; then echo "$2"; echo "flags=[AUTH][ASSOC][AUTHORIZED]"; echo "ext_capab=$(cat "$FAKE/hap/sta.$2")"; else echo FAIL; fi ;;
+STA) if [ -f "$FAKE/hap/sta.$2" ]; then echo "$2"; echo "flags=$(cat "$FAKE/hap/sta.$2.flags" 2>/dev/null || echo '[AUTH][ASSOC][AUTHORIZED]')"
+	echo "ext_capab=$(cat "$FAKE/hap/sta.$2")"; cat "$FAKE/hap/sta.$2.x" 2>/dev/null; else echo FAIL; fi ;;
+STA) ;;
+GET_CONFIG) echo "bssid=$(awk -v i="$ifn" '$1 == "bss" && $3 == i { print $7 }' "$FAKE/run/gt-be98-wifi/gen/plan")"
+	km=$(sed -n 's/^wpa_key_mgmt=//p' "$FAKE/run/gt-be98-wifi/gen/bss-$ifn.conf" 2>/dev/null)
+	if [ -n "$km" ]; then echo wpa=2; printf 'key_mgmt='; for k in $km; do printf '%s ' "$k"; done; echo; else echo wpa=0; fi ;;
 BSS_TM_REQ) echo OK ;;
 *) echo "UNKNOWN COMMAND" ;;
 esac
@@ -51,12 +61,13 @@ printf '#!/bin/sh\n[ "$1 $3 $4" = "dev station dump" ] && cat "$FAKE/iw/$2" 2>/d
 printf '#!/bin/sh\nshift 3\necho "$*" >> "$FAKE/log"\n' > "$T/bin/logger"
 chmod +x "$T/bin/"*
 
-# ---- the plan: network 1 kv steer on 2g 5gl 6g, network 2 kv (no steer)
-# on 2g 5gl, network 3 no kv on 2g ----
+# ---- the plan: network 1 kv steer on 2g 5gl 6g (psk2sae: WPA2+WPA3 on
+# 2g/5gl, SAE only on 6g), network 2 kv (no steer) on 2g 5gl, network 3 no
+# kv on 2g ----
 M="2g=00:00:5e:00:53:a0 5gl=00:00:5e:00:53:a4 5gh=00:00:5e:00:53:a8 6g=00:00:5e:00:53:ac"
-net() { printf 'network=%s\nssid=%s\nsecurity=sae\npassphrase=%s\nbands=%s\nvlan=%s\n' "$@"; }
+net() { printf 'network=%s\nssid=%s\nsecurity=%s\npassphrase=%s\nbands=%s\nvlan=%s\n' "$1" "$2" "${SEC:-sae}" "$3" "$4" "$5"; }
 mkplan() {	# mkplan BANDS_OF_NETWORK_1
-	{ net 1 one password1 "$1" 1; printf 'kv=1\nsteer=1\n'; net 2 two password2 "2g 5gl" 2; printf 'kv=1\n'
+	{ SEC=psk2sae net 1 one password1 "$1" 1; printf 'kv=1\nsteer=1\n'; net 2 two password2 "2g 5gl" 2; printf 'kv=1\n'
 	  net 3 three password3 2g 3; } > "$T/nets"
 	GT_BE98_KV=1 $SH "$G" -n "$T/nets" -o "$T/run/gt-be98-wifi/gen" -s "$T/slots" -m "$M" 2> "$T/generr"
 }
@@ -111,19 +122,35 @@ rm -f "$T/hap/$B5.down"
 # ---- 2. steering ----
 # stations: RFC 7042 documentation MACs
 SA=00:00:5e:00:53:1a SB=00:00:5e:00:53:1b SC=00:00:5e:00:53:1c SD=00:00:5e:00:53:1d SE=00:00:5e:00:53:1e SF=00:00:5e:00:53:1f
+SG=00:00:5e:00:53:2a SX=00:00:5e:00:53:2b SI=00:00:5e:00:53:2c SJ=00:00:5e:00:53:2d SK=00:00:5e:00:53:2e
 sta() {	# sta MAC SIGNAL RXBYTES TXBYTES
 	printf 'Station %s (on x)\n\tinactive time:\t10 ms\n\trx bytes:\t%s\n\trx packets:\t10\n\ttx bytes:\t%s\n\ttx packets:\t10\n\tsignal:  \t%s [%s, %s] dBm\n\tsignal avg:\t%s [%s, %s] dBm\n' \
 		"$1" "$3" "$4" "$(($2 + 1))" "$(($2 + 1))" "$(($2 + 1))" "$2" "$2" "$2"
 }
-echo 000008 > "$T/hap/sta.$SA"	# BSS transition: octet 2 bit 3
-echo 0000f7 > "$T/hap/sta.$SB"	# every bit of octet 2 but bit 3
-echo 000008 > "$T/hap/sta.$SC"; echo 000008 > "$T/hap/sta.$SD"; echo 000008 > "$T/hap/sta.$SE"; echo 000008 > "$T/hap/sta.$SF"
-RXF=1000
+# BSS transition: octet 2 bit 3; B: every bit of octet 2 but bit 3
+for m in $SA $SC $SD $SE $SF $SG $SX $SI $SJ $SK; do echo 000008 > "$T/hap/sta.$m"; done
+echo 0000f7 > "$T/hap/sta.$SB"
+# what each one associated with (hostapd STA's own keys). SA SE SJ SK: SAE +
+# PMF, no Supported Operating Classes (unknown band: allowed). SG: WPA2-PSK
+# (with PMF) on a 2.4/5/6 GHz client. SX: SAE, 2.4 GHz only (81..84 and the
+# 130 delimiter). SI: SAE, 2.4 + 5 GHz (115, 116), no 6 GHz class
+for m in $SA $SE $SG $SX $SI $SJ $SK; do echo '[AUTH][ASSOC][AUTHORIZED][MFP]' > "$T/hap/sta.$m.flags"; done
+for m in $SA $SE $SJ $SK; do echo 'AKMSuiteSelector=00-0f-ac-8' > "$T/hap/sta.$m.x"; done
+printf 'AKMSuiteSelector=00-0f-ac-2\nsupp_op_classes=51517375808183\n' > "$T/hap/sta.$SG.x"
+printf 'AKMSuiteSelector=00-0f-ac-8\nsupp_op_classes=515152535482\n' > "$T/hap/sta.$SX.x"
+printf 'AKMSuiteSelector=00-0f-ac-8\nsupp_op_classes=51517374\n' > "$T/hap/sta.$SI.x"
+RXF=1000 FN=0 GON=$A2 ION=$A2
 fill() {	# the station dumps of one sample; F's traffic grows 100 kB per sample
-	RXF=$((RXF + 100000))
-	{ sta $SA -50 1000 1000; sta $SB -50 1000 1000; sta $SC -68 1000 1000; } > "$T/iw/$A2"
+	RXF=$((RXF + 100000)) FN=$((FN + 1))
+	# J: -59 -63 -62 then -62 (within the hysteresis once counting); K: -59 -66 alternating
+	case $FN in 1) sj=-59 ;; 2) sj=-63 ;; *) sj=${SJV:--62} ;; esac
+	sk=-59; [ $((FN % 2)) = 0 ] && sk=-66
+	{ sta $SA -50 1000 1000; sta $SB -50 1000 1000; sta $SC -68 1000 1000; sta $SX -50 1000 1000
+	  sta $SJ "$sj" 1000 1000; sta $SK "$sk" 1000 1000
+	  [ "$GON" = "$A2" ] && sta $SG -50 1000 1000; [ "$ION" = "$A2" ] && sta $SI -50 1000 1000; } > "$T/iw/$A2"
 	sta $SD -40 1000 1000 > "$T/iw/$B2"
-	{ sta $SE -75 5000 5000; sta $SF -75 "$RXF" 1000; } > "$T/iw/$A5"
+	{ sta $SE -75 5000 5000; sta $SF -75 "$RXF" 1000
+	  [ "$GON" = "$A5" ] && sta $SG -50 1000 1000; [ "$ION" = "$A5" ] && sta $SI -50 1000 1000; } > "$T/iw/$A5"
 }
 reqs() { grep -c " BSS_TM_REQ $1" "$T/cmds"; }
 fill; tick; s1="$(reqs $SA)"; fill; tick; s2="$(reqs $SA)"
@@ -132,31 +159,61 @@ fill; tick
 check "upgrade: exactly one request at the 3rd sample" "1" "$(reqs $SA)"
 want="$A2 BSS_TM_REQ $SA pref=1 abridged=1 valid_int=255 neighbor=$(bid "$A5"),0x0000008f,128,36,9,0301ff0603002a00 neighbor=$(bid "$A6"),0x0000008f,131,69,14,0301fe"
 check "upgrade: the request (5gl then 6g, hostapd's own bssid_info/op class/channel/PHY, preference 255/254)" "$want" "$(grep " BSS_TM_REQ $SA" "$T/cmds")"
-check "upgrade: one STEER line, stable format" "STEER kind=upgrade if=$A2 sta=$SA rssi=-50 n=3 target=$(bid "$A5") rc=OK" "$(grep "^STEER .*sta=$SA" "$T/log")"
+check "upgrade: one STEER line, stable format" "STEER kind=upgrade if=$A2 sta=$SA rssi=-50 n=3 target=$(bid "$A5") excl=- rc=OK" "$(grep "^STEER .*sta=$SA" "$T/log")"
 check "upgrade: the non-BTM station B: no request, one STEER-SKIP no-btm" "0 STEER-SKIP reason=no-btm kind=upgrade if=$A2 sta=$SB rssi=-50 n=3" \
 	"$(reqs $SB) $(grep "sta=$SB" "$T/log")"
-check "upgrade: station C at -68 dBm (below -65): never counted" "0 0" "$(reqs $SC) $(grep -c "sta=$SC" "$T/log")"
+check "upgrade: station C at -68 dBm (below -60): never counted" "0 0" "$(reqs $SC) $(grep -c "sta=$SC" "$T/log")"
 check "steer=0 network 2: its strong BTM station D is never asked" "0 0" "$(grep -c "BSS_TM_REQ $SD" "$T/cmds") $(grep -c "sta=$SD" "$T/log")"
+# capability: the station's band (Supported Operating Classes) and security (AKM)
+want="$A2 BSS_TM_REQ $SG pref=1 abridged=1 valid_int=255 neighbor=$(bid "$A5"),0x0000008f,128,36,9,0301ff0603002a00"
+check "6 GHz WPA3-only: a WPA2-PSK station (PMF on, 6 GHz capable) is offered 5 GHz only" "$want" "$(grep " BSS_TM_REQ $SG" "$T/cmds")"
+check "6 GHz WPA3-only: its STEER line names the 6 GHz BSS excluded (6g-wpa3)" \
+	"STEER kind=upgrade if=$A2 sta=$SG rssi=-50 n=3 target=$(bid "$A5") excl=$I6:6g-wpa3 rc=OK" "$(grep "^STEER .*sta=$SG" "$T/log")"
+check "single-band: a 2.4 GHz-only station (classes 81..84, the 130 delimiter skipped): no request, one STEER-SKIP" \
+	"0 STEER-SKIP reason=single-band kind=upgrade if=$A2 sta=$SX rssi=-50 n=3 excl=$(bid "$A5"):band,$I6:band" "$(reqs $SX) $(grep "sta=$SX" "$T/log")"
+want="$A2 BSS_TM_REQ $SI pref=1 abridged=1 valid_int=255 neighbor=$(bid "$A5"),0x0000008f,128,36,9,0301ff0603002a00"
+check "band: a 2.4 + 5 GHz station (no 6 GHz class) is offered 5 GHz only, 6g excluded as band" \
+	"$want|excl=$I6:band" "$(grep " BSS_TM_REQ $SI" "$T/cmds")|$(grep "^STEER .*sta=$SI" "$T/log" | grep -o 'excl=[^ ]*')"
+check "hysteresis: J at -59 -63 -62 (the count goes on within 5 dB) is asked at the 3rd sample" "1" "$(reqs $SJ)"
+check "hysteresis control: K at -59 -66 -59 (below -65 resets it) is not" "0 0" "$(reqs $SK) $(grep -c "sta=$SK" "$T/log")"
 check "assist: weak idle E (5gl): not yet at the 3rd sample (the 1st set its byte baseline)" "0" "$(reqs $SE)"
+GON=$A5	# G follows its request; A, I and J stay where they are
 fill; tick
 check "assist: weak idle E: one request at the 4th sample (3 idle intervals)" "1" "$(reqs $SE)"
 want="$A5 BSS_TM_REQ $SE pref=1 valid_int=255 neighbor=$(bid "$A2"),0x0000008f,81,1,7,0301ff neighbor=$(bid "$A6"),0x0000008f,131,69,14,0301fe"
 check "assist: the request lists the siblings, 2.4 GHz preferred, not abridged" "$want" "$(grep " BSS_TM_REQ $SE" "$T/cmds")"
-check "assist: the STEER line" "STEER kind=assist if=$A5 sta=$SE rssi=-75 n=3 target=$(bid "$A2") rc=OK" "$(grep "^STEER .*sta=$SE" "$T/log")"
+check "assist: the STEER line" "STEER kind=assist if=$A5 sta=$SE rssi=-75 n=3 target=$(bid "$A2") excl=- rc=OK" "$(grep "^STEER .*sta=$SE" "$T/log")"
 check "assist: weak but busy F (160 kbit/s > 20): never asked" "0 0" "$(reqs $SF) $(grep -c "sta=$SF" "$T/log")"
-# cooldown: A keeps its strong signal: samples 4..6 meet the policy again
-fill; tick; fill; tick; c1=$(reqs $SA); fill; tick; c2=$(reqs $SA)
+check "outcome: nothing said before VERIFY (10 s)" "0" "$(grep -c '^STEER-RESULT' "$T/log")"
+# cooldown: A keeps its strong signal: samples 5..7 meet the policy again
+fill; tick
+check "outcome at +10 s: G moved to 5 GHz; A, I, J stayed (refused, 1st)" \
+	"STEER-RESULT result=moved kind=upgrade if=$A2 sta=$SG to=$A5 refusals=0|1 1 1" \
+	"$(grep "^STEER-RESULT .*sta=$SG" "$T/log")|$(grep -c "^STEER-RESULT result=refused kind=upgrade if=$A2 sta=$SA to=- refusals=1$" "$T/log") $(grep -c "result=refused.*sta=$SI .*refusals=1$" "$T/log") $(grep -c "result=refused.*sta=$SJ .*refusals=1$" "$T/log")"
+fill; tick; c1=$(reqs $SA); fill; tick; c2=$(reqs $SA)
 check "cooldown: no second request to A within 300 s" "0 0" "$c1 $c2"
 check "cooldown: said once (STEER-SKIP reason=cooldown), the no-btm skip of B not repeated" "1 1" \
 	"$(grep -c "^STEER-SKIP reason=cooldown kind=upgrade if=$A2 sta=$SA " "$T/log") $(grep -c "reason=no-btm.*sta=$SB" "$T/log")"
+check "outcome: E stayed on its BSS after the assist: refused once; G (on 5 GHz, -50) never asked again" "1 1" \
+	"$(grep -c "result=refused kind=assist if=$A5 sta=$SE .*refusals=1$" "$T/log") $(grep -c "^STEER .*sta=$SG" "$T/log")"
 for i in 1 2 3 4 5 6 7 8 9 10; do fill; tick; done
 check "cooldown: still nothing for A at +80 s" "1" "$(grep -c "^STEER .*sta=$SA" "$T/log")"
-# control: once the 300 s passed, A is asked again
+# control: once the 300 s passed, A is asked again (its 2nd chance); I too, and
+# I follows this time (it moves at the sample its request goes out)
 echo "$(( $(cut -d. -f1 "$T/uptime") + 300 )).00 1.00" > "$T/uptime"
-fill; tick; fill; tick; fill; tick
+for i in 1 2 3; do fill; tick; [ "$(reqs $SI)" = 1 ] && ION=$A5; done
 check "cooldown control: after 300 s A is asked again (2 STEER lines)" "2" "$(grep -c "^STEER .*sta=$SA" "$T/log")"
+fill; tick; fill; tick
+check "refusals: A stayed again (2nd consecutive refusal); I moved this time (its count starts again)" "1 1 no" \
+	"$(grep -c "result=refused.*sta=$SA .*refusals=2$" "$T/log") $(grep -c "result=moved.*sta=$SI .*refusals=0$" "$T/log") $([ -f "$T/run/gt-be98-wifi-steer/r.$SI" ] && echo yes || echo no)"
+echo "$(( $(cut -d. -f1 "$T/uptime") + 300 )).00 1.00" > "$T/uptime"
+SJV=-50	# J (refused once) turns strong
+: > "$T/cmds.a"; l0=$(grep -c . "$T/log"); for i in 1 2 3 4 5 6; do fill; tick; cat "$T/cmds" >> "$T/cmds.a"; done
+check "refused twice: A is never asked again (no request in 6 samples past the cooldown), said once" "0 2 1" \
+	"$(grep -c " BSS_TM_REQ $SA" "$T/cmds.a") $(grep -c "^STEER .*sta=$SA" "$T/log") $(tail -n +$((l0 + 1)) "$T/log" | grep -c "^STEER-SKIP reason=refused kind=upgrade if=$A2 sta=$SA ")"
+check "refused twice control: J, refused once, is asked again once strong (the rule bites at 2, per station)" "1" "$(grep -c " BSS_TM_REQ $SJ" "$T/cmds.a")"
 check "never a disconnect: no DEAUTHENTICATE/DISASSOCIATE/disassoc_imminent anywhere" "0" \
-	"$(cat "$T/cmds" "$T/log" | grep -ciE 'deauth|disassoc')"
+	"$(cat "$T/cmds" "$T/cmds.a" "$T/log" | grep -ciE 'deauth|disassoc')"
 
 # ---- 3. a BSS leaves the network: its entries are removed from the siblings ----
 : > "$T/log"

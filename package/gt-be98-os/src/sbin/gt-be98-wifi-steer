@@ -39,28 +39,58 @@
 #    <mac>` ext_capab, bit 19 = octet 2 bit 3). A station without it is
 #    NEVER disassociated or deauthenticated: it is skipped (logged).
 #    (a) upgrade (bsd band steering): a station on a 2.4 GHz BSS whose signal
-#        is >= UPGRADE_RSSI for STEER_SAMPLES consecutive samples, while its
-#        network has a 5 or 6 GHz BSS, gets
+#        is strong for STEER_SAMPLES consecutive samples, while its network
+#        has a 5 or 6 GHz BSS the station can use, gets
 #          BSS_TM_REQ <mac> pref=1 abridged=1 valid_int=255 neighbor=...
-#        listing those BSSes (5gl, 5gh, then 6g, preference 255 down)
+#        listing those BSSes (5gl, 5gh, then 6g, preference 255 down).
+#        Strong, with hysteresis: a count starts at >= UPGRADE_RSSI and
+#        goes on while the signal stays >= UPGRADE_RSSI - HYST_DB (a
+#        station hovering at the threshold is neither counted on every
+#        other sample nor reset by one noisy sample)
 #    (b) assist (roamast roaming assistant): a station on any steer BSS
-#        whose signal is < ASSIST_RSSI and whose traffic is < ASSIST_IDLE_KBPS
-#        for STEER_SAMPLES consecutive samples gets
+#        whose signal is weak (< ASSIST_RSSI to start, < ASSIST_RSSI +
+#        HYST_DB to go on) and whose traffic is < ASSIST_IDLE_KBPS for
+#        STEER_SAMPLES consecutive samples gets
 #          BSS_TM_REQ <mac> pref=1 valid_int=255 neighbor=...
-#        listing the network's other BSSes, the lower band preferred (it
-#        reaches farther). Not abridged: a BSS of another AP the client
-#        finds stays acceptable (roamast's point). With no other BSS: the
-#        request carries no list (the client is asked to look for a better
-#        AP itself). The traffic is the bytes between two samples, so the
-#        first sample of a station only sets its baseline: assist fires at
-#        the (STEER_SAMPLES + 1)th sample of a newly seen station
-#    (c) one request per station per COOLDOWN s (keyed by the station's MAC,
+#        listing the network's other BSSes the station can use, the lower
+#        band preferred (it reaches farther). Not abridged: a BSS of
+#        another AP the client finds stays acceptable (roamast's point).
+#        With none: the request carries no list (the client is asked to
+#        look for a better AP itself). The traffic is the bytes between two
+#        samples, so the first sample of a station only sets its baseline:
+#        assist fires at the (STEER_SAMPLES + 1)th sample of a newly seen
+#        station
+#    (c) what the station can use (each candidate BSS, from the station's
+#        own association as hostapd holds it, `STA <mac>`):
+#        - its band: the Supported Operating Classes it sent
+#          (supp_op_classes: 5 GHz = a class 115..129, 6 GHz = 131..137;
+#          130 is skipped, it doubles as the element's delimiter). Not sent:
+#          unknown, allowed (the refusal rule (e) bounds it)
+#        - its security: the AKM it associated with (AKMSuiteSelector) must
+#          be one the candidate offers (hostapd `GET_CONFIG` key_mgmt). A
+#          psk2sae network is WPA2+WPA3 on 2.4/5 GHz but SAE only on 6 GHz
+#          (gt-be98-wifi-gen): a WPA2-PSK station is never sent there
+#        - 6 GHz is WPA3 only: a 6 GHz candidate also needs a known WPA3
+#          AKM (never WPA-PSK, WPA-PSK-SHA256, WPA-EAP, FT-PSK, FT-EAP, an
+#          unread one or an open association) AND PMF ([MFP]); an
+#          unreadable candidate config excludes a 6 GHz BSS, never another
+#        An upgrade with no usable candidate is skipped (reason single-band
+#        when the band was the only reason, akm when security was, else
+#        no-target)
+#    (d) one request per station per COOLDOWN s (keyed by the station's MAC,
 #        kept when it moves to another BSS); a skip (no BTM, no target,
-#        cooldown) is logged at most once per COOLDOWN s. After any decision
-#        the station's sample count starts again from 0.
+#        cooldown, refused) is logged at most once per COOLDOWN s. After any
+#        decision the station's sample count starts again from 0.
+#    (e) the outcome of each request, VERIFY s later: the station on another
+#        BSS of the network = moved; still on the BSS it was asked to leave
+#        = refused (a BTM reject, or a request ignored); on none = gone (not
+#        counted). REFUSE_MAX consecutive refusals (a move in between
+#        starts the count again) and the station is never asked again
+#        while this daemon's state lives (the service's stop clears it).
 #    One syslog line per decision (logger -t gt-be98-steer), greppable:
-#      STEER kind=upgrade|assist if=<if> sta=<mac> rssi=<dBm> n=<samples> target=<bssid|-> rc=<hostapd reply>
-#      STEER-SKIP reason=no-btm|cooldown|no-target kind=upgrade|assist if=<if> sta=<mac> rssi=<dBm> n=<samples>
+#      STEER kind=upgrade|assist if=<if> sta=<mac> rssi=<dBm> n=<samples> target=<bssid|-> excl=<bssid>:<band|akm|6g-wpa3>[,...]|- rc=<hostapd reply>
+#      STEER-SKIP reason=no-btm|cooldown|no-target|single-band|akm|refused kind=upgrade|assist if=<if> sta=<mac> rssi=<dBm> n=<samples>[ excl=...]
+#      STEER-RESULT result=moved|refused|gone kind=<kind> if=<if> sta=<mac> to=<if|-> refusals=<n>
 #      NBR set if=<if> bssid=<sibling bssid> rc=<reply>
 #      NBR remove if=<if> bssid=<bssid> rc=<reply>
 #
@@ -75,18 +105,28 @@ STEER_PERIOD=5
 STEER_SAMPLES=3
 # band upgrade threshold. NOT a stock value: bsd's -82 (steering_policy
 # field 4, sta_select_policy "30 -82 ...") is its trigger to move a WEAK
-# station off a band; a 2.4 -> 5/6 GHz upgrade needs a strong one, and the
-# 5 GHz signal is a few dB below the 2.4 GHz one at the same spot
-UPGRADE_RSSI=-65
+# station off a band; a 2.4 -> 5/6 GHz upgrade needs a strong one. -60 on
+# 2.4 GHz lands at about -67..-70 on 5 GHz (a few dB of path loss more at the
+# same spot), still above the assist threshold below: the two policies never
+# hand one station back and forth (and the cooldown spaces any two requests)
+UPGRADE_RSSI=-60
 # roaming assistant: wlN_user_rssi=-70 (the weak-station threshold, dBm) and
 # rast_idlrt=20 (the idle rate, kbit/s). Stock: rast_mode=1,
 # rast_sens_level=2; roamast_enable=0 / roamast_disable=1 on this box
 # (stock runs neither bsd steering nor roamast here: this is opt-in, steer=1)
 ASSIST_RSSI=-70
 ASSIST_IDLE_KBPS=20
+# the hysteresis of both thresholds (dB): a count goes on while the signal
+# stays within HYST_DB of its start threshold
+HYST_DB=5
 # per-station hold after a request (ours: stock's roamast has no BTM, it
 # deauths; bsd keeps a per-station "steered" timer of the same order)
 COOLDOWN=300
+# the outcome is read this long after a request (a BTM move takes ~2 s on
+# this box, q218/q249), and this many consecutive refusals end the
+# station's steering (owner: never steer a client that refused BTM twice)
+VERIFY=10
+REFUSE_MAX=2
 
 # (GT_BE98_* / STEER_*: the offline test harness only)
 CONFD=${GT_BE98_CONFD:-/etc/conf.d}
@@ -167,14 +207,25 @@ nbr_has() {
 		END { exit !found }'
 }
 
+# BSS $1's AKMs (hostapd GET_CONFIG key_mgmt=, hostapd's names): "km NAME..."
+# or "open" (a BSS with no key_mgmt), "-" when it does not answer
+bss_akm() {
+	hap "$1" GET_CONFIG | awk '
+		/^bssid=/ { up = 1 }
+		/^key_mgmt=/ { sub(/^key_mgmt=/, ""); km = $0 }
+		END { if (!up) print "-"; else if (km ~ /[A-Z]/) print "km " km; else print "open" }'
+}
+
 nbr_sync() {
 	local net st band y yb n2 s2 b2 x xb cur want os onr ob rc o
 	mkdir -p "$SD"
 	kv_bsses > "$SD/bsses"
-	rm -f "$SD"/own.*
+	rm -f "$SD"/own.* "$SD"/akm.*
 	while read -r net st band x xb; do
 		o=$(own_entry "$x" "$xb")
-		[ -n "$o" ] && echo "$o" > "$SD/own.$x"
+		[ -n "$o" ] || continue
+		echo "$o" > "$SD/own.$x"
+		bss_akm "$x" > "$SD/akm.$x"
 	done < "$SD/bsses"
 	# each BSS y: the own entries of its siblings x (same network, other BSS)
 	while read -r net st band y yb; do
@@ -261,19 +312,53 @@ sta_dump() {
 		END { out() }'
 }
 
-# station $2 on BSS $1 advertises BSS Transition (Extended Capabilities bit 19)
-sta_btm() {
-	local x
-	x=$(hap "$1" STA "$2" | sed -n 's/^ext_capab=\([0-9a-fA-F]*\)$/\1/p' | head -n1)
-	[ ${#x} -ge 6 ] || return 1
-	x=$(echo "$x" | cut -c5-6)
-	[ $(( 0x$x & 8 )) != 0 ]
+# station $2 on BSS $1, from its association (hostapd STA): one line
+# "<btm 0|1> <akm name|-> <mfp 0|1> <5 GHz 1|0|-> <6 GHz 1|0|->"
+# btm: Extended Capabilities bit 19 (octet 2 bit 3); akm: AKMSuiteSelector
+# in hostapd's GET_CONFIG names (- = none or unknown); 5/6 GHz: the
+# Supported Operating Classes it sent (- = not sent)
+sta_info() {
+	hap "$1" STA "$2" | awk '
+		function h(x) { return index("0123456789abcdef", substr(x, 1, 1)) * 16 + index("0123456789abcdef", substr(x, 2, 1)) - 17 }
+		BEGIN { split("WPA-EAP WPA-PSK FT-EAP FT-PSK WPA-EAP-SHA256 WPA-PSK-SHA256 - SAE FT-SAE - WPA-EAP-SUITE-B WPA-EAP-SUITE-B-192 FT-EAP-SHA384 FILS-SHA256 FILS-SHA384 FT-FILS-SHA256 FT-FILS-SHA384 OWE - - - - - SAE-EXT-KEY FT-SAE-EXT-KEY", an, " ")
+			btm = 0; akm = "-"; mfp = 0; o5 = "-"; o6 = "-" }
+		/^flags=/ { if (index($0, "[MFP]")) mfp = 1 }
+		/^ext_capab=[0-9a-fA-F]*$/ { x = tolower(substr($0, 11)); if (length(x) >= 6 && int(h(substr(x, 5, 2)) / 8) % 2) btm = 1 }
+		/^AKMSuiteSelector=/ { v = tolower(substr($0, 18))
+			if (v ~ /^00-0f-ac-[0-9]+$/) { n = substr(v, 10) + 0; if ((n in an) && an[n] != "-") akm = an[n] }
+			else if (v == "50-6f-9a-2") akm = "DPP" }
+		/^supp_op_classes=[0-9a-fA-F]*$/ { x = tolower(substr($0, 17)); o5 = 0; o6 = 0
+			for (i = 1; i + 1 <= length(x); i += 2) { c = h(substr(x, i, 2))
+				if (c >= 115 && c <= 129) o5 = 1; else if (c >= 131 && c <= 137) o6 = 1 } }
+		END { print btm, akm, mfp, o5, o6 }'
+}
+
+# can the station (sta_info words $2..$6) use candidate BSS $1 (band $7)?
+# nothing = yes, else the reason: band | akm | 6g-wpa3
+cand_why() {
+	local ifn=$1 akm=$3 mfp=$4 o5=$5 o6=$6 band=$7 km
+	case $band in
+	5gl|5gh) [ "$o5" = 0 ] && { echo band; return; } ;;
+	6g) [ "$o6" = 0 ] && { echo band; return; } ;;
+	esac
+	km=$(cat "$SD/akm.$ifn" 2>/dev/null)
+	if [ "$band" = 6g ]; then
+		[ "$mfp" = 1 ] || { echo 6g-wpa3; return; }
+		case " $akm " in *" - "*|*" WPA-PSK "*|*" WPA-PSK-SHA256 "*|*" WPA-EAP "*|*" FT-PSK "*|*" FT-EAP "*) echo 6g-wpa3; return ;; esac
+		case "$km" in km\ *) ;; *) echo 6g-wpa3; return ;; esac
+	fi
+	case "$km" in
+	km\ *) [ "$akm" = - ] || case "$km " in *" $akm "*) ;; *) echo akm; return ;; esac ;;
+	open) [ "$akm" = - ] || { echo akm; return; } ;;
+	esac
 }
 
 # per (if, station) sample state: $SD/s.<if>.<mac> = "<up> <low> <bytes|-> <t>"
 # per station hold: $SD/h.<mac> = "<no request before> <no skip log before>"
+# per station request in flight: $SD/p.<mac> = "<t> <if> <kind>"
+# per station consecutive refusals: $SD/r.<mac> = "<n>"
 steer_bss() {
-	local net=$1 ifn=$2 band=$3 t=$4 mac sig by f up low pb pt kbps kind n hu hq cands c tgt p rc args
+	local net=$1 ifn=$2 band=$3 t=$4 mac sig by f up low pb pt kbps kind n hu hq cands c tgt p rc args si why excl whys refs
 	sta_dump "$ifn" > "$SD/dump"
 	while read -r mac sig by; do
 		case "$mac" in [0-9a-f][0-9a-f]:*:*:*:*:[0-9a-f][0-9a-f]) ;; *) continue ;; esac
@@ -288,9 +373,12 @@ steer_bss() {
 		fi
 		if [ "$sig" = - ]; then up=0 low=0
 		else
-			if [ "$band" = 2g ] && [ "$sig" -ge "$UPGRADE_RSSI" ] && [ -n "$(siblings "$net" "$ifn" up)" ]; then
+			# hysteresis: a running count goes on within HYST_DB of its threshold
+			c=$UPGRADE_RSSI; [ "$up" -gt 0 ] && c=$((UPGRADE_RSSI - HYST_DB))
+			if [ "$band" = 2g ] && [ "$sig" -ge "$c" ] && [ -n "$(siblings "$net" "$ifn" up)" ]; then
 				up=$((up + 1)); else up=0; fi
-			if [ "$sig" -lt "$ASSIST_RSSI" ] && [ "$kbps" != - ] && [ "$kbps" -lt "$ASSIST_IDLE_KBPS" ]; then
+			c=$ASSIST_RSSI; [ "$low" -gt 0 ] && c=$((ASSIST_RSSI + HYST_DB))
+			if [ "$sig" -lt "$c" ] && [ "$kbps" != - ] && [ "$kbps" -lt "$ASSIST_IDLE_KBPS" ]; then
 				low=$((low + 1)); else low=0; fi
 		fi
 		kind=
@@ -300,37 +388,81 @@ steer_bss() {
 			up=0 low=0
 			hu=0 hq=0
 			[ -f "$SD/h.$mac" ] && read -r hu hq < "$SD/h.$mac"
-			if [ "$t" -lt "$hu" ]; then
+			refs=0; [ -f "$SD/r.$mac" ] && read -r refs < "$SD/r.$mac"
+			si=$(sta_info "$ifn" "$mac")
+			if [ "$refs" -ge "$REFUSE_MAX" ]; then
+				if [ "$t" -ge "$hq" ]; then log "STEER-SKIP reason=refused kind=$kind if=$ifn sta=$mac rssi=$sig n=$n"; hq=$((t + COOLDOWN)); fi
+			elif [ "$t" -lt "$hu" ]; then
 				if [ "$t" -ge "$hq" ]; then log "STEER-SKIP reason=cooldown kind=$kind if=$ifn sta=$mac rssi=$sig n=$n"; hq=$hu; fi
-			elif ! sta_btm "$ifn" "$mac"; then
+			elif [ "${si%% *}" != 1 ]; then
 				if [ "$t" -ge "$hq" ]; then log "STEER-SKIP reason=no-btm kind=$kind if=$ifn sta=$mac rssi=$sig n=$n"; hq=$((t + COOLDOWN)); fi
 			else
 				if [ "$kind" = upgrade ]; then
 					cands=$(siblings "$net" "$ifn" up); args="pref=1 abridged=1 valid_int=255"
 				else
 					cands=$(siblings "$net" "$ifn" all); args="valid_int=255"
-					[ -n "$cands" ] && args="pref=1 valid_int=255"
 				fi
-				tgt=- p=255
+				tgt=- p=255 excl= whys=
 				for c in $cands; do
+					# shellcheck disable=SC2086 # sta_info's words
+					why=$(cand_why "$c" $si "$(awk -v i="$c" '$4 == i { print $3; exit }' "$SD/bsses")")
+					if [ -n "$why" ]; then
+						excl="${excl:+$excl,}$(cut -d' ' -f1 "$SD/own.$c"):$why"
+						case " $whys " in *" $why "*) ;; *) whys="${whys:+$whys }$why" ;; esac
+						continue
+					fi
 					c=$(candidate "$c" "$p") || continue
-					[ "$tgt" = - ] && tgt=${c%%,*}
+					[ "$tgt" = - ] && { tgt=${c%%,*}; [ "$kind" = assist ] && args="pref=1 $args"; }
 					args="$args neighbor=$c"; p=$((p - 1))
 				done
 				if [ "$kind" = upgrade ] && [ "$tgt" = - ]; then
-					if [ "$t" -ge "$hq" ]; then log "STEER-SKIP reason=no-target kind=$kind if=$ifn sta=$mac rssi=$sig n=$n"; hq=$((t + COOLDOWN)); fi
+					why=no-target
+					case "$whys" in band) why=single-band ;; akm|6g-wpa3|"akm 6g-wpa3"|"6g-wpa3 akm") why=akm ;; esac
+					if [ "$t" -ge "$hq" ]; then log "STEER-SKIP reason=$why kind=$kind if=$ifn sta=$mac rssi=$sig n=$n${excl:+ excl=$excl}"; hq=$((t + COOLDOWN)); fi
 				else
 					# shellcheck disable=SC2086 # the request's words
 					rc=$(hap "$ifn" BSS_TM_REQ "$mac" $args | head -n1)
-					log "STEER kind=$kind if=$ifn sta=$mac rssi=$sig n=$n target=$tgt rc=${rc:-none}"
+					log "STEER kind=$kind if=$ifn sta=$mac rssi=$sig n=$n target=$tgt excl=${excl:--} rc=${rc:-none}"
 					# the hold; the first sample that meets a policy within it is logged once
 					hu=$((t + COOLDOWN)) hq=$t
+					# its outcome is read VERIFY s on (a request with no candidate
+					# asks the client to look by itself: staying is no refusal)
+					[ "$rc" = OK ] && [ "$tgt" != - ] && echo "$t $ifn $kind" > "$SD/p.$mac"
 				fi
 			fi
 			echo "$hu $hq" > "$SD/h.$mac"
 		fi
 		echo "$up $low $by $t" > "$f"
 	done < "$SD/dump"
+}
+
+# the outcome of each request in flight, VERIFY s on (the seen.* marks of
+# this pass: every BSS of a steer network is sampled)
+steer_results() {
+	local t=$1 f mac tr src kind to refs r
+	for f in "$SD"/p.*; do
+		[ -f "$f" ] || continue
+		mac=${f##*/p.}
+		read -r tr src kind < "$f"
+		[ "$t" -ge $((tr + VERIFY)) ] || continue
+		to=-
+		for r in "$SD"/seen.*."$mac"; do
+			[ -f "$r" ] || continue
+			r=${r##*/seen.}; to=${r%."$mac"}
+			[ "$to" = "$src" ] && break
+		done
+		refs=0; [ -f "$SD/r.$mac" ] && read -r refs < "$SD/r.$mac"
+		if [ "$to" = "$src" ]; then
+			refs=$((refs + 1)); echo "$refs" > "$SD/r.$mac"
+			log "STEER-RESULT result=refused kind=$kind if=$src sta=$mac to=- refusals=$refs"
+		elif [ "$to" != - ]; then
+			refs=0; rm -f "$SD/r.$mac"
+			log "STEER-RESULT result=moved kind=$kind if=$src sta=$mac to=$to refusals=0"
+		else
+			log "STEER-RESULT result=gone kind=$kind if=$src sta=$mac to=- refusals=$refs"
+		fi
+		rm -f "$f"
+	done
 }
 
 cmd_once() {
@@ -342,6 +474,7 @@ cmd_once() {
 	while read -r net st band ifn bssid; do
 		[ "$st" = 1 ] && steer_bss "$net" "$ifn" "$band" "$t"
 	done < "$SD/bsses"
+	steer_results "$t"
 	# a station gone from a BSS: its samples go; a hold, once expired
 	for f in "$SD"/s.*; do
 		[ -f "$f" ] || continue
