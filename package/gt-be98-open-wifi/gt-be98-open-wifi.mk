@@ -43,7 +43,9 @@
 #  + the RUNNER-L3-FDB ledger rows c17d40ac (doc-only))
 # om-mesh-int-2026-11-17 2026-11-17 6dbad8c1 (imgmesh1: om-int 8c565b68 + om-mesh-bh-2026-11-17 9aa121bc (MESH-BH: the
 #  4-address link on a secondary BSS, its AP_VLAN back-pressure, the leave the firmware is owed; no module parameter))
-GT_BE98_OPEN_WIFI_VERSION = 6dbad8c199614e1de0b4add0fcd61168bc35df08
+# om-mesh-int-2026-11-17 2026-11-17 83cb2973 (imgint5: + om-mesh-bh bca7f518: R2 at address-set (the AP_VLAN parent chosen
+#  again when hostapd sets the MAC), R6 (a bound AP_VLAN's group frames on the link's own ring, 4-address))
+GT_BE98_OPEN_WIFI_VERSION = 83cb297362a66bdce6af74dfe08329a739fb9292
 GT_BE98_OPEN_WIFI_SITE = git@github.com:nebuloss/gt-be98-open-wifi.git
 GT_BE98_OPEN_WIFI_SITE_METHOD = git
 GT_BE98_OPEN_WIFI_LICENSE = GPL-2.0-only
