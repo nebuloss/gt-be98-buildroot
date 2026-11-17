@@ -384,6 +384,17 @@ repeated ones. The file holds the backhaul key and every passphrase. The leaf re
 these SSIDs with the root's network ids; its own Wi-Fi networks and uplink are kept in its store
 and not rendered while it is a leaf.
 
+**C6a (11-17, after the OS lane's §3.4 C2a / §8.2 on `mesh-backhaul-os-2026-11-17` 4299bba).**
+- The leaf file gains an optional `"mgmt_vid": <vid>`: the VLAN the root suggests for the leaf's
+  management address, the first VLAN-only network that has an SSID (else the first carried one).
+  It must be one of the SSIDs' VIDs. The leaf's import writes the station's `mgmt_vid=` from it
+  unless the admin picks another carried VLAN (a dropdown; a change is a confirm-or-revert trial).
+  The leaf shows the address from `gt-be98-mesh status` (`mgmt bhm0 <bridge> <vid> <addr|->`).
+- The root writes `leaf=<MAC>` in the `backhaul=` block (one leaf, §8.2), from an address the
+  admin enters (the leaf's Mesh page shows its station address). Until it is given, the web UI
+  renders no `backhaul=` block and says why.
+- The Networks page refuses a network VLAN ID equal to a gateway network's explicit backhaul VID.
+
 ---
 
 ## 4. EasyMesh controller/agent (prplMesh) or a static backhaul
