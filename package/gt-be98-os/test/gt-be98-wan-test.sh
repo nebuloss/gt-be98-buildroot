@@ -60,7 +60,8 @@ export GT_BE98_WAN_CONF="$T/etc/wan.conf" GT_BE98_WAN_RUN="$T/run" GT_BE98_SYSNE
 	DHCPCD_BASE="$SRC/etc/dhcpcd.conf" DHCPCD_PID="$T/dhcpcd.pid" DHCPCD_RESOLV_DIR="$T/resolv" \
 	RESOLV_CONF="$T/resolv.conf" GT_BE98_WIFI_L2="$T/l2.conf" GT_BE98_WIFI_AP="$T/none" \
 	GT_BE98_LAN_CONF="$T/none" GT_BE98_WAN_SELF="$SH $W" PPP_RUNDIR="$T/run" IFACE_WAIT=1 \
-	ROUTER_APPLIED="$T/none"
+	ROUTER_APPLIED="$T/none" GT_BE98_FWD="$T/bin/gt-be98-fwd" GT_BE98_UPTIME="$T/uptime" GW_APPLIED="$T/gwapplied"
+echo "1000.00 2000.00" > "$T/uptime"
 sleep 1000 & echo $! > "$T/dhcpcd.pid"
 wan() { $SH "$W" "$@"; }
 reset() { [ -f "$T/run/trial.pid" ] && kill "$(cat "$T/run/trial.pid")" 2>/dev/null; rm -rf "$T/run" "$T/etc/wan.conf" "$FAKE/log" "$FAKE"/pppd.* "$T/net/rnr0."*; mkdir -p "$T/run"; : > "$FAKE/log"; }
@@ -246,7 +247,8 @@ reset
 printf 'WAN_IPV6=1\nWAN_PD_LANS="brwifi1 brwifi2"\n' > "$T/etc/wan.conf"
 printf 'nameserver 192.0.2.53\nnameserver 2001:db8::53\n' > "$T/resolv.conf"
 wan start 2>/dev/null
-check "PD: forwarding on" yes "$(yes_no has "$FAKE/log" "sysctl -q -w net.ipv6.conf.all.forwarding=1")"
+check "PD: IPv6 forwarding held by name (gt-be98-fwd -6 hold wan), never written here" "yes no" \
+	"$(yes_no has "$FAKE/log" "gt-be98-fwd -6 hold wan") $(yes_no grep -q 'forwarding' "$FAKE/log")"
 check "PD: RA constructor per LAN" "dhcp-range=::,constructor:brwifi1,ra-only,64,1h
 dhcp-range=::,constructor:brwifi2,ra-only,64,1h" "$(grep '^dhcp-range' "$T/run/dnsmasq-ra.conf")"
 check "PD: RA has no DHCP/DNS (port=0)" yes "$(yes_no grep -qx port=0 "$T/run/dnsmasq-ra.conf")"
@@ -267,8 +269,71 @@ reason=EXPIRE6 interface=rnr0 wan hook dhcpcd
 check "hook: no v6 default = unreachable (never leaks)" yes "$(yes_no has "$FAKE/log" "ip -6 route replace unreachable default table 182")"
 : > "$FAKE/log"
 wan stop 2>/dev/null
-check "stop: forwarding restored" yes "$(yes_no has "$FAKE/log" "sysctl -q -w net.ipv6.conf.all.forwarding=")"
+check "stop: IPv6 forwarding let go (gt-be98-fwd -6 release wan: on while gt-be98-gw holds it)" "yes no" \
+	"$(yes_no has "$FAKE/log" "gt-be98-fwd -6 release wan") $(yes_no grep -q 'sysctl.*forwarding' "$FAKE/log")"
 check "stop: RA dnsmasq stopped" yes "$(yes_no grep -q 'start-stop-daemon --stop' "$FAKE/log")"
+
+# ---- 4b. the delegated prefix (IA_PD) for the gateway networks (gt-be98-gw) ----------
+reset
+printf 'WAN_IPV6=1\n' > "$T/etc/wan.conf"
+p=$(wan dhcpcd-conf)
+check "PD without WAN_PD_LANS: requested, assigned to no interface (ia_pd 2 -)" "ia_pd 2 -" "$(grep '^ia_pd' "$p")"
+printf 'WAN_IPV6=1\nWAN_PD_LEN=56\n' > "$T/etc/wan.conf"
+p=$(wan dhcpcd-conf)
+check "  with WAN_PD_LEN: the size hint kept" "ia_pd 2/::/56 -" "$(grep '^ia_pd' "$p")"
+check "  no LAN block, the WAN block as before" "interface rnr0|ipv6rs|ia_na 1|ia_pd 2/::/56 -" "$(sed -n '/^interface /,$p' "$p" | tr '\n' '|' | sed 's/|$//')"
+# the reroute is started in the background (rc-service ... &): wait for its
+# line, and let a late one land before a log is cleared for a negative check
+waitlog() { i=0; while [ $i -lt 30 ]; do has "$FAKE/log" "$1" && return 0; sleep 0.1; i=$((i + 1)); done; return 1; }
+clearlog() { sleep 0.5; : > "$FAKE/log"; }
+pd6h() {	# <reason> <prefix> <len> <pltime> <vltime> [interface]
+	reason=$1 interface=${6:-rnr0} new_dhcp6_ia_pd1_prefix1=$2 new_dhcp6_ia_pd1_prefix1_length=$3 \
+		new_dhcp6_ia_pd1_prefix1_pltime=$4 new_dhcp6_ia_pd1_prefix1_vltime=$5 wan hook dhcpcd 2>/dev/null
+}
+echo "net 4 brwifi100004 192.168.40.1/24" > "$T/gwapplied"; clearlog
+pd6h BOUND6 2001:db8:aa00:: 56 1800 3600
+check "hook BOUND6: the prefix recorded, pd6 prints it with its lifetimes" "2001:db8:aa00::/56 1800 3600" "$(wan pd6)"
+check "  ... gt-be98-gw follows (reroute)" yes "$(yes_no waitlog "rc-service --ifstarted gt-be98-gw reroute")"
+check "  ... status pd6=" "pd6=2001:db8:aa00::/56" "$(wan status | grep '^pd6=')"
+echo "1600.00 2000.00" > "$T/uptime"
+check "pd6: the remaining lifetimes (600 s later)" "2001:db8:aa00::/56 1200 3000" "$(wan pd6)"
+echo "5000.00 2000.00" > "$T/uptime"
+check "pd6: expired (valid lifetime over): nothing, rc 1" "|1" "$(wan pd6)|$(wan pd6 >/dev/null; echo $?)"
+echo "1000.00 2000.00" > "$T/uptime"
+clearlog
+reason=INFORM6 interface=rnr0 wan hook dhcpcd
+sleep 0.5; check "  control: INFORM6 (no lease change): no reroute" no "$(yes_no has "$FAKE/log" "gt-be98-gw reroute")"
+pd6h RENEW6 2001:db8:aa00:: 72 1800 3600
+check "a /72 delegation: not usable, cleared (logged)" "" "$(wan pd6)"
+pd6h REBIND6 2001:db8:aa00:: 56 1800 3600
+check "  control: the /56 again" "2001:db8:aa00::/56 1800 3600" "$(wan pd6)"
+pd6h RENEW6 '2001:db8:aa00::;x' 56 1800 3600
+check "a prefix with a foreign character: cleared" "" "$(wan pd6)"
+pd6h RENEW6 2001:db8:aa00:: 56 1800 3600
+pd6h RENEW6 2001:db8:bb00:: 56 1800 0
+check "a valid lifetime 0: cleared" "" "$(wan pd6)"
+pd6h RENEW6 2001:db8:aa00:: 56 9000 3600
+check "a preferred lifetime above the valid one: capped" "2001:db8:aa00::/56 3600 3600" "$(wan pd6)"
+pd6h RENEW6 2001:db8:bb00:: 56 1800 3600 eth0
+check "  control: another interface's lease changes nothing" "2001:db8:aa00::/56 3600 3600" "$(wan pd6)"
+clearlog
+reason=EXPIRE6 interface=rnr0 wan hook dhcpcd
+check "EXPIRE6: the prefix gone, gt-be98-gw follows" "|yes" "$(wan pd6)|$(yes_no waitlog "gt-be98-gw reroute")"
+: > "$T/gwapplied"
+pd6h BOUND6 2001:db8:aa00:: 56 1800 3600
+clearlog
+pd6h RENEW6 2001:db8:aa00:: 56 1800 7200
+sleep 0.5; check "  control: no gateway network applied: no reroute" no "$(yes_no has "$FAKE/log" "gt-be98-gw reroute")"
+printf 'WAN_IPV6=0\n' > "$T/etc/wan.conf"
+check "WAN_IPV6=0: a stale record is never read back" "|1" "$(wan pd6)|$(wan pd6 >/dev/null; echo $?)"
+printf 'WAN_IPV6=1\nWAN_VLAN=835\n' > "$T/etc/wan.conf"
+check "a record of another WAN netdev (rnr0, the WAN is now rnr0.835): never read back" "" "$(wan pd6)"
+printf 'WAN_IPV6=0\n' > "$T/etc/wan.conf"
+pd6h BOUND6 2001:db8:cc00:: 56 1800 3600
+printf 'WAN_IPV6=1\n' > "$T/etc/wan.conf"
+check "WAN_IPV6=0: the hook records nothing" "2001:db8:aa00::/56 1800 7200" "$(wan pd6)"
+check "the 07 hook forwards the release/stop reasons too" yes \
+	"$(yes_no grep -q 'EXPIRE6|RELEASE6|STOP6|STOPPED|DEPARTED' "$SRC/dhcpcd-hooks/07-gt-be98-wan")"
 
 # ---- 5. trial / confirm / revert (management safety) ------------------------------------
 reset

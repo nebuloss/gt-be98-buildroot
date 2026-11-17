@@ -25,24 +25,29 @@
 #                         the file says mode=gateway)
 #   gt-be98-gw status     one line per network: "net <id> <state> <bridge|->
 #                         <cidr> <isolate> <mgmt> starts=<n> refusals=<n>
-#                         why=<text>", then "wan <netdev>", "forwarding 0|1",
+#                         why=<text>", then per network "net6 <id> <mode>
+#                         <off|waiting|active|refused> <prefix/64|->
+#                         id=<hex|auto> why=<text>", "pd6 <prefix/len|->",
+#                         "wan <netdev>", "forwarding 0|1", "forwarding6 0|1",
 #                         "dnsmasq pid=<pid|-> restarts=<n> hups=<n>
 #                         static=<n>"
 #   gt-be98-gw leases     dnsmasq's lease table, one line per lease: "lease
 #                         <network id|-> <mac> <ip> <expiry epoch|0> <name|*>
 #                         static=<0|1>" (static: the lease is a reservation of
 #                         the static leases file; the web UI's read-only list)
-#   gt-be98-gw features   "features gateway" (the web UI's handshake: it
-#                         offers the gateway mode only when the OS says so)
+#   gt-be98-gw features   "features gateway ipv6" (the web UI's handshake: it
+#                         offers the gateway mode, and its IPv6 fields, only
+#                         when the OS says so)
 #   gt-be98-gw nft-text <wan>     the rule set of the current state (tests)
 #   gt-be98-gw dnsmasq-text       dnsmasq's config of the current state (tests)
 #   gt-be98-gw hosts-text         its static leases of the current state (tests)
+#   gt-be98-gw v6calc net64|ov|canon ...  the IPv6 arithmetic (tests)
 #
 # networks.conf (written by the web UI; parsed, never sourced; keys in any
 # order, unknown keys ignored):
 #   network=<id> name=<pct> vlan=<vid> subnet=<A.B.C.D/P> mode=gateway
 #   isolate=0|1 mgmt=0|1 [dhcp=0|1 dhcp_start=<ip> dhcp_end=<ip> lease=<t>
-#   dns=<ip>[,<ip>...] domain=<name>]
+#   dns=<ip>[,<ip>...] domain=<name>] [ipv6=off|slaac|dhcpv6 ipv6_prefix_id=<hex 0..ffff>]
 # isolate (default 0): no forwarding to or from any other gateway network
 # (internet kept). mgmt (default 1, 0 when isolate=1 and mgmt= is absent):
 # the box's SSH (22) and web UI (80, 443) reachable from that network. DHCP
@@ -137,13 +142,45 @@
 # (UniFi does the same). Kept after stop (a set address stays set: the
 # bridge is gt-be98-l2's, and the MAC is harmless on a VLAN-only bridge).
 # Without that port (no jack switch) the bridge keeps its own.
-# Hooks left for later phases: IPv6 (off on the bridges: gt-be98-l2).
+#
+# IPv6 (phase 5; no NAT66, UniFi's model): ipv6=slaac|dhcpv6 on a running
+# (local or routed) gateway network gives it a /64 of the prefix the WAN's
+# DHCPv6 lease delegates (gt-be98-wan pd6, WAN_IPV6=1): /64 number
+# ipv6_prefix_id (hex, the last 16 bits of the /64; absent = the lowest free
+# one from 1, file order) of the delegated prefix, the gateway address
+# <that /64>::1 on the bridge (lifetimes = the delegation's), and the router
+# advertisements from the same dnsmasq: slaac = SLAAC + stateless DHCPv6
+# (ra-stateless: the A and O flags, DNS by RA and DHCPv6), dhcpv6 = stateful
+# DHCPv6 only (the M flag, addresses ::1000-::1fff; clients without DHCPv6,
+# such as Android, get no address). DNS is the gateway itself. The dnsmasq
+# lines name the bridge ("constructor:"), never the prefix: a new prefix
+# needs no dnsmasq restart (dnsmasq deprecates the old one in its RAs).
+# Per network: off; waiting (no prefix yet, or WAN_IPV6=0); active;
+# refused (the bridge is a WAN_PD_LANS LAN of gt-be98-wan, the prefix id is
+# taken there or by an earlier network, does not fit the delegated length,
+# a bad ipv6_prefix_id, or the /64 overlaps an address the box has
+# elsewhere). The /64s are numbered after gt-be98-wan's WAN_PD_LANS, which
+# hold ids 0..n-1. IPv6 is on on the bridge only while active
+# (disable_ipv6=0, accept_ra=0, autoconf=0; back to gt-be98-l2's
+# disable_ipv6=1 after), with `ip -6 rule iif <br> lookup main
+# suppress_prefixlength 0` and `ip -6 rule iif <br> lookup GW_TABLE` (the
+# WAN's IPv6 default only), and an unreachable route for the whole
+# delegated prefix in main (metric PD_METRIC: a /64 not assigned never
+# loops back out of the WAN). POLICY: the same table inet gt_be98_gw, the
+# v6 set: IPv6 from an active network to the WAN accepted, from the WAN only
+# replies (established, related: the ICMPv6 errors of a flow included),
+# between networks as IPv4 (isolate), input ICMPv6 (ND, RS) and DHCPv6 (547)
+# always, management as IPv4. A narrowing (IPv6 off, a new prefix, isolate,
+# mgmt off) deletes the conntrack entries of the /64. FORWARDING:
+# net.ipv6.conf.all.forwarding held as "gw" (gt-be98-fwd -6) while any
+# network's IPv6 is active.
 set -u
 RUNDIR=${GT_BE98_RUN:-/run}
 GW=${GT_BE98_GW_STATE:-$RUNDIR/gt-be98-gw}
 NETWORKS=${GT_BE98_NETWORKS:-/etc/gt-be98-networks.conf}
 HOSTS=${GT_BE98_DHCP_HOSTS:-/etc/gt-be98-dhcp-hosts.conf}
 SYSNET=${GT_BE98_SYSNET:-/sys/class/net}
+PROCNET=${GT_BE98_PROCNET:-/proc/sys/net}
 L2=${GT_BE98_L2:-/usr/sbin/gt-be98-l2}
 WANT=${GT_BE98_WAN:-/usr/sbin/gt-be98-wan}
 FWD=${GT_BE98_FWD:-/usr/sbin/gt-be98-fwd}
@@ -160,6 +197,7 @@ STATIC_MAX=256		# static leases per network
 NFT_TABLE=gt_be98_gw
 NAT_TABLE=gt_be98_gw_nat
 MGMT_PORTS="22, 80, 443"
+PD_METRIC=4184		# the unreachable route of the delegated prefix (main)
 
 log() { logger -t gt-be98-gw -- "$*" 2>/dev/null; echo "gt-be98-gw: $*" >&2; }
 
@@ -269,10 +307,86 @@ domain_why() {
 	for l in $1; do [ ${#l} -le 63 ] || { echo "domain '$1': a label is at most 63 characters"; return; }; done
 }
 
+# ---- IPv6 arithmetic (awk, no bitwise built-ins: portable) ----------------------
+# v6calc net64 <prefix>/<len> <id>   the /64 number <id> (decimal) of the
+#                                    prefix: "<a:b:c:d::>" (RFC 5952), rc 1
+#                                    when it does not fit (len > 64, id too big)
+# v6calc ov <a>/<la> <b>/<lb>        rc 0 when the two prefixes overlap
+# v6calc canon <address>             the address in RFC 5952 form
+v6calc() {
+	awk -v m="$1" -v x="${2:-}" -v y="${3:-}" '
+	function hv(c) { return index("0123456789abcdef", c) - 1 }
+	function hex2n(s,   i, n) { s = tolower(s); n = 0; for (i = 1; i <= length(s); i++) n = n * 16 + hv(substr(s, i, 1)); return n }
+	# the 8 groups of address a into H[1..8]; 0 when a is not an IPv6 address
+	function expand(a, H,   l, r, nl, nr, L, R, i, k) {
+		if (a == "" || a ~ /[^0-9A-Fa-f:]/ || a ~ /:::/) return 0
+		if (index(a, "::")) {
+			l = substr(a, 1, index(a, "::") - 1); r = substr(a, index(a, "::") + 2)
+			if (index(r, "::")) return 0
+			nl = (l == "") ? 0 : split(l, L, ":"); nr = (r == "") ? 0 : split(r, R, ":")
+			if (nl + nr > 7) return 0
+			k = 0
+			for (i = 1; i <= nl; i++) H[++k] = L[i]
+			for (i = 1; i <= 8 - nl - nr; i++) H[++k] = "0"
+			for (i = 1; i <= nr; i++) H[++k] = R[i]
+		} else if (split(a, H, ":") != 8) return 0
+		for (i = 1; i <= 8; i++) { if (H[i] == "" || length(H[i]) > 4) return 0; H[i] = hex2n(H[i]) }
+		return 1
+	}
+	# H masked to its first len bits
+	function mask(H, len,   i, k, p) {
+		for (i = 1; i <= 8; i++) {
+			k = len - 16 * (i - 1)
+			if (k >= 16) continue
+			if (k <= 0) { H[i] = 0; continue }
+			p = 2 ^ (16 - k); H[i] = int(H[i] / p) * p
+		}
+	}
+	function canon(H,   i, bs, bl, cs, cl, s) {
+		bs = 0; bl = 0; cl = 0
+		for (i = 1; i <= 8; i++) {
+			if (H[i] == 0) { if (!cl) cs = i; cl++; if (cl > bl) { bl = cl; bs = cs } }
+			else cl = 0
+		}
+		if (bl < 2) bs = 0
+		s = ""
+		for (i = 1; i <= 8; i++) {
+			if (bs && i == bs) { s = s "::"; i += bl - 1; continue }
+			if (s != "" && substr(s, length(s)) != ":") s = s ":"
+			s = s sprintf("%x", H[i])
+		}
+		return s
+	}
+	BEGIN {
+		if (m == "canon") { if (!expand(x, A)) exit 1; print canon(A); exit 0 }
+		if (m == "net64") {
+			p = x; sub(/\/.*/, "", p); l = x; sub(/^[^\/]*\//, "", l)
+			if (l !~ /^[0-9]+$/ || l + 0 < 1 || l + 0 > 64 || y !~ /^[0-9]+$/) exit 1
+			if (!expand(p, A)) exit 1
+			mask(A, l + 0)
+			# the id goes in the last group of the /64 (at most 16 bits,
+			# below the delegated length)
+			if (y + 0 > 65535 || (l + 0 > 48 && y + 0 >= 2 ^ (64 - l))) exit 1
+			A[4] += y; A[5] = A[6] = A[7] = A[8] = 0
+			print canon(A); exit 0
+		}
+		if (m == "ov") {
+			a = x; sub(/\/.*/, "", a); la = x; sub(/^[^\/]*\//, "", la)
+			b = y; sub(/\/.*/, "", b); lb = y; sub(/^[^\/]*\//, "", lb)
+			if (!expand(a, A) || !expand(b, B)) exit 1
+			l = (la + 0 < lb + 0) ? la + 0 : lb + 0
+			mask(A, l); mask(B, l)
+			for (i = 1; i <= 8; i++) if (A[i] != B[i]) exit 1
+			exit 0
+		}
+		exit 2
+	}'
+}
+
 # ---- the network list -----------------------------------------------------------------
 # the mode=gateway lines of the list, one per line, in file order:
 # "<id> <vid> <subnet|-> <isolate|-> <mgmt|-> <dhcp|-> <start|-> <end|-> <lease|->
-# <dns|-> <domain|->"
+# <dns|-> <domain|-> <ipv6|-> <ipv6_prefix_id|->"
 # (- = the key is absent; values with a character outside the expected set
 # are kept as "?" so that the check refuses them, never re-interpreted)
 gw_lines() {
@@ -286,22 +400,42 @@ gw_lines() {
 		  print v("network", "^[0-9]+$"), v("vlan", "^[0-9]+$"), v("subnet", "^[0-9./]+$"),
 			v("isolate", "^[01]$"), v("mgmt", "^[01]$"), v("dhcp", "^[01]$"),
 			v("dhcp_start", "^[0-9.]+$"), v("dhcp_end", "^[0-9.]+$"), v("lease", "^[0-9a-z]+$"),
-			v("dns", "^[0-9.,]+$"), v("domain", "^[0-9a-z][0-9a-z.-]*$") }' "$NETWORKS"
+			v("dns", "^[0-9.,]+$"), v("domain", "^[0-9a-z][0-9a-z.-]*$"),
+			v("ipv6", "^(off|slaac|dhcpv6)$"), tolower(v("ipv6_prefix_id", "^[0-9A-Fa-f]+$")) }' "$NETWORKS"
 }
 
 # ---- what the box has -------------------------------------------------------------------
 # the WAN netdev (gt-be98-wan's; rnr0 when it reports none) and its config
 wan_ctx() {
-	local l
+	local l c
 	WAN_IF=$("$WANT" ifname 2>/dev/null)
 	case "$WAN_IF" in ''|*[!A-Za-z0-9_.-]*) WAN_IF=rnr0 ;; esac
-	WAN_VLAN= WAN_ADDR= WAN_PORT=rnr0
-	for l in $("$WANT" check 2>/dev/null); do
+	WAN_VLAN= WAN_ADDR= WAN_PORT=rnr0 WAN_IPV6=0
+	c=$("$WANT" check 2>/dev/null)
+	for l in $c; do
 		case "$l" in
 		WAN_VLAN=*) WAN_VLAN=${l#*=} ;; WAN_ADDR=*) WAN_ADDR=${l#*=} ;; WAN_PORT=*) WAN_PORT=${l#*=} ;;
+		WAN_IPV6=1) WAN_IPV6=1 ;;
 		esac
 	done
+	# gt-be98-wan's own delegated LANs (their /64s are ids 0..n-1)
+	WAN_PD_LANS=$(printf '%s\n' "$c" | sed -n 's/^WAN_PD_LANS="\{0,1\}\([A-Za-z0-9_. -]*\)"\{0,1\}$/\1/p' | head -n1)
 }
+# the delegated prefix (gt-be98-wan pd6) into PD6 ("" none), PD6_PL, PD6_VL
+pd6_ctx() {
+	local p pl vl
+	PD6= PD6_PL= PD6_VL=
+	[ "$WAN_IPV6" = 1 ] || return 0
+	read -r p pl vl _ <<-EOF
+	$("$WANT" pd6 2>/dev/null)
+	EOF
+	case "$pl$vl" in ''|*[!0-9]*) return 0 ;; esac
+	v6calc net64 "$p" 0 >/dev/null || return 0
+	[ "$vl" -gt 0 ] || return 0
+	PD6=$(v6calc canon "${p%/*}")/${p#*/} PD6_PL=$pl PD6_VL=$vl
+}
+# every global IPv6 address of the box: "<dev> <cidr>" per line
+box_addrs6() { ip -6 -o addr show scope global 2>/dev/null | awk '{ for (i = 1; i < NF; i++) if ($i == "inet6") { d = $2; sub(/@.*/, "", d); print d, $(i + 1) } }'; }
 # every IPv4 address of the box: "<dev> <cidr>" per line
 box_addrs() { ip -4 -o addr show 2>/dev/null | awk '{ for (i = 1; i < NF; i++) if ($i == "inet") { d = $2; sub(/@.*/, "", d); print d, $(i + 1) } }'; }
 # configured but maybe not up yet: br-lan's LAN_ADDR, the station's routed networks
@@ -322,12 +456,25 @@ wan_port_jack() {
 
 # ---- one network: init / check ----------------------------------------------------------
 # net_init <id> <vid> <subnet> <isolate> <mgmt> <dhcp> <start> <end> <lease>
-# <dns> <domain> into N_*; N_ERR the refusal (shape), N_DWHY why its DHCP is
-# off (then no domain either: nothing half-checked is rendered)
+# <dns> <domain> <ipv6> <ipv6_prefix_id> into N_*; N_ERR the refusal (shape),
+# N_DWHY why its DHCP is off (then no domain either: nothing half-checked is
+# rendered), N_V6WHY why its IPv6 is not used (a bad ipv6= turns it off, a
+# bad id refuses it)
 net_init() {
-	N_ID=$1 N_VID=$2 N_CIDR=$3 N_ERR= N_DWHY= N_LOCAL=
+	N_ID=$1 N_VID=$2 N_CIDR=$3 N_ERR= N_DWHY= N_LOCAL= N_V6WHY=
 	N_DNS=${10:--} N_DOMAIN=${11:--}
 	[ "$N_DOMAIN" = - ] && N_DOMAIN=
+	N_V6=${12:--} N_PID=${13:--}
+	case "$N_V6" in
+	-) N_V6=off ;;
+	off|slaac|dhcpv6) ;;
+	*) N_V6=off N_V6WHY="ipv6 '$N_V6': off, slaac or dhcpv6 (IPv6 off)" ;;
+	esac
+	case "$N_PID" in
+	-) ;;
+	[0-9a-f]|[0-9a-f][0-9a-f]|[0-9a-f][0-9a-f][0-9a-f]|[0-9a-f][0-9a-f][0-9a-f][0-9a-f]) N_PID=$(printf '%x' $((0x$N_PID))) ;;
+	*) N_V6WHY="ipv6_prefix_id '$N_PID': 1 to 4 hex digits (0..ffff)"; N_PID=? ;;
+	esac
 	N_ISO=$4; [ "$N_ISO" = - ] && N_ISO=0
 	N_MGMT=$5; if [ "$N_MGMT" = - ]; then N_MGMT=1; [ "$N_ISO" = 1 ] && N_MGMT=0; fi
 	N_DHCP=$6; [ "$N_DHCP" = - ] && N_DHCP=1
@@ -383,6 +530,7 @@ counter() { local v; v=$(st_get "$1" "$2"); case "$v" in ''|*[!0-9]*) v=0 ;; esa
 net_stop() {
 	local id=$1 b c s
 	b=$(st_get "$id" bridge); c=$(st_get "$id" cidr); s=$(st_get "$id" state)
+	v6_stop "$id"
 	if [ -n "$b" ] && [ "$b" != - ]; then
 		ip rule del iif "$b" priority "$GW_PRIO" 2>/dev/null
 		ip rule del iif "$b" priority $((GW_PRIO + 1)) 2>/dev/null
@@ -407,16 +555,203 @@ gw_mac() {
 	return 0
 }
 
-# conntrack entries from or to subnet $1 (and, given $2, only between $1 and $2)
+# conntrack entries from or to subnet $1 (and, given $2, only between $1 and
+# $2); an IPv6 subnet is named with its family (-f ipv6)
 ct_del() {
+	local f=
 	command -v conntrack >/dev/null 2>&1 || return 0
+	case "$1" in *:*) f="-f ipv6" ;; esac
 	if [ -n "${2:-}" ]; then
-		conntrack -D -s "$1" -d "$2" >/dev/null 2>&1
-		conntrack -D -s "$2" -d "$1" >/dev/null 2>&1
+		conntrack -D $f -s "$1" -d "$2" >/dev/null 2>&1
+		conntrack -D $f -s "$2" -d "$1" >/dev/null 2>&1
 	else
-		conntrack -D -s "$1" >/dev/null 2>&1
-		conntrack -D -d "$1" >/dev/null 2>&1
+		conntrack -D $f -s "$1" >/dev/null 2>&1
+		conntrack -D $f -d "$1" >/dev/null 2>&1
 	fi
+	return 0
+}
+
+# ---- one network's IPv6 -------------------------------------------------------------------
+v6_sysctl() { echo "$3" > "$PROCNET/ipv6/conf/$1/$2" 2>/dev/null; }
+# the IPv6 of network $1 as applied ("net6 <id> <bridge> <address>" in
+# $GW/applied) leaves: rules, address, IPv6 off on the bridge again (gt-be98-
+# l2's default), the conntrack entries of its /64 deleted (narrowing)
+v6_stop() {
+	local id=$1 k i b a
+	while read -r k i b a; do
+		[ "$k" = net6 ] && [ "$i" = "$id" ] || continue
+		ip -6 rule del iif "$b" priority "$GW_PRIO" 2>/dev/null
+		ip -6 rule del iif "$b" priority $((GW_PRIO + 1)) 2>/dev/null
+		ip -6 addr del "$a" dev "$b" 2>/dev/null
+		v6_sysctl "$b" disable_ipv6 1
+		ct_del "${a%::1/64}::/64"
+		log "network $id: IPv6 ${a%::1/64}::/64 off $b"
+	done < "$GW/applied"
+	sed -i "/^net6 $id /d" "$GW/applied" 2>/dev/null
+	return 0
+}
+# the IPv6 of active network $1 up (or its lifetimes renewed)
+v6_start() {
+	local id=$1 b a pl vl
+	b=$(st_get "$id" bridge); a=$(st_get "$id" addr6)
+	pl=$PD6_PL vl=$PD6_VL
+	[ "$pl" = 4294967295 ] && pl=forever
+	[ "$vl" = 4294967295 ] && vl=forever
+	if ! grep -qxF "net6 $id $b $a" "$GW/applied"; then
+		# never a router that autoconfigures itself from its own network
+		v6_sysctl "$b" accept_ra 0; v6_sysctl "$b" autoconf 0
+		v6_sysctl "$b" disable_ipv6 0
+	fi
+	if ip -6 addr replace "$a" dev "$b" valid_lft "$vl" preferred_lft "$pl"; then
+		if ! grep -qxF "net6 $id $b $a" "$GW/applied"; then
+			ip -6 rule del iif "$b" priority "$GW_PRIO" 2>/dev/null
+			ip -6 rule del iif "$b" priority $((GW_PRIO + 1)) 2>/dev/null
+			ip -6 rule add iif "$b" lookup main suppress_prefixlength 0 priority "$GW_PRIO"
+			ip -6 rule add iif "$b" lookup "$GW_TABLE" priority $((GW_PRIO + 1))
+			echo "net6 $id $b $a" >> "$GW/applied"
+			log "network $id: IPv6 $(st_get "$id" prefix6) on $b ($(st_get "$id" ipv6))"
+		fi
+		return 0
+	fi
+	log "network $id: $a on $b: IPv6 address refused"
+	v6_sysctl "$b" disable_ipv6 1
+	st_set "$id" "v6 refused" "why6 $a on $b: address refused by the kernel"
+	return 1
+}
+# the IPv6 plan of every running network (state keys v6 pid6 prefix6 addr6
+# why6), in file order ($GW/wanted): header, IPv6
+v6_plan() {
+	local id c b m p why used= nl=0 x n len max d net a6 dev cidr explicit=
+	pd6_ctx
+	len=${PD6#*/}
+	max=65535
+	if [ -n "$PD6" ] && [ $((64 - len)) -lt 16 ]; then max=$(( (1 << (64 - len)) - 1 )); fi
+	for x in $WAN_PD_LANS; do used="$used $nl"; nl=$((nl + 1)); done
+	# explicit ids first (an earlier network keeps its id), then the auto ones
+	while read -r id c; do
+		[ -n "$id" ] || continue
+		case "$(st_get "$id" state)" in local|routed) ;; *) continue ;; esac
+		m=$(st_get "$id" ipv6); p=$(st_get "$id" pid)
+		[ "$m" != off ] && [ -n "$p" ] && [ "$p" != - ] && [ "$p" != "?" ] || continue
+		d=$((0x$p))
+		case " $used " in
+		*" $d "*) explicit="$explicit $id:dup" ;;
+		*) used="$used $d"; explicit="$explicit $id:$d" ;;
+		esac
+	done < "$GW/wanted"
+	while read -r id c; do
+		[ -n "$id" ] || continue
+		case "$(st_get "$id" state)" in local|routed) ;; *) continue ;; esac
+		m=$(st_get "$id" ipv6); p=$(st_get "$id" pid); b=$(st_get "$id" bridge)
+		why=$(st_get "$id" why6_shape) d= net=
+		if [ "$m" = off ]; then
+			st_set "$id" "v6 off" "pid6 -" "prefix6 -" "addr6 -" "why6 $why"; continue
+		fi
+		if [ -n "$why" ]; then
+			st_set "$id" "v6 refused" "pid6 -" "prefix6 -" "addr6 -" "why6 $why"; continue
+		fi
+		case " $WAN_PD_LANS " in *" $b "*)
+			st_set "$id" "v6 refused" "pid6 -" "prefix6 -" "addr6 -" "why6 $b is a delegated LAN of the WAN (WAN_PD_LANS): its IPv6 is gt-be98-wan's"
+			continue ;;
+		esac
+		if [ "$p" != - ]; then
+			case " $explicit " in
+			*" $id:dup "*)
+				st_set "$id" "v6 refused" "pid6 $p" "prefix6 -" "addr6 -" "why6 prefix ID $p is taken (a WAN_PD_LANS LAN, ids 0..$((nl - 1)), or an earlier network)"
+				continue ;;
+			esac
+			d=$((0x$p))
+		fi
+		if [ "$WAN_IPV6" != 1 ]; then
+			st_set "$id" "v6 waiting" "pid6 ${p}" "prefix6 -" "addr6 -" "why6 the WAN has IPv6 off (WAN_IPV6=0): no prefix to delegate"; continue
+		fi
+		if [ -z "$PD6" ]; then
+			st_set "$id" "v6 waiting" "pid6 ${p}" "prefix6 -" "addr6 -" "why6 no delegated prefix from the WAN yet (DHCPv6-PD)"; continue
+		fi
+		if [ -z "$d" ]; then
+			# auto: the lowest free id from 1 (0 last: a /64 delegation)
+			n=1
+			while [ $n -le "$max" ]; do case " $used " in *" $n "*) n=$((n + 1)) ;; *) break ;; esac; done
+			if [ $n -gt "$max" ]; then
+				case " $used " in *" 0 "*) n= ;; *) n=0 ;; esac
+			fi
+			if [ -z "$n" ]; then
+				st_set "$id" "v6 refused" "pid6 auto" "prefix6 -" "addr6 -" "why6 no free /64 left in the delegated $PD6"; continue
+			fi
+			d=$n; used="$used $d"
+		fi
+		if [ "$d" -gt "$max" ] || ! net=$(v6calc net64 "$PD6" "$d"); then
+			st_set "$id" "v6 refused" "pid6 $(printf '%x' "$d")" "prefix6 -" "addr6 -" "why6 prefix ID $(printf '%x' "$d") does not fit the delegated $PD6 (0..$(printf '%x' "$max"))"; continue
+		fi
+		why=
+		while read -r dev cidr; do
+			[ -n "${cidr:-}" ] && [ "$dev" != "$b" ] || continue
+			v6calc ov "$cidr" "$net/64" && { why="$net/64 overlaps the box's $cidr on $dev"; break; }
+		done <<-EOF
+		$(box_addrs6)
+		EOF
+		if [ -n "$why" ]; then
+			st_set "$id" "v6 refused" "pid6 $(printf '%x' "$d")" "prefix6 -" "addr6 -" "why6 $why"; continue
+		fi
+		st_set "$id" "v6 active" "pid6 $(printf '%x' "$d")" "prefix6 $net/64" "addr6 ${net}1/64" "why6 "
+	done < "$GW/wanted"
+}
+# every running network's IPv6 follows its plan: what is applied and no
+# longer wanted as it runs leaves first, then the active ones come up
+v6_apply() {
+	local k id b a rc=0 f s
+	[ -f "$GW/applied" ] || return 0
+	while read -r k id b a; do
+		[ "$k" = net6 ] || continue
+		s=$(st_get "$id" state)
+		case "$s" in local|routed) ;; *) v6_stop "$id"; continue ;; esac
+		if [ "$(st_get "$id" v6)" != active ] || [ "$(st_get "$id" bridge)" != "$b" ] || [ "$(st_get "$id" addr6)" != "$a" ]; then
+			v6_stop "$id"
+		fi
+	done <<-EOF
+	$(cat "$GW/applied")
+	EOF
+	for f in "$GW/net"/*; do
+		[ -f "$f" ] || continue
+		id=${f##*/}; case "$id" in *.new|*.tmp) continue ;; esac
+		case "$(st_get "$id" state)" in local|routed) ;; *) continue ;; esac
+		[ "$(st_get "$id" v6)" = active ] || continue
+		v6_start "$id" || { rc=1; REDO=1; }
+	done
+	return $rc
+}
+# table GW_TABLE (IPv6): the WAN's IPv6 default only, else unreachable; the
+# delegated prefix unreachable in main (recorded "pd6route <prefix>")
+route6_table() {
+	local gw old
+	ip -6 route flush table "$GW_TABLE" 2>/dev/null
+	gw=$(ip -6 route show default dev "$1" 2>/dev/null | sed -n 's/^default via \([0-9a-fA-F:]*\).*/\1/p' | head -n1)
+	if [ -n "$gw" ]; then
+		ip -6 route replace default via "$gw" dev "$1" table "$GW_TABLE"
+	elif ip -6 route show default dev "$1" 2>/dev/null | grep -q '^default'; then
+		ip -6 route replace default dev "$1" table "$GW_TABLE"
+	else
+		log "$1 has no IPv6 default route yet: the gateway networks reach the IPv6 internet with its next RA"
+		ip -6 route replace unreachable default table "$GW_TABLE"
+	fi
+	old=$(sed -n 's/^pd6route //p' "$GW/applied" | head -n1)
+	if [ -n "$old" ] && [ "$old" != "$PD6" ]; then
+		ip -6 route del unreachable "$old" metric "$PD_METRIC" 2>/dev/null
+		sed -i '/^pd6route /d' "$GW/applied"
+	fi
+	if [ -n "$PD6" ]; then
+		ip -6 route replace unreachable "$PD6" metric "$PD_METRIC"
+		grep -qxF "pd6route $PD6" "$GW/applied" || echo "pd6route $PD6" >> "$GW/applied"
+	fi
+}
+# no network's IPv6 runs any more: table, prefix route, forwarding let go
+route6_clear() {
+	local old
+	ip -6 route flush table "$GW_TABLE" 2>/dev/null
+	old=$(sed -n 's/^pd6route //p' "$GW/applied" 2>/dev/null | head -n1)
+	[ -n "$old" ] && ip -6 route del unreachable "$old" metric "$PD_METRIC" 2>/dev/null
+	sed -i '/^pd6route /d' "$GW/applied" 2>/dev/null
+	if grep -qx fwd6 "$GW/applied" 2>/dev/null; then "$FWD" -6 release gw; sed -i '/^fwd6$/d' "$GW/applied"; fi
 	return 0
 }
 
@@ -424,7 +759,7 @@ ct_del() {
 # the active networks of the state into A_* lists (bridges), A_NAT (subnets)
 active_sets() {
 	local f id s b
-	A_GW= A_ISO= A_MGMT= A_NATB= A_NAT=
+	A_GW= A_ISO= A_MGMT= A_NATB= A_NAT= A_V6= A_DNS6=
 	for f in "$GW/net"/*; do
 		[ -f "$f" ] || continue
 		id=${f##*/}; case "$id" in *.new) continue ;; esac
@@ -434,6 +769,10 @@ active_sets() {
 		[ "$(st_get "$id" isolate)" = 1 ] && A_ISO="$A_ISO${A_ISO:+, }$b"
 		[ "$(st_get "$id" mgmt)" = 1 ] && A_MGMT="$A_MGMT${A_MGMT:+, }$b"
 		[ "$s" = routed ] && { A_NATB="$A_NATB${A_NATB:+, }$b"; A_NAT="$A_NAT${A_NAT:+, }$(st_get "$id" subnet)"; }
+		case "$(st_get "$id" v6)" in
+		active) A_V6="$A_V6${A_V6:+, }$b"; A_DNS6=1 ;;
+		waiting) A_DNS6=1 ;;
+		esac
 	done
 }
 set_text() {	# <name> <elements, ", " separated>
@@ -458,12 +797,14 @@ nft_text() {
 	set_text iso "$A_ISO"
 	set_text mgmt "$A_MGMT"
 	set_text nat "$A_NATB"
+	set_text v6 "$A_V6"
 	cat <<-EOF
 		chain forward {
 			type filter hook forward priority filter; policy accept;
 			oifname @gw ct state established,related accept
 			oifname @gw ct status dnat accept
-			iifname @nat oifname "$w" accept
+			iifname @nat oifname "$w" meta nfproto ipv4 accept
+			iifname @v6 oifname "$w" meta nfproto ipv6 accept
 			iifname @iso counter drop
 			oifname @iso counter drop
 			iifname @gw oifname @gw accept
@@ -476,6 +817,8 @@ nft_text() {
 			iifname @gw udp dport 67 accept
 			iifname @gw meta l4proto { tcp, udp } th dport 53 accept
 			iifname @gw meta l4proto icmp accept
+			iifname @gw meta l4proto ipv6-icmp accept
+			iifname @gw udp dport 547 accept
 			iifname @mgmt tcp dport { $MGMT_PORTS } accept
 			iifname @gw counter drop
 		}
@@ -534,6 +877,8 @@ dnsmasq_text() {
 	echo "dhcp-leasefile=$GW/leases"
 	echo "dhcp-hostsfile=$GW/dhcp-hosts"
 	echo "dhcp-authoritative"
+	# router advertisements (IPv6 networks; the lines name the bridge only)
+	[ -n "$A_DNS6" ] && echo "enable-ra"
 	for f in "$GW/net"/*; do
 		[ -f "$f" ] || continue
 		id=${f##*/}; case "$id" in *.new) continue ;; esac
@@ -543,6 +888,14 @@ dnsmasq_text() {
 		# the domain: handed out (option 15) and the suffix of the clients' names
 		d=$(st_get "$id" domain)
 		[ -n "$d" ] && [ "$d" != - ] && echo "domain=$d,$(st_get "$id" subnet)"
+		case "$(st_get "$id" v6):$(st_get "$id" ipv6)" in
+		active:slaac|waiting:slaac)
+			echo "dhcp-range=set:n$id,::,constructor:$b,ra-stateless,64,$(st_get "$id" lease)"
+			echo "dhcp-option=tag:n$id,option6:dns-server,[::]" ;;
+		active:dhcpv6|waiting:dhcpv6)
+			echo "dhcp-range=set:n$id,::1000,::1fff,constructor:$b,64,$(st_get "$id" lease)"
+			echo "dhcp-option=tag:n$id,option6:dns-server,[::]" ;;
+		esac
 		[ "$(st_get "$id" dhcp)" = 1 ] || continue
 		echo "dhcp-range=set:n$id,$(st_get "$id" dhcp_start),$(st_get "$id" dhcp_end),$(n2ip "$(mask_of "${c#*/}")"),$(st_get "$id" lease)"
 		echo "dhcp-option=tag:n$id,option:router,${c%/*}"
@@ -673,7 +1026,7 @@ l2_bridge() {
 }
 
 cmd_apply() {
-	local f id vid sub iso mgmt dh st en le dns dom acc= n=0 why l d c b s rc=0 prev_iso prev_mgmt prev_s prev_why old
+	local f id vid sub iso mgmt dh st en le dns dom v6 pid acc= n=0 why l d c b s rc=0 prev_iso prev_mgmt prev_s prev_why old
 	local addrs cnets nat_why=
 	if [ -f "$ROUTER_APPLIED" ] && [ -n "$(gw_lines)" ]; then
 		router_refused=1
@@ -685,9 +1038,9 @@ cmd_apply() {
 	wan_port_jack && nat_why="the WAN port $WAN_PORT is a LAN jack (LAN_PORT_$WAN_PORT): no NAT through it"
 	: > "$GW/wanted.new"
 	# init + check every gateway line (file order: the first one keeps a subnet)
-	while read -r id vid sub iso mgmt dh st en le dns dom; do
+	while read -r id vid sub iso mgmt dh st en le dns dom v6 pid; do
 		[ -n "$id" ] || continue
-		net_init "$id" "$vid" "$sub" "$iso" "$mgmt" "$dh" "$st" "$en" "$le" "${dns:--}" "${dom:--}"
+		net_init "$id" "$vid" "$sub" "$iso" "$mgmt" "$dh" "$st" "$en" "$le" "${dns:--}" "${dom:--}" "${v6:--}" "${pid:--}"
 		why=$N_ERR
 		case "$N_ID" in ''|0*|*[!0-9]*) log "a mode=gateway line without a valid network= id: skipped"; continue ;; esac
 		if [ -z "$why" ] && [ -n "$router_refused" ]; then why="router mode is applied (gt-be98-router): gateway networks and router mode exclude each other (D-GW5)"; fi
@@ -750,6 +1103,7 @@ cmd_apply() {
 			echo "dhcp_start ${N_START:--}"; echo "dhcp_end ${N_END:--}"; echo "lease $N_LEASE"
 			echo "dns $N_DNS"; echo "domain ${N_DOMAIN:--}"
 			echo "refused ${why:+1}"; echo "why_refused $why"; echo "why_local $N_LOCAL"; echo "why_dhcp $N_DWHY"
+		echo "ipv6 $N_V6"; echo "pid $N_PID"; echo "why6_shape $N_V6WHY"
 		} > "$GW/plan.$N_ID"
 		[ -z "$N_DWHY" ] || [ -n "$why" ] || log "network $N_ID: DHCP off: $N_DWHY"
 		N_START= N_END=
@@ -826,7 +1180,7 @@ cmd_apply() {
 		fi
 		{
 			echo "state $s"; echo "bridge $b"
-			sed -n '/^\(vid\|cidr\|subnet\|isolate\|mgmt\|dhcp\|dhcp_start\|dhcp_end\|lease\|dns\|domain\) /p' "$f"
+			sed -n '/^\(vid\|cidr\|subnet\|isolate\|mgmt\|dhcp\|dhcp_start\|dhcp_end\|lease\|dns\|domain\|ipv6\|pid\|why6_shape\) /p' "$f"
 			echo "why $why"
 			if [ "$s" != inactive ] && [ "$prev_s" != "$s" ]; then echo "starts $(( $(counter "$id" starts) + 1 ))"
 			else echo "starts $(counter "$id" starts)"; fi
@@ -839,6 +1193,8 @@ cmd_apply() {
 		[ "$old" != "$b" ] && [ -n "$old" ] && [ "$old" != - ] && rm -f "$GW/hold/$old"
 		rm -f "$f"
 	done
+	# IPv6 of each running network (its /64 of the delegated prefix)
+	v6_plan
 	# 4. the rule set FIRST (no address of a gateway network is up without
 	# it: forwarding may already be held by another owner), then the
 	# addresses and policy rules, then the conntrack entries it no longer
@@ -864,10 +1220,19 @@ cmd_apply() {
 		fi
 	done
 	START=
+	v6_apply || rc=1
 	[ -z "${REDO:-}" ] || { REDO=; nft_apply "$WAN_IF" || rc=1; }
 	narrow
 	# 5. routes, DHCP/DNS, forwarding
 	active_sets
+	if [ -n "$A_V6" ]; then
+		route6_table "$WAN_IF"
+		"$FWD" -6 hold gw || rc=1
+		grep -qx fwd6 "$GW/applied" || echo fwd6 >> "$GW/applied"
+	elif grep -qs '^\(fwd6\|pd6route .*\)$' "$GW/applied"; then
+		# the last network's IPv6 left (nothing run when none ever had it)
+		route6_clear
+	fi
 	if [ -n "$A_GW" ]; then
 		route_table "$WAN_IF"
 		dnsmasq_apply || rc=1
@@ -895,13 +1260,15 @@ stop_all_active() {
 }
 # the narrowing of this apply (ISO_NARROW, MGMT_NARROW: network ids)
 narrow() {
-	local id x a b
+	local id x a b a6
 	for id in ${ISO_NARROW:-}; do
-		a=$(st_get "$id" subnet)
+		a=$(st_get "$id" subnet); a6=$(st_get "$id" prefix6)
 		for x in "$GW/net"/*; do
 			x=${x##*/}; [ "$x" != "$id" ] || continue
 			case "$(st_get "$x" state)" in local|routed) ;; *) continue ;; esac
 			b=$(st_get "$x" subnet); ct_del "$a" "$b"
+			b=$(st_get "$x" prefix6)
+			[ -n "$a6" ] && [ "$a6" != - ] && [ -n "$b" ] && [ "$b" != - ] && ct_del "$a6" "$b"
 		done
 		log "network $id: isolated (its flows to and from the other networks deleted)"
 	done
@@ -909,6 +1276,10 @@ narrow() {
 		a=$(st_get "$id" subnet)
 		if command -v conntrack >/dev/null 2>&1; then
 			for x in 22 80 443; do conntrack -D -s "$a" -p tcp --dport "$x" >/dev/null 2>&1; done
+			a6=$(st_get "$id" prefix6)
+			if [ -n "$a6" ] && [ "$a6" != - ]; then
+				for x in 22 80 443; do conntrack -D -f ipv6 -s "$a6" -p tcp --dport "$x" >/dev/null 2>&1; done
+			fi
 		fi
 		log "network $id: management off (its management sessions deleted)"
 	done
@@ -929,6 +1300,7 @@ cmd_stop() {
 	nft delete table inet "$NFT_TABLE" 2>/dev/null
 	nft delete table ip "$NAT_TABLE" 2>/dev/null
 	ip route flush table "$GW_TABLE" 2>/dev/null
+	route6_clear
 	dnsmasq_stop
 	if grep -qx fwd "$GW/applied" 2>/dev/null; then "$FWD" release gw; fi
 	# the lease table stays (D-GW7: the next start reads it back)
@@ -937,15 +1309,27 @@ cmd_stop() {
 }
 
 cmd_status() {
-	local f id
+	local f id m v p x
 	for f in "$GW/net"/*; do
 		[ -f "$f" ] || continue
 		id=${f##*/}; case "$id" in *.new|*.tmp) continue ;; esac
 		echo "net $id $(st_get "$id" state) $(st_get "$id" bridge) $(st_get "$id" cidr) isolate=$(st_get "$id" isolate) mgmt=$(st_get "$id" mgmt) starts=$(counter "$id" starts) refusals=$(counter "$id" refusals) why=$(st_get "$id" why)"
 	done
-	wan_ctx
+	for f in "$GW/net"/*; do
+		[ -f "$f" ] || continue
+		id=${f##*/}; case "$id" in *.new|*.tmp) continue ;; esac
+		m=$(st_get "$id" ipv6); v=$(st_get "$id" v6); p=$(st_get "$id" pid6)
+		case "$(st_get "$id" state)" in local|routed) ;; *) v=off ;; esac
+		case "$p" in ''|-) p=$(st_get "$id" pid) ;; esac
+		case "$p" in ''|-) p=auto ;; esac
+		x=$(st_get "$id" prefix6)
+		echo "net6 $id ${m:-off} ${v:-off} ${x:--} id=$p why=$(st_get "$id" why6)"
+	done
+	wan_ctx; pd6_ctx
+	echo "pd6 ${PD6:--}"
 	echo "wan $WAN_IF"
 	echo "forwarding $("$FWD" held gw && echo 1 || echo 0)"
+	echo "forwarding6 $("$FWD" -6 held gw && echo 1 || echo 0)"
 	p=-; pid_alive "$GW/dnsmasq.pid" && p=$(cat "$GW/dnsmasq.pid")
 	echo "dnsmasq pid=$p restarts=$(dn_stat restarts) hups=$(dn_stat hups) static=$(grep -vc '^#' "$GW/dhcp-hosts" 2>/dev/null || echo 0)"
 }
@@ -979,9 +1363,10 @@ apply|reroute) lock || exit 1; cmd_apply; r=$?; unlock; exit $r ;;
 stop)	lock || exit 1; cmd_stop; r=$?; unlock; exit $r ;;
 status)	cmd_status ;;
 leases)	cmd_leases ;;
-features) echo "features gateway" ;;
+features) echo "features gateway ipv6" ;;
 nft-text) [ $# = 1 ] || exit 2; nft_text "$1" ;;
 dnsmasq-text) wan_ctx; dnsmasq_text ;;
 hosts-text) hosts_text ;;
+v6calc)	v6calc "$@" ;;
 *)	sed -n '/^#   gt-be98-gw apply/,/^#   gt-be98-gw hosts-text/p' "$0" | sed 's/^# \{0,1\}//' >&2; exit 2 ;;
 esac

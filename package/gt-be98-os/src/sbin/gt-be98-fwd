@@ -1,15 +1,22 @@
 #!/bin/sh
 # SPDX-License-Identifier: GPL-2.0
-# gt-be98-fwd: the one owner of net.ipv4.ip_forward. The image ships it 0
+# gt-be98-fwd: the one owner of net.ipv4.ip_forward and, with -6, of
+# net.ipv6.conf.all.forwarding. The image ships both 0
 # (etc/sysctl.d/90-gt-be98.conf); every routed service HOLDS forwarding by
 # name instead of writing the sysctl itself:
 #
-#   gt-be98-fwd hold <owner>      ip_forward=1; <owner> recorded as a holder
-#   gt-be98-fwd release <owner>   <owner> no longer holds it; the LAST holder
-#                                 leaving restores the image's 0
-#   gt-be98-fwd status            "ip_forward <0|1>" then "holder <owner>" lines
-#   gt-be98-fwd held [<owner>]    rc 0 when <owner> (any owner: none given)
-#                                 holds it
+#   gt-be98-fwd [-6] hold <owner>      forwarding=1; <owner> recorded as a holder
+#   gt-be98-fwd [-6] release <owner>   <owner> no longer holds it; the LAST
+#                                      holder leaving restores the image's 0
+#   gt-be98-fwd [-6] status            "ip_forward <0|1>" (-6: "ipv6_forwarding
+#                                      <0|1>") then "holder <owner>" lines
+#   gt-be98-fwd [-6] held [<owner>]    rc 0 when <owner> (any owner: none
+#                                      given) holds it
+# The two families are independent (separate holders, separate sysctls):
+# IPv6 holders are gt-be98-wan (WAN_PD_LANS, its delegated LANs) and
+# gt-be98-gw (gateway networks with IPv6 on). Before -6, gt-be98-wan saved
+# and restored the IPv6 sysctl itself, which a second IPv6 router would have
+# turned off under the other's feet.
 #
 # Owners (one lower-case word each): lan (gt-be98-lan's routed br-lan),
 # router (gt-be98-router), sta (gt-be98-wifi-sta's routed networks), gw
@@ -24,6 +31,13 @@ set -u
 RUNDIR=${GT_BE98_RUN:-/run}
 D=${GT_BE98_FWD_DIR:-$RUNDIR/gt-be98-fwd}
 SYSCTL=${GT_BE98_FWD_SYSCTL:-/proc/sys/net/ipv4/ip_forward}
+NAME=ip_forward
+if [ "${1:-}" = -6 ]; then
+	shift
+	D=$D/v6
+	SYSCTL=${GT_BE98_FWD_SYSCTL6:-/proc/sys/net/ipv6/conf/all/forwarding}
+	NAME=ipv6_forwarding
+fi
 # the image's value (etc/sysctl.d/90-gt-be98.conf)
 BASE=0
 
@@ -50,7 +64,7 @@ holders() {
 		f=${f##*/}; valid_owner "$f" && echo "$f"
 	done
 }
-fwd_set() { echo "$1" > "$SYSCTL" 2>/dev/null || err "ip_forward=$1 not written"; }
+fwd_set() { echo "$1" > "$SYSCTL" 2>/dev/null || err "$NAME=$1 not written"; }
 
 cmd_hold() {
 	: > "$D/$1" || { err "$1: holder file not written"; return 1; }
@@ -68,7 +82,7 @@ hold|release)
 	[ $# = 1 ] && valid_owner "$1" || { err "usage: $c <owner> (a lower-case word)"; exit 2; }
 	lock || exit 1; "cmd_$c" "$1"; r=$?; unlock; exit $r ;;
 held)	if [ $# = 1 ]; then [ -f "$D/$1" ]; else [ -n "$(holders)" ]; fi ;;
-status)	echo "ip_forward $(cat "$SYSCTL" 2>/dev/null || echo '?')"
+status)	echo "$NAME $(cat "$SYSCTL" 2>/dev/null || echo '?')"
 	holders | sed 's/^/holder /' ;;
-*)	err "usage: hold|release <owner> | held [<owner>] | status"; exit 2 ;;
+*)	err "usage: [-6] hold|release <owner> | [-6] held [<owner>] | [-6] status"; exit 2 ;;
 esac

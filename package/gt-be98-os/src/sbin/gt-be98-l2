@@ -9,9 +9,10 @@
 # members, and a VLAN with jacks and no running SSID still has its bridge.
 #
 #   gt-be98-l2 up <user> <bridge> <trunk> <vid> [<wired>]
-#       the bridge (created or adopted: no STP, forward_delay 0, IPv6 off,
-#       up), <trunk>.<vid> (created or adopted, IPv6 off, up, enslaved, not
-#       isolated; the trunk is brought up if down, never re-addressed); user
+#       the bridge (created or adopted: no STP, forward_delay 0, IPv6 off but
+#       on a bridge gt-be98-gw holds, up), <trunk>.<vid> (created or adopted,
+#       IPv6 off, up, enslaved, not isolated; the trunk is brought up if
+#       down, never re-addressed); user
 #       recorded. <wired> (rnr1..rnr3, never rnr0, never the trunk): the
 #       user's WIRED MEMBER <wired>.<vid> too, created or adopted like the
 #       trunk VLAN and recorded as that user's (the RTL8372 tags each jack's
@@ -328,7 +329,11 @@ cmd_up() {
 	# recorded at once: a failure below still lets `down` undo what exists
 	case " $S_USERS " in *" $u "*) ;; *) S_USERS="$S_USERS $u" ;; esac
 	st_write "$b"
-	ipv6_off "$b"
+	# IPv6 off on the bridge, except while gt-be98-gw holds it: the gateway
+	# network's IPv6 (its /64 of the delegated prefix) is gt-be98-gw's, which
+	# turns IPv6 on and off itself; writing disable_ipv6=1 here at every
+	# `up` (each lan/wifi reload) would flush its address under it
+	[ -e "$GW_HOLD/$b" ] || ipv6_off "$b"
 	ip link set dev "$b" type bridge stp_state 0 forward_delay 0 && ip link set dev "$b" up ||
 		{ err "$b: setup failed"; return 1; }
 	# a gateway network: no trunk sub-interface (header)
