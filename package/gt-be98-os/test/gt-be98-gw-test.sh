@@ -564,8 +564,14 @@ S=$here/..
 fol() { awk -v f="$2" '/^'"$2"'\(\) \{/ { x = 1 } x && /GW_FOLLOW/ { n++ } x && /^}/ { x = 0 } END { print n + 0 }' "$1"; }
 check "gt-be98-wifi: start and reload run GW_FOLLOW (rc-service --ifstarted gt-be98-gw reload)" "1 1 yes" \
 	"$(fol "$S/src/init.d/gt-be98-wifi" start) $(fol "$S/src/init.d/gt-be98-wifi" reload) $(yn grep -q 'GW_FOLLOW=${GT_BE98_GW_FOLLOW-rc-service --ifstarted gt-be98-gw reload}' "$S/src/init.d/gt-be98-wifi")"
+# a MESH LEAF (the Wi-Fi plan's bhtrunk line) runs no gateway network; control: the line gone
+mkdir -p "$T/run/gt-be98-wifi/gen"; echo 'bhtrunk bcawl1 10' > "$T/run/gt-be98-wifi/gen/plan"
+sh "$GWT" apply > /dev/null 2>&1
+check "mesh leaf: every gateway network refused (why= says so)" yes "$(sh "$GWT" status | grep '^net 4 ' | grep -q 'mesh leaf' && echo yes || echo no)"
+rm -f "$T/run/gt-be98-wifi/gen/plan"; sh "$GWT" apply > /dev/null 2>&1
+check "control: no bhtrunk line: network 4 not refused for it" no "$(sh "$GWT" status | grep '^net 4 ' | grep -q 'mesh leaf' && echo yes || echo no)"
 check "gt-be98-os.mk: the tools, the service, the dhcpcd hook installed; gt-be98-gw in the default runlevel" "yes yes yes yes" \
-	"$(yn grep -q 'gt-be98-l2 gt-be98-fwd gt-be98-gw; do' "$S/gt-be98-os.mk") $(yn grep -q 'gt-be98-hostkeys gt-be98-wan gt-be98-gw' "$S/gt-be98-os.mk") $(yn grep -q 'dhcpcd-hooks/09-gt-be98-gw$' "$S/gt-be98-os.mk") $(yn grep -q 'gt-be98-lan gt-be98-gw; do' "$S/gt-be98-os.mk")"
+	"$(yn grep -qE 'gt-be98-l2 gt-be98-fwd gt-be98-gw[ ;]' "$S/gt-be98-os.mk") $(yn grep -q 'gt-be98-hostkeys gt-be98-wan gt-be98-gw' "$S/gt-be98-os.mk") $(yn grep -q 'dhcpcd-hooks/09-gt-be98-gw$' "$S/gt-be98-os.mk") $(yn grep -q 'gt-be98-lan gt-be98-gw; do' "$S/gt-be98-os.mk")"
 check "the service answers features (an extra command, so when stopped too)" "features|features gateway ipv6" \
 	"$(GT_BE98_GW="$GWT"; extra_commands=; . "$S/src/init.d/gt-be98-gw"; echo "$extra_commands|$(features)")"
 check "no routed owner writes ip_forward itself any more (gt-be98-fwd only)" "" \

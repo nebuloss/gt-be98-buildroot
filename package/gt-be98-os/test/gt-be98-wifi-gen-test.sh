@@ -1478,6 +1478,91 @@ stref "routed beside a repeater station" "routed= needs the station repeater=0" 
 stref "repeater bad value" "repeater=yes refused (0, 4addr or multiap)" station=2g repeater=yes $(nl "$N1")
 stref "repeated=2" "network 1: repeated=2 refused" station=2g repeater=4addr $(nl "$N1") repeated=2
 
+# ---- 14. mesh (design §3.4 C0-C2, §8.2): the root's backhaul= BSS and the leaf's station trunk=1 ----
+check "-F: feature mesh 1, feature wds 0 (wds= stays refused)" "feature wds 0|feature mesh 1" "$(grep -E '^feature (wds|mesh) ' "$T/feat" | tr '\n' '|' | sed 's/|$//')"
+BH='backhaul=5gl|ssid=mesh-bh|passphrase=SECRETpass1|leaf=02:00:00:00:00:0A'
+rm -f "$T/slots"
+{ net 1 a sae password1 "2g 5gl" 1; nl "$BH"; } > "$T/bh1"
+gen "$T/bh1"; check "backhaul=5gl: accepted" 0 $?
+check "backhaul: a BSS of 5gl at slot 1 (index 1), no bridge (-)" "bcawl0 bcawl0-1 1 100000 1 -" \
+	"$(awk '$1 == "bss" && $5 == 100000 { print $2, $3, $4, $5, $6, $8 }' "$T/o/plan")"
+check "backhaul: plan line <band> <dev> <ifname> <bssid>" "backhaul 5gl bcawl0 bcawl0-1 $(bssid_of bcawl0-1)" "$(grep '^backhaul ' "$T/o/plan")"
+check "backhaul: no net line, no brwifi100000" "0 0" "$(grep -c '^net 100000' "$T/o/plan") $(grep -c brwifi100000 "$T/o/plan")"
+check "backhaul: hidden, multi_ap=1 wds_sta=1 profile 2 vlanid 0, no bridge=, no rnr" "yes yes yes yes yes no no" \
+	"$(has bcawl0-1 ignore_broadcast_ssid=1) $(has bcawl0-1 multi_ap=1) $(has bcawl0-1 wds_sta=1) $(has bcawl0-1 multi_ap_profile=2) $(has bcawl0-1 multi_ap_vlanid=0) $(grep -q '^bridge=' "$T/o/sec-bcawl0-1" && echo yes || echo no) $(has bcawl0-1 rnr=1)"
+check "backhaul: ONE leaf: max_num_sta=1, macaddr_acl=1, the accept file holds the leaf (lower case)" "yes yes yes 02:00:00:00:00:0a" \
+	"$(has bcawl0-1 max_num_sta=1) $(has bcawl0-1 macaddr_acl=1) $(has bcawl0-1 "accept_mac_file=$T/o/accept-bcawl0-1") $(cat "$T/o/accept-bcawl0-1")"
+check "backhaul: SAE only, PMF required (default security=sae)" "yes yes yes" \
+	"$(has bcawl0-1 wpa_key_mgmt=SAE) $(has bcawl0-1 ieee80211w=2) $(has bcawl0-1 sae_require_mfp=1)"
+check "control: the fronthaul BSS of 5gl keeps its bridge and rnr, no multi_ap, no ACL" "yes yes no no" \
+	"$(has bcawl0 bridge=brwifi1) $(has bcawl0 rnr=1) $(has bcawl0 multi_ap=1) $(has bcawl0 macaddr_acl=1)"
+bssid_rules "backhaul"
+conf_ok "backhaul"
+check "backhaul: its slot is sticky (slot file: 5gl 1 100000 1)" "5gl 1 100000 1" "$(grep '^5gl 1 100000 ' "$T/slots")"
+# psk2sae: WPA2/WPA3; on 6 GHz it is written as SAE
+{ net 1 a sae password1 "6g" 1; nl 'backhaul=6g|ssid=mesh6|security=psk2sae|passphrase=password66|leaf=02:00:00:00:00:0a'; } > "$T/bh2"
+rm -f "$T/slots"; gen "$T/bh2"; check "backhaul=6g psk2sae: accepted, SAE on 6 GHz, no 6 GHz discovery frames" "0 yes no no" \
+	"$? $(has bcawl2-1 wpa_key_mgmt=SAE) $(has bcawl2-1 fils_discovery_max_interval=20) $(has bcawl2-1 unsol_bcast_probe_resp_interval=20)"
+{ net 1 a sae password1 "5gl" 1; nl 'backhaul=5gl|ssid=mesh5|security=psk2sae|passphrase=password55|leaf=02:00:00:00:00:0a'; } > "$T/bh3"
+rm -f "$T/slots"; gen "$T/bh3"; check "backhaul=5gl psk2sae: WPA-PSK SAE, PMF optional" "0 yes yes" "$? $(has bcawl0-1 'wpa_key_mgmt=WPA-PSK SAE') $(has bcawl0-1 ieee80211w=1)"
+# alone on its radio, the backhaul is the anchor
+{ net 1 a sae password1 "2g" 1; nl 'backhaul=5gl|ssid=mesh5|passphrase=password55|leaf=02:00:00:00:00:0a'; } > "$T/bh4"
+rm -f "$T/slots"; gen "$T/bh4"; check "backhaul alone on 5gl: the anchor bcawl0" "0 backhaul 5gl bcawl0 bcawl0" "$? $(grep '^backhaul ' "$T/o/plan" | cut -d' ' -f1-4)"
+# enabled=0: no BSS, no plan line, no accept file
+{ net 1 a sae password1 "5gl" 1; nl 'backhaul=5gl|enabled=0|ssid=mesh5|passphrase=password55|leaf=02:00:00:00:00:0a'; } > "$T/bh5"
+rm -f "$T/slots"; gen "$T/bh5"; check "backhaul enabled=0: no BSS, no backhaul line, no accept file" "0 0 0 no" \
+	"$? $(grep -c '^backhaul ' "$T/o/plan") $(grep -c ' 100000 ' "$T/o/plan") $(ls "$T/o"/accept-* > /dev/null 2>&1 && echo yes || echo no)"
+# it counts in the per-radio limit
+{ net 1 a sae password1 "5gl" 1; net 2 b sae password2 "5gl" 2; nl "$BH"; } > "$T/bh6"
+rm -f "$T/slots"; gen "$T/bh6" -C 2; check "backhaul counts in the per-radio limit (-C 2, 2 networks + backhaul): refused" "1 yes" "$? $(grep -qF 'radio 5gl: 3 networks, at most 2' "$T/err" && echo yes || echo no)"
+gen "$T/bh6" -C 3; check "control: -C 3: accepted" 0 $?
+stref "two backhaul blocks" "one backhaul= block only" backhaul=5gl ssid=x passphrase=SECRETpass1 leaf=02:00:00:00:00:01 backhaul=6g
+stref "backhaul bad band" "backhaul 2g|5gl|6g" backhaul=5
+stref "backhaul on 5gh (all DFS)" "backhaul 2g|5gl|6g (5gh: every channel is DFS)" backhaul=5gh ssid=x passphrase=SECRETpass1 leaf=02:00:00:00:00:01
+stref "backhaul short passphrase" "backhaul 5gl: the backhaul passphrase must be 8-63" backhaul=5gl ssid=x passphrase=short leaf=02:00:00:00:00:01
+stref "backhaul security psk2" "backhaul 5gl: security=psk2 refused (sae or psk2sae)" backhaul=5gl ssid=x security=psk2 passphrase=SECRETpass1 leaf=02:00:00:00:00:01
+stref "backhaul no ssid" "backhaul 5gl: ssid must be 1-32 bytes" backhaul=5gl passphrase=SECRETpass1 leaf=02:00:00:00:00:01
+stref "backhaul ssid of a network" "backhaul 5gl: ssid also used by network 1" $(nl "$N1") backhaul=5gl ssid=a passphrase=SECRETpass1 leaf=02:00:00:00:00:01
+stref "backhaul without leaf=" "backhaul 5gl: leaf=<the leaf station address> is required" backhaul=5gl ssid=x passphrase=SECRETpass1
+stref "backhaul with two leaf= (one leaf per backhaul BSS)" "one leaf= only" backhaul=5gl ssid=x passphrase=SECRETpass1 leaf=02:00:00:00:00:01 leaf=02:00:00:00:00:02
+stref "backhaul bad leaf" "backhaul 5gl: leaf=01:00:00:00:00:01: a unicast MAC" backhaul=5gl ssid=x passphrase=SECRETpass1 leaf=01:00:00:00:00:01
+stref "backhaul unknown key (no value echoed)" "backhaul 5gl: unknown key vlan" backhaul=5gl ssid=x passphrase=SECRETpass1 leaf=02:00:00:00:00:01 vlan=SECRETpass1
+stref "backhaul on the station radio" "the radio of the station=" station=5gl ssid=up security=sae passphrase=saepassword1 $(nl "$N1") backhaul=5gl ssid=x passphrase=SECRETpass1 leaf=02:00:00:00:00:01
+{ stab 5gl ssid=up security=sae passphrase=saepassword1 enabled=0; nl 'network=1|ssid=a|security=sae|passphrase=password1|bands=2g|vlan=1'; nl "$BH"; } > "$T/bh8"
+gen "$T/bh8"; check "control: the station of that radio disabled: the backhaul accepted" 0 $?
+# -S: a bad backhaul is skipped, the networks run
+{ net 1 a sae password1 "5gl" 1; nl 'backhaul=5gl|ssid=x|passphrase=short|leaf=02:00:00:00:00:01'; } > "$T/bh7"
+rm -f "$T/slots"; gen "$T/bh7" -S; check "-S: a bad backhaul is skipped (warned, plan 'skipped backhaul'), network 1 runs" "0 yes skipped backhaul 1" \
+	"$? $(grep -qF 'backhaul 5gl skipped: the backhaul passphrase' "$T/err" && echo yes || echo no) $(grep '^skipped ' "$T/o/plan") $(grep -c '^net 1 ' "$T/o/plan")"
+# the leaf: station trunk=1
+{ stab 5gh ssid=mesh-bh security=sae passphrase=saepassword1 repeater=multiap trunk=1
+  net 1 a sae password1 "2g 5gh" 10; net 2 b sae password2 "2g" 20; } > "$T/lf1"
+rm -f "$T/slots"; gen "$T/lf1"; check "leaf: station trunk=1 accepted" 0 $?
+check "leaf: plan lines repeater <dev> multiap - and bhtrunk <dev> <vids>" "repeater bcawl1 multiap -|bhtrunk bcawl1 10,20" \
+	"$(grep -E '^(repeater|bhtrunk) ' "$T/o/plan" | tr '\n' '|' | sed 's/|$//')"
+check "leaf: the networks stay VLAN networks (the trunk carries vlan=)" "net 1 brwifi1 10 0|net 2 brwifi2 20 0" \
+	"$(grep '^net ' "$T/o/plan" | tr '\n' '|' | sed 's/|$//')"
+check "leaf: multi_ap_backhaul_sta=1, scan_ssid=1 (the backhaul is hidden)" "	multi_ap_backhaul_sta=1|	scan_ssid=1" "$(grep -E 'multi_ap|scan_ssid' "$T/o/sta-bcawl1.conf" | sort | tr '\n' '|' | sed 's/|$//')"
+sta_ok "leaf trunk" "ctrl=/run/wpa_supplicant networks=1 mesh-bh key_mgmt=0x400 pmf=2 sae_pwe=2 psk=- sae_password=12 bssid=- scan_ssid=1"
+{ stab 5gh ssid=mesh-bh security=sae passphrase=saepassword1 repeater=multiap trunk=1; } > "$T/lf3"
+gen "$T/lf3"; check "leaf with no network: bhtrunk <dev> -" "0 bhtrunk bcawl1 -" "$? $(grep '^bhtrunk ' "$T/o/plan")"
+sed 's/^trunk=1$/trunk=0/' "$T/lf1" > "$T/lf2"
+gen "$T/lf2"; check "control: trunk=0: no bhtrunk line, the repeater line stays" "0 0 1" "$? $(grep -c '^bhtrunk ' "$T/o/plan") $(grep -c '^repeater ' "$T/o/plan")"
+gen "$T/lf1"; check "leaf: bhmgmt line, the default management VLAN = the first vlan= network's" "bhmgmt 10 brwifi1" "$(grep '^bhmgmt ' "$T/o/plan")"
+{ stab 5gh ssid=mesh-bh security=sae passphrase=saepassword1 repeater=multiap trunk=1 mgmt_vid=20
+  net 1 a sae password1 "2g 5gh" 10; net 2 b sae password2 "2g" 20; } > "$T/lf4"
+gen "$T/lf4"; check "leaf: mgmt_vid=20: bhmgmt 20 brwifi2" "0 bhmgmt 20 brwifi2" "$? $(grep '^bhmgmt ' "$T/o/plan")"
+check "control: leaf with no network: no bhmgmt line" 0 "$(gen "$T/lf3"; grep -c '^bhmgmt ' "$T/o/plan")"
+stref "mgmt_vid not a network's VLAN" "mgmt_vid=30 is not the vlan= of a network of the list" station=5gh repeater=multiap trunk=1 mgmt_vid=30 $(nl "$N1")
+stref "mgmt_vid without trunk" "mgmt_vid= needs trunk=1" station=5gh repeater=multiap mgmt_vid=1 $(nl "$N1")
+stref "mgmt_vid bad value" "mgmt_vid=0 refused" station=5gh repeater=multiap trunk=1 mgmt_vid=0 $(nl "$N1")
+stref "trunk without multiap" "trunk=1 needs repeater=multiap" station=5gh repeater=4addr trunk=1 $(nl "$N1")
+stref "trunk on a disabled station" "trunk=1 needs enabled=1" station=5gh enabled=0 repeater=multiap trunk=1 $(nl "$N1")
+stref "trunk and a repeated network" "repeated=1 excludes the station trunk=1" station=2g repeater=multiap trunk=1 $(nl "$N6")
+stref "trunk and a backhaul" "a backhaul= block and a station trunk=1 exclude each other" station=5gh repeater=multiap trunk=1 $(nl "$N1") backhaul=5gl ssid=x passphrase=SECRETpass1 leaf=02:00:00:00:00:01
+stref "trunk and routed" "routed= needs the station repeater=0" station=2g repeater=multiap trunk=1 network=1 ssid=a security=sae passphrase=password1 bands=2g routed=192.168.50.1/24
+stref "trunk=2" "station 2g: unknown key trunk" station=2g repeater=multiap trunk=2 $(nl "$N1")
+
 # ---- WPS (network wps=1): off by default, push-button + enrollee PIN, never a
 # static AP PIN, never on a WPA3-only BSS, one network per list ----
 check "-F: feature wps 1" "feature wps 1" "$($SH "$G" -F | grep '^feature wps ')"

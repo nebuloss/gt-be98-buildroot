@@ -30,7 +30,7 @@ define GT_BE98_OS_INSTALL_TARGET_CMDS
 		gt-be98-macaddr gt-be98-netguard gt-be98-save gt-be98-nandcheck \
 		gt-be98-nandpage gt-be98-autosave gt-be98-wifi-gen gt-be98-wifi-sched \
 		gt-be98-leds gt-be98-wifi-sta gt-be98-wifi-reprobe gt-be98-wan \
-		gt-be98-wps gt-be98-wifi-steer gt-be98-l2 gt-be98-fwd gt-be98-gw; do \
+		gt-be98-wps gt-be98-wifi-steer gt-be98-l2 gt-be98-fwd gt-be98-gw gt-be98-mesh; do \
 		$(INSTALL) -D -m 0755 $(@D)/sbin/$$f $(TARGET_DIR)/usr/sbin/$$f || exit 1; \
 	done
 	for s in $(GT_BE98_OS_SERVICES); do \

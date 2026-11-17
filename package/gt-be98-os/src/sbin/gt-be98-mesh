@@ -1,0 +1,548 @@
+#!/bin/sh
+# shellcheck shell=busybox
+# SPDX-License-Identifier: GPL-2.0
+# gt-be98-mesh: the Wi-Fi mesh backhaul of the OS (buildroot
+# docs/MESH-BACKHAUL-DESIGN.md: a static Multi-AP backhaul, every network
+# carried over the 4-address link as an 802.1Q VLAN).
+#
+# ROOT (the Wi-Fi list has a backhaul= block, plan line "backhaul <band>
+# <dev> <ifname> <bssid> <leaves>"): hostapd runs a hidden Multi-AP backhaul
+# BSS with wds_sta=1, and makes one 4-address AP_VLAN <ifname>.sta<aid> per
+# leaf. gt-be98-wifi runs `hostapd_cli -r -a <this script>` on that BSS, so
+# hostapd's WDS-STA-INTERFACE-ADDED / -REMOVED reach this script, which
+# makes the AP_VLAN a downlink trunk of gt-be98-l2 (bh<k>: every network
+# bridge gets bh<k>.<backhaul VID>) or lets it go. The untagged AP_VLAN is
+# no bridge port (EAPOL and management only: the root's management is rnr0,
+# which is never bridged). Only the block's one leaf= (the generator's
+# accept-<ifname>: hostapd admits nobody else either, design §8.2) gets a
+# trunk; any other peer is deauthenticated.
+# LEAF (the station has trunk=1, plan line "bhtrunk <dev>"): gt-be98-wifi
+# makes the station gt-be98-l2's uplink trunk bhs (every network bridge on
+# bhs.<vid>); this script only reports it.
+#
+#   gt-be98-mesh <ctrl ifname> <event> [key=value ...]
+#                     the hostapd_cli action (hostapd_cli -a): events other
+#                     than WDS-STA-INTERFACE-ADDED/-REMOVED are ignored
+#   gt-be98-mesh sync the AP_VLANs that exist made trunks, and the trunks
+#                     whose AP_VLAN is gone deleted (after a hostapd restart
+#                     or reload: events missed while hostapd_cli was not
+#                     attached). gt-be98-wifi runs it after every apply
+#   gt-be98-mesh mgmt <bridge>|-
+#                     LEAF MANAGEMENT (D-MESH-OS1; plan line "bhmgmt <vid>
+#                     <bridge>"): a veth pair, bhm0 (the box's management
+#                     netdev, IPv4 by DHCP, IPv6 off) and bhm0p (a port of the
+#                     management VLAN's network bridge); dhcpcd on bhm0 in a
+#                     private mount namespace (as gt-be98-wifi-sta's), the
+#                     default route through its router at metric MESH_METRIC
+#                     (2500: behind the wired management's), its DNS servers
+#                     used when /etc/resolv.conf has none; table inet
+#                     gt_be98_mesh_mgmt lets in on bhm0 only replies, ICMP,
+#                     DHCP replies and the management ports 22, 80, 443
+#                     (sshd and the web UI: sshd listens on every address,
+#                     the web UI on every address of MGMT_IF, which holds
+#                     bhm0). bhm0's address is stable: 06 + the last five
+#                     octets of the station's address (never the station's
+#                     own: the loop guard drops those). "-": all of it undone
+#   gt-be98-mesh status
+#                     role root|leaf|off, then per role: "backhaul <band>
+#                     <ifname> <bssid> leaves=<mac|->", "link <alias> <dev>
+#                     <peer> vids=<v,...>", "refused <peer>" (root); "uplink
+#                     bhs <dev> vids=<v,...>" and "mgmt bhm0 <bridge> <vid>
+#                     <A.B.C.D/P|->" (leaf)
+#   gt-be98-mesh export [-o FILE] [-n WIFI_LIST] [-g NETWORKS]
+#                     ROOT: the LEAF's configuration (D-MESH5) on stdout or
+#                     into FILE (0600: it holds the passphrases): the root's
+#                     Wi-Fi networks with the backhaul VID as their vlan=
+#                     (routed= and repeated= networks left out: they belong
+#                     to the root's own uplink), a station block on the
+#                     backhaul's band (repeater=multiap trunk=1, SAE, the
+#                     backhaul SSID and passphrase), and the networks of the
+#                     web UI's list as VLAN networks on their backhaul VID
+#                     (no mode=gateway, no subnet: a leaf never routes)
+#   gt-be98-mesh import FILE [-n WIFI_LIST] [-g NETWORKS]
+#                     LEAF: FILE (an export) checked (format, then the Wi-Fi
+#                     part by gt-be98-wifi-gen -Q, the networks part line by
+#                     line) and written into the Wi-Fi list (the leaf's own
+#                     country= and radio= blocks kept) and the web UI's list;
+#                     nothing is written when a check fails. Apply with
+#                     `rc-service gt-be98-wifi reload` (the web UI does)
+# Export format (v1): a first line "# gt-be98-mesh leaf v1", a "[wifi]"
+# line then gt-be98-wifi-gen list lines, a "[networks]" line then
+# /etc/gt-be98-networks.conf lines. Nothing else.
+# State: /run/gt-be98-mesh (refused peers). Logs: syslog tag gt-be98-mesh,
+# MESH-LINK-UP / MESH-LINK-DOWN / MESH-LINK-REFUSED lines.
+set -u
+RUNDIR=${GT_BE98_RUN:-/run}
+SYSNET=${GT_BE98_SYSNET:-/sys/class/net}
+CONFD=${GT_BE98_CONFD:-/etc/conf.d/gt-be98-wifi}
+CONFAP=${GT_BE98_CONFAP:-/etc/conf.d/gt-be98-wifi-ap}
+L2=${GT_BE98_L2:-/usr/sbin/gt-be98-l2}
+GEN=${GT_BE98_WIFI_GEN:-/usr/sbin/gt-be98-wifi-gen}
+NETWORKS=${GT_BE98_NETWORKS:-/etc/gt-be98-networks.conf}
+L2_STATE=${GT_BE98_L2_STATE:-$RUNDIR/gt-be98-l2}
+PLAN=$RUNDIR/gt-be98-wifi/gen/plan
+M=$RUNDIR/gt-be98-mesh
+DHCPCD=${GT_BE98_DHCPCD:-/sbin/dhcpcd}
+MESH_METRIC=2500
+MGMT_PORTS="22, 80, 443"
+NFT_MGMT=gt_be98_mesh_mgmt
+SELF=$(command -v "$0" 2>/dev/null || echo "$0")
+case "$SELF" in /*) ;; *) SELF=$(pwd)/$SELF ;; esac
+
+log() { logger -t gt-be98-mesh -- "$*" 2>/dev/null; echo "gt-be98-mesh: $*" >&2; }
+
+# one setting of the Wi-Fi conf.d files (the web UI's first), parsed
+setting() {
+	local f v
+	for f in "$CONFAP" "$CONFD"; do
+		v=$(sed -n "s/^$1=\"\{0,1\}\([A-Za-z0-9/_.-]*\)\"\{0,1\}[[:space:]]*$/\1/p" "$f" 2>/dev/null | tail -n1)
+		[ -n "$v" ] && { echo "$v"; return 0; }
+	done
+	echo "${2:-}"
+}
+HCTRL=$(setting HOSTAPD_CTRL "$RUNDIR/hostapd")
+
+valid_mac() {
+	case "$1" in [0-9a-f][0-9a-f]:[0-9a-f][0-9a-f]:[0-9a-f][0-9a-f]:[0-9a-f][0-9a-f]:[0-9a-f][0-9a-f]:[0-9a-f][0-9a-f]) return 0 ;; esac
+	return 1
+}
+lower() { echo "$1" | tr 'A-F' 'a-f'; }
+
+# the plan's backhaul line into B_BAND B_DEV B_IF B_BSSID, and its one leaf
+# (the generator's accept-<ifname>, hostapd's accept_mac_file) into B_LEAVES
+# (rc 1: no backhaul)
+bh_plan() {
+	local t a b c d l
+	B_BAND= B_DEV= B_IF= B_BSSID= B_LEAVES=
+	[ -r "$PLAN" ] || return 1
+	while read -r t a b c d _; do
+		[ "$t" = backhaul ] || continue
+		B_BAND=$a B_DEV=$b B_IF=$c B_BSSID=$d
+		if [ -r "${PLAN%/plan}/accept-$c" ]; then
+			while read -r l _; do
+				l=$(lower "$l"); valid_mac "$l" && B_LEAVES="${B_LEAVES:+$B_LEAVES,}$l"
+			done < "${PLAN%/plan}/accept-$c"
+		fi
+		return 0
+	done < "$PLAN"
+	return 1
+}
+# the plan's bhtrunk line into B_STA (rc 1: none)
+leaf_plan() {
+	local t a
+	B_STA=
+	[ -r "$PLAN" ] || return 1
+	while read -r t a _; do [ "$t" = bhtrunk ] && { B_STA=$a; return 0; }; done < "$PLAN"
+	return 1
+}
+# may backhaul STA $1 have a trunk? Only the backhaul's leaf (design §8.2:
+# one leaf per backhaul BSS); no leaf known: none
+leaf_ok() {
+	case ",$B_LEAVES," in *",$1,"*) return 0 ;; esac
+	return 1
+}
+# the backhaul VLANs alias $1 carries, "v,v" ("-" none), from gt-be98-l2's state
+vids_of() {
+	local f k v out=
+	for f in "$L2_STATE"/brwifi*; do
+		[ -f "$f" ] || continue
+		while read -r k v _; do
+			[ "$k" = bh ] || continue
+			case "$v" in "$1".*) out="$out,${v#*.}" ;; esac
+		done < "$f"
+	done
+	out=${out#,}
+	echo "${out:--}"
+}
+refused_add() {
+	mkdir -p "$M"
+	grep -qx "$1" "$M/refused" 2>/dev/null || echo "$1" >> "$M/refused"
+}
+refused_del() {
+	[ -f "$M/refused" ] || return 0
+	grep -vx "$1" "$M/refused" > "$M/refused.new" 2>/dev/null; mv -f "$M/refused.new" "$M/refused"
+}
+
+# a leaf's link $1 (AP_VLAN) with peer $2 comes up on backhaul BSS $3
+link_up() {
+	local d=$1 p=$2 c=$3 a
+	if ! leaf_ok "$p"; then
+		log "MESH-LINK-REFUSED peer=$p dev=$d: not a leaf= of the backhaul BSS $c (deauthenticated, no trunk)"
+		refused_add "$p"
+		hostapd_cli -p "$HCTRL" -i "$c" deauthenticate "$p" > /dev/null 2>&1
+		return 1
+	fi
+	refused_del "$p"
+	a=$("$L2" trunk-add "$d" "$p") || { log "MESH-LINK-FAILED dev=$d peer=$p: gt-be98-l2 trunk-add failed${a:+ ($a)}"; return 1; }
+	log "MESH-LINK-UP $a dev=$d peer=$p vids=$(vids_of "$a")"
+}
+link_down() {
+	local d=$1 p=$2 a
+	a=$("$L2" trunk-del "$d") || { log "MESH-LINK-FAILED dev=$d peer=$p: gt-be98-l2 trunk-del failed"; return 1; }
+	[ -n "$a" ] && log "MESH-LINK-DOWN $a dev=$d peer=$p"
+	return 0
+}
+
+# hostapd_cli -a: <ctrl ifname> <event> [key=value ...]
+hook() {
+	local c=$1 e=${2:-} w d= p=
+	shift 2 2>/dev/null || return 0
+	case "$e" in WDS-STA-INTERFACE-ADDED|WDS-STA-INTERFACE-REMOVED) ;; *) return 0 ;; esac
+	for w; do
+		case "$w" in ifname=*) d=${w#ifname=} ;; sta_addr=*) p=$(lower "${w#sta_addr=}") ;; esac
+	done
+	case "$d" in "$c".sta[0-9]*) ;; *) log "event $e on $c for '$d' ignored (not an AP_VLAN of $c)"; return 0 ;; esac
+	valid_mac "$p" || { log "event $e on $c: sta_addr '$p' refused"; return 0; }
+	bh_plan; [ -n "$B_IF" ] || B_IF=$c
+	if [ "$e" = WDS-STA-INTERFACE-ADDED ]; then link_up "$d" "$p" "$c"; else link_down "$d" "$p"; fi
+}
+
+# the peer of AP_VLAN $1 (its one station), "" when unread
+apvlan_peer() {
+	iw dev "$1" station dump 2>/dev/null | awk '$1 == "Station" { print tolower($2); exit }'
+}
+
+sync_links() {
+	local f d p a r=0
+	# the trunks whose AP_VLAN is gone
+	"$L2" trunks 2>/dev/null | while read -r a d _ p; do
+		case "$a" in bh[0-7]) ;; *) continue ;; esac
+		[ -e "$SYSNET/$d" ] || link_down "$d" "$p"
+	done
+	bh_plan || return 0
+	for f in "$SYSNET/$B_IF".sta*; do
+		[ -e "$f" ] || continue
+		d=${f##*/}
+		case "$d" in "$B_IF".sta[0-9]*) ;; *) continue ;; esac
+		p=$(apvlan_peer "$d")
+		# the peer is not readable: the trunk's record, else refused when
+		# leaf= is set (never a trunk for an unknown station)
+		[ -n "$p" ] || p=$("$L2" trunks 2>/dev/null | awk -v d="$d" '$2 == d { print $4 }')
+		if [ -z "$p" ] || [ "$p" = - ]; then log "sync: $d: its peer is unread: no trunk"; r=1; continue; fi
+		link_up "$d" "$p" "$B_IF" || r=1
+	done
+	return $r
+}
+
+status() {
+	local a d r p f
+	if bh_plan; then
+		echo "role root"
+		echo "backhaul $B_BAND $B_IF $B_BSSID leaves=${B_LEAVES:--}"
+		"$L2" trunks 2>/dev/null | while read -r a d r p; do
+			case "$a" in bh[0-7]) echo "link $a $d $p vids=$(vids_of "$a")" ;; esac
+		done
+		[ -f "$M/refused" ] && while read -r p; do [ -n "$p" ] && echo "refused $p"; done < "$M/refused"
+	elif leaf_plan; then
+		echo "role leaf"
+		f=$(for d in "$L2_STATE"/brwifi*; do
+			[ -f "$d" ] || continue
+			awk '$1 == "trunk" && $2 == "bhs" { t = 1 } $1 == "vid" { v = $2 } END { if (t) print v }' "$d"
+		done | sort -n | tr '\n' ',' | sed 's/,$//')
+		echo "uplink bhs $B_STA vids=${f:--}"
+		p=$(awk '$1 == "bhmgmt" { print $3, $2; exit }' "$PLAN" 2>/dev/null)
+		if [ -n "$p" ]; then
+			a=$(sed -n 's/^ip=\([0-9./]*\) .*/\1/p' "$M/bhm0.lease" 2>/dev/null)
+			echo "mgmt bhm0 $p ${a:--}"
+		fi
+	else
+		echo "role off"
+	fi
+	return 0
+}
+
+# ---- the leaf's management address (D-MESH-OS1, header: mgmt) ----
+
+master_of() { local m; m=$(readlink "$SYSNET/$1/master" 2>/dev/null) && echo "${m##*/}"; }
+pid_alive() { local p; p=$(cat "$1" 2>/dev/null) || return 1; [ -n "$p" ] && kill -0 "$p" 2>/dev/null; }
+mgmt_nft() {
+	cat <<-EOF
+	table inet $NFT_MGMT {}
+	delete table inet $NFT_MGMT
+	table inet $NFT_MGMT {
+		chain input {
+			type filter hook input priority filter; policy accept;
+			iifname "bhm0" ct state established,related accept
+			iifname "bhm0" meta l4proto { icmp, ipv6-icmp } accept
+			iifname "bhm0" udp dport 68 accept
+			iifname "bhm0" tcp dport { $MGMT_PORTS } accept
+			iifname "bhm0" counter drop
+		}
+	}
+	EOF
+}
+# a stable address for bhm0: 06 (locally administered, unicast, below every
+# BSS block prefix 62..da) + the station's last five octets; 0e when the
+# station's own first octet is 06. Never the station's address: the leaf's
+# loop guard drops every frame sourced by the station that enters a bridge
+# off bhs.*, so a management port with that address would be cut off
+mgmt_mac() {
+	local a p=06
+	leaf_plan || return 1
+	{ read -r a < "$SYSNET/$B_STA/address"; } 2>/dev/null || return 1
+	valid_mac "$a" || return 1
+	[ "${a%%:*}" = 06 ] && p=0e
+	echo "$p:${a#*:}"
+}
+mgmt_up() {
+	local b=$1 mac d=$M/dhcpcd conf=$M/bhm0.dhcpcd.conf
+	case "$b" in brwifi[0-9]*) ;; *) log "mgmt: bridge '$b' refused"; return 1 ;; esac
+	[ -d "$SYSNET/$b/bridge" ] || { log "mgmt: bridge $b missing"; return 1; }
+	mkdir -p "$M" "$d"
+	if [ ! -e "$SYSNET/bhm0" ]; then
+		ip link add bhm0 type veth peer name bhm0p || { log "mgmt: bhm0 not made"; return 1; }
+		mac=$(mgmt_mac) && ip link set dev bhm0 address "$mac"
+	fi
+	for x in bhm0 bhm0p; do echo 1 > "$PROCNET/ipv6/conf/$x/disable_ipv6" 2>/dev/null; done
+	[ "$(master_of bhm0p)" = "$b" ] || ip link set dev bhm0p master "$b" || { log "mgmt: bhm0p not in $b"; return 1; }
+	ip link set dev bhm0p up && ip link set dev bhm0 up || return 1
+	mgmt_nft | nft -f - || { log "mgmt: table inet $NFT_MGMT not loaded: no DHCP client started (the address would be unfiltered)"; return 1; }
+	pid_alive "$M/bhm0.dhcp.pid" && return 0
+	{
+		echo "# generated by gt-be98-mesh: the mesh leaf's management address"
+		echo "allowinterfaces bhm0"; echo "ipv4only"; echo "noipv4ll"; echo "nogateway"; echo "clientid"
+		echo "option domain_name_servers, routers, subnet_mask"; echo "timeout 0"
+	} > "$conf"
+	# shellcheck disable=SC2016 # expanded by the inner shell
+	start-stop-daemon --start --background --make-pidfile --pidfile "$M/bhm0.dhcp.pid" \
+		--exec /usr/bin/unshare -- -m /bin/sh -c \
+		'mkdir -p /var/run/dhcpcd && mount --bind "$1" /var/run/dhcpcd && exec "$5" -B -q -f "$2" -c "$3" -4 "$4"' \
+		sh "$d" "$conf" "$SELF" bhm0 "$DHCPCD" || { log "mgmt: DHCP client did not start"; return 1; }
+	log "mgmt: bhm0 in $b (management VLAN), DHCP client started"
+}
+mgmt_down() {
+	[ -f "$M/bhm0.dhcp.pid" ] && start-stop-daemon --stop --pidfile "$M/bhm0.dhcp.pid" --retry TERM/5/KILL/2 > /dev/null 2>&1
+	rm -f "$M/bhm0.dhcp.pid" "$M/bhm0.lease" "$M/bhm0.dhcpcd.conf"
+	ip route del default dev bhm0 metric "$MESH_METRIC" 2>/dev/null
+	[ -e "$SYSNET/bhm0" ] && ip link del dev bhm0
+	nft delete table inet "$NFT_MGMT" 2>/dev/null
+	return 0
+}
+# dhcpcd's script (its environment: reason, interface, new_*)
+dhcp_event() {
+	local gw
+	[ "${interface:-}" = bhm0 ] || exit 0
+	mkdir -p "$M"
+	case "${reason:-}" in
+	BOUND|RENEW|REBIND|REBOOT|STATIC)
+		gw=${new_routers:-}; gw=${gw%% *}
+		echo "ip=${new_ip_address:-}/${new_subnet_cidr:-} gw=$gw dns=${new_domain_name_servers:-}" > "$M/bhm0.lease"
+		[ -n "$gw" ] && ip route replace default via "$gw" dev bhm0 metric "$MESH_METRIC"
+		if [ -n "${new_domain_name_servers:-}" ] && ! grep -q '^nameserver' /etc/resolv.conf 2>/dev/null; then
+			for n in $new_domain_name_servers; do echo "nameserver $n"; done > /etc/resolv.conf 2>/dev/null
+		fi
+		log "mgmt: lease ${new_ip_address:-?}/${new_subnet_cidr:-?} via ${gw:-none} on bhm0 (${reason})" ;;
+	EXPIRE|FAIL|NAK|NOCARRIER|RELEASE|STOP|STOPPED|DEPARTED|TIMEOUT|IPV4LL)
+		rm -f "$M/bhm0.lease"
+		ip route del default dev bhm0 metric "$MESH_METRIC" 2>/dev/null
+		log "mgmt: no lease on bhm0 (${reason})" ;;
+	esac
+	exit 0
+}
+
+# ---- export / import (D-MESH5) ----
+
+wifi_list() { setting WIFI_NETWORKS /etc/hostapd/networks.conf; }
+
+# the leaf configuration of the root: $1 Wi-Fi list, $2 the web UI's list
+export_conf() {
+	LC_ALL=C awk -v nets="$2" '
+	function trim(s) { sub(/^[ \t]+/, "", s); sub(/[ \t]+$/, "", s); return s }
+	function flush(    j, skip) {
+		if (blk == "n") {
+			skip = (isrep || isrtd || (vl in nocross))
+			if (!skip) {
+				for (j = 1; j <= nl; j++) {
+					if (lk[j] == "vlan") print "vlan=" ((lv[j] in bhv) ? bhv[lv[j]] : lv[j])
+					else print lk[j] "=" lv[j]
+				}
+				nexp++
+			}
+		}
+		nl = 0; isrep = 0; isrtd = 0; blk = ""; vl = ""
+	}
+	BEGIN {
+		# the web UI list (design §3.4 C3): a gateway network crosses on its
+		# bhvid= (none: it does not cross), a VLAN-only one on its vlan=
+		while ((getline l < nets) > 0) {
+			if (l ~ /^[ \t]*(#|$)/) continue
+			n = split(l, w, /[ \t]+/); v = ""; x = ""; m = ""
+			for (i = 1; i <= n; i++) {
+				if (w[i] ~ /^vlan=/) v = substr(w[i], 6)
+				if (w[i] ~ /^bhvid=/) x = substr(w[i], 7)
+				if (w[i] ~ /^mode=/) m = substr(w[i], 6)
+			}
+			if (v == "" || m != "gateway") continue
+			if (x ~ /^[1-9][0-9]*$/ && x + 0 >= 2 && x + 0 <= 4094) bhv[v] = x
+			else nocross[v] = 1
+		}
+		print "# gt-be98-mesh leaf v1"
+		print "[wifi]"
+	}
+	/^[ \t]*(#|$)/ { next }
+	{
+		eq = index($0, "="); if (!eq) next
+		k = trim(substr($0, 1, eq - 1)); v = substr($0, eq + 1)
+		if (k != "ssid" && k != "passphrase" && k != "radius_secret" && k != "radius_acct_secret") v = trim(v)
+	}
+	k == "country" && blk == "" { print "country=" v; next }
+	k == "network" || k == "radio" || k == "station" || k == "backhaul" {
+		flush()
+		if (k == "network") blk = "n"
+		else if (k == "backhaul") { blk = "b"; bhband = v; bhsec = "sae" }
+		else blk = "x"
+		if (blk == "n") { nl = 1; lk[1] = k; lv[1] = v }
+		next
+	}
+	blk == "n" {
+		if (k == "repeated" && v == "1") isrep = 1
+		if (k == "routed") isrtd = 1
+		if (k == "vlan") vl = v
+		# a BSS address, slot or index is the root radios own
+		if (k ~ /^(slot\.|mac\.|bssid)/) next
+		nl++; lk[nl] = k; lv[nl] = v
+		next
+	}
+	blk == "b" {
+		if (k == "ssid") bhssid = v
+		else if (k == "passphrase") bhpass = v
+		else if (k == "enabled") bhen = v
+		next
+	}
+	END {
+		flush()
+		if (bhband == "") { print "gt-be98-mesh: export: the Wi-Fi list has no backhaul= block (not a mesh root)" > "/dev/stderr"; exit 1 }
+		if (bhen == "0") { print "gt-be98-mesh: export: the backhaul= block is disabled (enabled=0)" > "/dev/stderr"; exit 1 }
+		print "station=" bhband
+		print "ssid=" bhssid
+		print "security=sae"
+		print "passphrase=" bhpass
+		print "repeater=multiap"
+		print "trunk=1"
+		print "[networks]"
+		close(nets)
+		while ((getline l < nets) > 0) {
+			if (l ~ /^[ \t]*(#|$)/) continue
+			n = split(l, w, /[ \t]+/); id = ""; v = ""; x = ""; nm = ""
+			for (i = 1; i <= n; i++) {
+				if (w[i] ~ /^network=/) id = substr(w[i], 9)
+				if (w[i] ~ /^vlan=/) v = substr(w[i], 6)
+				if (w[i] ~ /^bhvid=/) x = substr(w[i], 7)
+				if (w[i] ~ /^name=/) nm = w[i]
+			}
+			if (id == "" || v == "" || (v in nocross)) continue
+			print "network=" id (nm != "" ? " " nm : "") " vlan=" ((v in bhv) ? bhv[v] : v)
+		}
+	}' "$1"
+}
+
+do_export() {
+	local out= wl nets o
+	wl=$(wifi_list); nets=$NETWORKS
+	while getopts o:n:g: o; do
+		case $o in o) out=$OPTARG ;; n) wl=$OPTARG ;; g) nets=$OPTARG ;; *) return 2 ;; esac
+	done
+	[ -r "$wl" ] || { log "export: the Wi-Fi list $wl is missing"; return 1; }
+	[ -r "$nets" ] || nets=/dev/null
+	umask 077
+	if [ -n "$out" ]; then
+		export_conf "$wl" "$nets" > "$out.new" && chmod 600 "$out.new" && mv -f "$out.new" "$out" ||
+			{ rm -f "$out.new"; return 1; }
+	else
+		export_conf "$wl" "$nets"
+	fi
+}
+
+# check a networks part line by line: network=<1..99999> [name=<pct>] vlan=<1..4094>,
+# no gateway (a leaf never routes): rc 1 with the reasons
+check_nets() {
+	LC_ALL=C awk '
+	/^[ \t]*(#|$)/ { next }
+	{
+		n = split($0, w, /[ \t]+/); id = ""; v = ""; bad = ""
+		for (i = 1; i <= n; i++) {
+			if (w[i] == "") continue
+			if (w[i] ~ /^network=/) id = substr(w[i], 9)
+			else if (w[i] ~ /^vlan=/) v = substr(w[i], 6)
+			else if (w[i] ~ /^name=[A-Za-z0-9%._~-]*$/) continue
+			else bad = bad " " w[i]
+		}
+		if (id !~ /^[1-9][0-9]*$/ || id + 0 > 99999) { print "networks line " NR ": network=1..99999" > "/dev/stderr"; e = 1 }
+		if (v !~ /^[1-9][0-9]*$/ || v + 0 > 4094) { print "networks line " NR ": vlan=1..4094" > "/dev/stderr"; e = 1 }
+		if (bad != "") { print "networks line " NR ": refused:" bad " (a leaf network is network= name= vlan= only: no gateway, no subnet)" > "/dev/stderr"; e = 1 }
+		if (id in seen) { print "networks line " NR ": network " id " twice" > "/dev/stderr"; e = 1 }
+		seen[id] = 1
+	}
+	END { exit e }' "$1"
+}
+
+do_import() {
+	local f=${1:-} wl nets o T rc=0
+	[ -n "$f" ] && [ -r "$f" ] || { log "import: no file"; return 2; }
+	shift
+	wl=$(wifi_list); nets=$NETWORKS
+	while getopts n:g: o; do
+		case $o in n) wl=$OPTARG ;; g) nets=$OPTARG ;; *) return 2 ;; esac
+	done
+	T=$(mktemp -d) || return 1
+	chmod 700 "$T"
+	# the format (header): a header line, [wifi], [networks], nothing else
+	if ! LC_ALL=C awk -v w="$T/wifi" -v n="$T/nets" '
+		NR == 1 { if ($0 != "# gt-be98-mesh leaf v1") { print "not a gt-be98-mesh leaf v1 file" > "/dev/stderr"; e = 1; exit } next }
+		/\r/ { print "line " NR ": carriage return" > "/dev/stderr"; e = 1; exit }
+		$0 == "[wifi]" { if (s != "") { e = 1; exit } s = "w"; next }
+		$0 == "[networks]" { if (s != "w") { e = 1; exit } s = "n"; next }
+		s == "w" { print > w; next }
+		s == "n" { print > n; next }
+		{ print "line " NR ": outside a section" > "/dev/stderr"; e = 1; exit }
+		END { if (!e && s != "n") { print "no [networks] section" > "/dev/stderr"; e = 1 } exit e }' "$f"; then
+		log "import: $f refused (format)"; rm -rf "$T"; return 1
+	fi
+	touch "$T/wifi" "$T/nets"
+	# the leaf: a trunk=1 station, no backhaul= block
+	grep -qx 'trunk=1' "$T/wifi" && grep -q '^station=' "$T/wifi" ||
+		{ log "import: $f refused: no station trunk=1 (not a leaf configuration)"; rm -rf "$T"; return 1; }
+	grep -q '^backhaul=' "$T/wifi" && { log "import: $f refused: a backhaul= block (a leaf is no root)"; rm -rf "$T"; return 1; }
+	# the leaf's own country= and radio= blocks are kept (its radios, its
+	# channels); the export's country= wins only when the leaf has none
+	{
+		if [ -r "$wl" ] && grep -q '^country=' "$wl"; then
+			grep '^country=' "$wl" | head -n1
+		else
+			grep '^country=' "$T/wifi" | head -n1
+		fi
+		[ -r "$wl" ] && awk '
+			/^[ \t]*(#|$)/ { next }
+			/^(network|station|backhaul)=/ { r = 0 }
+			/^radio=/ { r = 1 }
+			r' "$wl"
+		grep -v '^country=' "$T/wifi"
+	} > "$T/wifi.new"
+	"$GEN" -n "$T/wifi.new" -Q > /dev/null 2> "$T/err" || { log "import: $f refused: the Wi-Fi part: $(tr '\n' ' ' < "$T/err")"; rc=1; }
+	check_nets "$T/nets" 2> "$T/err2" || { log "import: $f refused: $(tr '\n' ' ' < "$T/err2")"; rc=1; }
+	if [ $rc = 0 ]; then
+		umask 077
+		cp "$T/wifi.new" "$wl.new" && chmod 600 "$wl.new" && mv -f "$wl.new" "$wl" || rc=1
+		if [ $rc = 0 ]; then
+			{ echo "# written by gt-be98-mesh import (a mesh leaf: VLAN networks only)"; cat "$T/nets"; } > "$nets.new" &&
+				chmod 644 "$nets.new" && mv -f "$nets.new" "$nets" || rc=1
+		fi
+		[ $rc = 0 ] && log "import: $f: $(grep -c '^network=' "$T/wifi") Wi-Fi network(s), $(grep -c '^network=' "$T/nets") network(s), station $(sed -n 's/^station=//p' "$T/wifi"): written to $wl and $nets (apply: rc-service gt-be98-wifi reload)"
+	fi
+	rm -rf "$T"
+	return $rc
+}
+
+PROCNET=${GT_BE98_PROCNET:-/proc/sys/net}
+# dhcpcd runs this script with no argument and its reason in the environment
+[ $# = 0 ] && [ -n "${reason:-}" ] && dhcp_event
+c=${1:-}
+case "$c" in
+mgmt)	case "${2:-}" in -) mgmt_down ;; '') echo "usage: gt-be98-mesh mgmt <bridge>|-" >&2; exit 2 ;; *) mgmt_up "$2" ;; esac ;;
+sync)	sync_links ;;
+status)	status ;;
+export)	shift; do_export "$@" ;;
+import)	shift; do_import "$@" ;;
+bcawl*|wlan*) hook "$@" ;;	# hostapd_cli -a: <ctrl ifname> <event> ...
+*)	echo "usage: gt-be98-mesh <ctrl ifname> <event> ... | sync | status | export [-o FILE] | import FILE" >&2; exit 2 ;;
+esac

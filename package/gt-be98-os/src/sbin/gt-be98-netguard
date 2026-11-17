@@ -38,6 +38,31 @@
 #      WIFI_VLANS lists it. Such a bridge's wired members (rnr1.<vid>) and
 #      bare jacks are admitted as for any network bridge (its state's
 #      "uplink" is the current trunk).
+#   7. the MESH BACKHAUL (buildroot docs/MESH-BACKHAUL-DESIGN.md, gt-be98-l2's
+#      trunk-add/uplink, gt-be98-mesh): a leaf's AP_VLAN on the root's
+#      backhaul BSS (<backhaul ifname>.sta<N>, the plan's backhaul line) is
+#      never a bridge port (the untagged link carries EAPOL and management
+#      only); its 802.1Q sub-interface bh<k>.<vid> is a port only of the
+#      bridge gt-be98-l2 recorded it for (a "bh" line of its state); a
+#      leaf's bhs.<vid> only of the bridge gt-be98-l2 runs on bhs.<vid>. A
+#      LEAF's bridge (its uplink is bhs) never holds a wired trunk VLAN
+#      (<port>.<vid> of a protected port other than the 2.5G jacks' recorded
+#      rnr1.<vid>): the wired port and the backhaul would close a loop
+#      through the upstream LAN. LOOP GUARD on the leaf (while gt-be98-l2
+#      has the uplink bhs): table bridge gt_be98_bh_guard drops and counts a
+#      frame whose SOURCE is the leaf station's own address entering a leaf
+#      bridge anywhere but bhs.* (it can only have come back around a loop:
+#      out of the backhaul, through the root's LAN, into a jack); every
+#      BH_PROBE_EVERY sweeps (default 6) an ARP probe (arping -D, from the
+#      station's address) leaves on each bhs.<vid> so a loop shows within
+#      ~30 s even when the leaf is idle. A count on rnr2/rnr3 latches that
+#      jack, on rnr1.<V> the 2.5G jack the switch learned the station's
+#      address on (its L2 lookup on each VLAN V a jack carries; none found:
+#      every jack of those VLANs), as the BPDU guard latches (the tripped
+#      file; rc-service gt-be98-lan restart clears it); a count elsewhere (a
+#      BSS port: a client bridging two networks) is dropped and logged. The
+#      leaf's management veth (gt-be98-mesh mgmt): bhm0p only in the bridge
+#      of the plan's bhmgmt line, bhm0 (the box's address) in no bridge.
 # One exception to 1., the wired LAN (gt-be98-lan, off by default): a bare
 # port listed in LAN_PORTS may be a port of the bridge LAN_BRIDGE (br-lan),
 # and of no other bridge, when it is rnr1, rnr2 or rnr3 and not the Wi-Fi
@@ -108,6 +133,8 @@ LAN_TRIPPED=${GT_BE98_LAN_TRIPPED:-${GT_BE98_RUN:-/run}/gt-be98-lan.tripped}
 # the latch lock, shared with gt-be98-lan (its lan_lock_try: the same code)
 LAN_LOCK=$LAN_TRIPPED.lock
 NETWORKS=${GT_BE98_NETWORKS:-/etc/gt-be98-networks.conf}
+WIFI_PLAN=${GT_BE98_WIFI_PLAN:-${GT_BE98_RUN:-/run}/gt-be98-wifi/gen/plan}
+BH_PROBE_EVERY=${BH_PROBE_EVERY:-6}
 # the RTL8372 driver's sysfs directory (one device; GT_BE98_RTL8372: a fixed
 # directory, the offline tests)
 RTL_GLOB=${GT_BE98_RTL8372:-/sys/bus/mdio_bus/drivers/rtl8372/*}
@@ -188,7 +215,19 @@ wifi_conf() {
 	cfg_last "$f" WIFI_ISOLATE 'A-Za-z0-9 '; ISOLATE=$CFG
 	cfg_last "$f" WIFI_TRUNK 'A-Za-z0-9'; TRUNK=${CFG:-rnr0}
 	cfg_last "$f" WIFI_MCAST_TO_UNICAST '01'; M2U=${CFG:-1}
-	case "$TRUNK" in rnr[0-3]) ;; *) TRUNK= ;; esac
+	# bhs: a mesh leaf's trunk (its station, rule 7)
+	case "$TRUNK" in rnr[0-3]|bhs) ;; *) TRUNK= ;; esac
+	# the root's backhaul BSS (plan line "backhaul <band> <dev> <ifname> ..."): BHIF
+	# and its one leaf (the generator's accept-<ifname>): BHLEAF
+	BHIF= BHLEAF= BHMGMT=
+	if [ -r "$WIFI_PLAN" ]; then
+		local t a b c
+		while read -r t a b c _; do
+			case "$t" in backhaul) BHIF=$c ;; bhmgmt) BHMGMT=$b ;; esac
+		done < "$WIFI_PLAN"
+		[ -n "$BHIF" ] && [ -r "${WIFI_PLAN%/plan}/accept-$BHIF" ] &&
+			{ read -r BHLEAF _ < "${WIFI_PLAN%/plan}/accept-$BHIF"; } 2>/dev/null
+	fi
 }
 # the gateway networks' VLANs of the web UI's list into GW_VIDS (" 40 41 ",
 # read with `read`, once per sweep; keys in any order, unknown ignored)
@@ -309,10 +348,63 @@ lan_port_ok() {
 	return 1
 }
 # the verdict on bridge port $1 of bridge $2 into VERDICT: keep, or why it is detached
+# rule 7: is $1 a leaf's AP_VLAN on the root's backhaul BSS (BHIF)?
+mesh_link() {
+	[ -n "${BHIF:-}" ] || return 1
+	case "$1" in "$BHIF".sta[0-9]*) ;; *) return 1 ;; esac
+	case "${1#"$BHIF".sta}" in *[!0-9]*) return 1 ;; esac
+}
+# rule 7: may backhaul VLAN $1 (bh<k>.<vid>, bhs.<vid>) be a port of bridge $2?
+bh_port_ok() {
+	local k v _w
+	case "$2" in brwifi[0-9]*) ;; *) return 1 ;; esac
+	case "$1" in
+	bhs.*)	l2_state "$2"
+		[ "$L2T" = bhs ] && [ -n "$L2V" ] && [ "$1" = "bhs.$L2V" ] ;;
+	bh[0-7].*)
+		# the link's peer is the backhaul's one leaf (design §8.2)
+		if [ -n "${BHLEAF:-}" ]; then
+			v=
+			[ -r "$L2_STATE/trunks/${1%%.*}" ] && while read -r k _w; do [ "$k" = peer ] && v=$_w; done < "$L2_STATE/trunks/${1%%.*}"
+			[ "$v" = "$BHLEAF" ] || return 1
+		fi
+		[ -r "$L2_STATE/$2" ] || return 1
+		while read -r k v _w; do [ "$k" = bh ] && [ "$v" = "$1" ] && return 0; done < "$L2_STATE/$2"
+		return 1 ;;
+	*)	return 1 ;;
+	esac
+}
+# rule 7: is bridge $1 a mesh leaf's (gt-be98-l2 runs it on bhs)?
+leaf_bridge() {
+	case "$1" in brwifi[0-9]*) ;; *) return 1 ;; esac
+	l2_state "$1"
+	[ "$L2T" = bhs ] || [ "${L2U:-}" = bhs ]
+}
 verdict() {
 	VERDICT=keep
+	# rule 7: the mesh backhaul's links and VLANs
+	if mesh_link "$1"; then
+		VERDICT="a mesh leaf's link (AP_VLAN of the backhaul BSS $BHIF): never bridged untagged (its VLANs bh<k>.<vid> are)"; return
+	fi
+	# the leaf's management port (gt-be98-mesh mgmt): bhm0p only in the
+	# plan's management bridge, bhm0 (the box's own address) never
+	case "$1" in
+	bhm0) VERDICT="the mesh leaf's management netdev: never a bridge port"; return ;;
+	bhm0p) [ -n "${BHMGMT:-}" ] && [ "$2" = "$BHMGMT" ] || VERDICT="the mesh leaf's management port: only in the management VLAN's bridge (${BHMGMT:-none planned})"
+		return ;;
+	esac
+	case "$1" in
+	bh[0-7].*|bhs.*)
+		bh_port_ok "$1" "$2" || VERDICT="a mesh backhaul VLAN: a port only of the network bridge gt-be98-l2 runs it for, on the link of the backhaul's leaf"
+		return ;;
+	esac
 	case "$1" in
 	*.*)	# 802.1Q sub-interface of a protected port: listed trunk VLANs only
+		# a mesh leaf's bridge: its uplink is the backhaul, never a wired
+		# trunk VLAN (rule 7: a loop through the upstream LAN)
+		if protected "${1%%.*}" && leaf_bridge "$2" && ! jack_vlan_ok "$1" "$2"; then
+			VERDICT="$2 is a mesh leaf's bridge (uplink bhs): no wired trunk VLAN in it (the backhaul and the wired port would close a loop)"; return
+		fi
 		# a gateway network's VLAN is never carried upstream (rule 6)
 		if protected "${1%%.*}" && gw_trunk_vlan "$1"; then
 			VERDICT="$GWHY: its trunk VLAN is never bridged (the box is that network's gateway)"; return
@@ -540,6 +632,124 @@ guard_locked() {
 	jack_block_sync
 }
 tripped() { case "${TRIP_LIST:-}" in *"$NL$1$NL"*) return 0 ;; esac; return 1; }
+# ---- the loop guard of a mesh leaf (rule 7) ----
+# the leaf's uplink (gt-be98-l2's trunk bhs) into BH_DEV, BH_MAC ("" none)
+bh_uplink() {
+	local k v
+	BH_DEV= BH_MAC=
+	[ -r "$L2_STATE/trunks/bhs" ] || return 1
+	while read -r k v _; do [ "$k" = dev ] && BH_DEV=$v; done < "$L2_STATE/trunks/bhs"
+	[ -n "$BH_DEV" ] || return 1
+	{ read -r BH_MAC < "$SYSNET/$BH_DEV/address"; } 2>/dev/null
+	case "$BH_MAC" in [0-9a-f][0-9a-f]:[0-9a-f][0-9a-f]:[0-9a-f][0-9a-f]:[0-9a-f][0-9a-f]:[0-9a-f][0-9a-f]:[0-9a-f][0-9a-f]) return 0 ;; esac
+	BH_MAC=; return 1
+}
+# the guard's rule set for station address $1 (bh_guard loads it)
+bh_ruleset() {
+	cat <<-EOF
+	table bridge gt_be98_bh_guard
+	delete table bridge gt_be98_bh_guard
+	table bridge gt_be98_bh_guard {
+		counter loop_rnr1 { }
+		counter loop_rnr2 { }
+		counter loop_rnr3 { }
+		counter loop_other { }
+		chain pre {
+			type filter hook prerouting priority -300; policy accept;
+			iifname "bhs.*" accept
+			ether saddr $1 iifname "rnr1.*" counter name loop_rnr1 drop
+			ether saddr $1 iifname "rnr2" counter name loop_rnr2 drop
+			ether saddr $1 iifname "rnr3" counter name loop_rnr3 drop
+			ether saddr $1 counter name loop_other drop
+		}
+	}
+	EOF
+}
+# "<counter> <packets>" per loop counter of the guard's listing on stdin
+bh_counts() {
+	local c= l
+	set -f
+	while read -r l; do
+		# shellcheck disable=SC2086 # word split, no glob (set -f)
+		set -- $l
+		case "${1:-} ${2:-}" in
+		"counter loop_"*) c=${2#loop_} ;;
+		"packets "*) [ -n "$c" ] && echo "$c $2"; c= ;;
+		esac
+	done
+	set +f
+}
+# a loop came back on $1 (rnr1, rnr2, rnr3 or other): the jack(s) latched
+bh_latch() {
+	local w jv= v n f x att=
+	case "$1" in
+	rnr2|rnr3)
+		f=0; [ -r "$LAN_TRIPPED" ] && while read -r x _; do [ "$x" = "$1" ] && f=1; done < "$LAN_TRIPPED"
+		[ $f = 1 ] || echo "$1" >> "$LAN_TRIPPED"
+		TRIP_LIST="${TRIP_LIST:-$NL}$1$NL"
+		log "loop guard (backhaul): the leaf station's own frame ($BH_MAC) came back in on $1 (the wired jack and the backhaul close a loop through the upstream LAN): $1 latched off (rc-service gt-be98-lan restart clears it)" ;;
+	rnr1)	# the 2.5G jacks: the switch's L2 table says where it entered
+		rtl_dir
+		for w in $JACKS_APPLIED; do
+			v=${w#*:}
+			case " $jv " in *" $v "*) continue ;; esac
+			jv="$jv $v"
+			LK=; l2_lookup "$BH_MAC" "$v"
+			case "$LK" in [4-7]) case " $att " in *" $LK "*) ;; *) att="$att $LK" ;; esac ;; esac
+		done
+		if [ -z "$att" ]; then
+			for w in $JACKS_APPLIED; do case " $att " in *" ${w%%:*} "*) ;; *) att="$att ${w%%:*}" ;; esac; done
+		fi
+		for n in $att; do
+			f=0; [ -r "$LAN_TRIPPED" ] && while read -r x _; do [ "$x" = "jack$n" ] && f=1; done < "$LAN_TRIPPED"
+			[ $f = 1 ] || echo "jack$n" >> "$LAN_TRIPPED"
+		done
+		log "loop guard (backhaul): the leaf station's own frame ($BH_MAC) came back in on a 2.5G jack (rnr1.<vid>): jack(s)${att:- none} latched off (rc-service gt-be98-lan restart clears it)" ;;
+	*)	log "loop guard (backhaul): the leaf station's own frame ($BH_MAC) came back in on a Wi-Fi port of a leaf bridge (a client bridging two networks?): dropped" ;;
+	esac
+}
+# the guard (header, rule 7): loaded while the leaf has its uplink, its
+# counters read, the probes sent; nothing forks without an uplink
+bh_guard() {
+	local c n d v
+	if ! bh_uplink; then
+		[ -n "${BHG_MAC:-}" ] && { nft delete table bridge gt_be98_bh_guard 2>/dev/null; BHG_MAC=; log "loop guard (backhaul): off (no mesh uplink)"; }
+		return 0
+	fi
+	# a table this guard loaded before (a netguard restart, or --sweep):
+	# adopted as it is, its counters kept
+	if [ "${BHG_MAC:-}" != "$BH_MAC" ] && nft list table bridge gt_be98_bh_guard 2>/dev/null | grep -q "ether saddr $BH_MAC iifname \"rnr2\""; then
+		BHG_MAC=$BH_MAC
+	fi
+	if [ "${BHG_MAC:-}" != "$BH_MAC" ]; then
+		if bh_ruleset "$BH_MAC" | nft -f - 2>/dev/null; then
+			BHG_MAC=$BH_MAC; BHG_N=0
+			log "loop guard (backhaul): on, station $BH_DEV ($BH_MAC)"
+		else
+			[ -n "${BHG_ERR:-}" ] || log "loop guard (backhaul): loading table bridge gt_be98_bh_guard FAILED (retried every sweep)"
+			BHG_ERR=1; return 0
+		fi
+		BHG_ERR=
+	fi
+	nft list table bridge gt_be98_bh_guard 2>/dev/null | bh_counts > "${LAN_TRIPPED}.bh" 2>/dev/null
+	n=0
+	while read -r c v; do
+		[ -n "$v" ] && [ "$v" != 0 ] || continue
+		bh_latch "$c"; n=1
+	done < "${LAN_TRIPPED}.bh"
+	rm -f "${LAN_TRIPPED}.bh"
+	[ $n = 0 ] || nft reset counters table bridge gt_be98_bh_guard > /dev/null 2>&1
+	# the probes: one ARP DAD probe per backhaul VLAN every BH_PROBE_EVERY sweeps
+	BHG_N=$(( ${BHG_N:-0} + 1 ))
+	[ "$BHG_N" -ge "$BH_PROBE_EVERY" ] || return 0
+	BHG_N=0
+	for d in "$SYSNET"/bhs.*; do
+		[ -e "$d" ] || continue
+		arping -D -q -c 1 -w 1 -I "${d##*/}" 169.254.0.1 > /dev/null 2>&1 &
+	done
+	wait
+	return 0
+}
 sweep() {
 	local b m pp i n f v
 	wifi_conf
@@ -547,6 +757,7 @@ sweep() {
 	gw_conf
 	load_lists
 	guard
+	bh_guard
 	for b in "$SYSNET"/*/brif; do
 		[ -d "$b" ] || continue
 		m=${b%/brif}; m=${m##*/}
@@ -593,6 +804,7 @@ sweep() {
 # fixed cases, each with its control (the same case with one input changed)
 selftest() {
 	local fail=0 n=0 c
+	log() { :; }	# fixed cases: nothing to the system log
 	NETGUARD_PROTECT="rnr* eth* usb* enx*"
 	WIFI_STATIONS=$(mktemp); printf 'bcawl5\nbcawl6\n' > "$WIFI_STATIONS"
 	WIFI_REPEATERS=$(mktemp); echo 'bcawl6 brwifi60' > "$WIFI_REPEATERS"
@@ -746,6 +958,78 @@ selftest() {
 	gcheck keep   rnr2    brwifi7 " 40 " -    rnr0 40 "" "" 40			# a bare jack native 40 in the gateway bridge
 	gcheck detach rnr2    brwifi7 " 40 " -    rnr0 40 "" "" 41			# control: its native is another VLAN
 	GW_VIDS=' '
+	# rule 7, the mesh backhaul: <expect> <port> <bridge> <its l2 state, printf format> <trunk> <WIFI_VLANS> <backhaul ifname>
+	mcheck() {
+		LPORTS=; LBRIDGE=br-lan; TRUNK=$5; VLANS=$6; BHIF=$7; VN_rnr1= VN_rnr2= VN_rnr3=
+		rm -f "$L2_STATE"/* 2>/dev/null
+		[ -n "$4" ] && printf "$4" > "$L2_STATE/$3"
+		load_lists; verdict "$2" "$3"; c=$VERDICT; [ "$c" = keep ] || c=detach
+		n=$((n + 1))
+		if [ "$c" = "$1" ]; then echo "ok   $1 mesh: $2 in $3 (trunk $5, backhaul BSS '${7:-}')"
+		else echo "FAIL want $1, got $c: mesh: $2 in $3 (trunk $5, backhaul BSS '${7:-}'): $VERDICT"; fail=$((fail + 1)); fi
+	}
+	R='trunk rnr0\nuplink rnr0\nvid 10\nmade_bridge 1\nmade_vlan 1\nuser wifi\n'
+	mcheck keep   bh0.10 brwifi10 "${R}bh bh0.10 1\n" rnr0 "brwifi10:10" bcawl0-1	# the root's downlink, recorded for the bridge
+	mkdir -p "$L2_STATE/trunks"; printf 'dev bcawl0-1.sta1\nrole down\npeer 02:00:00:00:00:0a\n' > "$L2_STATE/trunks/bh0"
+	BHLEAF=02:00:00:00:00:0a mcheck keep bh0.10 brwifi10 "${R}bh bh0.10 1\n" rnr0 "brwifi10:10" bcawl0-1	# its peer is the leaf
+	BHLEAF=02:00:00:00:00:0b mcheck detach bh0.10 brwifi10 "${R}bh bh0.10 1\n" rnr0 "brwifi10:10" bcawl0-1	# its peer is not the leaf
+	rm -rf "$L2_STATE/trunks"; BHLEAF=
+	mcheck detach bh0.10 brwifi10 "$R" rnr0 "brwifi10:10" bcawl0-1				# control: not recorded
+	mcheck detach bh0.10 brwifi11 "${R}bh bh0.11 1\n" rnr0 "" bcawl0-1			# recorded for another VLAN
+	mcheck detach bh0.10 br-lan "" rnr0 "" bcawl0-1						# never outside brwifi
+	mcheck keep   bh1.444 brwifi41 'trunk -\nuplink rnr0\nvid 44\nuser wifi\nbh bh1.444 1\n' rnr0 "" bcawl0-1	# a gateway network on its bhvid
+	L='trunk bhs\nuplink bhs\nvid 10\nmade_bridge 1\nmade_vlan 1\nuser wifi\n'
+	mcheck keep   bhs.10 brwifi10 "$L" bhs "brwifi10:10" ""					# the leaf's uplink VLAN
+	mcheck detach bhs.11 brwifi10 "$L" bhs "brwifi10:10" ""					# another VID than the bridge runs
+	mcheck detach bhs.10 brwifi10 "$R" rnr0 "brwifi10:10" ""					# a bridge on the wired trunk
+	mcheck detach bcawl0-1.sta1 brwifi10 "${R}bh bh0.10 1\n" rnr0 "brwifi10:10" bcawl0-1	# the untagged link: never bridged
+	mcheck detach bcawl0-1.sta12 br-lan "" rnr0 "" bcawl0-1					# ... in no bridge
+	mcheck keep   bcawl0-2.sta1 brwifi10 "$R" rnr0 "brwifi10:10" bcawl0-1		# control: an AP_VLAN of another BSS (today's rule)
+	mcheck keep   bcawl0-1.sta1 brwifi10 "$R" rnr0 "brwifi10:10" ""				# control: no backhaul BSS planned
+	mcheck detach rnr0.10 brwifi10 "$L" rnr0 "brwifi10:10" ""					# a leaf bridge: no wired trunk VLAN, even listed
+	mcheck keep   rnr0.10 brwifi10 "$R" rnr0 "brwifi10:10" ""					# control: the root's bridge keeps its uplink
+	mcheck detach rnr0.10 brwifi10 "$L" bhs "brwifi10:10" ""					# the leaf's trunk is bhs: rnr0.10 is no trunk VLAN
+	mcheck keep   rnr1.10 brwifi10 "${L}wired lan rnr1.10 1\n" bhs "brwifi10:10" ""	# the leaf's 2.5G jacks of VLAN 10 (recorded)
+	mcheck detach rnr1.10 brwifi10 "$L" bhs "brwifi10:10" ""					# control: not recorded
+	VN_rnr2=10; LPORTS=; LBRIDGE=br-lan; TRUNK=bhs; VLANS=; BHIF=; rm -f "$L2_STATE"/*; printf "$L" > "$L2_STATE/brwifi10"
+	verdict rnr2 brwifi10; n=$((n + 1))
+	if [ "$VERDICT" = keep ]; then echo "ok   keep mesh: a leaf's bare jack rnr2 native 10 in brwifi10"; else echo "FAIL a leaf's bare jack rnr2 native 10: $VERDICT"; fail=$((fail + 1)); fi
+	BHIF=
+	# the leaf's management veth: <expect> <port> <bridge> <BHMGMT>
+	vmcheck() {
+		LPORTS=; LBRIDGE=br-lan; TRUNK=bhs; VLANS=; BHIF=; BHMGMT=$4
+		load_lists; verdict "$2" "$3"; c=$VERDICT; [ "$c" = keep ] || c=detach
+		n=$((n + 1))
+		if [ "$c" = "$1" ]; then echo "ok   $1 mesh mgmt: $2 in $3 (planned '$4')"; else echo "FAIL want $1, got $c: mesh mgmt $2 in $3 (planned '$4')"; fail=$((fail + 1)); fi
+	}
+	vmcheck keep   bhm0p brwifi10 brwifi10	# the management port in the planned bridge
+	vmcheck detach bhm0p brwifi20 brwifi10	# another bridge
+	vmcheck detach bhm0p brwifi10 ""		# no management planned
+	vmcheck detach bhm0  brwifi10 brwifi10	# the box's own address side: never a port
+	BHMGMT=
+	# the loop guard's counters: <expect> <nft listing>
+	bcheck() {
+		c=$(printf "$2" | bh_counts | tr '\n' '|')
+		n=$((n + 1))
+		if [ "$c" = "$1" ]; then echo "ok   bh guard counters -> '$1'"; else echo "FAIL bh guard counters: want '$1' got '$c'"; fail=$((fail + 1)); fi
+	}
+	bcheck "rnr1 0|rnr2 3|rnr3 0|other 0|" 'table bridge gt_be98_bh_guard {\n\tcounter loop_rnr1 {\n\t\tpackets 0 bytes 0\n\t}\n\tcounter loop_rnr2 {\n\t\tpackets 3 bytes 180\n\t}\n\tcounter loop_rnr3 {\n\t\tpackets 0 bytes 0\n\t}\n\tcounter loop_other {\n\t\tpackets 0 bytes 0\n\t}\n\tchain pre {\n\t}\n}\n'
+	bcheck "" 'table bridge other {\n\tchain pre {\n\t}\n}\n'
+	# the latch: <expect tripped lines> <counter> <jacks applied>
+	BLT=$(mktemp -d)
+	latchk() {
+		LAN_TRIPPED=$BLT/tripped; rm -f "$LAN_TRIPPED"; RTL_GLOB=/nonexistent; JACKS_APPLIED=$3; BH_MAC=02:00:00:00:00:5a; TRIP_LIST=$NL
+		bh_latch "$2"
+		c=$({ tr '\n' ' ' < "$LAN_TRIPPED"; } 2>/dev/null)
+		n=$((n + 1))
+		if [ "$c" = "$1" ]; then echo "ok   bh guard latch $2 -> '$1'"; else echo "FAIL bh guard latch $2: want '$1' got '$c'"; fail=$((fail + 1)); fi
+	}
+	latchk "rnr2 " rnr2 ""				# the bare jack the loop came back on
+	latchk "rnr3 " rnr3 " 4:10"			# ... rnr3, whatever the 2.5G jacks
+	latchk "jack4 jack6 " rnr1 " 4:10 6:20 4:20"	# a 2.5G jack, no switch lookup: every jack carrying a VLAN, once each
+	latchk "" rnr1 ""				# no jack applied: nothing to latch
+	latchk "" other " 4:10"				# a Wi-Fi port: dropped and logged, nothing latched
+	rm -rf "$BLT"; LAN_TRIPPED=/nonexistent; JACKS_APPLIED=
 	# the loop guard: the driver's jack_status line -> <expect "port loop pair"> <line>
 	scheck() {
 		js_parse "$2"

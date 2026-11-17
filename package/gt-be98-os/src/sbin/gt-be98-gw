@@ -87,7 +87,8 @@
 # port is a LAN jack; the inter-network policy still applies), routed
 # (address, DHCP, DNS, NAT out of the WAN). Counters: starts, refusals.
 #
-# REFUSED (logged; that network only, never the whole file): a subnet that
+# REFUSED (logged; that network only, never the whole file): every one
+# while the box is a MESH LEAF (the Wi-Fi plan has a bhtrunk line); a subnet that
 # is not RFC 1918 /16../30 with a host address (D-GW9); VLAN 1 (Default:
 # the trunk's untagged management) or outside 2..4094; a subnet overlapping
 # an earlier gateway network's (file order), an address the box has on any
@@ -187,6 +188,8 @@ FWD=${GT_BE98_FWD:-/usr/sbin/gt-be98-fwd}
 LAN_CONF=${GT_BE98_LAN_CONF:-/etc/conf.d/gt-be98-lan}
 LAN_APPLIED=${GT_BE98_LAN_APPLIED:-$RUNDIR/gt-be98-lan.applied}
 STA_ROUTED=${GT_BE98_STA_ROUTED:-$RUNDIR/gt-be98-wifi/sta/routed.applied}
+# the Wi-Fi plan: a "bhtrunk" line = the box is a mesh leaf (no gateway network)
+WIFI_PLAN=${GT_BE98_WIFI_PLAN:-$RUNDIR/gt-be98-wifi/gen/plan}
 ROUTER_APPLIED=${GT_BE98_ROUTER_APPLIED:-$RUNDIR/gt-be98-router.applied}
 RESOLV=${GT_BE98_GW_RESOLV:-/etc/resolv.conf}
 GW_TABLE=184
@@ -484,6 +487,9 @@ net_init() {
 	[ ${#N_ID} -le 5 ] || { N_ERR="network id '$1' (1..99999)"; return; }
 	case "$N_VID" in ''|0*|*[!0-9]*) N_ERR="vlan '$2' (2..4094)"; return ;; esac
 	[ "$N_VID" = 1 ] && { N_ERR="VLAN 1 is Default, the trunk's untagged management: never a gateway network"; return; }
+	# a mesh leaf routes nothing: the root is every network's gateway
+	# (buildroot docs/MESH-BACKHAUL-DESIGN.md §3.4 C2)
+	grep -q '^bhtrunk ' "$WIFI_PLAN" 2>/dev/null && { N_ERR="the box is a mesh leaf (Wi-Fi station trunk=1): no gateway network on a leaf, the root is its gateway"; return; }
 	[ ${#N_VID} -le 4 ] && [ "$N_VID" -ge 2 ] && [ "$N_VID" -le 4094 ] || { N_ERR="vlan '$2' (2..4094)"; return; }
 	case "$N_ISO$N_MGMT$N_DHCP" in *[!01]*) N_ERR="isolate/mgmt/dhcp: 0 or 1"; return ;; esac
 	N_ERR=$(cidr_why "$N_CIDR"); [ -z "$N_ERR" ] || return
