@@ -681,6 +681,11 @@ bh_guard() {
 		[ -n "${BHG_MAC:-}" ] && { nft delete table bridge gt_be98_bh_guard 2>/dev/null; BHG_MAC=; log "loop guard (backhaul): off (no mesh uplink)"; }
 		return 0
 	fi
+	# a table this guard loaded before (a netguard restart, or --sweep):
+	# adopted as it is, its counters kept
+	if [ "${BHG_MAC:-}" != "$BH_MAC" ] && nft list table bridge gt_be98_bh_guard 2>/dev/null | grep -q "ether saddr $BH_MAC iifname \"rnr2\""; then
+		BHG_MAC=$BH_MAC
+	fi
 	if [ "${BHG_MAC:-}" != "$BH_MAC" ]; then
 		if bh_ruleset "$BH_MAC" | nft -f - 2>/dev/null; then
 			BHG_MAC=$BH_MAC; BHG_N=0
