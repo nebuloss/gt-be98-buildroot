@@ -33,6 +33,28 @@
 #       its own trunk VLAN is left in place, with a warning)
 #   gt-be98-l2 vid <bridge>       the VLAN id the bridge carries (rc 1: none)
 #   gt-be98-l2 list               "<bridge> <trunk> <vid> <user>..." per bridge
+#                                 (<trunk> "-": a gateway network's bridge)
+#   gt-be98-l2 mode <vid> [<bridge>]  "gateway" or "vlan": what this tool
+#                                 does with <vid>'s trunk sub-interface
+#   gt-be98-l2 sync               every bridge's trunk sub-interface made to
+#                                 follow its mode (removed for a gateway
+#                                 network, added back for a VLAN-only one):
+#                                 gt-be98-gw runs it after each change
+# GATEWAY NETWORKS (the two-gateway rule; buildroot docs/ROUTED-NETWORKS-
+# DESIGN.md §1): a network of the web UI's list (/etc/gt-be98-networks.conf)
+# whose line says mode=gateway is routed by the box (gt-be98-gw: its address,
+# DHCP, NAT), never bridged upstream: its bridge has NO <trunk>.<vid> (the
+# upstream router's DHCP and the box's would both answer the segment). The
+# VLAN id keeps its meaning on the LAN side (the jacks' rnr1.<vid>, bare
+# jacks, tagged jack trunks, BSSes). The state records "trunk -" and the
+# trunk the users asked for as "uplink <trunk>". A line without mode= is VLAN
+# only, whatever its subnet= (the explicit key, owner D-GW1). While
+# gt-be98-gw holds a bridge (its address on it: $GW_HOLD/<bridge>) the trunk
+# sub-interface stays out even when the file says VLAN only again:
+# gt-be98-gw removes its address first, lets go, then runs `sync`, so the
+# segment never has two gateways, not even briefly. Switching a bridge
+# between the two modes adds or removes ONLY the trunk sub-interface: its
+# wired members, bare jacks and users stay (same VLAN).
 # A NETWORK WITHOUT AN SSID (the web UI's /etc/gt-be98-networks.conf, a
 # wired-only network as in UniFi) has no Wi-Fi bridge: gt-be98-lan names its
 # bridge brwifi<100000 + network id> (never a Wi-Fi network's: those are
@@ -54,6 +76,8 @@ L2=${GT_BE98_L2_STATE:-$RUNDIR/gt-be98-l2}
 SYSNET=${GT_BE98_SYSNET:-/sys/class/net}
 VLANCFG=${GT_BE98_VLANCFG:-/proc/net/vlan/config}
 PROCNET=${GT_BE98_PROCNET:-/proc/sys/net}
+NETWORKS=${GT_BE98_NETWORKS:-/etc/gt-be98-networks.conf}
+GW_HOLD=${GT_BE98_GW_HOLD:-$RUNDIR/gt-be98-gw/hold}
 
 err() { echo "gt-be98-l2: $*" >&2; logger -t gt-be98-l2 -- "$*" 2>/dev/null; return 1; }
 
@@ -83,26 +107,29 @@ lock() {
 }
 unlock() { rm -rf "$L2/.lock"; }
 
-# state of bridge $1 into S_TRUNK S_VID S_MB S_MV S_USERS S_WIRED ("" when
-# none; S_WIRED: "<user>:<dev>:<made>" words)
+# state of bridge $1 into S_TRUNK S_UPLINK S_VID S_MB S_MV S_USERS S_WIRED
+# ("" when none; S_TRUNK "-" for a gateway network, S_UPLINK the trunk the
+# users asked for, = S_TRUNK in a state written before it existed;
+# S_WIRED: "<user>:<dev>:<made>" words)
 st_read() {
 	local k v w x
-	S_TRUNK= S_VID= S_MB=0 S_MV=0 S_USERS= S_WIRED=
+	S_TRUNK= S_UPLINK= S_VID= S_MB=0 S_MV=0 S_USERS= S_WIRED=
 	[ -f "$L2/$1" ] || return 1
 	while read -r k v w x; do
 		case "$k" in
-		trunk) S_TRUNK=$v ;; vid) S_VID=$v ;;
+		trunk) S_TRUNK=$v ;; uplink) S_UPLINK=$v ;; vid) S_VID=$v ;;
 		made_bridge) S_MB=$v ;; made_vlan) S_MV=$v ;;
 		user) S_USERS="$S_USERS $v" ;;
 		wired) S_WIRED="$S_WIRED $v:$w:$x" ;;
 		esac
 	done < "$L2/$1"
+	[ -n "$S_UPLINK" ] || S_UPLINK=$S_TRUNK
 	return 0
 }
 st_write() {
 	local u w
 	{
-		echo "trunk $S_TRUNK"; echo "vid $S_VID"
+		echo "trunk $S_TRUNK"; echo "uplink $S_UPLINK"; echo "vid $S_VID"
 		echo "made_bridge $S_MB"; echo "made_vlan $S_MV"
 		for u in $S_USERS; do echo "user $u"; done
 		for w in $S_WIRED; do u=${w#*:}; echo "wired ${w%%:*} ${u%%:*} ${u#*:}"; done
@@ -148,13 +175,60 @@ wired_prune() {
 # the old sub-interface of bridge $1 (state S_*) leaves it
 sub_drop() {
 	local s=$S_TRUNK.$S_VID
-	[ -n "$S_TRUNK" ] && [ -n "$S_VID" ] || return 0
+	[ -n "$S_TRUNK" ] && [ "$S_TRUNK" != - ] && [ -n "$S_VID" ] || return 0
 	[ -e "$SYSNET/$s" ] || return 0
 	if [ "$S_MV" = 1 ]; then
 		ip link del dev "$s" || return 1
 	elif [ "$(master_of "$s")" = "$1" ]; then
 		ip link set dev "$s" nomaster || return 1
 	fi
+}
+
+# the mode of VLAN $1 (bridge $2, optional) into MODE: gateway when the
+# network list has a line with vlan=$1 and mode=gateway (vlan 2..4094), or
+# while gt-be98-gw holds bridge $2 (header); else vlan. Keys in any order,
+# unknown keys ignored; read with `read` (no fork).
+vid_mode() {
+	local l w v m
+	MODE=vlan
+	[ -n "${2:-}" ] && [ -e "$GW_HOLD/$2" ] && { MODE=gateway; return 0; }
+	case "$1" in 1) return 0 ;; esac
+	[ -r "$NETWORKS" ] || return 0
+	set -f
+	while IFS= read -r l || [ -n "$l" ]; do
+		case "$l" in ''|'#'*) continue ;; esac
+		v= m=
+		# shellcheck disable=SC2086 # word split, no glob
+		for w in $l; do
+			case "$w" in vlan=*) v=${w#vlan=} ;; mode=*) m=${w#mode=} ;; esac
+		done
+		[ "$v" = "$1" ] && [ "$m" = gateway ] && { MODE=gateway; break; }
+	done < "$NETWORKS"
+	set +f
+	return 0
+}
+
+# the trunk sub-interface $S_TRUNK.$S_VID of bridge $1: created or adopted,
+# IPv6 off, up, enslaved, not isolated (S_* written as it goes)
+sub_up() {
+	local b=$1 t=$S_TRUNK v=$S_VID s=$S_TRUNK.$S_VID o
+	o=$(master_of "$s")
+	[ -z "$o" ] || [ "$o" = "$b" ] || { err "$s is a port of $o: $b refused"; return 1; }
+	if [ $(( $(cat "$SYSNET/$t/flags" 2>/dev/null || echo 0) & 1 )) = 0 ]; then
+		ip link set dev "$t" up || { err "trunk $t: up failed"; return 1; }
+	fi
+	if [ -e "$SYSNET/$s" ]; then
+		vlan_is "$s" "$t" "$v" || { err "$s exists and is not VLAN $v of $t"; return 1; }
+	else
+		ip link add link "$t" name "$s" type vlan id "$v" || { err "cannot create $s"; return 1; }
+		S_MV=1; st_write "$b"
+	fi
+	ipv6_off "$s"
+	ip link set dev "$s" up || { err "$s: up failed"; return 1; }
+	[ "$(master_of "$s")" = "$b" ] || ip link set dev "$s" master "$b" ||
+		{ err "$s: enslave into $b failed"; return 1; }
+	bridge link set dev "$s" isolated off 2>/dev/null
+	return 0
 }
 
 # is bridge $1 one gt-be98-lan names for a network without an SSID
@@ -200,7 +274,7 @@ cmd_up() {
 		o=${f##*/}; case "$o" in *.new) continue ;; esac
 		[ "$o" = "$b" ] && continue
 		st_read "$o"
-		[ "$S_TRUNK.$S_VID" = "$s" ] || continue
+		[ "$S_UPLINK.$S_VID" = "$s" ] || continue
 		if [ "$u" = wifi ] && wired_only_net "$o" && [ "$S_USERS" = " lan" ]; then
 			yield_bridge "$o" || { err "$s: $o could not be let go: $b refused"; return 1; }
 			err "$s moves from $o (a network without an SSID, lan only) to $b (its SSID's bridge): gt-be98-lan's reload re-attaches the jacks"
@@ -208,15 +282,18 @@ cmd_up() {
 		fi
 		err "$s is bridged in $o already: $b refused"; return 1
 	done
-	o=$(master_of "$s")
-	[ -z "$o" ] || [ "$o" = "$b" ] || { err "$s is a port of $o: $b refused"; return 1; }
+	vid_mode "$v" "$b"
+	if [ "$MODE" = vlan ]; then
+		o=$(master_of "$s")
+		[ -z "$o" ] || [ "$o" = "$b" ] || { err "$s is a port of $o: $b refused"; return 1; }
+	fi
 	if [ -n "$ws" ]; then
 		o=$(master_of "$ws")
 		[ -z "$o" ] || [ "$o" = "$b" ] || { err "$ws is a port of $o: $b refused"; return 1; }
 	fi
-	st_read "$b" || { S_TRUNK=$t S_VID=$v; S_MB=0 S_MV=0 S_USERS= S_WIRED=; }
+	st_read "$b" || { S_TRUNK=$t S_UPLINK=$t S_VID=$v; S_MB=0 S_MV=0 S_USERS= S_WIRED=; }
 	# the bridge's VLAN changed: the old one goes first
-	if [ "$S_TRUNK.$S_VID" != "$s" ]; then
+	if [ "$S_UPLINK.$S_VID" != "$s" ]; then
 		sub_drop "$b" || { err "$b: the old VLAN $S_TRUNK.$S_VID could not be removed"; return 1; }
 		S_MV=0
 		# every user's wired members are of the old VLAN too
@@ -233,8 +310,15 @@ cmd_up() {
 			done
 		fi
 		S_USERS=
+	elif [ "$MODE" = gateway ] && [ "$S_TRUNK" != - ]; then
+		# the same VLAN turned into a gateway network: only the trunk
+		# sub-interface leaves (the wired members and users stay)
+		sub_drop "$b" || { err "$b: $S_TRUNK.$S_VID could not be removed (gateway network)"; return 1; }
+		S_MV=0
+		err "$b: VLAN $v is a gateway network: $S_TRUNK.$S_VID removed, the bridge is not carried upstream"
 	fi
-	S_TRUNK=$t S_VID=$v
+	S_UPLINK=$t S_VID=$v S_TRUNK=$t
+	[ "$MODE" = gateway ] && S_TRUNK=-
 	if [ -e "$SYSNET/$b" ]; then
 		[ -d "$SYSNET/$b/bridge" ] || { err "$b exists and is not a bridge"; return 1; }
 	else
@@ -247,20 +331,8 @@ cmd_up() {
 	ipv6_off "$b"
 	ip link set dev "$b" type bridge stp_state 0 forward_delay 0 && ip link set dev "$b" up ||
 		{ err "$b: setup failed"; return 1; }
-	if [ $(( $(cat "$SYSNET/$t/flags" 2>/dev/null || echo 0) & 1 )) = 0 ]; then
-		ip link set dev "$t" up || { err "trunk $t: up failed"; return 1; }
-	fi
-	if [ -e "$SYSNET/$s" ]; then
-		vlan_is "$s" "$t" "$v" || { err "$s exists and is not VLAN $v of $t"; return 1; }
-	else
-		ip link add link "$t" name "$s" type vlan id "$v" || { err "cannot create $s"; return 1; }
-		S_MV=1; st_write "$b"
-	fi
-	ipv6_off "$s"
-	ip link set dev "$s" up || { err "$s: up failed"; return 1; }
-	[ "$(master_of "$s")" = "$b" ] || ip link set dev "$s" master "$b" ||
-		{ err "$s: enslave into $b failed"; return 1; }
-	bridge link set dev "$s" isolated off 2>/dev/null
+	# a gateway network: no trunk sub-interface (header)
+	if [ "$MODE" = vlan ]; then sub_up "$b" || return 1; fi
 	# the user's wired member: what it named, and nothing else of its own
 	wired_prune "$b" "$u" "$ws"; st_write "$b"
 	[ -n "$ws" ] || return 0
@@ -305,7 +377,7 @@ cmd_down() {
 		for p in "$SYSNET/$b/brif"/*; do
 			[ -e "$p" ] || [ -L "$p" ] || continue
 			p=${p##*/}
-			case "$p" in bcawl*|"$S_TRUNK.$S_VID") ;; *)
+			case "$p" in bcawl*|"$S_UPLINK.$S_VID") ;; *)
 				err "$b has port $p: left in place (its owner removes it)"
 				S_MB=0 ;;
 			esac
@@ -315,6 +387,37 @@ cmd_down() {
 	[ "$S_MB" = 1 ] && [ -e "$SYSNET/$b" ] && { ip link del dev "$b" || err "$b: not deleted"; }
 	rm -f "$L2/$b"
 	return 0
+}
+
+# every bridge's trunk sub-interface follows its mode (header); rc 1 when one
+# could not
+cmd_sync() {
+	local f b r=0
+	for f in "$L2"/brwifi*; do
+		[ -f "$f" ] || continue
+		b=${f##*/}; case "$b" in *.new) continue ;; esac
+		st_read "$b" || continue
+		[ -n "$S_VID" ] && valid_trunk "$S_UPLINK" || continue
+		vid_mode "$S_VID" "$b"
+		if [ "$MODE" = gateway ] && [ "$S_TRUNK" != - ]; then
+			if sub_drop "$b"; then
+				S_TRUNK=- S_MV=0; st_write "$b"
+				err "$b: VLAN $S_VID is a gateway network: $S_UPLINK.$S_VID removed (sync)"
+			else
+				err "$b: $S_UPLINK.$S_VID could not be removed (gateway network)"; r=1
+			fi
+		elif [ "$MODE" = vlan ] && [ "$S_TRUNK" = - ]; then
+			[ -e "$SYSNET/$S_UPLINK" ] || { err "$b: trunk $S_UPLINK not present: VLAN $S_VID not carried"; r=1; continue; }
+			S_TRUNK=$S_UPLINK S_MV=0; st_write "$b"
+			if sub_up "$b"; then
+				err "$b: VLAN $S_VID is VLAN only again: $S_UPLINK.$S_VID carried (sync)"
+			else
+				# nothing half-made: back to "-" (sub_drop deletes what was made)
+				sub_drop "$b"; S_TRUNK=- S_MV=0; st_write "$b"; r=1
+			fi
+		fi
+	done
+	return $r
 }
 
 cmd_list() {
@@ -336,5 +439,9 @@ down)	[ $# = 2 ] || { err "usage: down <user> <bridge>"; exit 2; }
 vid)	[ $# = 1 ] && valid_bridge "$1" && st_read "$1" && [ -n "$S_VID" ] || exit 1
 	echo "$S_VID" ;;
 list)	cmd_list ;;
-*)	err "usage: up|down|vid|list"; exit 2 ;;
+mode)	[ $# = 1 ] || [ $# = 2 ] || { err "usage: mode <vid> [<bridge>]"; exit 2; }
+	valid_vid "$1" || exit 2
+	vid_mode "$1" "${2:-}"; echo "$MODE" ;;
+sync)	lock || exit 1; cmd_sync; r=$?; unlock; exit $r ;;
+*)	err "usage: up|down|vid|list|mode|sync"; exit 2 ;;
 esac

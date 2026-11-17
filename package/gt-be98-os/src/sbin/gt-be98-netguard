@@ -30,6 +30,14 @@
 #      as gt-be98-wifi sets it (WIFI_MCAST_TO_UNICAST, default 1), the
 #      repeater's uplink port never (a port whose kernel lacks the
 #      attribute is left alone).
+#   6. a GATEWAY network's VLAN is never carried upstream (the two-gateway
+#      rule, gt-be98-l2's header): <WIFI_TRUNK>.<vid> is never a bridge port
+#      when <vid> is a network whose line of the web UI's list
+#      (/etc/gt-be98-networks.conf) says mode=gateway, or when gt-be98-l2
+#      runs the bridge as one ("trunk -" in its state), even if a stale
+#      WIFI_VLANS lists it. Such a bridge's wired members (rnr1.<vid>) and
+#      bare jacks are admitted as for any network bridge (its state's
+#      "uplink" is the current trunk).
 # One exception to 1., the wired LAN (gt-be98-lan, off by default): a bare
 # port listed in LAN_PORTS may be a port of the bridge LAN_BRIDGE (br-lan),
 # and of no other bridge, when it is rnr1, rnr2 or rnr3 and not the Wi-Fi
@@ -89,6 +97,7 @@ LAN_CONF=${GT_BE98_LAN_CONF:-/etc/conf.d/gt-be98-lan}
 L2_STATE=${GT_BE98_L2_STATE:-${GT_BE98_RUN:-/run}/gt-be98-l2}
 LAN_APPLIED=${GT_BE98_LAN_APPLIED:-${GT_BE98_RUN:-/run}/gt-be98-lan.applied}
 LAN_TRIPPED=${GT_BE98_LAN_TRIPPED:-${GT_BE98_RUN:-/run}/gt-be98-lan.tripped}
+NETWORKS=${GT_BE98_NETWORKS:-/etc/gt-be98-networks.conf}
 # the RTL8372 driver's sysfs directory (one device; GT_BE98_RTL8372: a fixed
 # directory, the offline tests)
 RTL_GLOB=${GT_BE98_RTL8372:-/sys/bus/mdio_bus/drivers/rtl8372/*}
@@ -171,6 +180,47 @@ wifi_conf() {
 	cfg_last "$f" WIFI_MCAST_TO_UNICAST '01'; M2U=${CFG:-1}
 	case "$TRUNK" in rnr[0-3]) ;; *) TRUNK= ;; esac
 }
+# the gateway networks' VLANs of the web UI's list into GW_VIDS (" 40 41 ",
+# read with `read`, once per sweep; keys in any order, unknown ignored)
+gw_conf() {
+	local l w v m
+	GW_VIDS=' '
+	[ -r "$NETWORKS" ] || return 0
+	set -f
+	while IFS= read -r l || [ -n "$l" ]; do
+		case "$l" in ''|'#'*) continue ;; esac
+		v= m=
+		# shellcheck disable=SC2086 # word split, no glob
+		for w in $l; do
+			case "$w" in vlan=*) v=${w#vlan=} ;; mode=*) m=${w#mode=} ;; esac
+		done
+		case "$v" in ''|0*|*[!0-9]*) continue ;; esac
+		[ "$m" = gateway ] && GW_VIDS="$GW_VIDS$v "
+	done < "$NETWORKS"
+	set +f
+}
+# invariant 6: is sub-interface $1 of a protected port the trunk VLAN of a
+# gateway network (the list, or a bridge gt-be98-l2 runs as one)? Why into GWHY
+gw_trunk_vlan() {
+	local v=${1#*.} f
+	GWHY=
+	[ -n "$TRUNK" ] && [ "${1%%.*}" = "$TRUNK" ] || return 1
+	case "$v" in ''|0*|*[!0-9]*) return 1 ;; esac
+	case "${GW_VIDS:- }" in *" $v "*) GWHY="VLAN $v is a gateway network (mode=gateway)"; return 0 ;; esac
+	# gt-be98-l2 runs a bridge on VLAN v as a gateway network ("trunk -")
+	for f in "$L2_STATE"/brwifi*; do
+		[ -f "$f" ] || continue
+		l2_state "${f##*/}"
+		[ "$L2V" = "$v" ] && [ "$L2T" = - ] && { GWHY="gt-be98-l2 runs ${f##*/} on VLAN $v as a gateway network"; return 0; }
+	done
+	return 1
+}
+# the bridge's trunk as gt-be98-l2 records it is the current one: L2T, or
+# for a gateway network's bridge ("trunk -") the uplink its users asked for
+l2_on_trunk() {
+	[ "$L2T" = "$TRUNK" ] && return 0
+	[ "$L2T" = - ] && [ "${L2U:-$TRUNK}" = "$TRUNK" ]
+}
 # is sub-interface $1 the listed trunk VLAN of bridge $2?
 wifi_vlan_ok() {
 	local p v
@@ -194,7 +244,7 @@ jack_vlan_ok() {
 	case "$2" in brwifi[0-9]*) ;; *) return 1 ;; esac
 	[ -n "$TRUNK" ] && [ "$TRUNK" != rnr1 ] || return 1
 	l2_state "$2"
-	[ -n "$L2V" ] && [ "$L2T" = "$TRUNK" ] && [ "$1" = "rnr1.$L2V" ] || return 1
+	[ -n "$L2V" ] && l2_on_trunk && [ "$1" = "rnr1.$L2V" ] || return 1
 	case " $L2W " in *" $1 "*) return 0 ;; esac
 	return 1
 }
@@ -216,14 +266,15 @@ lan_conf() {
 		eval "VN_$p=\$n"
 	done
 }
-# the VLAN gt-be98-l2 runs bridge $1 on, into L2V ("" none), L2T (trunk)
+# the VLAN gt-be98-l2 runs bridge $1 on, into L2V ("" none), L2T (trunk,
+# "-" for a gateway network), L2U (the uplink trunk, "" in an older state)
 # and L2W (its wired members, space-separated)
 l2_state() {
 	local k v w
-	L2V= L2T= L2W=
+	L2V= L2T= L2U= L2W=
 	[ -r "$L2_STATE/$1" ] || return 0
 	while read -r k v w _; do
-		case "$k" in vid) L2V=$v ;; trunk) L2T=$v ;; wired) L2W="$L2W $w" ;; esac
+		case "$k" in vid) L2V=$v ;; trunk) L2T=$v ;; uplink) L2U=$v ;; wired) L2W="$L2W $w" ;; esac
 	done < "$L2_STATE/$1"
 }
 # may bare port $1 be a port of brwifi bridge $2 as a VLAN jack?
@@ -235,7 +286,7 @@ vport_ok() {
 	eval "n=\${VN_$1:-}"
 	[ -n "$n" ] || return 1
 	l2_state "$2"
-	[ "$L2V" = "$n" ] && [ "$L2T" = "$TRUNK" ]
+	[ "$L2V" = "$n" ] && l2_on_trunk
 }
 # may bare port $1 be a port of bridge $2 as a wired LAN port?
 lan_port_ok() {
@@ -252,6 +303,10 @@ verdict() {
 	VERDICT=keep
 	case "$1" in
 	*.*)	# 802.1Q sub-interface of a protected port: listed trunk VLANs only
+		# a gateway network's VLAN is never carried upstream (rule 6)
+		if protected "${1%%.*}" && gw_trunk_vlan "$1"; then
+			VERDICT="$GWHY: its trunk VLAN is never bridged (the box is that network's gateway)"; return
+		fi
 		if protected "${1%%.*}" && ! wifi_vlan_ok "$1" "$2" && ! jack_vlan_ok "$1" "$2"; then
 			VERDICT="not a listed Wi-Fi VLAN of $2, nor the 2.5G jacks' VLAN (rnr1.<vid>) gt-be98-l2 runs $2 on"; return
 		fi
@@ -421,6 +476,7 @@ sweep() {
 	local b m pp i n f v
 	wifi_conf
 	lan_conf
+	gw_conf
 	load_lists
 	guard
 	for b in "$SYSNET"/*/brif; do
@@ -597,6 +653,31 @@ selftest() {
 	lcheck ""   "02:00:00:00:0a:01 921 port=12" 921
 	lcheck ""   "02:00:00:00:0a:01 921" 921		# what was written (a plain file, no driver)
 	lcheck ""   "none" 921				# before any lookup
+	# rule 6: a gateway network's trunk VLAN, never a bridge port; its
+	# bridge's wired members and jacks still are (gt-be98-l2 "trunk -")
+	gcheck() {	# <expect> <port> <bridge> <GW_VIDS> <l2 trunk|""> <l2 uplink> <vid> <wired> <WIFI_VLANS> <native of rnr2>
+		LPORTS=; LBRIDGE=br-lan; TRUNK=rnr0; VLANS=$9; VN_rnr1= VN_rnr2=${10:-} VN_rnr3=; GW_VIDS=$4
+		rm -f "$L2_STATE"/*
+		if [ -n "$5" ]; then
+			printf 'trunk %s\nuplink %s\nvid %s\nmade_bridge 1\nmade_vlan 0\nuser lan\n' "$5" "$6" "$7" > "$L2_STATE/$3"
+			for c in $8; do echo "wired lan $c 1" >> "$L2_STATE/$3"; done
+		fi
+		load_lists; verdict "$2" "$3"; c=$VERDICT; [ "$c" = keep ] || c=detach
+		n=$((n + 1))
+		if [ "$c" = "$1" ]; then echo "ok   $1 gateway: $2 in $3 (gw vids '$4', l2 trunk '$5' uplink '$6', WIFI_VLANS '$9')"
+		else echo "FAIL want $1, got $c: gateway: $2 in $3 (gw vids '$4', l2 trunk '$5' uplink '$6', WIFI_VLANS '$9')"; fail=$((fail + 1)); fi
+	}
+	gcheck detach rnr0.40 brwifi7 " 40 " rnr0 rnr0 40 "" "brwifi7:40"		# listed in WIFI_VLANS, but 40 is a gateway network
+	gcheck keep   rnr0.40 brwifi7 " 41 " rnr0 rnr0 40 "" "brwifi7:40"		# control: another VLAN is the gateway
+	gcheck detach rnr0.40 brwifi7 " "    -    rnr0 40 "" "brwifi7:40"		# the list says nothing, gt-be98-l2 runs it as a gateway ("trunk -")
+	gcheck detach rnr0.40 brwifi100004 " 40 " - rnr0 40 "" ""			# a network without an SSID
+	gcheck detach rnr0.40 brx     " 40 " ""   ""   ""  "" ""			# in any bridge
+	gcheck keep   rnr1.40 brwifi7 " 40 " -    rnr0 40 "rnr1.40" ""		# the 2.5G jacks of the gateway network: kept
+	gcheck detach rnr1.40 brwifi7 " 40 " -    rnr0 40 "" ""			# control: not a recorded wired member
+	gcheck detach rnr1.40 brwifi7 " 40 " -    rnr3 40 "rnr1.40" ""		# control: its uplink is not the current trunk
+	gcheck keep   rnr2    brwifi7 " 40 " -    rnr0 40 "" "" 40			# a bare jack native 40 in the gateway bridge
+	gcheck detach rnr2    brwifi7 " 40 " -    rnr0 40 "" "" 41			# control: its native is another VLAN
+	GW_VIDS=' '
 	rm -rf "$L2_STATE"
 	rm -f "$WIFI_STATIONS" "$WIFI_REPEATERS"
 	echo "selftest: $((n - fail))/$n ok"

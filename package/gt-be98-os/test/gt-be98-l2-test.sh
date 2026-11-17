@@ -165,5 +165,55 @@ L up lan brwifi100004 rnr0 931; L up lan brwifi100005 rnr0 931; check "control: 
 L up wifi brwifi100004 rnr0 931; L up wifi brwifi9 rnr0 931; check "control: a lan-only bridge the Wi-Fi also uses (users lan wifi): refused" 1 $?
 L down wifi brwifi100004
 L up lan brwifi20 rnr0 932; L up wifi brwifi21 rnr0 932; check "control: a lan-only brwifi20 (a Wi-Fi number, test 4's case): refused" 1 $?
+# 11. GATEWAY NETWORKS (the two-gateway rule): a network whose line says
+# mode=gateway has no trunk sub-interface; every check with its control
+export GT_BE98_NETWORKS="$T/networks.conf"
+st() { sed -n "s/^$2 //p" "$T/run/gt-be98-l2/$1" 2>/dev/null; }
+printf '# comment\nnetwork=4 name=Lab vlan=44 subnet=192.168.40.1/24 mode=gateway isolate=0 mgmt=1\nnetwork=3 name=Up vlan=30 subnet=192.168.30.1/24\nnetwork=5 name=V vlan=50 subnet= mode=vlan\n' > "$GT_BE98_NETWORKS"
+check "mode 44 (mode=gateway)" gateway "$(L mode 44)"
+check "control: mode 30 (a subnet, no mode=: VLAN only, D-GW1)" vlan "$(L mode 30)"
+check "control: mode 50 (mode=vlan)" vlan "$(L mode 50)"
+check "control: mode 41 (no line)" vlan "$(L mode 41)"
+L up lan brwifi100004 rnr0 44 rnr1; check "up on a gateway VLAN: rc 0, bridge with rnr1.44, NO rnr0.44" "0 brwifi100004 no" "$? $(master rnr1.44) $(ex rnr0.44)"
+check "... state: trunk -, uplink rnr0" "- rnr0" "$(st brwifi100004 trunk) $(st brwifi100004 uplink)"
+check "... list shows trunk -" "brwifi100004 - 44 lan" "$(L list | grep '^brwifi100004')"
+L up lan brwifi30 rnr0 30 rnr1; check "control: VLAN 30 (VLAN only) gets rnr0.30" "0 brwifi30" "$? $(master rnr0.30)"
+# a second user (the SSID's bridge takes the VLAN over): still no trunk
+L up wifi brwifi9 rnr0 44; check "the SSID's bridge takes gateway VLAN 44 over: rc 0, no rnr0.44" "0 no no" "$? $(ex rnr0.44) $(ex brwifi100004)"
+check "... one bridge per VLAN still holds on a gateway VLAN (another Wi-Fi bridge refused)" 1 "$(L up wifi brwifi19 rnr0 44; echo $?)"
+L up lan brwifi9 rnr0 44 rnr1; port rnr3; ip link set dev rnr3 master brwifi9
+# mode switch gateway -> vlan via sync: ONLY the trunk sub-interface comes; members stay
+sed -i 's/ mode=gateway / mode=vlan /' "$GT_BE98_NETWORKS"
+L sync; check "sync, 44 now VLAN only: rc 0, rnr0.44 created in brwifi9" "0 brwifi9" "$? $(master rnr0.44)"
+check "... the wired member, the bare jack and both users stay" "brwifi9 brwifi9 wifi lan " "$(master rnr1.44) $(master rnr3) $(users brwifi9)"
+check "... state: trunk rnr0" rnr0 "$(st brwifi9 trunk)"
+# and back: vlan -> gateway via sync, members stay
+sed -i 's/ mode=vlan isolate/ mode=gateway isolate/' "$GT_BE98_NETWORKS"
+L sync; check "sync, 44 a gateway again: rnr0.44 deleted (made here), members stay" "0 no brwifi9 brwifi9 -" "$? $(ex rnr0.44) $(master rnr1.44) $(master rnr3) $(st brwifi9 trunk)"
+check "control: sync left VLAN 30's rnr0.30 alone" brwifi30 "$(master rnr0.30)"
+# mode switch by `up` (gt-be98-lan's reload): vlan -> gateway keeps the members
+sed -i 's/vlan=30 subnet=192.168.30.1\/24$/vlan=30 subnet=192.168.30.1\/24 mode=gateway/' "$GT_BE98_NETWORKS"
+L up lan brwifi30 rnr0 30 rnr1; check "up after 30 became a gateway: rnr0.30 removed, rnr1.30 kept, no eviction" "0 no brwifi30 lan " "$? $(ex rnr0.30) $(master rnr1.30) $(users brwifi30)"
+check "... no 'evicted' message for brwifi30" 0 "$(grep -c 'evicted from brwifi30' "$T/err")"
+# gt-be98-gw holds a bridge: the trunk stays out even when the file says VLAN only
+sed -i 's/ mode=gateway$//' "$GT_BE98_NETWORKS"
+mkdir -p "$T/run/gt-be98-gw/hold"; : > "$T/run/gt-be98-gw/hold/brwifi30"
+check "mode 30 with gt-be98-gw holding brwifi30: gateway" gateway "$(L mode 30 brwifi30)"
+check "control: mode 30 of another bridge: vlan" vlan "$(L mode 30 brwifi31)"
+L sync; check "sync while held: still no rnr0.30" "no -" "$(ex rnr0.30) $(st brwifi30 trunk)"
+L up lan brwifi30 rnr0 30 rnr1; check "up while held: still no rnr0.30" "0 no" "$? $(ex rnr0.30)"
+rm -f "$T/run/gt-be98-gw/hold/brwifi30"
+L sync; check "released, then sync: rnr0.30 carried again, rnr1.30 kept" "0 brwifi30 brwifi30" "$? $(master rnr0.30) $(master rnr1.30)"
+# the last down of a gateway bridge: nothing of a trunk to delete, bridge gone
+L down wifi brwifi9; ip link set dev rnr3 nomaster; L down lan brwifi9
+check "last down of a gateway bridge: bridge and rnr1.44 deleted, state gone" "no no no" "$(ex brwifi9) $(ex rnr1.44) $([ -e "$T/run/gt-be98-l2/brwifi9" ] && echo yes || echo no)"
+# a gateway bridge does not hold rnr0.<vid> even when an rnr0.44 exists (adopted by nobody)
+ip link add link rnr0 name rnr0.44 type vlan id 44
+L up lan brwifi100004 rnr0 44; check "an rnr0.44 that exists is never enslaved into a gateway bridge" "0 -" "$? $(master rnr0.44)-"
+L down lan brwifi100004; ip link del dev rnr0.44
+# a state written before the uplink line existed: uplink = trunk
+printf 'trunk rnr0\nvid 60\nmade_bridge 0\nmade_vlan 0\nuser lan\n' > "$T/run/gt-be98-l2/brwifi60"
+check "an old state (no uplink line) lists as before" "brwifi60 rnr0 60 lan" "$(L list | grep '^brwifi60')"
+rm -f "$T/run/gt-be98-l2/brwifi60"
 echo "gt-be98-l2-test: $pass ok, $fail failed"
 [ $fail -eq 0 ]

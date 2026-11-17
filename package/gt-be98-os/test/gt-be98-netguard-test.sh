@@ -224,5 +224,23 @@ check "older-image conf (LAN_PORT_* absent): rnr1 in brwifi1 detached, its trunk
 rm -rf "$T/run/gt-be98-l2" "$T/run/gt-be98-lan.applied" "$T/run/gt-be98-lan.tripped" "$T/counters"
 printf 'LAN_PORTS="rnr1"\nLAN_BRIDGE=br-lan\n' > "$T/lan.conf"
 
+# rule 6 (gateway networks, sweep level): the list's mode=gateway VLAN 921
+# loses its trunk VLAN rnr0.921 even listed in WIFI_VLANS; the bridge's
+# wired member rnr1.921 (gt-be98-l2 "trunk -", uplink rnr0) and BSS stay
+printf 'WIFI_TRUNK="rnr0"\nWIFI_VLANS="brwifi1:921"\n' > "$T/l2.conf"
+mkdir -p "$T/run/gt-be98-l2"; printf 'trunk -\nuplink rnr0\nvid 921\nmade_bridge 1\nmade_vlan 0\nuser wifi\nuser lan\nwired lan rnr1.921 1\n' > "$T/run/gt-be98-l2/brwifi1"
+printf 'network=4 name=Lab vlan=921 subnet=192.168.40.1/24 mode=gateway isolate=0 mgmt=1\n' > "$T/networks.conf"
+gsweep() { rm -rf "$S"; mkdir -p "$S/lo"; port brwifi1 rnr0.921 0 0; port brwifi1 rnr1.921 0 0; port brwifi1 bcawl0 0 0
+	: > "$T/acts"; GT_BE98_NETWORKS="$T/networks.conf" PATH="$T/bin:$PATH" $SH "$G" --sweep; grep '^ip ' "$T/acts" | tr '\n' '|'; }
+check "rule 6: a gateway network's rnr0.921 detached (even listed), rnr1.921 and the BSS kept" "ip link set rnr0.921 nomaster|" "$(gsweep)"
+check "... logged with its reason" yes "$(grep -q 'log detached rnr0.921 from bridge brwifi1 (VLAN 921 is a gateway network' "$T/acts" && echo yes || echo no)"
+printf 'trunk rnr0\nuplink rnr0\nvid 921\nmade_bridge 1\nmade_vlan 0\nuser wifi\nuser lan\nwired lan rnr1.921 1\n' > "$T/run/gt-be98-l2/brwifi1"
+printf 'network=4 name=Lab vlan=921 subnet=192.168.40.1/24\n' > "$T/networks.conf"
+check "control: the same VLAN without mode=gateway (D-GW1): nothing detached" "" "$(gsweep)"
+rm -rf "$T/run/gt-be98-l2" "$T/networks.conf"
+# the verdict tables (gt-be98-netguard --selftest)
+if $SH "$G" --selftest > "$T/st.out" 2>&1; then check "--selftest: $(tail -n1 "$T/st.out")" 0 0
+else check "--selftest" 0 1; grep FAIL "$T/st.out"; fi
+
 if [ $fail = 0 ]; then echo "ALL OK ($n checks)"; else echo "FAILED"; fi
 exit $fail
