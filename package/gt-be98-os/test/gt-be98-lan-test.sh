@@ -588,7 +588,7 @@ printf 'WIFI_TRUNK="rnr0"\nWIFI_VLANS="brwifi9:921 brwifi8:30"\n' > "$T/svc/l2.c
 # the BPDU guard latched jack 6 (gt-be98-netguard): reload keeps its VLAN, writes the latch
 echo jack6 > "$T/svc/tripped"; echo 0x0 > "$T/svc/rtl/jack_block"
 : > "$T/svc/seq"; svcj reload
-[ "$(cat "$T/svc/rtl/jack_block")" = 64 ] && grep -q '^put jack_profiles 4=921 5=off 6=921 7=921$' "$T/svc/seq" && grep -q '^W 2.5G jacks latched off by the BPDU guard (jack_block 64)' "$T/svc/seq" &&
+[ "$(cat "$T/svc/rtl/jack_block")" = 64 ] && grep -q '^put jack_profiles 4=921 5=off 6=921 7=921$' "$T/svc/seq" && grep -q '^W 2.5G jacks latched off by the loop guard (BPDU or RLDP, jack_block 64)' "$T/svc/seq" &&
 	ok "latched jack 6: the set unchanged, jack_block 64 written after it (the latch survives a module reload: re-written at every set)" || ko "latch: block $(cat "$T/svc/rtl/jack_block") [$(tr '\n' '|' < "$T/svc/seq")]"
 # a latch that cannot be written: the latched jack written off instead
 : > "$T/svc/seq"; rm -f "$T/svc/putn"; PUTFAIL="jack_block:Input/output error:9" svcj reload
@@ -874,6 +874,114 @@ for k in AUTOSAVE_WATCH ALLOW_PATHS; do
 done
 grep -q '^AUTOSAVE_WATCH=${AUTOSAVE_WATCH:-"[^"]* etc/gt-be98-networks.conf ' "$SRC/sbin/gt-be98-save" || grep -q 'AUTOSAVE_WATCH:-"etc/webui etc/gt-be98-networks.conf ' "$SRC/sbin/gt-be98-save" &&
 	ok "gt-be98-save's default watch list too" || ko "gt-be98-save default watch"
+
+# 4h. a disabled jack (enabled=0) is switched off: its PHY powered down (the
+# driver's jack_disabled), not only out of every VLAN; no jack enabled after a
+# reload: the switch back to its boot state (the module unloaded); the
+# RTL8372's loop detection (jack_status loop=1) latched like a BPDU.
+dis() {	# JDISABLED of a conf
+	printf "$1\n" > "$T/lan.conf"
+	(
+		eerror() { :; }; ewarn() { :; }; LAN_CONF_FILE="$T/lan.conf"
+		. "$SRC/init.d/gt-be98-lan"
+		wifi_trunk() { echo rnr0; }
+		load_conf || exit 1
+		echo "[$JACKS] [$JDISABLED] $(jack_down)"
+	)
+}
+dis_case() { r=$(dis "$2"); if [ "$r" = "$1" ]; then ok "disabled jacks $1: $(printf "$2" | tr '\n' ' ')"; else ko "disabled jacks: want $1 got $r: $2"; fi; }
+dis_case "[6] [5] 32" 'LAN_JACK_5="native=921 enabled=0"\nLAN_JACK_6="native=921"'
+dis_case "[] [4 7] 144" 'LAN_JACK_4="native=921 enabled=0"\nLAN_JACK_7="native=30 tagged=40 enabled=0"'
+dis_case "[] [4 5 6 7] 240" 'LAN_PORT_rnr1="native=921 enabled=0"'		# the RC9 migration's profile: all four
+dis_case "[6] [] 0" 'LAN_JACK_5=""\nLAN_JACK_6="native=921"'			# control: no profile is off, not disabled
+dis_case "[4] [] 0" 'LAN_JACK_7="native=921 enabled=2"\nLAN_JACK_4="native=30"'	# control: a refused profile is off, not disabled
+dis_case "[] [6] 64" 'LAN_PORTS="rnr1"\nLAN_JACK_6="native=921 enabled=0"'	# the routed LAN takes it too (4=1..: jack 6 dark)
+# the service with a driver that has jack_disabled
+printf 'WIFI_TRUNK="rnr0"\nWIFI_VLANS="brwifi9:921 brwifi8:30"\n' > "$T/svc/l2.conf"
+rm -f "$T/svc/applied" "$T/svc/tripped" "$T/svc/putn"; : > "$T/svc/modules"; echo 0x00 > "$T/svc/rtl/jack_disabled"
+printf 'LAN_PORT_rnr1=""\nLAN_JACK_4="native=921"\nLAN_JACK_6="native=921 tagged=none enabled=0"\n' > "$T/lan.conf"
+: > "$T/svc/seq"; svcj start
+o=$(seqf)
+[ "$o" = "modprobe rtl8372|put jack_profiles 4=921 5=off 6=off 7=off|put jack_block 0|put jack_disabled 64|nft -c -f -|nft -f -|l2 up lan brwifi9 rnr0 921 rnr1|" ] &&
+	ok "start, jack 6 enabled=0: off in the set, then its PHY down (jack_disabled 64) after the latch" || ko "start disabled: [$o]"
+printf 'LAN_PORT_rnr1=""\nLAN_JACK_4="native=921"\nLAN_JACK_6="native=921 tagged=none enabled=1"\n' > "$T/lan.conf"
+: > "$T/svc/seq"; svcj reload
+o=$(seqf)
+[ "$o" = "put jack_profiles 4=921 5=off 6=921 7=off|put jack_block 0|put jack_disabled 0|nft -c -f -|nft -f -|l2 up lan brwifi9 rnr0 921 rnr1|" ] &&
+	ok "reload, jack 6 enabled again: in its VLAN, its PHY up (jack_disabled 0)" || ko "reload enabled: [$o]"
+: > "$T/svc/seq"; svcj reload
+! grep -q '^put jack_disabled' "$T/svc/seq" && ok "control: nothing disabled and the driver has none down: jack_disabled not written" || ko "jack_disabled rewritten: [$(seqf)]"
+rm -f "$T/svc/rtl/jack_disabled"
+printf 'LAN_PORT_rnr1=""\nLAN_JACK_4="native=921"\nLAN_JACK_6="native=921 enabled=0"\n' > "$T/lan.conf"
+: > "$T/svc/seq"; svcj reload; r=$?
+[ $r = 0 ] && ! grep -q '^put jack_disabled' "$T/svc/seq" && grep -q '^W the RTL8372 driver has no jack_disabled: the disabled jack(s) 6 are off' "$T/svc/seq" && [ "$(jp)" = "4=921 5=off 6=off 7=off" ] &&
+	ok "an older driver (no jack_disabled): the disabled jack off in the set, logged, rc 0" || ko "older driver: rc $r [$(tr '\n' '|' < "$T/svc/seq")]"
+# no jack enabled any more: the module this service loaded is unloaded (the switch in reset, as at boot)
+echo 0x00 > "$T/svc/rtl/jack_disabled"
+printf 'LAN_PORT_rnr1=""\nLAN_JACK_4="native=921 enabled=0"\nLAN_JACK_6="native=921 enabled=0"\n' > "$T/lan.conf"
+: > "$T/svc/seq"; svcj reload; r=$?
+o=$(seqf)
+[ $r = 0 ] && [ "$o" = "rmmod rtl8372|l2 down lan brwifi9|nft delete table bridge gt_be98_lan_guard|" ] && ! grep -q '^module rtl8372$\|^jacks ' "$T/svc/applied" &&
+	ok "reload, no jack enabled: rtl8372 unloaded FIRST (the switch held in reset: every jack dark), the bridge let go, the guard removed; no module/jacks line left" || ko "release: rc $r [$o] applied [$(tr '\n' '|' < "$T/svc/applied")]"
+echo "rtl8372 1 0 - Live" > "$T/svc/modules"	# (the fake rmmod emptied it; a fake driver dir stays)
+: > "$T/svc/seq"; svcj reload
+[ -z "$(seqf)" ] && ok "control: the next reload with no jack does nothing (already released)" || ko "released reload: [$(seqf)]"
+: > "$T/svc/modules"
+printf 'LAN_PORT_rnr1=""\nLAN_JACK_6="native=921"\n' > "$T/lan.conf"
+: > "$T/svc/seq"; svcj reload
+case "$(seqf)" in "modprobe rtl8372|put jack_profiles 4=off 5=off 6=921 7=off|put jack_block 0|"*) ok "a jack enabled again: the module loaded again, the set written" ;; *) ko "reload after release: [$(seqf)]" ;; esac
+# a module this service did not load: kept, the jacks written off, the jacks line dropped
+sed -i '/^module rtl8372$/d' "$T/svc/applied"
+printf 'LAN_PORT_rnr1=""\nLAN_JACK_6=""\n' > "$T/lan.conf"
+: > "$T/svc/seq"; svcj reload
+o=$(seqf)
+case "$o" in "put jack_profiles 4=off 5=off 6=off 7=off|put jack_block 0|"*) ! grep -q '^rmmod' "$T/svc/seq" && ! grep -q '^jacks ' "$T/svc/applied" &&
+	ok "control: the module not this service's: never unloaded, the jacks written off, the jacks line dropped" || ko "not ours: [$o]" ;; *) ko "not ours: [$o]" ;; esac
+svcj stop > /dev/null
+# the routed LAN (LAN_PORTS=rnr1) keeps the switch even with no jack profile
+printf 'LAN_PORTS="rnr1"\n' > "$T/lan.conf"; rm -f "$T/svc/applied"; : > "$T/svc/modules"
+svcj start > /dev/null; : > "$T/svc/seq"; svcj reload
+! grep -q '^rmmod' "$T/svc/seq" && grep -q '^module rtl8372$' "$T/svc/applied" && ok "control: LAN_PORTS=rnr1, reload: the switch kept (the routed LAN owns it)" || ko "routed release: [$(tr '\n' '|' < "$T/svc/seq")]"
+# ... and a jack switched off there by a reload (the set itself untouched), then on again
+printf 'LAN_PORTS="rnr1"\nLAN_JACK_6="native=921 enabled=0"\n' > "$T/lan.conf"
+: > "$T/svc/seq"; svcj reload
+[ "$(seqf)" = "put jack_disabled 64|" ] && ok "LAN_PORTS=rnr1, reload with jack 6 enabled=0: jack_disabled 64 only (the set 4=1.. untouched)" || ko "routed disable: [$(seqf)]"
+printf 'LAN_PORTS="rnr1"\n' > "$T/lan.conf"
+: > "$T/svc/seq"; svcj reload
+[ "$(seqf)" = "put jack_disabled 0|" ] && ok "... enabled again: jack_disabled 0" || ko "routed enable: [$(seqf)]"
+svcj stop > /dev/null
+rm -f "$T/svc/rtl/jack_disabled"
+# netguard: a jack the driver reports in a loop (RLDP) is latched like a BPDU's
+for c in loop ctl noapp; do
+	rm -rf "$T/ngl"; mkdir -p "$T/ngl/bin" "$T/ngl/run" "$T/ngl/net" "$T/ngl/rtl"
+	printf '#!/bin/sh\nexit 0\n' > "$T/ngl/bin/nft"; printf '#!/bin/sh\nexit 0\n' > "$T/ngl/bin/logger"; chmod +x "$T/ngl/bin/"*
+	printf 'jacks 4=921 5=off 6=921 7=off\nguard\njack 4 brwifi9 921\njack 6 brwifi9 921\n' > "$T/ngl/run/gt-be98-lan.applied"
+	[ $c = noapp ] && sed -i '/^jacks /d' "$T/ngl/run/gt-be98-lan.applied"
+	l=1; [ $c = ctl ] && l=0
+	printf 'port=4 link=up speed=1000 vid=921 blocked=0 tagged=none enabled=1 loop=0 loop_pair=-\nport=5 link=down speed=? vid=off blocked=0 tagged=none enabled=1 loop=0 loop_pair=-\nport=6 link=up speed=1000 vid=921 blocked=0 tagged=none enabled=1 loop=%s loop_pair=6\nport=7 link=down speed=? vid=off blocked=0 tagged=none enabled=1 loop=0 loop_pair=-\n' $l > "$T/ngl/rtl/jack_status"
+	echo 0x00 > "$T/ngl/rtl/jack_block"; : > "$T/ngl/rtl/l2_lookup"; : > "$T/ngl/lan.conf"
+	GT_BE98_SYSNET="$T/ngl/net" GT_BE98_RUN="$T/ngl/run" GT_BE98_LAN_CONF="$T/ngl/lan.conf" GT_BE98_WIFI_L2="$T/ngl/none" \
+		GT_BE98_RTL8372="$T/ngl/rtl" PATH="$T/ngl/bin:$PATH" sh "$SRC/sbin/gt-be98-netguard" --sweep 2>/dev/null
+	r="$( { tr '\n' ' ' < "$T/ngl/run/gt-be98-lan.tripped"; } 2>/dev/null)|$( { cat "$T/ngl/run/gt-be98-lan.tripped.loop"; } 2>/dev/null)|$(cat "$T/ngl/rtl/jack_block")"
+	case $c in
+	loop) [ "$r" = "jack6 |jack6 6|64" ] && ok "netguard, jack_status loop=1 on jack 6 (RLDP): jack 6 latched (its pair kept in .loop), jack_block 64" || ko "netguard RLDP: [$r]" ;;
+	ctl) [ "$r" = "||0x00" ] && ok "control: loop=0 everywhere: nothing latched, jack_block untouched" || ko "netguard RLDP control: [$r]" ;;
+	noapp) [ "$r" = "||0x00" ] && ok "control: no jack set applied by gt-be98-lan (no jacks line): the loop guard does not run" || ko "netguard RLDP noapp: [$r]" ;;
+	esac
+done
+# gt-be98-lan carries that latch exactly like a BPDU's: written after every set, cleared by a restart
+printf 'WIFI_TRUNK="rnr0"\nWIFI_VLANS="brwifi9:921"\n' > "$T/svc/l2.conf"
+printf 'LAN_PORT_rnr1=""\nLAN_JACK_6="native=921"\n' > "$T/lan.conf"
+rm -f "$T/svc/applied" "$T/svc/putn"; : > "$T/svc/modules"; svcj start > /dev/null
+echo jack6 > "$T/svc/tripped"; echo "jack6 6" > "$T/svc/tripped.loop"; echo 0x0 > "$T/svc/rtl/jack_block"
+: > "$T/svc/seq"; svcj reload
+[ "$(cat "$T/svc/rtl/jack_block")" = 64 ] && [ -e "$T/svc/tripped.loop" ] && ok "an RLDP latch survives a reload: jack_block 64 re-written after the set" || ko "RLDP latch reload: [$(tr '\n' '|' < "$T/svc/seq")]"
+svcj stop > /dev/null
+[ ! -e "$T/svc/tripped" ] && [ ! -e "$T/svc/tripped.loop" ] && ok "stop (restart's first half) clears the RLDP latch and its reason" || ko "RLDP latch not cleared"
+echo jack6 > "$T/svc/tripped"; echo "jack6 6" > "$T/svc/tripped.loop"
+svcj start > /dev/null
+[ ! -e "$T/svc/tripped.loop" ] && ok "start clears it too" || ko "start keeps .loop"
+svcj stop > /dev/null
 
 echo "gt-be98-lan-test: $pass ok, $fail failed"
 [ $fail -eq 0 ]
