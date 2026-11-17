@@ -153,7 +153,8 @@
 # advertisements from the same dnsmasq: slaac = SLAAC + stateless DHCPv6
 # (ra-stateless: the A and O flags, DNS by RA and DHCPv6), dhcpv6 = stateful
 # DHCPv6 only (the M flag, addresses ::1000-::1fff; clients without DHCPv6,
-# such as Android, get no address). DNS is the gateway itself. The dnsmasq
+# such as Android, get no address). DNS is the gateway itself (RDNSS and the
+# DHCPv6 option name its global or, for a ULA prefix, its ULA ::1). The dnsmasq
 # lines name the bridge ("constructor:"), never the prefix: a new prefix
 # needs no dnsmasq restart (dnsmasq deprecates the old one in its RAs).
 # Per network: off; waiting (no prefix yet, or WAN_IPV6=0); active;
@@ -902,13 +903,20 @@ dnsmasq_text() {
 		# the domain: handed out (option 15) and the suffix of the clients' names
 		d=$(st_get "$id" domain)
 		[ -n "$d" ] && [ "$d" != - ] && echo "domain=$d,$(st_get "$id" subnet)"
+		# DNS = the gateway itself: [::] is dnsmasq's "this interface's global
+		# address", [fd00::] its ULA one; each is dropped when the interface
+		# has no such address (radv.c / rfc3315.c), so one of them always
+		# names the /64's ::1. [::] alone gave a ULA-delegated network NO
+		# RDNSS at all (q298: the prefix fd99:177:1ff:7::/64 is ULA, [::] was
+		# dropped, and the explicit option suppressed dnsmasq's link-local
+		# default), and an empty DNS option in DHCPv6
 		case "$(st_get "$id" v6):$(st_get "$id" ipv6)" in
 		active:slaac|waiting:slaac)
 			echo "dhcp-range=set:n$id,::,constructor:$b,ra-stateless,64,$(st_get "$id" lease)"
-			echo "dhcp-option=tag:n$id,option6:dns-server,[::]" ;;
+			echo "dhcp-option=tag:n$id,option6:dns-server,[::],[fd00::]" ;;
 		active:dhcpv6|waiting:dhcpv6)
 			echo "dhcp-range=set:n$id,::1000,::1fff,constructor:$b,64,$(st_get "$id" lease)"
-			echo "dhcp-option=tag:n$id,option6:dns-server,[::]" ;;
+			echo "dhcp-option=tag:n$id,option6:dns-server,[::],[fd00::]" ;;
 		esac
 		[ "$(st_get "$id" dhcp)" = 1 ] || continue
 		echo "dhcp-range=set:n$id,$(st_get "$id" dhcp_start),$(st_get "$id" dhcp_end),$(n2ip "$(mask_of "${c#*/}")"),$(st_get "$id" lease)"

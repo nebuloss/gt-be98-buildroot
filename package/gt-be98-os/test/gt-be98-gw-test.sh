@@ -440,7 +440,7 @@ printf 'WAN_IPV6=1\nWAN_PD_LANS=""\n' > "$T/wancheck"
 run reroute; check "IPv6: WAN_IPV6=1, no delegated prefix yet: waiting (no DHCPv6-PD yet)" "waiting yes " \
 	"$(s6 4 v6) $(yn grep -q 'no delegated prefix' "$G/net/4") $(log '^ip -6 addr')"
 check "IPv6: dnsmasq: enable-ra, slaac = ra-stateless on 4, dhcpv6 = a stateful range on 6, DNS = the gateway" \
-	"enable-ra|dhcp-range=set:n4,::,constructor:brwifi100004,ra-stateless,64,12h|dhcp-option=tag:n4,option6:dns-server,[::]|dhcp-range=set:n6,::1000,::1fff,constructor:brwifi7,64,12h|dhcp-option=tag:n6,option6:dns-server,[::]" \
+	"enable-ra|dhcp-range=set:n4,::,constructor:brwifi100004,ra-stateless,64,12h|dhcp-option=tag:n4,option6:dns-server,[::],[fd00::]|dhcp-range=set:n6,::1000,::1fff,constructor:brwifi7,64,12h|dhcp-option=tag:n6,option6:dns-server,[::],[fd00::]" \
 	"$(grep -E '^(enable-ra|dhcp-range=set:n[0-9]+,:|dhcp-option=tag:n[0-9]+,option6)' "$D" | tr '\n' '|' | sed 's/|$//')"
 pid6=$(cat "$G/dnsmasq.pid")
 # b. the prefix arrives (gt-be98-wan's dhcpcd hook -> reroute)
