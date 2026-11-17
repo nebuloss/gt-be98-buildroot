@@ -98,7 +98,7 @@ RMAC=$(ip netns exec mroot cat /sys/class/net/bcawl3/address)
 LMAC=$(ip netns exec mleaf cat /sys/class/net/bcawl1/address)
 # ---- the root: the generator's backhaul BSS, the network bridges ----
 printf 'radio=2g\nchannel=6\nbackhaul=2g\nssid=mesh-bh\npassphrase=hwsim-mesh-1\nleaf=%s\n' "$LMAC" > "$w/root/list"
-R sh "$S/gt-be98-wifi-gen" -n "$w/root/list" -o "$w/root/run/gt-be98-wifi/gen" -d "2g=bcawl3" -m "2g=$RMAC" \
+R sh "$S/gt-be98-wifi-gen" -n "$w/root/list" -o "$w/root/run/gt-be98-wifi/gen" -d "2g=bcawl3 5gl=bcawl90 5gh=bcawl91 6g=bcawl92" -m "2g=$RMAC" \
 	-x "$w/root/run/hostapd" 2> "$w/root/gen.err" || { cat "$w/root/gen.err"; echo "root list refused"; exit 1; }
 check "generator: the backhaul line of the root, its one leaf" "backhaul 2g bcawl3 bcawl3 $RMAC|$LMAC" "$(grep '^backhaul ' "$w/root/run/gt-be98-wifi/gen/plan")|$(cat "$w/root/run/gt-be98-wifi/gen/accept-bcawl3")"
 printf 'network=10 name=Ten vlan=10\nnetwork=20 name=Twenty vlan=20 subnet=10.20.0.1/24 mode=gateway bhvid=220\n' > "$w/root/networks.conf"
@@ -118,7 +118,7 @@ until_ 15 grep -q AP-ENABLED "$w/root/hostapd.log" || { tail -20 "$w/root/hostap
 R "$HCLI" -B -r -P "$w/root/hook.pid" -p "$w/root/run/hostapd" -i bcawl3 -a "$S/gt-be98-mesh" || { echo "hostapd_cli hook failed"; exit 1; }
 # ---- the leaf: the generator's station trunk=1, the bridges on bhs ----
 printf 'station=2g\nssid=mesh-bh\nsecurity=sae\npassphrase=hwsim-mesh-1\nrepeater=multiap\ntrunk=1\n' > "$w/leaf/list"
-F sh "$S/gt-be98-wifi-gen" -n "$w/leaf/list" -o "$w/leaf/run/gt-be98-wifi/gen" -d "2g=bcawl1" -m "2g=$LMAC" \
+F sh "$S/gt-be98-wifi-gen" -n "$w/leaf/list" -o "$w/leaf/run/gt-be98-wifi/gen" -d "2g=bcawl1 5gl=bcawl90 5gh=bcawl91 6g=bcawl92" -m "2g=$LMAC" \
 	-X "$w/leaf/run/wpa_supplicant" 2> "$w/leaf/gen.err" || { cat "$w/leaf/gen.err"; echo "leaf list refused"; exit 1; }
 check "generator: the leaf's bhtrunk line (no Wi-Fi network in its list)" "bhtrunk bcawl1 -" "$(grep '^bhtrunk ' "$w/leaf/run/gt-be98-wifi/gen/plan")"
 printf 'network=10 vlan=10\nnetwork=20 vlan=220\n' > "$w/leaf/networks.conf"
