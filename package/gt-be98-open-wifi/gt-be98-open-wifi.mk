@@ -47,7 +47,9 @@
 #  again when hostapd sets the MAC), R6 (a bound AP_VLAN's group frames on the link's own ring, 4-address))
 # om-mesh-int-2026-11-17 2026-11-17 8137daeb (imgint5b: 83cb2973 + om-int 74526e96 = om-rebind-ch40 7c216637 (ledger) +
 #  om-rebind-flip-r 67b5c4b6: radio_rebind DEFAULT 1 (INV-RECOVERY; q296 rebind-ch40-arm-r2 PASS both cells, 6/6))
-GT_BE98_OPEN_WIFI_VERSION = 8137daeb665c6ab64f3118f410f8dc1ef18251b4
+# om-mesh-int-2026-11-17 2026-11-17 4040667a (imgint7: 8137daeb (radio_rebind=1 kept) + om-mesh-bh a65722d4: the MESH-G1 ledger
+#  AND the bench knob band5_full (class B: bench build only, folded to 0 in the shipped ko) with its census / declared rows)
+GT_BE98_OPEN_WIFI_VERSION = 4040667a8ec9a0256d691766dd97bc8fb465a772
 GT_BE98_OPEN_WIFI_SITE = git@github.com:nebuloss/gt-be98-open-wifi.git
 GT_BE98_OPEN_WIFI_SITE_METHOD = git
 GT_BE98_OPEN_WIFI_LICENSE = GPL-2.0-only
