@@ -595,9 +595,22 @@ dhcpcd, exactly as before; every other mode is opt-in.
   `net.ipv6.conf.all.forwarding=1` only while prefixes are delegated
   (dhcpcd owns RA processing and sets `accept_ra=0`, so the box's own IPv6
   routes do not depend on it).
-- **Firewall / NAT**: `table inet gt_be98_wan`: TCP MSS clamped to the
-  route MTU both ways on a PPPoE or reduced-MTU WAN (`tcp option maxseg
-  size set rt mtu`: nft_exthdr + nft_rt, built into nf_tables); from the
+- **Firewall / NAT**: `table inet gt_be98_wan`: TCP MSS clamped both ways
+  on a PPPoE or reduced-MTU WAN: to the route MTU (`tcp option maxseg size
+  set rt mtu`: nft_exthdr + nft_rt, built into nf_tables) AND to a fixed
+  cap from the WAN's own MTU (`meta nfproto ipv4 ... set <MTU - 40>`,
+  IPv6 `<MTU - 60>`: PPPoE 1492 -> 1452 / 1432). `rt mtu` alone does not
+  clamp a SYN-ACK coming in from the WAN: it is min(the packet's route =
+  the LAN's 1500, the route back to its source), and that reverse lookup
+  (nft_rt.c `get_tcpmss` -> `ip_route_output_key`, daddr only) never
+  matches the gateway networks' `iif` rules, so main's best default
+  decides: the management lease or the USB lifeline (both preferred over
+  PPPoE's metric 4000) give 1500 and the LAN client is told 1460. The
+  kernel only lowers an MSS (nft_exthdr.c), so the cap never raises a
+  smaller one. Gateway networks (gt-be98-gw) are NATed out of the WAN
+  netdev `gt-be98-wan ifname` names (`pppoe-wan`), their table 184
+  follows each PPP session (ip-up/ip-down run `gt-be98-gw reroute`:
+  `default dev pppoe-wan`, `unreachable` while the session is down); from the
   WAN into the delegated LANs only replies and ICMPv6; the box's own
   input from a WAN netdev other than the bare port (a VLAN or `pppoe-wan`):
   replies, ICMP, DHCP client replies only. In AP mode the bare port gets
@@ -607,6 +620,19 @@ dhcpcd, exactly as before; every other mode is opt-in.
   it was: gt-be98-router's `router.nft` (any non-Wi-Fi output) and the web
   UI's `table ip webui`, whose WAN interface follows the OS's WAN netdev
   when it is a VLAN or PPPoE of `WAN_IF`.
+- **PPPoE status** (`gt-be98-wan status`, the web UI's WAN card):
+  `ppp_state=down|connecting|up`, `ppp_sessions` / `ppp_reconnects`
+  (sessions since pppd started: the ip-up/ip-down hooks keep
+  `/run/gt-be98-wan/ppp.state`, reset when pppd starts), while up
+  `ppp_uptime ppp_local ppp_peer ppp_dns ppp_ac` (the concentrator's name,
+  kept printable), `ppp_mtu`, `mss4`/`mss6`, `ppp_last_connect` (seconds of
+  the last session), and while connecting `ppp_error`: the RUNNING pppd's
+  last failure from its own syslog lines (`pppd[<pid>]`, cleared by its
+  last IPCP success): `auth_failed` (PAP/CHAP refused), `no_server` (no
+  PADO: no concentrator on that port/VLAN), `no_session` (no PADS),
+  `lcp_timeout`, `link_dead` (LCP echoes lost), `peer_hangup` (PADT).
+  `ppp_log=unread` when the syslog file cannot be read (never "no error").
+  Reconnect: pppd `persist`, `maxfail 0`, `holdoff 10`.
 - **MTU**: PPPoE MTU/MRU 1492 (8 bytes of PPPoE + PPP header in a 1500
   frame), MSS clamped as above. `WAN_MTU` (1280..1500) for a dhcp/static
   WAN that needs less. A VLAN WAN keeps 1500 (the tag is not counted).
@@ -628,14 +654,21 @@ dhcpcd, exactly as before; every other mode is opt-in.
   Runner ports or bridges over them (open-ethernet `flowcache.c`
   `fc_dev_candidate`, `fc_l3_resolve_devs` "ingress is not a Runner
   port"), and the flowtable glue refuses actions it does not parse
-  (`flow_offload.c`: no `FLOW_ACTION_PPPOE_PUSH`). So **PPPoE and VLAN-WAN
-  routed traffic is forwarded by the CPU**; a DHCP/static WAN on the bare
-  port keeps the hardware offload. PPPoE offload needs Runner work (the
-  parser already knows PPP_IP, `parser.c`; the cmdlist would push/pop the
-  8-byte PPPoE header).
+  (`flow_offload.c`: no `FLOW_ACTION_PPPOE_PUSH`). A `pppoe-wan` flow is
+  refused before anything is programmed (`fc_l3_out_ok`/`fc_l3_in_ok`
+  accept a Runner port, a bridge, a Wi-Fi netdev or a VLAN of a Runner
+  port only), so **PPPoE routed traffic is forwarded by the CPU** and is
+  never offloaded with a wrong L2 header. PPPoE offload ("Phase B") needs
+  Runner work: the PPPoE path from the kernel (`dev_fill_forward_path`,
+  `DEV_PATH_PPPOE`: session id, peer MAC, lower device), an L2 rebuild
+  14 <-> 22/26 bytes, the per-packet PPPoE length (stock's cmdlist uses a
+  copy-add-16 op the open driver does not emit yet) and a PPPoE-exact
+  `max_pkt_len`; feasibility analysis in the lane report (2026-11-17).
 - Tests (offline): `test/gt-be98-wan-test.sh` (dash, bash; fake ip, nft,
-  pppd, dhcpcd, sysctl, start-stop-daemon). Box arms: `wan-arms.sh` (lab,
-  not in git). Not measured on silicon yet.
+  pppd, dhcpcd, sysctl, start-stop-daemon; `NFT_REAL=<nft>` also parses
+  the rendered rule file with a real nft in a user namespace),
+  `test/gt-be98-gw-test.sh` (the PPP session down/up reroute). Box arms:
+  `wan-arms.sh`, `pppoe-wan-arm.sh` (lab, not in git).
 
 ### Web UI
 
