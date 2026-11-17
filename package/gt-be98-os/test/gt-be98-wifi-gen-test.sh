@@ -478,8 +478,8 @@ fi
 { printf 'country=DE\nradio=5gh\nchannel=100\nwidth=80\n'; net 1 a sae password1 "2g 5gl 5gh 6g" 1; } > "$T/d3"
 hcl() { [ -f "$T/o/hdr-$1" ] || { echo absent; return; }; grep '^chanlist=' "$T/o/hdr-$1" | tr '\n' ' ' | sed 's/ $//'; }
 rm -f "$T/slots"; gen "$T/d3" -c
-check "chanlist per 5 GHz radio: 5gh its own channels, 5gl its own, none on 2.4/6 (headers present)" \
-	"0|chanlist=36-64|chanlist=100-144 149-177||" "$?|$(hcl bcawl0)|$(hcl bcawl1)|$(hcl bcawl3)|$(hcl bcawl2)"
+check "chanlist per 5 GHz radio: 5gh its own channels (DE, ETSI: no 116/80 weather block), 5gl its own, none on 2.4/6 (headers present)" \
+	"0|chanlist=36-64|chanlist=100-112 132-144 149-177||" "$?|$(hcl bcawl0)|$(hcl bcawl1)|$(hcl bcawl3)|$(hcl bcawl2)"
 conf_ok "chanlist on 5gl/5gh"
 rm -f "$T/slots"; gen "$T/d1"; check "country=DE without -c (no regdb): warned" "0 yes" \
 	"$? $(grep -q '5gh: channel 100 is a DFS (radar) channel and the regulatory database is not loaded' "$T/err" && echo yes || echo no)"
@@ -538,14 +538,14 @@ check "2g auto: channel=acs_survey, acs_num_scans=2" "channel=acs_survey acs_num
 check "5gl auto (default 160): acs_survey, [HT40+], chwidth 2 with NO centre index (ACS sets it), chanlist 36-64, 11h" \
 	"channel=acs_survey ht_capab=[HT40+] vht_oper_chwidth=2 he_oper_chwidth=2 eht_oper_chwidth=2 chanlist=36-64 acs_num_scans=2 ieee80211h=1" "$(ra bcawl0)"
 check "5gl auto 160: [VHT160]" "yes" "$(grep -q '^vht_capab=.*\[VHT160\]' "$T/o/hdr-bcawl0" && echo yes || echo no)"
-check "5gh auto 80: acs_survey, chwidth 1, no centre index, its own chanlist" \
-	"channel=acs_survey ht_capab=[HT40+] vht_oper_chwidth=1 he_oper_chwidth=1 eht_oper_chwidth=1 chanlist=100-144 149-177 acs_num_scans=2 ieee80211h=1" "$(ra bcawl1)"
+check "5gh auto 80: acs_survey, chwidth 1, no centre index, its own chanlist (FR: no weather block)" \
+	"channel=acs_survey ht_capab=[HT40+] vht_oper_chwidth=1 he_oper_chwidth=1 eht_oper_chwidth=1 chanlist=100-112 132-144 149-177 acs_num_scans=2 ieee80211h=1" "$(ra bcawl1)"
 check "auto: no centre index line anywhere" "" "$(grep -l 'centr_freq_seg0_idx' "$T"/o/hdr-bcawl3 "$T"/o/hdr-bcawl0 "$T"/o/hdr-bcawl1 | tr '\n' ' ')"
 conf_ok "channel=auto 2g/5gl/5gh"
 { printf 'radio=5gl\nchannel=auto\nwidth=40\nradio=5gh\nchannel=auto\nwidth=20\n'; net 1 a sae password1 "5gl 5gh" 1; } > "$T/acs2"
 rm -f "$T/slots"; gen "$T/acs2" -c
 check "5gl auto 40: [HT40+], chwidth 0; 5gh auto 20: no ht_capab" \
-	"channel=acs_survey ht_capab=[HT40+] vht_oper_chwidth=0 he_oper_chwidth=0 eht_oper_chwidth=0 chanlist=36-64 acs_num_scans=2 ieee80211h=1|channel=acs_survey vht_oper_chwidth=0 he_oper_chwidth=0 eht_oper_chwidth=0 chanlist=100-144 149-177 acs_num_scans=2 ieee80211h=1" \
+	"channel=acs_survey ht_capab=[HT40+] vht_oper_chwidth=0 he_oper_chwidth=0 eht_oper_chwidth=0 chanlist=36-64 acs_num_scans=2 ieee80211h=1|channel=acs_survey vht_oper_chwidth=0 he_oper_chwidth=0 eht_oper_chwidth=0 chanlist=100-116 132-144 149-177 acs_num_scans=2 ieee80211h=1" \
 	"$(ra bcawl0)|$(ra bcawl1)"
 conf_ok "channel=auto 40/20"
 # control: a numeric channel renders no ACS line
@@ -589,7 +589,7 @@ check "station radio + auto, not associated: the default channel 100, no ACS, wa
 	"$? $(grep '^channel=' "$T/o/hdr-bcawl1") $(grep -c acs_ "$T/o/hdr-bcawl1") $(grep -q 'radio 5gh: channel=auto on a station radio: its APs run on channel 100 until the uplink associates' "$T/err" && echo yes || echo no)"
 # 5gh ACS never picks a block holding the weather-radar channels 120-128 (600 s
 # CAC): freqlist= leaves out every channel of such a block at the width
-# (hostapd acs.c applies the list per primary only); chanlist (radar moves) unchanged
+# (hostapd acs.c applies the list per primary only); chanlist (radar moves): 10b3d
 fq() { grep '^freqlist=' "$T/o/hdr-bcawl1" 2>/dev/null; }
 for w in 20 40 80 160; do
 	{ printf 'radio=5gh\nchannel=auto\nwidth=%s\n' "$w"; net 1 a sae password1 5gh 1; } > "$T/acsw"
@@ -598,7 +598,7 @@ done > "$T/acsw.out"
 check "5gh auto: freqlist per width (20: 100-116; 40/80: 100-112; 160 -> 80), 132-144 and 149-177 kept" \
 	"20:0:freqlist=5500-5580,5660-5720,5745-5885:vht_oper_chwidth=0 40:0:freqlist=5500-5560,5660-5720,5745-5885:vht_oper_chwidth=0 80:0:freqlist=5500-5560,5660-5720,5745-5885:vht_oper_chwidth=1 160:0:freqlist=5500-5560,5660-5720,5745-5885:vht_oper_chwidth=1 " \
 	"$(cat "$T/acsw.out")"
-check "5gh auto 160: warned, no [VHT160], chanlist unchanged" "yes no chanlist=100-144 149-177" \
+check "5gh auto 160: warned, no [VHT160], chanlist at 80 (FR: no weather block)" "yes no chanlist=100-112 132-144 149-177" \
 	"$(grep -q 'radio 5gh: channel=auto at 160 MHz: the only 5gh 160 MHz block' "$T/err" && echo yes || echo no) $(grep -q 'VHT160' "$T/o/hdr-bcawl1" && echo yes || echo no) $(grep '^chanlist=' "$T/o/hdr-bcawl1")"
 conf_ok "5gh auto 160 -> 80 with freqlist"
 # the excluded set, re-derived from the 5 GHz block geometry: no freqlist channel
@@ -614,6 +614,63 @@ check "freqlist: no channel shares a block with 120-128 (20/40/80)" "" "$(for w 
 done)"
 check "control: 5gh numeric channel, 5gl auto: no freqlist" "0|0" \
 	"$({ printf 'radio=5gh\nchannel=116\nwidth=80\nradio=5gl\nchannel=auto\n'; net 1 a sae password1 "5gl 5gh" 1; } > "$T/acsx"; rm -f "$T/slots"; gen "$T/acsx" -c; cat "$T"/o/hdr-* | grep -c '^freqlist=')|$(grep -c 'weather' "$T/err")"
+# ---- 10b3d. 5gh chanlist in an ETSI country (owner 11-17): no block holding
+# the weather-radar channels 120-128 (600 s CAC), so a move after a radar never
+# lands on one. hostapd 2.12 dfs.c checks chanlist on a block's FIRST channel
+# only (dfs_find_channel: is_in_chanlist(first)), at the width and at each
+# narrower one down to 40 (dfs_downgrade_bandwidth): the list leaves out the
+# first channel of every such block. The configured block stays (the user
+# chose it); US/JP unchanged ----
+W20='100-116 132-144 149-177' W40='100-112 132-144 149-177' FULL='100-144 149-177'
+for cc in DE US JP; do for cw in 100:20 116:20 120:20 124:20 128:20 132:20 100:40 116:40 120:40 124:40 128:40 132:40 100:80 116:80 120:80 128:80 132:80 149:80 100:160 124:160 auto:20 auto:40 auto:80 auto:160; do
+	{ printf 'country=%s\nradio=5gh\nchannel=%s\nwidth=%s\n' "$cc" "${cw%:*}" "${cw#*:}"; net 1 a sae password1 5gh 1; } > "$T/wx"
+	rm -f "$T/slots"; gen "$T/wx" -c; printf '%s/%s:%s:%s\n' "$cc" "$cw" "$?" "$(grep '^chanlist=' "$T/o/hdr-bcawl1" | cut -d= -f2)"
+done; done > "$T/wx.out"
+check "5gh chanlist DE: 20 drops 120-128, 40/80 drop 116-128, the configured block kept (120/20, 124/20, 128/20, 116/40, 120/40, 124/40, 128/40, 116/80, 120/80, 128/80, 160)" \
+"DE/100:20:0:$W20 DE/116:20:0:$W20 DE/120:20:0:100-120 132-144 149-177 DE/124:20:0:100-116 124 132-144 149-177 DE/128:20:0:100-116 128-144 149-177 DE/132:20:0:$W20 DE/100:40:0:$W40 DE/116:40:0:100-120 132-144 149-177 DE/120:40:0:100-120 132-144 149-177 DE/124:40:0:100-112 124-144 149-177 DE/128:40:0:100-112 124-144 149-177 DE/132:40:0:$W40 DE/100:80:0:$W40 DE/116:80:0:$FULL DE/120:80:0:$FULL DE/128:80:0:$FULL DE/132:80:0:$W40 DE/149:80:0:$W40 DE/100:160:0:$FULL DE/124:160:0:$FULL DE/auto:20:0:$W20 DE/auto:40:0:$W40 DE/auto:80:0:$W40 DE/auto:160:0:$W40" \
+	"$(grep '^DE/' "$T/wx.out" | tr '\n' ' ' | sed 's/ $//')"
+check "control: 5gh chanlist US and JP (non-ETSI): unchanged on every channel/width" "" \
+	"$(grep -E '^(US|JP)/' "$T/wx.out" | grep -v ":0:$FULL\$" | tr '\n' ' ')"
+check "control: the matrix ran (72 configs)" "72" "$(grep -c . "$T/wx.out")"
+# the rule re-derived from hostapd dfs.c geometry, not from the generator: for
+# every DE fixed config and every width hostapd may reach from it (w, then
+# 80, 40), no block whose first channel is in the chanlist holds 120-128 unless
+# it is (inside) the configured block; and every non-weather block start of
+# 100-144 stays in. dfs.c starts: 20 every channel; 40 100 108 116 124 132 140;
+# 80 100 116 132; 160 100
+inl() {	# inl LIST CH: 1 if CH is in the hostapd range list
+	for r in $1; do lo=${r%-*}; hi=${r#*-}; [ "$2" -ge "$lo" ] && [ "$2" -le "$hi" ] && { echo 1; return; }; done; echo 0; }
+wxgeo() { while IFS=: read -r cfg w rc l; do
+	ch=${cfg#DE/}
+	case $w in 20) blo=$ch bhi=$ch ;; 40) blo=$(( ch - (ch - 100) % 8 )) bhi=$(( blo + 4 )) ;; 80) blo=$(( ch - (ch - 100) % 16 )) bhi=$(( blo + 12 )) ;; 160) blo=100 bhi=128 ;; esac
+	[ "$ch" -ge 149 ] && { blo=0; bhi=0; }
+	for rw in 20 40 80 160; do
+		[ "$rw" -gt "$w" ] && continue; [ "$rw" = 20 ] && [ "$w" != 20 ] && continue
+		n=$(( rw / 20 )); s=100
+		while [ $s -le 144 ]; do
+			e=$(( s + 4 * n - 4 ))
+			if [ $e -le 144 ] && [ "$(inl "$l" $s)" = 1 ]; then
+				[ $s -le 128 ] && [ $e -ge 120 ] && ! { [ $s -ge $blo ] && [ $e -le $bhi ]; } && printf '%s/%s:%s@%s ' "$ch" "$w" "$s" "$rw"
+			elif [ $e -le 144 ]; then
+				{ [ $e -lt 120 ] || [ $s -gt 128 ]; } && printf '%s/%s:lost%s@%s ' "$ch" "$w" "$s" "$rw"
+			fi
+			s=$(( s + 4 * n ))
+		done
+	done
+done; }
+check "chanlist: no reachable dfs.c block with 120-128 outside the configured block; no clean block start lost" "" "$(grep '^DE/[0-9]' "$T/wx.out" | wxgeo)"
+check "control: that check flags the old full list at 100/80 (116@80, 116@40, 124@40) and a list without 132 (lost)" \
+	"100/80:116@40 100/80:124@40 100/80:116@80 100/20:lost132@20 " \
+	"$(printf 'DE/100:80:0:100-144 149-177\nDE/100:20:0:100-116 136-144 149-177\n' | wxgeo)"
+{ printf 'country=DE\nradio=5gh\nchannel=100\nwidth=80\n'; net 1 a sae password1 5gh 1; } > "$T/wx"
+rm -f "$T/slots"; gen "$T/wx" -c; conf_ok "5gh chanlist without the weather blocks (DE 100/80)"
+{ printf 'country=DE\nradio=5gh\nchannel=124\nwidth=20\n'; net 1 a sae password1 5gh 1; } > "$T/wx"
+rm -f "$T/slots"; gen "$T/wx" -c; conf_ok "5gh chanlist with a lone kept channel (DE 124/20)"
+# a station radio on a weather channel: the uplink's block is the configured one
+{ printf 'country=DE\nradio=5gh\nchannel=100\nwidth=80\n'; printf 'station=5gh\nssid=up\nsecurity=sae\npassphrase=saepassword1\n'; net 1 a sae password1 5gh 1; } > "$T/wx"
+rm -f "$T/slots"; gen "$T/wx" -c -U "5gh=5620"
+check "station radio on the uplink 124 (80 MHz, 116-128): its block kept" "0 channel=124 chanlist=$FULL" \
+	"$? $(grep '^channel=' "$T/o/hdr-bcawl1") $(grep '^chanlist=' "$T/o/hdr-bcawl1")"
 check "-F: feature acs 1, acs 2g 5gl 5gh" "feature acs 1|acs 2g 5gl 5gh" "$($SH "$G" -F | grep -E '^(feature acs|acs) ' | tr '\n' '|' | sed 's/|$//')"
 
 # ---- 10b4. 6 GHz secondaries = the anchor's nontransmitted BSSIDs (soak
