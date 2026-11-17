@@ -52,7 +52,7 @@ imgint8 = imgint7 + the PPPoE uplink length-bound fix, if q303 passes.
 
 | Component | Commit |
 |---|---|
-| gt-be98-buildroot | `br-int7-2026-11-17` `ef45815` (+ the RC11 pin commit) |
+| gt-be98-buildroot | `br-int8-2026-11-17` (= `br-int7` `ef45815` + `br-gw6-v6state` `6ed78d1` + the RC11 pin commit) |
 | open-wifi (`bca_pcie_ipc.ko`) | `om-mesh-int-2026-11-17` `4040667a` |
 | open-ethernet (Runner, kernel series, `rtl8372.ko`) | `oe-int-2026-11-17` `199918f` (RC11: `oe-int2-2026-11-17` `8a18fa5` if q303 passes) |
 | web UI (gt-be98-webui-go) | `wu-mesh-int-2026-11-17` `1cebbe7` |
@@ -114,6 +114,9 @@ trunk. A mesh leaf's backhaul bridge is exempt (it is not the wired trunk).
 - Router advertisements in SLAAC or DHCPv6 mode.
 - RDNSS: dnsmasq dropped a bare `[::]` DNS server on a ULA /64. It now
   writes `[::],[fd00::]`.
+- A network's IPv6 is reported `active` only once its address is past DAD
+  (`starting` before, `refused` on a DAD failure), so the web UI binds only
+  usable addresses (`br-gw6-v6state` `6ed78d1`).
 
 **Router MAC:** every gateway bridge takes the jacks' port MAC, so gateway
 networks cost no Runner router-MAC filter.
