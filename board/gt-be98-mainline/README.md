@@ -630,7 +630,8 @@ dhcpcd, exactly as before; every other mode is opt-in.
   last failure from its own syslog lines (`pppd[<pid>]`, cleared by its
   last IPCP success): `auth_failed` (PAP/CHAP refused), `no_server` (no
   PADO: no concentrator on that port/VLAN), `no_session` (no PADS),
-  `lcp_timeout`, `link_dead` (LCP echoes lost), `peer_hangup` (PADT).
+  `lcp_timeout`, `link_dead` (LCP echoes lost), `peer_hangup` (PADT or
+  the server's LCP Terminate-Request).
   `ppp_log=unread` when the syslog file cannot be read (never "no error").
   Reconnect: pppd `persist`, `maxfail 0`, `holdoff 10`.
 - **MTU**: PPPoE MTU/MRU 1492 (8 bytes of PPPoE + PPP header in a 1500

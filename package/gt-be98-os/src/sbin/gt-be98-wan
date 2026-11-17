@@ -410,7 +410,7 @@ acname_clean() { printf '%s' "$1" | LC_ALL=C tr -cd 'A-Za-z0-9._ -' | cut -c1-64
 # ("local  IP address"). One word: auth_failed (PAP/CHAP refused: user or
 # password), no_server (no PADO: no concentrator answered on this port/VLAN),
 # no_session (PADI answered, no PADS), lcp_timeout, link_dead (LCP echoes
-# unanswered), peer_hangup (PADT / the session dropped). "" = none seen.
+# unanswered), peer_hangup (PADT, or the server's LCP Terminate-Request). "" = none seen.
 # Read from the syslog file (etc/syslog.conf: every pppd line reaches it);
 # PPP_LOG_LINES bounds the read. An unreadable log is said so (ppp_log=unread),
 # never reported as "no error".
@@ -424,7 +424,7 @@ ppp_last_error() {
 		/Timeout waiting for PADS/ { e = "no_session" }
 		/LCP: timeout sending Config-Requests/ { e = "lcp_timeout" }
 		/No response to [0-9]+ echo-requests/ { e = "link_dead" }
-		/Modem hangup/ { e = "peer_hangup" }
+		/Modem hangup|LCP terminated by peer/ { e = "peer_hangup" }
 		END { print e }'
 }
 
