@@ -27,7 +27,7 @@ check() {
 has() { grep -qF -- "$2" "$1" 2>/dev/null; }
 yes_no() { if "$@"; then echo yes; else echo no; fi; }
 
-for t in nft sysctl logger rc-service modprobe start-stop-daemon; do
+for t in nft sysctl logger rc-service modprobe start-stop-daemon gt-be98-fwd; do
 	printf '#!/bin/sh\necho "%s $*" >> "$FAKE/log"\nexit 0\n' "$t" > "$T/bin/$t"
 done
 # ip: logs; "link add ... name X" creates $SYSNET/X; "link del X" removes it;
@@ -500,7 +500,7 @@ check "  --igmp is not taken for a CIDR (refused only as one)" 1 "$($SH "$W" inp
 # forwarding; a filter that cannot be built keeps router mode down
 rsrc() {	# the router service's functions, its run files under $T
 	eerror() { echo "E $*"; }; ebegin() { :; }; eend() { [ "${1:-0}" = 0 ] || echo "E $*"; return "${1:-0}"; }; ewarn() { :; }
-	ROUTER_DIR="$T/router" GT_BE98_WAN="$SH $W" ROUTER_TABLE=180 ROUTER_INPUT_NFT="$T/router-in.nft"
+	ROUTER_DIR="$T/router" GT_BE98_WAN="$SH $W" ROUTER_TABLE=180 ROUTER_INPUT_NFT="$T/router-in.nft" GT_BE98_FWD="$T/bin/gt-be98-fwd" GT_BE98_GW_APPLIED="$T/none"
 	. "$SRC/init.d/gt-be98-router"
 	APPLIED=$T/router.applied DNSMASQ_PID=$T/router-dnsmasq.pid IFACE_WAIT=0
 	IGMPPROXY=$T/bin/igmpproxy IGMPPROXY_CONF=$T/igmpproxy.conf IGMPPROXY_PID=$T/igmpproxy.pid
@@ -512,24 +512,24 @@ printf 'ROUTER_WAN="rnr0"\nROUTER_LANS="bcawl3=192.168.83.1/24"\nROUTER_WAN_ALLO
 r=$(rstart 2>&1)
 check "router start on rnr0: rc 0" yes "$(isrc "$r" rc=0)"
 check "router: input filter checked, loaded, then router.nft, then forwarding" \
-	"nft -c -f $T/router-in.nft|nft -f $T/router-in.nft|nft -c -f $T/router/router.nft|nft -f $T/router/router.nft|sysctl -q -w net.ipv4.ip_forward=1" \
-	"$(grep -E '^(nft|sysctl)' "$FAKE/log" | tr '\n' '|' | sed 's/|$//')"
+	"nft -c -f $T/router-in.nft|nft -f $T/router-in.nft|nft -c -f $T/router/router.nft|nft -f $T/router/router.nft|gt-be98-fwd hold router" \
+	"$(grep -E '^(nft|sysctl|gt-be98-fwd)' "$FAKE/log" | tr '\n' '|' | sed 's/|$//')"
 check "router: the filter is on rnr0, with the allow-list" yes "$(yes_no grep -q 'iifname "rnr0" ip saddr { 192.0.2.0/24 } accept' "$T/router-in.nft")"
 check "router: the filter drops the rest of rnr0's input" yes "$(yes_no grep -q 'iifname "rnr0" drop' "$T/router-in.nft")"
 reset
 printf 'ROUTER_WAN="rnr0"\nROUTER_LANS="bcawl3=192.168.83.1/24"\nROUTER_WAN_ALLOW="192.0.2.0"\n' > "$T/router/router.conf"
 r=$(rstart 2>&1)
 check "router: a bad allow-list CIDR = router mode not started (rc 1)" yes "$(isrc "$r" rc=1)"
-check "  ... no NAT loaded, no forwarding turned on" "" "$(grep -E 'router.nft|ip_forward=1' "$FAKE/log")"
+check "  ... no NAT loaded, no forwarding turned on" "" "$(grep -E 'router.nft|ip_forward=1|fwd hold' "$FAKE/log")"
 reset
 printf 'ROUTER_WAN="rnr0"\nROUTER_LANS="bcawl3=192.168.83.1/24"\nROUTER_WAN_ALLOW="192.0.2.0/24 *"\n' > "$T/router/router.conf"
 r=$(rstart 2>&1)
-check "router: an allow-list with a non-CIDR character refused (rc 1, no NAT)" "yes " "$(isrc "$r" rc=1) $(grep -E 'router.nft|ip_forward=1' "$FAKE/log")"
+check "router: an allow-list with a non-CIDR character refused (rc 1, no NAT)" "yes " "$(isrc "$r" rc=1) $(grep -E 'router.nft|ip_forward=1|fwd hold' "$FAKE/log")"
 reset
 printf 'ROUTER_WAN="rnr0"\nROUTER_LANS="bcawl3=192.168.83.1/24"\n' > "$T/router/router.conf"
 r=$(rstart 2>&1)
 check "router: no allow-list = rc 0, filter without saddr, NAT and forwarding on" "yes no yes" \
-	"$(isrc "$r" rc=0) $(yes_no grep -q saddr "$T/router-in.nft") $(yes_no has "$FAKE/log" 'net.ipv4.ip_forward=1')"
+	"$(isrc "$r" rc=0) $(yes_no grep -q saddr "$T/router-in.nft") $(yes_no has "$FAKE/log" 'gt-be98-fwd hold router')"
 reset
 ( rsrc; stop ) >/dev/null 2>&1
 check "router stop: the input filter table is removed" yes "$(yes_no has "$FAKE/log" "nft delete table inet gt_be98_router_in")"

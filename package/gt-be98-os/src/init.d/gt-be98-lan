@@ -109,8 +109,8 @@ DNSMASQ_PID=/run/gt-be98-lan-dnsmasq.pid
 # $LAN_TABLE`: the WAN's default route plus `throw` routes for the private
 # ranges and the WAN's own subnet), and nothing else leaves the bridge
 # (forwarded to the WAN, replies back; IPv6 to the WAN stays allowed for a
-# delegated prefix, gt-be98-wan WAN_PD_LANS). ip_forward is turned on only
-# while that rule set is loaded and only if it was off. Refused, with an
+# delegated prefix, gt-be98-wan WAN_PD_LANS). ip_forward is held (gt-be98-fwd
+# hold lan) only while that rule set is loaded. Refused, with an
 # error, when a WAN address or a Wi-Fi station routed network
 # (gt-be98-wifi-sta) overlaps LAN_ADDR's subnet: the LAN then stays a local
 # island (DHCP/DNS from the box only). The dhcpcd hook 08-gt-be98-lan runs
@@ -119,6 +119,9 @@ LAN_TABLE=${LAN_TABLE:-183}
 NAT_TABLE=gt_be98_lan_nat
 STA_ROUTED=${GT_BE98_STA_ROUTED:-/run/gt-be98-wifi/sta/routed.applied}
 L2=${GT_BE98_L2:-/usr/sbin/gt-be98-l2}
+# ip_forward's one owner: this service holds it as "lan" while the routed
+# LAN's NAT runs (gt-be98-fwd)
+FWD=${GT_BE98_FWD:-/usr/sbin/gt-be98-fwd}
 WIFI_L2CONF=${GT_BE98_WIFI_L2:-/run/gt-be98-wifi/l2.conf}
 WIFI_CONFS=${GT_BE98_WIFI_CONFS:-/etc/conf.d/gt-be98-wifi-ap /etc/conf.d/gt-be98-wifi}
 # the web UI's network list (one line per network, its SSIDs or none):
@@ -136,6 +139,10 @@ JACKS_OFF="4=off 5=off 6=off 7=off"
 # tagged VLANs per jack: the RTL8372 driver's RTL8372_TAGGED_MAX
 JACK_TAGGED_MAX=32
 extra_started_commands="reroute reload"
+# the gateway networks follow every change of the network bridges (an
+# address moves with a lan-only bridge yielding to an SSID's, a bridge
+# appears for a gateway network's first jack)
+GW_FOLLOW=${GT_BE98_GW_FOLLOW-rc-service --ifstarted gt-be98-gw reload}
 # features: what this service takes, for the web UI (a line "features <word>..."):
 # tagged = LAN_JACK_<n> tagged=all|<list>; networks = a VLAN of a network
 # without an SSID (NETWORKS_FILE) is a port's network too
@@ -533,8 +540,9 @@ lan_routed_apply() {
 	if [ $mode = nat ]; then
 		lan_route_table "$w"
 		ip rule add iif "$LAN_BRIDGE" table "$LAN_TABLE" priority "$LAN_TABLE"
-		if [ "$(cat /proc/sys/net/ipv4/ip_forward 2>/dev/null)" = 0 ] && ! grep -q '^ipfwd ' $APPLIED; then
-			sysctl -q -w net.ipv4.ip_forward=1 && echo "ipfwd 0" >> $APPLIED
+		# forwarding held by name (gt-be98-fwd: the last holder restores 0)
+		if ! grep -q '^ipfwd ' $APPLIED; then
+			"$FWD" hold lan && echo "ipfwd lan" >> $APPLIED
 		fi
 		echo "nat $w $(lan_subnet)" >> $APPLIED
 	else
@@ -837,6 +845,10 @@ reload() {
 	ebegin "Wired LAN: VLAN jacks ${VPORTS:-none}, 2.5G jacks ${JACKS:-none}"
 	vports_apply
 	eend $?
+	r=$?
+	# shellcheck disable=SC2086 # a command line
+	[ -n "$GW_FOLLOW" ] && $GW_FOLLOW > /dev/null 2>&1
+	return $r
 }
 
 start() {
@@ -853,6 +865,8 @@ start() {
 		# a jack that cannot be bridged yet (its network not configured)
 		# leaves the service started: a Wi-Fi reload re-runs this
 		vports_apply; eend $? "a VLAN jack is not bridged (above)"
+		# shellcheck disable=SC2086 # a command line
+		[ -n "$GW_FOLLOW" ] && $GW_FOLLOW > /dev/null 2>&1
 	fi
 	return 0
 }
@@ -962,9 +976,8 @@ stop() {
 				nft delete table ip $NAT_TABLE 2>/dev/null ;;
 			nat)	ip rule del iif "$LAN_BRIDGE_APPLIED" table "$LAN_TABLE" priority "$LAN_TABLE" 2>/dev/null
 				ip route flush table "$LAN_TABLE" 2>/dev/null ;;
-			ipfwd)	# back off only if no other router needs forwarding
-				[ -f /run/gt-be98-router.applied ] || [ -s /run/gt-be98-wifi/sta/routed.applied ] ||
-					sysctl -q -w net.ipv4.ip_forward="$v" ;;
+			ipfwd)	# this service lets go; the last holder restores 0
+				"$FWD" release lan ;;
 			esac
 		done < $APPLIED
 		for v in $mods; do rmmod "$v" 2>/dev/null; done

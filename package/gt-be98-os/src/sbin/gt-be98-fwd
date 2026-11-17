@@ -1,0 +1,74 @@
+#!/bin/sh
+# SPDX-License-Identifier: GPL-2.0
+# gt-be98-fwd: the one owner of net.ipv4.ip_forward. The image ships it 0
+# (etc/sysctl.d/90-gt-be98.conf); every routed service HOLDS forwarding by
+# name instead of writing the sysctl itself:
+#
+#   gt-be98-fwd hold <owner>      ip_forward=1; <owner> recorded as a holder
+#   gt-be98-fwd release <owner>   <owner> no longer holds it; the LAST holder
+#                                 leaving restores the image's 0
+#   gt-be98-fwd status            "ip_forward <0|1>" then "holder <owner>" lines
+#   gt-be98-fwd held [<owner>]    rc 0 when <owner> (any owner: none given)
+#                                 holds it
+#
+# Owners (one lower-case word each): lan (gt-be98-lan's routed br-lan),
+# router (gt-be98-router), sta (gt-be98-wifi-sta's routed networks), gw
+# (gt-be98-gw's gateway networks). Before this helper each owner restored
+# the sysctl after checking the other owners' state files by name, so a
+# fourth owner meant editing all three; now an owner knows only itself.
+# Holders: /run/gt-be98-fwd/<owner> (volatile: a reboot starts from the
+# image's 0 with no holder). hold/release are idempotent; one critical
+# section (a mkdir lock) at a time, so a hold racing the last release never
+# ends with a holder and ip_forward 0.
+set -u
+RUNDIR=${GT_BE98_RUN:-/run}
+D=${GT_BE98_FWD_DIR:-$RUNDIR/gt-be98-fwd}
+SYSCTL=${GT_BE98_FWD_SYSCTL:-/proc/sys/net/ipv4/ip_forward}
+# the image's value (etc/sysctl.d/90-gt-be98.conf)
+BASE=0
+
+err() { echo "gt-be98-fwd: $*" >&2; logger -t gt-be98-fwd -- "$*" 2>/dev/null; return 1; }
+valid_owner() { case "$1" in ''|*[!a-z]*) return 1 ;; esac; [ ${#1} -le 16 ]; }
+
+lock() {
+	local n=0 o
+	mkdir -p "$D" || return 1
+	while ! mkdir "$D/.lock" 2>/dev/null; do
+		o=$(cat "$D/.lock/pid" 2>/dev/null)
+		if [ -n "$o" ] && ! kill -0 "$o" 2>/dev/null; then rm -rf "$D/.lock"; continue; fi
+		n=$((n + 1)); [ $n -ge 30 ] && { rm -rf "$D/.lock"; n=0; continue; }
+		sleep 1
+	done
+	echo $$ > "$D/.lock/pid"
+}
+unlock() { rm -rf "$D/.lock"; }
+
+holders() {
+	local f
+	for f in "$D"/*; do
+		[ -f "$f" ] || continue
+		f=${f##*/}; valid_owner "$f" && echo "$f"
+	done
+}
+fwd_set() { echo "$1" > "$SYSCTL" 2>/dev/null || err "ip_forward=$1 not written"; }
+
+cmd_hold() {
+	: > "$D/$1" || { err "$1: holder file not written"; return 1; }
+	fwd_set 1
+}
+cmd_release() {
+	rm -f "$D/$1"
+	[ -n "$(holders)" ] && return 0
+	fwd_set "$BASE"
+}
+
+c=${1:-}; [ $# -gt 0 ] && shift
+case "$c" in
+hold|release)
+	[ $# = 1 ] && valid_owner "$1" || { err "usage: $c <owner> (a lower-case word)"; exit 2; }
+	lock || exit 1; "cmd_$c" "$1"; r=$?; unlock; exit $r ;;
+held)	if [ $# = 1 ]; then [ -f "$D/$1" ]; else [ -n "$(holders)" ]; fi ;;
+status)	echo "ip_forward $(cat "$SYSCTL" 2>/dev/null || echo '?')"
+	holders | sed 's/^/holder /' ;;
+*)	err "usage: hold|release <owner> | held [<owner>] | status"; exit 2 ;;
+esac

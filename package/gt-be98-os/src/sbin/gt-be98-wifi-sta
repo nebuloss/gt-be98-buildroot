@@ -78,6 +78,8 @@ S=$STATE/sta
 # (run 1102-1143-os-sta U4: the RTL's DHCPDISCOVERs unanswered). The resolver
 # list is not a secret: a 0755 directory, the file 0644.
 D=$STATE/sta-dns
+# ip_forward's one owner: the routed networks hold it as "sta"
+FWD=${GT_BE98_FWD:-/usr/sbin/gt-be98-fwd}
 SELF=$(command -v "$0" 2>/dev/null || echo "$0")
 case "$SELF" in /*) ;; *) SELF=$(pwd)/$SELF ;; esac
 
@@ -356,10 +358,9 @@ unroute() {
 		rm -f "$S/routed.applied"
 	fi
 	ip route flush table "$STA_TABLE" 2>/dev/null
-	# ip_forward back to what it was, unless router mode (gt-be98-router) or the
-	# routed wired LAN (gt-be98-lan NAT) runs
+	# forwarding: the station lets go (gt-be98-fwd: the last holder restores 0)
 	if [ -f "$S/ipfwd" ]; then
-		[ -f "$RUNDIR/gt-be98-router.applied" ] || grep -qs '^nat ' "$RUNDIR/gt-be98-lan.applied" || sysctl -q -w "net.ipv4.ip_forward=$(cat "$S/ipfwd")"
+		"$FWD" release sta
 		rm -f "$S/ipfwd"
 	fi
 	rm -f "$D/dnsmasq.conf" "$S/$NFT_TABLE.nft"
@@ -432,8 +433,7 @@ route() {
 		echo "}"
 	} > "$f"
 	if nft -c -f "$f" && nft -f "$f"; then :; else log "$f rejected"; rc=1; fi
-	if [ ! -f "$S/ipfwd" ]; then cat /proc/sys/net/ipv4/ip_forward > "$S/ipfwd" 2>/dev/null; fi
-	sysctl -q -w net.ipv4.ip_forward=1
+	"$FWD" hold sta && echo sta > "$S/ipfwd"
 	# DHCP and DNS on the routed bridges (DNS forwarded to the uplink's)
 	[ -f "$D/resolv.conf" ] || { : > "$D/resolv.conf"; chmod 644 "$D/resolv.conf"; }
 	{
