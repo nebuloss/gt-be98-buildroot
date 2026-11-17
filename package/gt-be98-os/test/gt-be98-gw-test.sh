@@ -5,8 +5,8 @@
 # No device, no root. Fakes: `ip` keeps the box's addresses and logs every
 # call; gt-be98-l2 (list from a file, sync logged), gt-be98-wan (ifname,
 # check from files), nft (logs, copies the file; a file with REFUSE is
-# rejected), conntrack, dnsmasq (a sleeper writing its pid file),
-# start-stop-daemon. The real gt-be98-fwd writes a fake ip_forward file.
+# rejected), conntrack, dnsmasq (a sleeper writing its pid file, counting
+# the SIGHUPs it gets in $FAKE/hups), start-stop-daemon. The real gt-be98-fwd writes a fake ip_forward file.
 # The generated rule sets are also checked by the kernel's parser
 # (`unshare -rn nft -c -f`, with a bad-rule-set control) when available.
 # Every check has a control that differs in one input.
@@ -20,7 +20,7 @@ export FAKE="$T" GT_BE98_RUN="$T/run" GT_BE98_NETWORKS="$T/networks.conf" GT_BE9
 	GT_BE98_WAN="$T/bin/wan" GT_BE98_FWD="$FWDT" GT_BE98_FWD_SYSCTL="$T/ip_forward" \
 	GT_BE98_LAN_CONF="$T/lan.conf" GT_BE98_LAN_APPLIED="$T/run/gt-be98-lan.applied" \
 	GT_BE98_STA_ROUTED="$T/run/sta.routed" GT_BE98_ROUTER_APPLIED="$T/run/gt-be98-router.applied" \
-	GT_BE98_GW_RESOLV="$T/resolv.conf" GT_BE98_SYSNET="$T/sys"
+	GT_BE98_GW_RESOLV="$T/resolv.conf" GT_BE98_SYSNET="$T/sys" GT_BE98_DHCP_HOSTS="$T/dhcp-hosts.conf"
 mkdir -p "$T/bin" "$T/run" "$T/sys"
 echo 0 > "$T/ip_forward"; : > "$T/addrs"; : > "$T/l2list"; echo rnr0 > "$T/wanif"; : > "$T/wancheck"
 # ip: addresses in $FAKE/addrs ("<dev> <cidr>"), routes from route-<dev>
@@ -50,7 +50,8 @@ cat > "$T/bin/dnsmasq" <<'X'
 #!/bin/sh
 echo "dnsmasq $*" >> "$FAKE/log"
 c=${1#--conf-file=}
-sleep 1000 & echo $! > "$(sed -n 's/^pid-file=//p' "$c")"
+sh -c 'trap "echo hup >> \"\$FAKE/hups\"" HUP; trap "kill \$p 2>/dev/null; exit 0" TERM; while :; do sleep 1000 & p=$!; wait $p; kill $p 2>/dev/null; done' &
+echo $! > "$(sed -n 's/^pid-file=//p' "$c")"
 exit 0
 X
 cat > "$T/bin/start-stop-daemon" <<'X'
@@ -289,6 +290,110 @@ rm -f "$T/refuse-mac"; run stop
 echo zz > "$T/sys/rnr1/address"; echo 02:00:00:00:00:a8 > "$T/sys/brwifi8/address"
 run apply; check "control: a malformed rnr1 address: ignored" "routed " "$(st 4 state) $(log '^ip link set')"
 run stop; rm -rf "$T/sys/rnr1" "$T/sys/brwifi8" "$T/sys/brwifi9"
+# ===== phase 3: DHCP and DNS options, static leases, the lease table =====
+NETS "network=3 name=Up vlan=30 subnet=192.168.30.1/24" \
+	"network=4 name=Lab vlan=40 subnet=192.168.40.1/24 mode=gateway dns=1.1.1.1,9.9.9.9 domain=lab.example lease=30m"
+printf 'brwifi100004 - 40 lan\n' > "$T/l2list"; echo "default via 10.9.0.1 dev rnr0 proto dhcp" > "$T/route-rnr0"; rm -f "$GT_BE98_DHCP_HOSTS"
+run apply
+check "P3: custom DNS servers handed out, the domain, the lease time" \
+	"dhcp-option=tag:n4,option:dns-server,1.1.1.1,9.9.9.9|dhcp-range=set:n4,192.168.40.100,192.168.40.199,255.255.255.0,30m|domain=lab.example,192.168.40.0/24" \
+	"$(grep -E '^(dhcp-range|dhcp-option=tag:n4,option:dns|domain=)' "$D" | sort | tr '\n' '|' | sed 's/|$//')"
+check "P3: the router option stays the box" yes "$(yn grep -qx 'dhcp-option=tag:n4,option:router,192.168.40.1' "$D")"
+dn() {	# <label> <extra keys> <expect: range|norange> <expect domain line or "">
+	NETS "network=4 name=Lab vlan=40 subnet=192.168.40.1/24 mode=gateway $2"; run apply
+	check "P3: $1" "routed $3 $4" "$(st 4 state) $(grep -q '^dhcp-range' "$D" && echo range || echo norange) $(grep '^domain=' "$D")"
+}
+dn "control: dns= one server" "dns=10.9.0.1" range ""
+dn "dns=127.0.0.1: DHCP off" "dns=127.0.0.1" norange ""
+dn "dns=0.1.2.3: DHCP off" "dns=0.1.2.3" norange ""
+dn "dns=224.0.0.1 (multicast): DHCP off" "dns=224.0.0.1" norange ""
+dn "dns twice: DHCP off" "dns=1.1.1.1,1.1.1.1" norange ""
+dn "dns trailing comma: DHCP off" "dns=1.1.1.1," norange ""
+dn "control: 4 dns servers" "dns=1.1.1.1,1.0.0.1,9.9.9.9,8.8.8.8" range ""
+dn "5 dns servers: DHCP off" "dns=1.1.1.1,1.0.0.1,9.9.9.9,8.8.8.8,8.8.4.4" norange ""
+dn "dns=1.1.1 (not IPv4): DHCP off" "dns=1.1.1" norange ""
+dn "control: a domain" "domain=home.arpa" range "domain=home.arpa,192.168.40.0/24"
+dn "domain upper case (never re-interpreted): DHCP off, no domain" "domain=Lab.example" norange ""
+dn "domain with an empty label: DHCP off, no domain" "domain=lab..example" norange ""
+dn "domain with a leading '-': DHCP off, no domain" "domain=-lab.example" norange ""
+dn "domain with a label ending in '-': DHCP off, no domain" "domain=lab-.example" norange ""
+L64=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+dn "domain with a 64-character label: DHCP off, no domain" "domain=$L64.example" norange ""
+dn "control: a 63-character label" "domain=${L64#a}.example" range "domain=${L64#a}.example,192.168.40.0/24"
+dn "dhcp=0 keeps the domain (DNS), no range" "dhcp=0 domain=lab.example" norange "domain=lab.example,192.168.40.0/24"
+dn "lease=1m (under dnsmasq's 2-minute floor): DHCP off" "lease=1m" norange ""
+dn "control: lease=2m" "lease=2m" range ""
+dn "control: lease=365d" "lease=365d" range ""
+dn "lease=366d: DHCP off" "lease=366d" norange ""
+dn "lease=8761h: DHCP off" "lease=8761h" norange ""
+dn "lease=0h: DHCP off" "lease=0h" norange ""
+dn "control: lease=infinite" "lease=infinite" range ""
+check "P3: the reason is in the state" yes "$(NETS 'network=4 name=Lab vlan=40 subnet=192.168.40.1/24 mode=gateway lease=1m'; run apply; yn grep -q "lease '1m': 2 minutes to 365 days" "$T/err")"
+# static leases: rendered for the running DHCP networks, each refusal a comment
+NETS "network=3 name=Up vlan=30 subnet=192.168.30.1/24" "network=4 name=Lab vlan=40 subnet=192.168.40.1/24 mode=gateway" \
+	"network=6 name=Off vlan=41 subnet=10.41.0.1/16 mode=gateway dhcp=0"
+printf 'brwifi100004 - 40 lan\nbrwifi7 - 41 wifi\n' > "$T/l2list"
+cat > "$GT_BE98_DHCP_HOSTS" <<'H'
+# written by the web UI
+network=4 mac=02:00:00:00:00:10 ip=192.168.40.10 name=printer
+network=4 mac=02:00:00:00:00:11 ip=192.168.40.150
+network=4 mac=02:00:00:00:00:12 ip=192.168.41.12
+network=4 mac=02:00:00:00:00:13 ip=192.168.40.1
+network=4 mac=02:00:00:00:00:14 ip=192.168.40.255
+network=4 mac=03:00:00:00:00:15 ip=192.168.40.15
+network=4 mac=02:00:00:00:00:1A ip=192.168.40.16
+network=4 mac=02:00:00:00:00:17 ip=192.168.40.10
+network=4 mac=02:00:00:00:00:10 ip=192.168.40.18
+network=4 mac=02:00:00:00:00:19 ip=192.168.40.19 name=PRINTER
+network=4 mac=02:00:00:00:00:20 ip=192.168.40.20 name=bad_name
+network=4 mac=00:00:00:00:00:00 ip=192.168.40.21
+network=3 mac=02:00:00:00:00:30 ip=192.168.30.30
+network=6 mac=02:00:00:00:00:60 ip=10.41.0.60
+network=4 ip=192.168.40.22
+H
+pid=; run apply; H=$G/dhcp-hosts
+check "P3: static leases served: the two valid ones of network 4, in file order" "02:00:00:00:00:10,192.168.40.10,printer|02:00:00:00:00:11,192.168.40.150" \
+	"$(grep -v '^#' "$H" | tr '\n' '|' | sed 's/|$//')"
+check "P3: every invalid entry refused with its reason (11), none for the unserved networks 3 and 6" \
+	"11 yes yes yes yes yes yes yes yes yes yes no no" "$(grep -c '^# refused' "$H") $(yn grep -q '192.168.41.12: ip 192.168.41.12: outside' "$H") $(yn grep -q '192.168.40.1: ip 192.168.40.1: the gateway address' "$H") $(yn grep -q '192.168.40.255: ip 192.168.40.255: the network or broadcast' "$H") $(yn grep -q "mac '03:00:00:00:00:15'" "$H") $(yn grep -q "mac '02:00:00:00:00:1A'" "$H") $(yn grep -q '192.168.40.10: ip 192.168.40.10: reserved for another device' "$H") $(yn grep -q 'mac 02:00:00:00:00:10: has a static lease on network 4' "$H") $(yn grep -q 'name PRINTER: used on network 4' "$H") $(yn grep -q "name 'bad_name'" "$H") $(yn grep -q 'mac 00:00:00:00:00:00: not a device' "$H") $(yn grep -q '30:30\|0:60' "$H") $(yn grep -q '10.41.0.60' "$H")"
+check "P3: an entry without a mac is refused, logged" "yes yes" "$(yn grep -q "mac '?'" "$H") $(yn grep -q 'static lease refused: network 4' "$T/err")"
+check "P3: the hosts file is world-readable (dnsmasq re-reads it as nobody)" 644 "$(stat -c %a "$H")"
+check "P3: hosts-text = the file" yes "$([ "$(sh "$GWT" hosts-text)" = "$(cat "$H")" ] && echo yes || echo no)"
+# a change of the static leases ALONE: SIGHUP, the same pid (GW3's contract)
+waithup() { i=0; while [ $i -lt 30 ] && [ "$(wc -l < "$T/hups" 2>/dev/null || echo 0)" -lt "$1" ]; do sleep 0.1; i=$((i + 1)); done; wc -l < "$T/hups" 2>/dev/null | tr -d ' ' || echo 0; }
+: > "$T/hups"; pid=$(cat "$G/dnsmasq.pid"); r0=$(sed -n 's/^restarts //p' "$G/dnsmasq.stats")
+printf '1700000000 02:00:00:00:00:99 192.168.40.123 laptop 01:02:00:00:00:00:99\n' > "$G/leases"
+echo "network=4 mac=02:00:00:00:00:40 ip=192.168.40.40 name=nas" >> "$GT_BE98_DHCP_HOSTS"
+run apply
+check "P3 (GW3): a static lease added: SIGHUP, dnsmasq's pid unchanged, not restarted, counted" "1 $pid $r0 1" \
+	"$(waithup 1) $(cat "$G/dnsmasq.pid") $(sed -n 's/^restarts //p' "$G/dnsmasq.stats") $(sed -n 's/^hups //p' "$G/dnsmasq.stats")"
+check "P3: ... the new entry served, the lease table untouched" "yes yes" \
+	"$(yn grep -qx '02:00:00:00:00:40,192.168.40.40,nas' "$H") $(yn grep -qx '1700000000 02:00:00:00:00:99 192.168.40.123 laptop 01:02:00:00:00:00:99' "$G/leases")"
+run apply; check "P3: control: nothing changed: no SIGHUP, no restart" "1 $pid" "$(sleep 0.3; waithup 1) $(cat "$G/dnsmasq.pid")"
+check "P3: status: dnsmasq pid, restarts, hups, static" "dnsmasq pid=$pid restarts=$r0 hups=1 static=3" "$(sh "$GWT" status | grep '^dnsmasq ')"
+# the range and the lease time change (GW3b's contract): a restart that keeps the lease table
+NETS "network=3 name=Up vlan=30 subnet=192.168.30.1/24" "network=4 name=Lab vlan=40 subnet=192.168.40.1/24 mode=gateway dhcp_start=192.168.40.50 dhcp_end=192.168.40.150 lease=2m" \
+	"network=6 name=Off vlan=41 subnet=10.41.0.1/16 mode=gateway dhcp=0"
+run apply
+check "P3 (GW3b): range + lease changed: restarted (new pid), no SIGHUP, the lease table kept byte for byte" "yes 1 $((r0 + 1)) yes" \
+	"$([ "$(cat "$G/dnsmasq.pid")" != "$pid" ] && echo yes || echo no) $(waithup 1) $(sed -n 's/^restarts //p' "$G/dnsmasq.stats") $(yn grep -qx '1700000000 02:00:00:00:00:99 192.168.40.123 laptop 01:02:00:00:00:00:99' "$G/leases")"
+check "P3: ... the new range and lease time rendered" yes "$(yn grep -qx 'dhcp-range=set:n4,192.168.40.50,192.168.40.150,255.255.255.0,2m' "$D")"
+# the lease table: each lease with its network and whether it is static
+printf '1700000000 02:00:00:00:00:99 192.168.40.123 laptop *\n0 02:00:00:00:00:40 192.168.40.40 nas *\n1700000100 02:00:00:00:00:77 172.20.0.7 * *\nbogus line\n' > "$G/leases"
+check "P3: leases: network, mac, ip, expiry, name, static" \
+	"lease 4 02:00:00:00:00:99 192.168.40.123 1700000000 laptop static=0|lease 4 02:00:00:00:00:40 192.168.40.40 0 nas static=1|lease - 02:00:00:00:00:77 172.20.0.7 1700000100 * static=0" \
+	"$(sh "$GWT" leases | tr '\n' '|' | sed 's/|$//')"
+rm -f "$G/leases"; check "P3: leases: no table, no line, rc 0" "0 " "$(sh "$GWT" leases > "$T/o"; echo "$? $(cat "$T/o")")"
+# the cap: STATIC_MAX (256) per network
+NETS "network=6 name=Big vlan=41 subnet=10.41.0.1/16 mode=gateway"; printf 'brwifi7 - 41 wifi\n' > "$T/l2list"
+i=0; : > "$GT_BE98_DHCP_HOSTS"
+while [ $i -lt 257 ]; do printf 'network=6 mac=02:00:00:00:%02x:%02x ip=10.41.%d.%d\n' $((i / 256)) $((i % 256)) $((1 + i / 200)) $((1 + i % 200)) >> "$GT_BE98_DHCP_HOSTS"; i=$((i + 1)); done
+run apply
+check "P3: the cap: 256 static leases served, the 257th refused" "256 1" "$(grep -vc '^#' "$H") $(grep -c 'more than 256 static leases' "$H")"
+# stop: the hosts file goes, the lease table stays (D-GW7)
+printf '1700000000 02:00:00:00:00:99 10.41.0.99 * *\n' > "$G/leases"
+run stop; check "P3: stop: the hosts file removed, the lease table kept" "no yes" "$(ex "$H") $(ex "$G/leases")"
+rm -f "$GT_BE98_DHCP_HOSTS" "$G/leases"
 # 16. the wiring (text checks of the image's files)
 S=$here/..
 fol() { awk -v f="$2" '/^'"$2"'\(\) \{/ { x = 1 } x && /GW_FOLLOW/ { n++ } x && /^}/ { x = 0 } END { print n + 0 }' "$1"; }

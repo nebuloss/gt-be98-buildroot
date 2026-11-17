@@ -25,16 +25,24 @@
 #                         the file says mode=gateway)
 #   gt-be98-gw status     one line per network: "net <id> <state> <bridge|->
 #                         <cidr> <isolate> <mgmt> starts=<n> refusals=<n>
-#                         why=<text>", then "wan <netdev>", "forwarding 0|1"
+#                         why=<text>", then "wan <netdev>", "forwarding 0|1",
+#                         "dnsmasq pid=<pid|-> restarts=<n> hups=<n>
+#                         static=<n>"
+#   gt-be98-gw leases     dnsmasq's lease table, one line per lease: "lease
+#                         <network id|-> <mac> <ip> <expiry epoch|0> <name|*>
+#                         static=<0|1>" (static: the lease is a reservation of
+#                         the static leases file; the web UI's read-only list)
 #   gt-be98-gw features   "features gateway" (the web UI's handshake: it
 #                         offers the gateway mode only when the OS says so)
 #   gt-be98-gw nft-text <wan>     the rule set of the current state (tests)
 #   gt-be98-gw dnsmasq-text       dnsmasq's config of the current state (tests)
+#   gt-be98-gw hosts-text         its static leases of the current state (tests)
 #
 # networks.conf (written by the web UI; parsed, never sourced; keys in any
 # order, unknown keys ignored):
 #   network=<id> name=<pct> vlan=<vid> subnet=<A.B.C.D/P> mode=gateway
-#   isolate=0|1 mgmt=0|1 [dhcp=0|1 dhcp_start=<ip> dhcp_end=<ip> lease=<t>]
+#   isolate=0|1 mgmt=0|1 [dhcp=0|1 dhcp_start=<ip> dhcp_end=<ip> lease=<t>
+#   dns=<ip>[,<ip>...] domain=<name>]
 # isolate (default 0): no forwarding to or from any other gateway network
 # (internet kept). mgmt (default 1, 0 when isolate=1 and mgmt= is absent):
 # the box's SSH (22) and web UI (80, 443) reachable from that network. DHCP
@@ -42,7 +50,29 @@
 # defaults to 1 with the range .100-.199 of a /24 or larger (the first and
 # last host of a smaller subnet, the gateway address excluded); dhcp_start /
 # dhcp_end (both or neither) and lease= (<n>m|<n>h|<n>d|infinite, default
-# 12h) are the web UI's phase-3 fields, re-checked here.
+# 12h; 2 minutes to 365 days) are the web UI's phase-3 fields, re-checked
+# here, with dns= (absent: the box, i.e. the network's gateway address; else
+# 1..4 unicast IPv4 servers, comma-separated, handed out instead) and
+# domain= (absent: none; a DNS name of a-z 0-9 '-' labels, handed out as
+# the clients' domain and the suffix dnsmasq answers their names under).
+#
+# STATIC LEASES (phase 3): $HOSTS (/etc/gt-be98-dhcp-hosts.conf, written by
+# the web UI next to the networks file: a list, so a file of its own rather
+# than a key of the network's line), one per line, parsed never sourced:
+#   network=<id> mac=<aa:bb:cc:dd:ee:ff> ip=<A.B.C.D> [name=<host label>]
+# rendered into dnsmasq's dhcp-hostsfile ($GW/dhcp-hosts, "<mac>,<ip>[,<name>]")
+# for the running networks with DHCP on; an entry that is not a unicast MAC,
+# an IP of its network's subnet (not its network, broadcast or gateway
+# address), unique (the IP box-wide, the MAC and the name per network) or
+# past STATIC_MAX per network is left out as a "# refused" comment line. A
+# change of the static leases ALONE is a SIGHUP (dnsmasq re-reads the hosts
+# file: its pid, its other leases and DNS are untouched); a change of the
+# range, the lease time, dns=, domain= or dhcp= rewrites dnsmasq's config:
+# a restart, for about a second, that keeps the lease table ($GW/leases is
+# read back at start, D-GW7), so a client keeps its address at its next
+# renewal while that address is still inside the new range (outside it,
+# dhcp-authoritative NAKs the renewal and the client gets a new one) and
+# gets the new lease time then.
 #
 # PER NETWORK, one object (state $GW/net/<id>): init (the line parsed and
 # checked), start (address + policy rules on its bridge), stop (both
@@ -107,12 +137,12 @@
 # (UniFi does the same). Kept after stop (a set address stays set: the
 # bridge is gt-be98-l2's, and the MAC is harmless on a VLAN-only bridge).
 # Without that port (no jack switch) the bridge keeps its own.
-# Hooks left for later phases: static leases (dhcp-hostsfile $GW/dhcp-hosts,
-# re-read on SIGHUP), IPv6 (off on the bridges: gt-be98-l2).
+# Hooks left for later phases: IPv6 (off on the bridges: gt-be98-l2).
 set -u
 RUNDIR=${GT_BE98_RUN:-/run}
 GW=${GT_BE98_GW_STATE:-$RUNDIR/gt-be98-gw}
 NETWORKS=${GT_BE98_NETWORKS:-/etc/gt-be98-networks.conf}
+HOSTS=${GT_BE98_DHCP_HOSTS:-/etc/gt-be98-dhcp-hosts.conf}
 SYSNET=${GT_BE98_SYSNET:-/sys/class/net}
 L2=${GT_BE98_L2:-/usr/sbin/gt-be98-l2}
 WANT=${GT_BE98_WAN:-/usr/sbin/gt-be98-wan}
@@ -126,6 +156,7 @@ GW_TABLE=184
 GW_PRIO=184		# suppress rule; the table rule is GW_PRIO + 1
 GW_MAX=16
 GW_MAC_PORT=${GT_BE98_GW_MAC_PORT:-rnr1}
+STATIC_MAX=256		# static leases per network
 NFT_TABLE=gt_be98_gw
 NAT_TABLE=gt_be98_gw_nat
 MGMT_PORTS="22, 80, 443"
@@ -201,10 +232,47 @@ range_why() {
 	[ $s != $b ] && [ $e != $bc ] || { echo "DHCP range $2..$3 holds the network or broadcast address"; return; }
 	[ $n -lt $s ] || [ $n -gt $e ] || { echo "DHCP range $2..$3 holds the gateway address ${1%/*}"; return; }
 }
+# a lease time: <n>m|<n>h|<n>d (2 minutes, dnsmasq's floor, to 365 days) or
+# infinite; why on stdout
+lease_why() {
+	local x m
+	[ "$1" = infinite ] && return
+	x=${1%[mhd]}
+	case "$1" in [1-9]*[mhd]) ;; *) x=bad ;; esac
+	case "$x" in *[!0-9]*) echo "lease '$1' (<n>m, <n>h, <n>d or infinite)"; return ;; esac
+	[ ${#x} -le 6 ] || { echo "lease '$1': 2 minutes to 365 days"; return; }
+	case "$1" in *m) m=$x ;; *h) m=$((x * 60)) ;; *d) m=$((x * 1440)) ;; esac
+	[ "$m" -ge 2 ] && [ "$m" -le 525600 ] || echo "lease '$1': 2 minutes to 365 days"
+}
+# dns= : 1..4 unicast IPv4 servers, comma-separated, each once; why on stdout
+dns_why() {
+	local IFS=, x n=0 seen=, o
+	case "$1" in ''|,*|*,|*,,*) echo "dns '$1': 1 to 4 IPv4 addresses, comma-separated"; return ;; esac
+	for x in $1; do
+		n=$((n + 1))
+		ip_ok "$x" || { echo "dns '$1': $x is not an IPv4 address"; return; }
+		o=${x%%.*}
+		[ "$o" != 0 ] && [ "$o" != 127 ] && [ "$o" -lt 224 ] || { echo "dns '$1': $x is not a unicast server address"; return; }
+		case "$seen" in *",$x,"*) echo "dns '$1': $x listed twice"; return ;; esac
+		seen="$seen$x,"
+	done
+	[ $n -le 4 ] || echo "dns '$1': at most 4 servers"
+}
+# domain= : labels of a-z 0-9 '-' (1..63, no '-' at either end), dot-separated,
+# at most 253 characters; why on stdout
+domain_why() {
+	local IFS=. l
+	case "$1" in
+	''|.*|*.|*..*|-*|*-|*-.*|*.-*|*[!0-9a-z.-]*) echo "domain '$1': labels of a-z, 0-9 and '-', dot-separated"; return ;;
+	esac
+	[ ${#1} -le 253 ] || { echo "domain '$1': at most 253 characters"; return; }
+	for l in $1; do [ ${#l} -le 63 ] || { echo "domain '$1': a label is at most 63 characters"; return; }; done
+}
 
 # ---- the network list -----------------------------------------------------------------
 # the mode=gateway lines of the list, one per line, in file order:
-# "<id> <vid> <subnet|-> <isolate|-> <mgmt|-> <dhcp|-> <start|-> <end|-> <lease|->"
+# "<id> <vid> <subnet|-> <isolate|-> <mgmt|-> <dhcp|-> <start|-> <end|-> <lease|->
+# <dns|-> <domain|->"
 # (- = the key is absent; values with a character outside the expected set
 # are kept as "?" so that the check refuses them, never re-interpreted)
 gw_lines() {
@@ -217,7 +285,8 @@ gw_lines() {
 		  if (f["mode"] != "gateway") next
 		  print v("network", "^[0-9]+$"), v("vlan", "^[0-9]+$"), v("subnet", "^[0-9./]+$"),
 			v("isolate", "^[01]$"), v("mgmt", "^[01]$"), v("dhcp", "^[01]$"),
-			v("dhcp_start", "^[0-9.]+$"), v("dhcp_end", "^[0-9.]+$"), v("lease", "^[0-9a-z]+$") }' "$NETWORKS"
+			v("dhcp_start", "^[0-9.]+$"), v("dhcp_end", "^[0-9.]+$"), v("lease", "^[0-9a-z]+$"),
+			v("dns", "^[0-9.,]+$"), v("domain", "^[0-9a-z][0-9a-z.-]*$") }' "$NETWORKS"
 }
 
 # ---- what the box has -------------------------------------------------------------------
@@ -253,9 +322,12 @@ wan_port_jack() {
 
 # ---- one network: init / check ----------------------------------------------------------
 # net_init <id> <vid> <subnet> <isolate> <mgmt> <dhcp> <start> <end> <lease>
-# into N_*; N_ERR the refusal (shape), N_DWHY why its DHCP is off
+# <dns> <domain> into N_*; N_ERR the refusal (shape), N_DWHY why its DHCP is
+# off (then no domain either: nothing half-checked is rendered)
 net_init() {
 	N_ID=$1 N_VID=$2 N_CIDR=$3 N_ERR= N_DWHY= N_LOCAL=
+	N_DNS=${10:--} N_DOMAIN=${11:--}
+	[ "$N_DOMAIN" = - ] && N_DOMAIN=
 	N_ISO=$4; [ "$N_ISO" = - ] && N_ISO=0
 	N_MGMT=$5; if [ "$N_MGMT" = - ]; then N_MGMT=1; [ "$N_ISO" = 1 ] && N_MGMT=0; fi
 	N_DHCP=$6; [ "$N_DHCP" = - ] && N_DHCP=1
@@ -269,12 +341,15 @@ net_init() {
 	case "$N_ISO$N_MGMT$N_DHCP" in *[!01]*) N_ERR="isolate/mgmt/dhcp: 0 or 1"; return ;; esac
 	N_ERR=$(cidr_why "$N_CIDR"); [ -z "$N_ERR" ] || return
 	N_SUB=$(subnet_of "$N_CIDR")
-	[ "$N_DHCP" = 1 ] || return 0
-	case "$N_LEASE" in
-	infinite) ;;
-	[1-9]*) case "${N_LEASE%[mhd]}" in *[!0-9]*) N_DWHY="lease '$N_LEASE' (<n>m, <n>h, <n>d or infinite)" ;; esac ;;
-	*) N_DWHY="lease '$N_LEASE' (<n>m, <n>h, <n>d or infinite)" ;;
-	esac
+	[ -z "$N_DOMAIN" ] || N_DWHY=$(domain_why "$N_DOMAIN")
+	if [ "$N_DHCP" != 1 ]; then
+		N_DNS=${N_CIDR%/*}
+		[ -z "$N_DWHY" ] || N_DOMAIN=
+		return 0
+	fi
+	if [ "$N_DNS" = - ]; then N_DNS=${N_CIDR%/*}	# the box
+	else [ -n "$N_DWHY" ] || N_DWHY=$(dns_why "$N_DNS"); fi
+	[ -n "$N_DWHY" ] || N_DWHY=$(lease_why "$N_LEASE")
 	if [ "$7" = - ] && [ "$8" = - ]; then
 		set -- $(dhcp_default "$N_CIDR"); N_START=$1 N_END=$2
 	elif [ "$7" = - ] || [ "$8" = - ]; then
@@ -283,7 +358,7 @@ net_init() {
 		N_START=$7 N_END=$8
 		[ -n "$N_DWHY" ] || N_DWHY=$(range_why "$N_CIDR" "$N_START" "$N_END")
 	fi
-	[ -z "$N_DWHY" ] || N_DHCP=0
+	[ -z "$N_DWHY" ] || { N_DHCP=0; N_DOMAIN=; N_DNS=${N_CIDR%/*}; }
 }
 
 # state file of network $1: "key value" lines
@@ -445,7 +520,7 @@ route_table() {
 
 # dnsmasq's config (stdout) for the active networks; nothing when none
 dnsmasq_text() {
-	local f id s b c
+	local f id s b c d
 	active_sets
 	[ -n "$A_GW" ] || return 0
 	echo "# generated by gt-be98-gw - do not edit"
@@ -465,11 +540,88 @@ dnsmasq_text() {
 		s=$(st_get "$id" state); b=$(st_get "$id" bridge); c=$(st_get "$id" cidr)
 		case "$s" in local|routed) ;; *) continue ;; esac
 		echo "interface=$b"
+		# the domain: handed out (option 15) and the suffix of the clients' names
+		d=$(st_get "$id" domain)
+		[ -n "$d" ] && [ "$d" != - ] && echo "domain=$d,$(st_get "$id" subnet)"
 		[ "$(st_get "$id" dhcp)" = 1 ] || continue
 		echo "dhcp-range=set:n$id,$(st_get "$id" dhcp_start),$(st_get "$id" dhcp_end),$(n2ip "$(mask_of "${c#*/}")"),$(st_get "$id" lease)"
 		echo "dhcp-option=tag:n$id,option:router,${c%/*}"
-		echo "dhcp-option=tag:n$id,option:dns-server,${c%/*}"
+		d=$(st_get "$id" dns); [ -n "$d" ] && [ "$d" != - ] || d=${c%/*}
+		echo "dhcp-option=tag:n$id,option:dns-server,$d"
 	done
+}
+# the static leases of the running networks with DHCP on (stdout, dnsmasq's
+# dhcp-hostsfile: "<mac>,<ip>[,<name>]"); an entry refused is a "# refused"
+# comment line saying why (file order: the first one keeps an IP, a MAC, a
+# name)
+hosts_text() {
+	local id mac ip name c s b m n bc why seen= cnt
+	[ -r "$HOSTS" ] || return 0
+	while read -r id mac ip name; do
+		[ -n "$id" ] || continue
+		case "$id" in ''|0*|*[!0-9]*) echo "# refused: network '$id'"; continue ;; esac
+		# not served: the network is not running, or its DHCP is off
+		[ -f "$GW/net/$id" ] || continue
+		case "$(st_get "$id" state)" in local|routed) ;; *) continue ;; esac
+		[ "$(st_get "$id" dhcp)" = 1 ] || continue
+		c=$(st_get "$id" cidr); why=
+		case "$mac" in
+		[0-9a-f][02468ace]:[0-9a-f][0-9a-f]:[0-9a-f][0-9a-f]:[0-9a-f][0-9a-f]:[0-9a-f][0-9a-f]:[0-9a-f][0-9a-f])
+			[ "$mac" != 00:00:00:00:00:00 ] || why="mac $mac: not a device address" ;;
+		*)	why="mac '$mac': a unicast MAC, aa:bb:cc:dd:ee:ff (lower case)" ;;
+		esac
+		if [ -z "$why" ]; then
+			if ip_ok "$ip"; then
+				n=$(ip2n "$ip"); m=$(mask_of "${c#*/}"); b=$(( $(ip2n "${c%/*}") & m )); bc=$(( b | (~m & 0xffffffff) ))
+				if [ $(( n & m )) != $b ]; then why="ip $ip: outside network $id's $(subnet_of "$c")"
+				elif [ $n = $b ] || [ $n = $bc ]; then why="ip $ip: the network or broadcast address of $(subnet_of "$c")"
+				elif [ "$ip" = "${c%/*}" ]; then why="ip $ip: the gateway address"
+				fi
+			else why="ip '$ip': not an IPv4 address"; fi
+		fi
+		[ "$name" = - ] && name=
+		if [ -z "$why" ] && [ -n "$name" ]; then
+			case "$name" in
+			-*|*-|*[!0-9A-Za-z-]*) why="name '$name': one host label of a-z, 0-9 and '-'" ;;
+			*) [ ${#name} -le 63 ] || why="name '$name': at most 63 characters" ;;
+			esac
+		fi
+		if [ -z "$why" ]; then
+			case "$seen" in
+			*" ip:$ip "*) why="ip $ip: reserved for another device already" ;;
+			*" $id:mac:$mac "*) why="mac $mac: has a static lease on network $id already" ;;
+			esac
+		fi
+		if [ -z "$why" ] && [ -n "$name" ]; then
+			s=$(echo "$name" | tr A-Z a-z)
+			case "$seen" in *" $id:name:$s "*) why="name $name: used on network $id already" ;; esac
+		fi
+		if [ -z "$why" ]; then
+			cnt=$(echo "$seen" | tr ' ' '\n' | grep -c "^$id:mac:")
+			[ "$cnt" -lt $STATIC_MAX ] || why="more than $STATIC_MAX static leases on network $id"
+		fi
+		if [ -n "$why" ]; then echo "# refused: network $id $mac $ip: $why"; continue; fi
+		seen="$seen ip:$ip $id:mac:$mac ${name:+$id:name:$(echo "$name" | tr A-Z a-z)} "
+		echo "$mac,$ip${name:+,$name}"
+	done <<-EOF
+	$(hosts_lines)
+	EOF
+}
+# the static leases file, one "<network> <mac> <ip> <name|->" per entry (? =
+# a key missing; checked by hosts_text, never re-interpreted)
+hosts_lines() {
+	awk '
+		/^[ \t]*(#|$)/ { next }
+		{ split("", f)
+		  for (i = 1; i <= NF; i++) { k = $i; sub(/=.*/, "", k); f[k] = substr($i, length(k) + 2) }
+		  print (f["network"] != "" ? f["network"] : "?"), (f["mac"] != "" ? f["mac"] : "?"),
+			(f["ip"] != "" ? f["ip"] : "?"), (f["name"] != "" ? f["name"] : "-") }' "$HOSTS"
+}
+stat_inc() {	# <counter> of dnsmasq ($GW/dnsmasq.stats)
+	local v
+	v=$(sed -n "s/^$1 //p" "$GW/dnsmasq.stats" 2>/dev/null); case "$v" in ''|*[!0-9]*) v=0 ;; esac
+	{ grep -v "^$1 " "$GW/dnsmasq.stats" 2>/dev/null; echo "$1 $((v + 1))"; } > "$GW/dnsmasq.stats.new"
+	mv -f "$GW/dnsmasq.stats.new" "$GW/dnsmasq.stats"
 }
 pid_alive() { local p; p=$(cat "$1" 2>/dev/null) && [ -n "$p" ] && kill -0 "$p" 2>/dev/null; }
 dnsmasq_stop() {
@@ -477,16 +629,34 @@ dnsmasq_stop() {
 	start-stop-daemon --stop --pidfile "$GW/dnsmasq.pid" --retry TERM/5/KILL/2 >/dev/null 2>&1
 	rm -f "$GW/dnsmasq.pid"
 }
-# (re)start dnsmasq when its config changed or it died; stopped when no network
+# (re)start dnsmasq when its config changed or it died; stopped when no
+# network. The static leases first (the hosts file a restart reads); a change
+# of them alone is a SIGHUP: dnsmasq re-reads the file, keeps its pid, its
+# leases, its DNS cache of everything else.
 dnsmasq_apply() {
-	local t
+	local t h hc=
 	t=$(dnsmasq_text)
 	if [ -z "$t" ]; then dnsmasq_stop; rm -f "$GW/dnsmasq.conf"; return 0; fi
-	[ -f "$GW/dhcp-hosts" ] || : > "$GW/dhcp-hosts"
-	if [ "$t" = "$(cat "$GW/dnsmasq.conf" 2>/dev/null)" ] && pid_alive "$GW/dnsmasq.pid"; then return 0; fi
+	h=$(hosts_text)
+	if [ ! -f "$GW/dhcp-hosts" ] || [ "$h" != "$(cat "$GW/dhcp-hosts")" ]; then
+		# read by dnsmasq AFTER it dropped to nobody (the SIGHUP): world-readable
+		if [ -n "$h" ]; then printf '%s\n' "$h"; fi > "$GW/dhcp-hosts.new"
+		chmod 644 "$GW/dhcp-hosts.new"; mv -f "$GW/dhcp-hosts.new" "$GW/dhcp-hosts"
+		hc=1
+		printf '%s\n' "$h" | sed -n 's/^# refused: /static lease refused: /p' | while read -r x; do log "$x"; done
+	fi
+	if [ "$t" = "$(cat "$GW/dnsmasq.conf" 2>/dev/null)" ] && pid_alive "$GW/dnsmasq.pid"; then
+		[ -n "$hc" ] || return 0
+		if kill -HUP "$(cat "$GW/dnsmasq.pid")" 2>/dev/null; then
+			stat_inc hups
+			log "static leases: $(grep -vc '^#' "$GW/dhcp-hosts") served (SIGHUP: dnsmasq re-read them, its pid and leases kept)"
+			return 0
+		fi
+	fi
 	dnsmasq_stop
 	printf '%s\n' "$t" > "$GW/dnsmasq.conf"
 	dnsmasq --conf-file="$GW/dnsmasq.conf" || { log "dnsmasq did not start: no DHCP/DNS on the gateway networks"; return 1; }
+	stat_inc restarts
 }
 
 # ---- apply ---------------------------------------------------------------------------------
@@ -503,7 +673,7 @@ l2_bridge() {
 }
 
 cmd_apply() {
-	local f id vid sub iso mgmt dh st en le acc= n=0 why l d c b s rc=0 prev_iso prev_mgmt prev_s prev_why old
+	local f id vid sub iso mgmt dh st en le dns dom acc= n=0 why l d c b s rc=0 prev_iso prev_mgmt prev_s prev_why old
 	local addrs cnets nat_why=
 	if [ -f "$ROUTER_APPLIED" ] && [ -n "$(gw_lines)" ]; then
 		router_refused=1
@@ -515,9 +685,9 @@ cmd_apply() {
 	wan_port_jack && nat_why="the WAN port $WAN_PORT is a LAN jack (LAN_PORT_$WAN_PORT): no NAT through it"
 	: > "$GW/wanted.new"
 	# init + check every gateway line (file order: the first one keeps a subnet)
-	while read -r id vid sub iso mgmt dh st en le; do
+	while read -r id vid sub iso mgmt dh st en le dns dom; do
 		[ -n "$id" ] || continue
-		net_init "$id" "$vid" "$sub" "$iso" "$mgmt" "$dh" "$st" "$en" "$le"
+		net_init "$id" "$vid" "$sub" "$iso" "$mgmt" "$dh" "$st" "$en" "$le" "${dns:--}" "${dom:--}"
 		why=$N_ERR
 		case "$N_ID" in ''|0*|*[!0-9]*) log "a mode=gateway line without a valid network= id: skipped"; continue ;; esac
 		if [ -z "$why" ] && [ -n "$router_refused" ]; then why="router mode is applied (gt-be98-router): gateway networks and router mode exclude each other (D-GW5)"; fi
@@ -578,6 +748,7 @@ cmd_apply() {
 			echo "want 1"; echo "vid $N_VID"; echo "cidr $N_CIDR"; echo "subnet ${N_SUB:--}"
 			echo "isolate $N_ISO"; echo "mgmt $N_MGMT"; echo "dhcp $N_DHCP"
 			echo "dhcp_start ${N_START:--}"; echo "dhcp_end ${N_END:--}"; echo "lease $N_LEASE"
+			echo "dns $N_DNS"; echo "domain ${N_DOMAIN:--}"
 			echo "refused ${why:+1}"; echo "why_refused $why"; echo "why_local $N_LOCAL"; echo "why_dhcp $N_DWHY"
 		} > "$GW/plan.$N_ID"
 		[ -z "$N_DWHY" ] || [ -n "$why" ] || log "network $N_ID: DHCP off: $N_DWHY"
@@ -655,7 +826,7 @@ cmd_apply() {
 		fi
 		{
 			echo "state $s"; echo "bridge $b"
-			sed -n '/^\(vid\|cidr\|subnet\|isolate\|mgmt\|dhcp\|dhcp_start\|dhcp_end\|lease\) /p' "$f"
+			sed -n '/^\(vid\|cidr\|subnet\|isolate\|mgmt\|dhcp\|dhcp_start\|dhcp_end\|lease\|dns\|domain\) /p' "$f"
 			echo "why $why"
 			if [ "$s" != inactive ] && [ "$prev_s" != "$s" ]; then echo "starts $(( $(counter "$id" starts) + 1 ))"
 			else echo "starts $(counter "$id" starts)"; fi
@@ -760,7 +931,8 @@ cmd_stop() {
 	ip route flush table "$GW_TABLE" 2>/dev/null
 	dnsmasq_stop
 	if grep -qx fwd "$GW/applied" 2>/dev/null; then "$FWD" release gw; fi
-	rm -f "$GW/applied" "$GW/wanted" "$GW/dnsmasq.conf" "$GW/gw.nft" "$GW"/plan.* "$GW/hold"/* 2>/dev/null
+	# the lease table stays (D-GW7: the next start reads it back)
+	rm -f "$GW/applied" "$GW/wanted" "$GW/dnsmasq.conf" "$GW/dhcp-hosts" "$GW/gw.nft" "$GW"/plan.* "$GW/hold"/* 2>/dev/null
 	return 0
 }
 
@@ -774,6 +946,31 @@ cmd_status() {
 	wan_ctx
 	echo "wan $WAN_IF"
 	echo "forwarding $("$FWD" held gw && echo 1 || echo 0)"
+	p=-; pid_alive "$GW/dnsmasq.pid" && p=$(cat "$GW/dnsmasq.pid")
+	echo "dnsmasq pid=$p restarts=$(dn_stat restarts) hups=$(dn_stat hups) static=$(grep -vc '^#' "$GW/dhcp-hosts" 2>/dev/null || echo 0)"
+}
+dn_stat() { local v; v=$(sed -n "s/^$1 //p" "$GW/dnsmasq.stats" 2>/dev/null); case "$v" in ''|*[!0-9]*) v=0 ;; esac; echo "$v"; }
+
+# dnsmasq's lease table ("<expiry> <mac> <ip> <name|*> <client id|*>"), each
+# lease with its network (the running network whose subnet holds the IP) and
+# whether it is a static lease of the hosts file
+cmd_leases() {
+	local exp mac ip name f id c m nid s
+	[ -r "$GW/leases" ] || return 0
+	while read -r exp mac ip name _; do
+		ip_ok "${ip:-x}" || continue
+		nid=-
+		for f in "$GW/net"/*; do
+			[ -f "$f" ] || continue
+			id=${f##*/}; case "$id" in *.new|*.tmp) continue ;; esac
+			c=$(st_get "$id" cidr); case "$c" in */*) ;; *) continue ;; esac
+			m=$(mask_of "${c#*/}")
+			[ $(( $(ip2n "$ip") & m )) = $(( $(ip2n "${c%/*}") & m )) ] && { nid=$id; break; }
+		done
+		s=0
+		awk -F, -v m="$mac" -v i="$ip" '!/^#/ && tolower($1) == tolower(m) && $2 == i { f = 1 } END { exit !f }' "$GW/dhcp-hosts" 2>/dev/null && s=1
+		echo "lease $nid $mac $ip $exp ${name:-*} static=$s"
+	done < "$GW/leases"
 }
 
 c=${1:-}; [ $# -gt 0 ] && shift
@@ -781,8 +978,10 @@ case "$c" in
 apply|reroute) lock || exit 1; cmd_apply; r=$?; unlock; exit $r ;;
 stop)	lock || exit 1; cmd_stop; r=$?; unlock; exit $r ;;
 status)	cmd_status ;;
+leases)	cmd_leases ;;
 features) echo "features gateway" ;;
 nft-text) [ $# = 1 ] || exit 2; nft_text "$1" ;;
 dnsmasq-text) wan_ctx; dnsmasq_text ;;
-*)	sed -n '/^#   gt-be98-gw apply/,/^#   gt-be98-gw dnsmasq-text/p' "$0" | sed 's/^# \{0,1\}//' >&2; exit 2 ;;
+hosts-text) hosts_text ;;
+*)	sed -n '/^#   gt-be98-gw apply/,/^#   gt-be98-gw hosts-text/p' "$0" | sed 's/^# \{0,1\}//' >&2; exit 2 ;;
 esac

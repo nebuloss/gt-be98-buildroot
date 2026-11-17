@@ -45,6 +45,19 @@ mutant "gw: the WAN clash ignored" sbin/gt-be98-gw 's/{ N_LOCAL="the WAN address
 mutant "gw: the address before the rule set" sbin/gt-be98-gw 's/nft_apply "\$WAN_IF" || { rc=1; START=; stop_all_active; }/:/' gt-be98-gw-test.sh
 mutant "gw: router mode not excluded" sbin/gt-be98-gw 's/router_refused=1$/router_refused=/' gt-be98-gw-test.sh
 mutant "gw: the cap off" sbin/gt-be98-gw 's/\[ \$n -le \$GW_MAX \] ||/true ||/' gt-be98-gw-test.sh
+mutant "gw P3: a static lease change restarts dnsmasq (no SIGHUP)" sbin/gt-be98-gw 's/if kill -HUP "\$(cat "\$GW\/dnsmasq.pid")" 2>\/dev\/null; then/if false; then/' gt-be98-gw-test.sh
+mutant "gw P3: a static lease outside its subnet served" sbin/gt-be98-gw 's/if \[ \$(( n \& m )) != \$b \]; then why=/if false; then why=/' gt-be98-gw-test.sh
+mutant "gw P3: one IP reserved twice" sbin/gt-be98-gw 's/\*" ip:\$ip "\*) why=/*" ipX:$ip "*) why=/' gt-be98-gw-test.sh
+mutant "gw P3: a multicast MAC served" sbin/gt-be98-gw 's/\[0-9a-f\]\[02468ace\]:/[0-9a-f][0-9a-f]:/' gt-be98-gw-test.sh
+mutant "gw P3: the static lease cap off" sbin/gt-be98-gw 's/\[ "\$cnt" -lt \$STATIC_MAX \] ||/true ||/' gt-be98-gw-test.sh
+mutant "gw P3: the hosts file not world-readable" sbin/gt-be98-gw 's/chmod 644 "\$GW\/dhcp-hosts.new"/chmod 600 "$GW\/dhcp-hosts.new"/' gt-be98-gw-test.sh
+mutant "gw P3: custom DNS ignored (always the box)" sbin/gt-be98-gw 's/d=\$(st_get "\$id" dns); \[ -n "\$d" \] \&\& \[ "\$d" != - \] || d=\${c%\/\*}/d=${c%\/*}/' gt-be98-gw-test.sh
+mutant "gw P3: a bad DNS server accepted" sbin/gt-be98-gw 's/\[ "\$o" != 0 \] \&\& \[ "\$o" != 127 \] \&\& \[ "\$o" -lt 224 \] ||/true ||/' gt-be98-gw-test.sh
+mutant "gw P3: the domain not rendered" sbin/gt-be98-gw 's/echo "domain=\$d,\$(st_get "\$id" subnet)"/:/' gt-be98-gw-test.sh
+mutant "gw P3: a bad domain accepted" sbin/gt-be98-gw 's/\[ -z "\$N_DOMAIN" \] || N_DWHY=\$(domain_why "\$N_DOMAIN")/:/' gt-be98-gw-test.sh
+mutant "gw P3: the lease floor off (1m accepted)" sbin/gt-be98-gw 's/\[ "\$m" -ge 2 \] \&\& \[ "\$m" -le 525600 \]/[ "$m" -ge 1 ] \&\& [ "$m" -le 525600 ]/' gt-be98-gw-test.sh
+mutant "gw P3: stop deletes the lease table" sbin/gt-be98-gw 's/rm -f "\$GW\/applied" "\$GW\/wanted"/rm -f "$GW\/leases" "$GW\/applied" "$GW\/wanted"/' gt-be98-gw-test.sh
+mutant "gw P3: leases: static flag never set" sbin/gt-be98-gw 's/END { exit !f }/END { exit 1 }/' gt-be98-gw-test.sh
 mutant "fwd: the last release leaves forwarding on" sbin/gt-be98-fwd 's/fwd_set "\$BASE"/:/' gt-be98-gw-test.sh
 echo "gt-be98-gw-mutants: $pass ok, $fail failed"
 [ $fail -eq 0 ]

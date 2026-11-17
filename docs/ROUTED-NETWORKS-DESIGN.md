@@ -393,6 +393,20 @@ Range/lease fields, static leases into `dhcp-hosts`, a leases view.
 **Arm GW3:** a reservation for the jack-6 peer's MAC; PASS: it gets exactly that address after
 a `dhclient` release/renew, and the change was a SIGHUP (dnsmasq pid unchanged).
 
+*Implemented (buildroot `br-gw3-dhcp-2026-11-17`, web UI `wu-gw3-dhcp-2026-11-17`):* the
+scalar options are keys appended to the network's line, only when not the default:
+`dhcp=0 dhcp_start=<ip> dhcp_end=<ip> lease=<n>m|h|d|infinite dns=<ip>[,<ip>..] domain=<name>`
+(bounded: a line stays under 1 KiB). The static leases are a list, so they live in a sibling
+file, `/etc/gt-be98-dhcp-hosts.conf` (`network=<id> mac=<mac> ip=<ip> [name=<host>]`): a
+static-lease change then touches neither the networks file nor its other readers, and
+`gt-be98-gw` turns it into a SIGHUP of dnsmasq (`dhcp-hostsfile` re-read; pid and leases kept).
+A range, lease-time, DNS, domain or on/off change rewrites dnsmasq's config: a restart that
+keeps the lease table (read back at start), so a client keeps its address at its next renewal
+while it is inside the new range. `gt-be98-gw leases` is the read-only lease list.
+**Arm GW3b:** range and lease time changed under a client's live lease: PASS: the lease-file
+row survives the restart and the client's next renewal (no release) is ACKed with the same
+address and the new lease time.
+
 ### Phase 4: offload G6b (open-ethernet lane), ~2-3 days + arm
 **Arm GW4** (driver with G6b; read `flowcache` debugfs stats before and after):
 - PASS: iperf3 jack-6 peer → an upstream host for 30 s: entries programmed for both
