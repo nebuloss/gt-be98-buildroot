@@ -41,7 +41,9 @@
 # om-int-2026-11-17 2026-11-17 8c565b68 (imgint4: 6f86ecab + the index regeneration e9d3da38 + om-rebind-ch40 69384cb3
 #  (radio_rebind's default named in one place, the G4 V2 move declaration; no behaviour change, default still 0)
 #  + the RUNNER-L3-FDB ledger rows c17d40ac (doc-only))
-GT_BE98_OPEN_WIFI_VERSION = 8c565b68699bf5d22a74fcf73fe20a22889995e4
+# om-mesh-int-2026-11-17 2026-11-17 6dbad8c1 (imgmesh1: om-int 8c565b68 + om-mesh-bh-2026-11-17 9aa121bc (MESH-BH: the
+#  4-address link on a secondary BSS, its AP_VLAN back-pressure, the leave the firmware is owed; no module parameter))
+GT_BE98_OPEN_WIFI_VERSION = 6dbad8c199614e1de0b4add0fcd61168bc35df08
 GT_BE98_OPEN_WIFI_SITE = git@github.com:nebuloss/gt-be98-open-wifi.git
 GT_BE98_OPEN_WIFI_SITE_METHOD = git
 GT_BE98_OPEN_WIFI_LICENSE = GPL-2.0-only
