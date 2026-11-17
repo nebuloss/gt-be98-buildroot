@@ -148,7 +148,24 @@
 #                                   always written hostapd's chanlist= of
 #                                   its own channels, 5gl 36-64, 5gh
 #                                   100-144 149-177, so a move after a
-#                                   radar stays in the radio's band)
+#                                   radar stays in the radio's band;
+#                                   in every country (US and JP too: the
+#                                   driver's regulatory table gives
+#                                   120-128 a 600 s CAC everywhere)
+#                                   5gh's chanlist also
+#                                   leaves out every block that holds
+#                                   the weather-radar channels 120-128
+#                                   (a 600 s CAC), so a move after a
+#                                   radar never lands on one: 20 MHz
+#                                   100-116 132-144 149-177, 40/80/160
+#                                   100-112 132-144 149-177 (hostapd's
+#                                   DFS pick checks the list on a
+#                                   block's first channel only, at the
+#                                   width and every narrower one it
+#                                   falls back to); the configured
+#                                   channel's own block stays in it (the
+#                                   user chose it; at 160 MHz the only
+#                                   block, 100-128: list unchanged))
 #                                   2g: 20, 40 (40: rendered at 20 MHz
 #                                   with a warning while HT40_2G=0, see
 #                                   below); 5gl/5gh: 20, 40, 80, 160
@@ -769,6 +786,36 @@ function c5(ch, w) { return w == 160 ? vht160(ch) : vht80(ch) }
 # a 5 GHz radio whose channel block (at width w) holds a DFS (radar)
 # channel, 52-144: a DFS primary, or 160 MHz (36-64 holds 52-64)
 function dfs5(b, ch, w) { return (b == "5gl" || b == "5gh") && ((ch >= 52 && ch <= 144) || (w == 160 && vht160(ch) != 0)) }
+# 5gh: the first and last channel (BLO, BHI) of the w MHz block of ch
+function blk5(ch, w) {
+	if (w == 20) { BLO = ch; BHI = ch }
+	else if (w == 40) { BLO = (ht40("5gh", ch) == "+") ? ch : ch - 4; BHI = BLO + 4 }
+	else { BLO = c5(ch, w) - (w == 160 ? 14 : 6); BHI = BLO + (w == 160 ? 28 : 12) }
+}
+# 5gh chanlist in EVERY country (owner 11-17): no block that holds the
+# weather-radar channels 120-128 (5600-5650 MHz, a 600 s CAC). This follows
+# the driver regdom, not the DFS region: open-wifi bca_cfg80211.c bca_regdom
+# is ONE table for every country (bca_regd_dup only relabels alpha2 and
+# dfs_region), and its rule 5590-5650 carries dfs_cac_ms 600000, so US and
+# JP take the 10 min CAC there too (owner/coordinator 11-17). hostapd 2.12 dfs.c dfs_find_channel takes every block as
+# primary = its FIRST channel and checks chanlist on that channel only
+# (is_in_chanlist), and dfs_downgrade_bandwidth retries with the same list at
+# each narrower width down to 40. So the list leaves out the first channel of
+# every such block at w and below: 20: 120 124 128; 40: 116 (116+120) and
+# 124 (124+128), 80: 116 (116-128), so 116-128 from 40 up. 160: the start of
+# 100-128 is 100, also the start of 100/80 (no weather channel): it stays,
+# the 160 block is the configured one anyway. keep (a numeric channel): the
+# configured block stays in the list, the user chose it
+function chl5gh(w, ch, keep,    c, s, a, inc) {
+	if (keep) blk5(ch, w)
+	s = ""; a = 0
+	for (c = 100; c <= 148; c += 4) {
+		inc = c <= 144 && !(c >= (w == 20 ? 120 : 116) && c <= 128 && !(keep && c >= BLO && c <= BHI))
+		if (inc && !a) a = c
+		if (!inc && a) { s = s a (a == c - 4 ? "" : "-" (c - 4)) " "; a = 0 }
+	}
+	return s "149-177"
+}
 # 6 GHz (802.11ax-2021 Annex E, op_class 131-134/137): the centre channel
 # index of the w MHz block that holds channel ch, 0 if the band has none (its
 # top channels). 40/80/160: blocks of 2/4/8 channels from channel 1 (centres
@@ -1458,8 +1505,9 @@ END {
 		# primary, the block stays a candidate): freqlist= therefore lists no
 		# channel of a block that holds 120-128 at this width (then "No
 		# valid channel found in the segment"). freqlist is read by acs.c
-		# only (dfs.c moves after a radar read chanlist): radar moves keep
-		# the whole band. At 160 the only 5gh block (100-128) holds them: 80
+		# only (dfs.c moves after a radar read chanlist, which leaves the
+		# same blocks out in every country: chl5gh). At 160 the only 5gh
+		# block (100-128) holds them: 80
 		if (acs && b == "5gh" && w == 160) {
 			warn("radio 5gh: channel=auto at 160 MHz: the only 5gh 160 MHz block (100-128) holds the weather-radar channels 120-128 (a 600 s CAC): automatic selection runs at 80 MHz")
 			w = 80
@@ -1546,7 +1594,10 @@ END {
 			# 5gh onto the 36/80 block of 5gl (run 1104-2058). Channels the
 			# regulatory domain disables stay off.
 			# (no apostrophe in this program: it is a single-quoted string)
-			print "chanlist=" (b == "5gl" ? "36-64" : "100-144 149-177") > hdr
+			# 5gh in every country: no block holding the weather-radar
+			# channels 120-128 (600 s CAC in the driver regdom of every
+			# country, owner 11-17), except the configured block (chl5gh)
+			print "chanlist=" (b == "5gl" ? "36-64" : chl5gh(w, ch, !acs)) > hdr
 			# ACS on 5gh: no block holding 120-128 (above), in MHz
 			if (acs && b == "5gh") print "freqlist=" (w == 20 ? "5500-5580" : "5500-5560") ",5660-5720,5745-5885" > hdr
 		}
