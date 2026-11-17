@@ -48,7 +48,9 @@
 #  detection on the jacks (jack_status loop= loop_pair=, re-armed when jack_block frees a jack), sysfs
 #  jack_disabled (a jack's PHY powered down), debugfs rtl8372/loop; host test tests/rtl8372-jack; no module
 #  parameter; only driver/rtl8372, tests and docs differ from befea83: no linux-dirclean needed)
-GT_BE98_OPEN_ETHERNET_VERSION = 8bc950fff172e11b3d750012492199f3a11827a1
+# oe rtl8372-rldp-portoff 2026-11-17 6681199 (on 8bc950f, driver/rtl8372 only: q290's fix - the live loop state is
+#  LOOPED_STATE 0x1090, LOOP_STATE 0x108c is a latch; LOOPPAIR's nibble is the port; the off/on re-arm removed)
+GT_BE98_OPEN_ETHERNET_VERSION = 66811991a1b4eb7d37dc150ccba52ea025315d85
 GT_BE98_OPEN_ETHERNET_SITE = git@github.com:nebuloss/gt-be98-open-ethernet.git
 GT_BE98_OPEN_ETHERNET_SITE_METHOD = git
 GT_BE98_OPEN_ETHERNET_LICENSE = GPL-2.0
