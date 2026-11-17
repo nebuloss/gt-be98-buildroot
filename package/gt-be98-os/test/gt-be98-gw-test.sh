@@ -20,8 +20,8 @@ export FAKE="$T" GT_BE98_RUN="$T/run" GT_BE98_NETWORKS="$T/networks.conf" GT_BE9
 	GT_BE98_WAN="$T/bin/wan" GT_BE98_FWD="$FWDT" GT_BE98_FWD_SYSCTL="$T/ip_forward" \
 	GT_BE98_LAN_CONF="$T/lan.conf" GT_BE98_LAN_APPLIED="$T/run/gt-be98-lan.applied" \
 	GT_BE98_STA_ROUTED="$T/run/sta.routed" GT_BE98_ROUTER_APPLIED="$T/run/gt-be98-router.applied" \
-	GT_BE98_GW_RESOLV="$T/resolv.conf"
-mkdir -p "$T/bin" "$T/run"
+	GT_BE98_GW_RESOLV="$T/resolv.conf" GT_BE98_SYSNET="$T/sys"
+mkdir -p "$T/bin" "$T/run" "$T/sys"
 echo 0 > "$T/ip_forward"; : > "$T/addrs"; : > "$T/l2list"; echo rnr0 > "$T/wanif"; : > "$T/wancheck"
 # ip: addresses in $FAKE/addrs ("<dev> <cidr>"), routes from route-<dev>
 cat > "$T/bin/ip" <<'X'
@@ -33,6 +33,7 @@ case "$*" in
 "addr replace "*)	[ -f "$FAKE/refuse-addr" ] && exit 2; grep -vx "$5 $3" "$FAKE/addrs" > "$FAKE/a.new"; echo "$5 $3" >> "$FAKE/a.new"; mv "$FAKE/a.new" "$FAKE/addrs" ;;
 "addr del "*)	grep -vx "$5 $3" "$FAKE/addrs" > "$FAKE/a.new"; mv "$FAKE/a.new" "$FAKE/addrs" ;;
 "-4 route show default dev "*)	cat "$FAKE/route-$6" 2>/dev/null ;;
+"link set dev "*" address "*)	[ -f "$FAKE/refuse-mac" ] && exit 2; mkdir -p "$FAKE/sys/$4"; echo "$6" > "$FAKE/sys/$4/address" ;;
 esac
 exit 0
 X
@@ -265,6 +266,29 @@ echo "default dev pppoe-wan scope link" > "$T/route-pppoe-wan"; echo pppoe-wan >
 run apply; check "PPPoE: default dev pppoe-wan, NAT and dnsmasq exclusion follow the WAN netdev" "ip route replace default dev pppoe-wan table 184 yes yes" \
 	"$(log '^ip route replace') $(yn has "$N" 'oifname "pppoe-wan" ip saddr') $(yn grep -qx except-interface=pppoe-wan "$D")"
 run stop
+# 15b. the shared router MAC (G6b): every gateway bridge takes rnr1's MAC, before its address
+rm -f "$T/route-pppoe-wan"; echo rnr0 > "$T/wanif"; echo "default via 10.9.0.1 dev rnr0 proto dhcp" > "$T/route-rnr0"
+mac() { cat "$T/sys/$1/address" 2>/dev/null; }
+NETS "network=4 name=Lab vlan=40 subnet=192.168.40.1/24 mode=gateway" "network=6 name=Guest vlan=60 subnet=192.168.60.1/24 mode=gateway"
+printf 'brwifi8 - 40 wifi lan\nbrwifi9 - 60 wifi\n' > "$T/l2list"
+mkdir -p "$T/sys/rnr1" "$T/sys/brwifi8" "$T/sys/brwifi9"
+echo 02:00:00:00:00:a8 > "$T/sys/brwifi8/address"; echo 02:00:00:00:00:a9 > "$T/sys/brwifi9/address"
+run apply; check "control: no rnr1 in sysfs: no MAC set, both routed" "routed routed 02:00:00:00:00:a8 02:00:00:00:00:a9 " \
+	"$(st 4 state) $(st 6 state) $(mac brwifi8) $(mac brwifi9) $(log '^ip link set')"
+run stop; echo 02:00:00:00:00:01 > "$T/sys/rnr1/address"
+run apply; check "two gateway bridges: both take rnr1's MAC (one parser router-MAC filter for all)" "routed routed 02:00:00:00:00:01 02:00:00:00:00:01" \
+	"$(st 4 state) $(st 6 state) $(mac brwifi8) $(mac brwifi9)"
+check "... the MAC set before the address, per bridge" \
+	"ip link set dev brwifi8 address 02:00:00:00:00:01|ip addr replace 192.168.40.1/24 dev brwifi8|ip link set dev brwifi9 address 02:00:00:00:00:01|ip addr replace 192.168.60.1/24 dev brwifi9" \
+	"$(log '^ip (link set|addr replace)')"
+run stop; run apply; check "control: the MAC already in place: no ip link set" "routed " "$(st 4 state) $(log '^ip link set')"
+run stop; echo 02:00:00:00:00:a8 > "$T/sys/brwifi8/address"; touch "$T/refuse-mac"
+run apply; check "a MAC the kernel refuses: logged, the bridge keeps its own, still routed" "routed 02:00:00:00:00:a8 yes" \
+	"$(st 4 state) $(mac brwifi8) $(yn grep -q 'brwifi8: router MAC 02:00:00:00:00:01 refused' "$T/err")"
+rm -f "$T/refuse-mac"; run stop
+echo zz > "$T/sys/rnr1/address"; echo 02:00:00:00:00:a8 > "$T/sys/brwifi8/address"
+run apply; check "control: a malformed rnr1 address: ignored" "routed " "$(st 4 state) $(log '^ip link set')"
+run stop; rm -rf "$T/sys/rnr1" "$T/sys/brwifi8" "$T/sys/brwifi9"
 # 16. the wiring (text checks of the image's files)
 S=$here/..
 fol() { awk -v f="$2" '/^'"$2"'\(\) \{/ { x = 1 } x && /GW_FOLLOW/ { n++ } x && /^}/ { x = 0 } END { print n + 0 }' "$1"; }

@@ -91,8 +91,24 @@
 # a flow the Runner offloaded before the change would otherwise keep running
 # in hardware (the flow cache drops an entry whose conntrack dies).
 # FORWARDING: held as "gw" (gt-be98-fwd) while any network is local/routed.
+# ROUTER MAC (G6b, design section 4 risks): every gateway bridge gets ONE
+# MAC, the jacks' port's (GW_MAC_PORT, rnr1), set before its address. The
+# Runner keys a frame as routed only when its DA hits one of 7 parser
+# router-MAC filters, refilled by the driver from every upper device of its
+# ports, bridges first, then the ports themselves. A Linux bridge takes the
+# lowest MAC of its ports, so each gateway bridge with an SSID on it carried
+# that BSS's MAC (a filter each, and a new MAC whenever an SSID came or
+# went): past 7 the newest network's flows stayed on the CPU ("no free
+# parser DA filter") and, ranked above the stand-alone WAN port, the
+# bridges could push the WAN's own MAC out, taking every reply direction
+# off the hardware. With one shared MAC - already a filter, as rnr1 and its
+# 802.1Q devices carry it - gateway networks cost no filter at all. The
+# bridges are separate segments, so one router MAC on all of them is legal
+# (UniFi does the same). Kept after stop (a set address stays set: the
+# bridge is gt-be98-l2's, and the MAC is harmless on a VLAN-only bridge).
+# Without that port (no jack switch) the bridge keeps its own.
 # Hooks left for later phases: static leases (dhcp-hostsfile $GW/dhcp-hosts,
-# re-read on SIGHUP), IPv6 (off on the bridges: gt-be98-l2), G6b offload.
+# re-read on SIGHUP), IPv6 (off on the bridges: gt-be98-l2).
 set -u
 RUNDIR=${GT_BE98_RUN:-/run}
 GW=${GT_BE98_GW_STATE:-$RUNDIR/gt-be98-gw}
@@ -109,6 +125,7 @@ RESOLV=${GT_BE98_GW_RESOLV:-/etc/resolv.conf}
 GW_TABLE=184
 GW_PRIO=184		# suppress rule; the table rule is GW_PRIO + 1
 GW_MAX=16
+GW_MAC_PORT=${GT_BE98_GW_MAC_PORT:-rnr1}
 NFT_TABLE=gt_be98_gw
 NAT_TABLE=gt_be98_gw_nat
 MGMT_PORTS="22, 80, 443"
@@ -301,6 +318,19 @@ net_stop() {
 	sed -i "/^net $id /d" "$GW/applied" 2>/dev/null
 }
 net_destroy() { rm -f "$GW/net/$1"; }
+
+# the gateway bridge $1 takes the shared router MAC (header: ROUTER MAC)
+gw_mac() {
+	local m have
+	m=$(cat "$SYSNET/$GW_MAC_PORT/address" 2>/dev/null) || return 0
+	case "$m" in ??:??:??:??:??:??) ;; *) return 0 ;; esac
+	[ "$m" != 00:00:00:00:00:00 ] || return 0
+	have=$(cat "$SYSNET/$1/address" 2>/dev/null)
+	[ "$have" = "$m" ] && return 0
+	ip link set dev "$1" address "$m" && return 0
+	log "$1: router MAC $m refused (kept $have)"
+	return 0
+}
 
 # conntrack entries from or to subnet $1 (and, given $2, only between $1 and $2)
 ct_del() {
@@ -648,6 +678,7 @@ cmd_apply() {
 	fi
 	for id in ${START:-}; do
 		b=$(st_get "$id" bridge); c=$(st_get "$id" cidr)
+		gw_mac "$b"
 		if ip addr replace "$c" dev "$b"; then
 			ip rule del iif "$b" priority "$GW_PRIO" 2>/dev/null
 			ip rule del iif "$b" priority $((GW_PRIO + 1)) 2>/dev/null
