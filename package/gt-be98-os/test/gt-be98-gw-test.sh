@@ -272,8 +272,17 @@ F release sta
 rm -f "$T/route-rnr0"; run apply
 check "no WAN default route: table 184 unreachable default" "ip route replace unreachable default table 184" "$(log '^ip route replace')"
 echo "default dev pppoe-wan scope link" > "$T/route-pppoe-wan"; echo pppoe-wan > "$T/wanif"
+# the session's address as the kernel prints a point-to-point one: "inet LOCAL peer PEER/32"
+# (q294: a bare LOCAL read as a prefix "overlapped" every subnet: every network local, no NAT)
+echo "pppoe-wan 198.51.100.10 peer 198.51.100.1/32" >> "$T/addrs"
 run apply; check "PPPoE: default dev pppoe-wan, NAT and dnsmasq exclusion follow the WAN netdev" "ip route replace default dev pppoe-wan table 184 yes yes" \
 	"$(log '^ip route replace') $(yn has "$N" 'oifname "pppoe-wan" ip saddr') $(yn grep -qx except-interface=pppoe-wan "$D")"
+check "... the PPPoE WAN's point-to-point address is outside 192.168.40.0/24: routed, NAT on" "routed yes" \
+	"$(st 4 state) $(yn has "$N" 'ip saddr { 192.168.40.0/24 } masquerade')"
+sed -i 's|^pppoe-wan .*|pppoe-wan 192.168.40.77 peer 198.51.100.1/32|' "$T/addrs"
+run reroute; check "control: the PPPoE local address INSIDE 192.168.40.0/24: local, no NAT" "local no" "$(st 4 state) $(yn has "$N" 'masquerade')"
+sed -i 's|^pppoe-wan .*|pppoe-wan 198.51.100.10 peer 198.51.100.1/32|' "$T/addrs"
+run reroute; check "  outside again: routed, NAT back" "routed yes" "$(st 4 state) $(yn has "$N" 'ip saddr { 192.168.40.0/24 } masquerade')"
 # the PPPoE session drops (pppd's ip-down: its default route is gone) and comes back (ip-up):
 # the reroute each hook runs leaves table 184 unreachable, then on pppoe-wan again; the NAT
 # keeps naming pppoe-wan throughout (a name: valid while the netdev is absent)
@@ -285,6 +294,7 @@ check "  PPPoE up again: default dev pppoe-wan in table 184" "ip route replace d
 run stop
 # 15b. the shared router MAC (G6b): every gateway bridge takes rnr1's MAC, before its address
 rm -f "$T/route-pppoe-wan"; echo rnr0 > "$T/wanif"; echo "default via 10.9.0.1 dev rnr0 proto dhcp" > "$T/route-rnr0"
+sed -i '/^pppoe-wan /d' "$T/addrs"
 mac() { cat "$T/sys/$1/address" 2>/dev/null; }
 NETS "network=4 name=Lab vlan=40 subnet=192.168.40.1/24 mode=gateway" "network=6 name=Guest vlan=60 subnet=192.168.60.1/24 mode=gateway"
 printf 'brwifi8 - 40 wifi lan\nbrwifi9 - 60 wifi\n' > "$T/l2list"
