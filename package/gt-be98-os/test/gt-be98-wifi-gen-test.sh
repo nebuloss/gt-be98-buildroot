@@ -678,6 +678,33 @@ rm -f "$T/slots"; gen "$T/wx" -c; conf_ok "5gh chanlist with a lone kept channel
 rm -f "$T/slots"; gen "$T/wx" -c -U "5gh=5620"
 check "station radio on the uplink 124 (80 MHz, 116-128): its block kept" "0 channel=124 chanlist=$FULL" \
 	"$? $(grep '^channel=' "$T/o/hdr-bcawl1") $(grep '^chanlist=' "$T/o/hdr-bcawl1")"
+# ---- 10b3e. a numeric channel keeps its primary (owner 11-17, rebind lane:
+# 36/80 came up on 5200 in 4 of 60 starts): no_pri_sec_switch=1 on every fixed
+# 5gl/5gh/6g radio, never with channel=auto, never on 2g (its 20/40 scan is
+# the coexistence rule) ----
+nps() { [ -f "$T/o/hdr-$1" ] || { echo absent; return; }; grep -c '^no_pri_sec_switch=1$' "$T/o/hdr-$1"; }
+{ printf 'country=DE\nradio=2g\nchannel=6\nradio=5gl\nchannel=36\nwidth=80\nradio=5gh\nchannel=100\nwidth=80\nradio=6g\nchannel=37\n'; net 1 a sae password1 "2g 5gl 5gh 6g" 1; } > "$T/np"
+rm -f "$T/slots"; gen "$T/np" -c
+check "fixed channels: no_pri_sec_switch=1 once on 5gl, 5gh, 6g; none on 2g" "0 1 1 1 0" "$? $(nps bcawl0) $(nps bcawl1) $(nps bcawl2) $(nps bcawl3)"
+conf_ok "no_pri_sec_switch on 5gl/5gh/6g"
+if [ -n "$CONFCHECK" ]; then
+	sed 's/^no_pri_sec_switch=1$/no_pri_sec_switchX=1/' "$T/o/hostapd-bcawl0.conf" > "$T/np-bad.conf"
+	"$CONFCHECK" "$T/np-bad.conf" > "$T/npcc" 2>&1
+	check "control: the parser refuses an unknown key beside it (so its OK reads the key)" "1 yes" \
+		"$(grep -c '^FAIL ' "$T/npcc") $(grep -q "unknown configuration item 'no_pri_sec_switchX'" "$T/npcc" && echo yes || echo no)"
+fi
+for w in 20 40 160; do
+	{ printf 'country=DE\nradio=5gl\nchannel=40\nwidth=%s\n' "$w"; net 1 a sae password1 5gl 1; } > "$T/np"
+	rm -f "$T/slots"; gen "$T/np" -c; printf '%s:%s ' "$w" "$(nps bcawl0)"
+done > "$T/np.out"
+check "5gl ch40 at every width: written (20 too: a no-op there, no secondary)" "20:1 40:1 160:1 " "$(cat "$T/np.out")"
+{ printf 'country=DE\nradio=2g\nchannel=auto\nradio=5gl\nchannel=auto\nradio=5gh\nchannel=auto\nwidth=80\nradio=6g\nchannel=37\n'; net 1 a sae password1 "2g 5gl 5gh 6g" 1; } > "$T/np"
+rm -f "$T/slots"; gen "$T/np" -c
+check "channel=auto: none on 2g/5gl/5gh (ACS sets the primary); fixed 6g still written" "0 0 0 0 1" "$? $(nps bcawl3) $(nps bcawl0) $(nps bcawl1) $(nps bcawl2)"
+conf_ok "no_pri_sec_switch beside ACS"
+{ printf 'country=DE\nradio=5gh\nchannel=auto\nwidth=80\n'; printf 'station=5gh\nssid=up\nsecurity=sae\npassphrase=saepassword1\n'; net 1 a sae password1 5gh 1; } > "$T/np"
+rm -f "$T/slots"; gen "$T/np" -c -U "5gh=5620"
+check "station radio + auto (uplink 124): fixed to the uplink, so written" "0 channel=124 1" "$? $(grep '^channel=' "$T/o/hdr-bcawl1") $(nps bcawl1)"
 check "-F: feature acs 1, acs 2g 5gl 5gh" "feature acs 1|acs 2g 5gl 5gh" "$($SH "$G" -F | grep -E '^(feature acs|acs) ' | tr '\n' '|' | sed 's/|$//')"
 
 # ---- 10b4. 6 GHz secondaries = the anchor's nontransmitted BSSIDs (soak

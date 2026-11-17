@@ -1,0 +1,50 @@
+From: gt-be98-buildroot <noreply@example.invalid>
+Subject: [PATCH] hostapd 2.12: no_pri_sec_switch is a configuration item (keep
+ the configured 5 GHz primary)
+
+hostapd 2.12 has the field (struct hostapd_config no_pri_sec_switch, read by
+src/ap/hw_features.c ieee80211n_check_40mhz and ieee80211n_check_40mhz_5g)
+but no configuration-file key: nothing in the hostapd tree sets it, and a
+"no_pri_sec_switch=1" line fails the whole file ("unknown configuration
+item", checked with hostapd's own parser). Without it a fixed 5 GHz
+[HT40+] BSS may come up on its SECONDARY 20 MHz channel: check_40mhz_5g
+swaps primary and secondary when the pre-start scan hears beacons on the
+secondary but not on the primary (gt-be98: configured 36/80 came up on
+5200 MHz in 4 of 60 starts, so clients that look for 5180 miss it).
+
+With no_pri_sec_switch=1 ieee80211n_check_40mhz returns before the
+pre-start 40 MHz scan: the configured primary is used as is. On 5 GHz that
+scan can only swap (check_40mhz_5g never drops the BSS to 20 MHz when it has
+scan results), so the swap is all that is lost. The DFS paths do not read the
+field: dfs.c picks a block with its first channel as primary (HT40+), a CSA
+does not run the scan, and a restart after a radar keeps the picked primary
+instead of re-swapping it. Default 0 (unchanged behaviour).
+
+diff -ru a/hostapd/config_file.c b/hostapd/config_file.c
+--- a/hostapd/config_file.c
++++ b/hostapd/config_file.c
+@@ -3678,6 +3678,8 @@
+ 		conf->ht_vht_twt_responder = atoi(pos);
+ 	} else if (os_strcmp(buf, "obss_interval") == 0) {
+ 		conf->obss_interval = atoi(pos);
++	} else if (os_strcmp(buf, "no_pri_sec_switch") == 0) {
++		conf->no_pri_sec_switch = atoi(pos);
+ #ifdef CONFIG_IEEE80211AC
+ 	} else if (os_strcmp(buf, "ieee80211ac") == 0) {
+ 		conf->ieee80211ac = atoi(pos);
+diff -ru a/hostapd/hostapd.conf b/hostapd/hostapd.conf
+--- a/hostapd/hostapd.conf
++++ b/hostapd/hostapd.conf
+@@ -673,6 +673,12 @@
+ # no co-existence issues with neighboring devices are found.
+ #obss_interval=0
+ 
++# no_pri_sec_switch: Keep the configured primary channel of a 5 GHz HT40/VHT/HE/EHT
++# BSS. 0 = hostapd may swap the primary and secondary 20 MHz channels after its
++# pre-start 20/40 MHz coexistence scan (default); 1 = no swap and no pre-start
++# 40 MHz scan (ieee80211n_check_40mhz); the configured primary is used as is.
++#no_pri_sec_switch=0
++
+ # ht_vht_twt_responder: Whether TWT responder is enabled in HT and VHT modes
+ # 0 = disable; Disable TWT responder support in  HT and VHT modes (default).
+ # 1 = enable; Enable TWT responder support in HT and VHT modes if supported by
