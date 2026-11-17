@@ -48,7 +48,12 @@
 #  detection on the jacks (jack_status loop= loop_pair=, re-armed when jack_block frees a jack), sysfs
 #  jack_disabled (a jack's PHY powered down), debugfs rtl8372/loop; host test tests/rtl8372-jack; no module
 #  parameter; only driver/rtl8372, tests and docs differ from befea83: no linux-dirclean needed)
-GT_BE98_OPEN_ETHERNET_VERSION = 8bc950fff172e11b3d750012492199f3a11827a1
+# oe-int-2026-11-17 2026-11-17 9880e99 (integration: = 8bc950f + merges of oe-gw-offload-g6b-2026-11-17
+#  80b3b9f (Runner G6b: a routed flow through an 802.1Q device of a Runner port under a gateway bridge is
+#  offloaded, tag popped / pushed) and oe-eth-ports-2026-11-17-r c851e63 (E3: core-7 TX_TASK_DS_0/1 r9 as
+#  stock on every load; G3: rnr2 reports its UNIMAC MIB in ip -s link / ethtool -S); no conflicts; only
+#  driver/runner, driver/rtl8372, tests, tools and docs differ from befea83: no linux-dirclean needed)
+GT_BE98_OPEN_ETHERNET_VERSION = 9880e991923563e6aa933b7cb1676bb5a8ac8a34
 GT_BE98_OPEN_ETHERNET_SITE = git@github.com:nebuloss/gt-be98-open-ethernet.git
 GT_BE98_OPEN_ETHERNET_SITE_METHOD = git
 GT_BE98_OPEN_ETHERNET_LICENSE = GPL-2.0
