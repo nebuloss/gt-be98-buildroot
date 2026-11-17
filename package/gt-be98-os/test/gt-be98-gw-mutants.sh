@@ -46,5 +46,29 @@ mutant "gw: the address before the rule set" sbin/gt-be98-gw 's/nft_apply "\$WAN
 mutant "gw: router mode not excluded" sbin/gt-be98-gw 's/router_refused=1$/router_refused=/' gt-be98-gw-test.sh
 mutant "gw: the cap off" sbin/gt-be98-gw 's/\[ \$n -le \$GW_MAX \] ||/true ||/' gt-be98-gw-test.sh
 mutant "fwd: the last release leaves forwarding on" sbin/gt-be98-fwd 's/fwd_set "\$BASE"/:/' gt-be98-gw-test.sh
+mutant "control" "" "" gt-be98-wan-test.sh
+mutant "fwd -6: one holder set for both families" sbin/gt-be98-fwd 's/^\tD=\$D\/v6$/\t:/' gt-be98-gw-test.sh
+mutant "gw6: IPv6 to the WAN not accepted" sbin/gt-be98-gw 's/^\t\t\tiifname @v6 oifname "\$w" meta nfproto ipv6 accept$//' gt-be98-gw-test.sh
+mutant "gw6: unsolicited IPv6 from the WAN let in (NAT66-less hole)" sbin/gt-be98-gw 's/^\t\t\toifname @gw counter drop$//' gt-be98-gw-test.sh
+mutant "gw6: no ICMPv6 to the box (ND, RS)" sbin/gt-be98-gw 's/^\t\t\tiifname @gw meta l4proto ipv6-icmp accept$//' gt-be98-gw-test.sh
+mutant "gw6: the prefix id ignored (always /64 number 0)" sbin/gt-be98-gw 's/! net=\$(v6calc net64 "\$PD6" "\$d")/! net=$(v6calc net64 "$PD6" 0)/' gt-be98-gw-test.sh
+mutant "gw6: a duplicate prefix id accepted" sbin/gt-be98-gw 's/\*" \$d "\*) explicit="\$explicit \$id:dup" ;;/*" nothing "*) ;;/' gt-be98-gw-test.sh
+mutant "gw6: the WAN_PD_LANS ids not reserved" sbin/gt-be98-gw 's/for x in \$WAN_PD_LANS; do used="\$used \$nl"; nl=\$((nl + 1)); done/:/' gt-be98-gw-test.sh
+mutant "gw6: the id size not checked against the delegated length" sbin/gt-be98-gw 's/(l + 0 > 48 \&\& y + 0 >= 2 ^ (64 - l))/(0)/' gt-be98-gw-test.sh
+mutant "gw6: no suppress_prefixlength rule (IPv6)" sbin/gt-be98-gw 's/ip -6 rule add iif "\$b" lookup main suppress_prefixlength 0/ip -6 rule add iif "$b" lookup main/' gt-be98-gw-test.sh
+mutant "gw6: IPv6 left on after the network's IPv6 stops" sbin/gt-be98-gw 's/^\t\tv6_sysctl "\$b" disable_ipv6 1$/\t\t:/' gt-be98-gw-test.sh
+mutant "gw6: renumbering deletes no flow" sbin/gt-be98-gw 's/^\t\tct_del "\${a%::1\/64}::\/64"$/\t\t:/' gt-be98-gw-test.sh
+mutant "gw6: no unreachable route for the delegated prefix" sbin/gt-be98-gw 's/ip -6 route replace unreachable "\$PD6" metric "\$PD_METRIC"/:/' gt-be98-gw-test.sh
+mutant "gw6: IPv6 forwarding not held" sbin/gt-be98-gw 's/"\$FWD" -6 hold gw || rc=1/:/' gt-be98-gw-test.sh
+mutant "gw6: the address lifetimes not the delegation's" sbin/gt-be98-gw 's/valid_lft "\$vl" preferred_lft "\$pl"/valid_lft forever preferred_lft forever/' gt-be98-gw-test.sh
+mutant "gw6: a box address overlap not refused" sbin/gt-be98-gw 's/v6calc ov "\$cidr" "\$net\/64" \&\& { why=/false \&\& { why=/' gt-be98-gw-test.sh
+mutant "gw6: slaac rendered stateful" sbin/gt-be98-gw 's/constructor:\$b,ra-stateless,64/constructor:$b,64/' gt-be98-gw-test.sh
+mutant "gw6: IPv6 routes touched with no IPv6 ever applied" sbin/gt-be98-gw 's/^\telif grep -qs .\^\\(fwd6\\|pd6route \.\*\\)\$. "\$GW\/applied"; then$/\telse/' gt-be98-gw-test.sh
+mutant "l2: disable_ipv6 rewritten on a held bridge" sbin/gt-be98-l2 's/\[ -e "\$GW_HOLD\/\$b" \] || ipv6_off "\$b"/ipv6_off "$b"/' gt-be98-l2-test.sh
+mutant "wan: ia_pd without an interface (dhcpcd assigns every other one)" sbin/gt-be98-wan 's/\[ -n "\$lans" \] || pd="\$pd -"/:/' gt-be98-wan-test.sh
+mutant "wan: the delegated prefix not recorded" sbin/gt-be98-wan 's/BOUND6|RENEW6|REBIND6|REBOOT6) pd6_record ;;/NONE) pd6_record ;;/' gt-be98-wan-test.sh
+mutant "wan: an expired prefix still reported" sbin/gt-be98-wan 's/\[ "\$vl" -gt "\$e" \] || return 1/:/' gt-be98-wan-test.sh
+mutant "wan: a stale prefix read after WAN_IPV6=0" sbin/gt-be98-wan 's/^\t\[ "\$W_IPV6" = 1 \] || return 1$/\t:/' gt-be98-wan-test.sh
+mutant "wan: IPv6 forwarding written directly again" sbin/gt-be98-wan 's/"\$FWD" -6 hold wan \&\& put fwd6 1/sysctl -q -w net.ipv6.conf.all.forwarding=1; put fwd6 1/' gt-be98-wan-test.sh
 echo "gt-be98-gw-mutants: $pass ok, $fail failed"
 [ $fail -eq 0 ]

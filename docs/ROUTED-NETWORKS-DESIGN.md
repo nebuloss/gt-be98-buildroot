@@ -405,9 +405,33 @@ Baseline (before G6b, same arm): pre-registered expectation "noport grows, progr
 0 for this flow". Tag rewrite and same-port routing: research only, no shipped code, until
 an arm like q216 proves one hand-programmed entry.
 
-### Phase 5 (optional): IPv6 on gateway networks, ~1.5 days
-IPv6 on for gateway bridges only, `WAN_PD_LANS` pattern widened, RA from the existing
-`gt-be98-wan` path.
+### Phase 5: IPv6 on gateway networks (implemented: buildroot `br-gw-ipv6-2026-11-17`, web UI `wu-gw-ipv6-2026-11-17`)
+UniFi's model, no NAT66. The design sentence that stood here (widen `WAN_PD_LANS`, RA from
+`gt-be98-wan`'s own dnsmasq) was not followed: it would have given gateway bridges two IPv6
+owners and a second RA daemon, and every network added would have rebound the WAN's dhcpcd
+(a new `ia_pd` interface list). As built:
+- **The WAN asks, gt-be98-gw assigns.** `WAN_IPV6=1` always requests a prefix (`ia_pd 2[/::/LEN]`);
+  without `WAN_PD_LANS` it is assigned to no interface (`ia_pd ... -`; an `ia_pd` with no interface
+  would make dhcpcd assign a /64 to *every* other interface, a latent defect of the old rendering).
+  The dhcpcd hook records the lease's `new_dhcp6_ia_pd1_prefix1*` (`gt-be98-wan pd6`: prefix and
+  remaining lifetimes, never read back after `WAN_IPV6=0` or a WAN netdev change) and runs
+  `gt-be98-gw reroute` on every change, an RA, and the lease's loss.
+- **Per network** (`ipv6=off|slaac|dhcpv6 ipv6_prefix_id=<hex>` in `networks.conf`): its /64 is number
+  `ipv6_prefix_id` of the delegated prefix (after `WAN_PD_LANS`' 0..n-1), the gateway `<64>::1` with
+  the delegation's lifetimes, IPv6 on on that bridge only while active (`gt-be98-l2` leaves a held
+  bridge's `disable_ipv6` alone), `ip -6 rule iif <br>` main-without-default then table 184 (the WAN's
+  IPv6 default), the whole delegated prefix unreachable in main (metric 4184). States off / waiting /
+  active / refused, `net6` lines in `gt-be98-gw status`, `pd6 <prefix>`.
+- **RA from the one dnsmasq**: `slaac` = `ra-stateless` (A+O flags), `dhcpv6` = a stateful range
+  `::1000-::1fff` (M flag); DNS = the gateway (`option6:dns-server,[::]`). The lines name the bridge
+  (`constructor:`), never the prefix: a renumbering restarts nothing.
+- **Policy** in the same `table inet gt_be98_gw`: set `v6`; IPv6 out of the WAN for `@v6`, IPv4 for
+  `@nat`; from the WAN only replies (the existing `oifname @gw ct state established,related` /
+  `oifname @gw counter drop`); isolate and management as IPv4; input ICMPv6 and DHCPv6 (547)
+  always. Narrowing deletes the /64's conntrack entries (`-f ipv6`).
+- **Forwarding**: `gt-be98-fwd -6` (holders `wan`, `gw`) replaces `gt-be98-wan`'s own save/restore
+  of `net.ipv6.conf.all.forwarding`.
+Arm GW5 (orchestrator's `bin/gw5-ipv6-arm.sh`) runs it against a DHCPv6-PD server in a PVE netns.
 
 **Total:** phases 0-3 about 6.5 working days (OS ~4.5, web UI ~2), phase 4 2-3 days plus box
 time, phase 5 1.5 days. The arms GW1, GW1-R, GW1-C, GW2, GW3 are the orchestrator's; GW4 is
@@ -428,4 +452,4 @@ on the driver lane's image.
 | D-GW7 | Lease file location | `/run` (volatile), static leases for what must not move. |
 | D-GW8 | Offload | Phase 4 G6b (jacks → untagged WAN) yes; tag rewrite and same-port routing as research only. |
 | D-GW9 | Allowed gateway subnets | RFC 1918, `/16`..`/30`. |
-| D-GW10 | IPv6 on gateway networks | Out of phase 1; phase 5 if wanted. |
+| D-GW10 | IPv6 on gateway networks | Out of phase 1; phase 5 (implemented, see §6 Phase 5). |
