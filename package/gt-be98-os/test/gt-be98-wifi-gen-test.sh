@@ -614,13 +614,14 @@ check "freqlist: no channel shares a block with 120-128 (20/40/80)" "" "$(for w 
 done)"
 check "control: 5gh numeric channel, 5gl auto: no freqlist" "0|0" \
 	"$({ printf 'radio=5gh\nchannel=116\nwidth=80\nradio=5gl\nchannel=auto\n'; net 1 a sae password1 "5gl 5gh" 1; } > "$T/acsx"; rm -f "$T/slots"; gen "$T/acsx" -c; cat "$T"/o/hdr-* | grep -c '^freqlist=')|$(grep -c 'weather' "$T/err")"
-# ---- 10b3d. 5gh chanlist in an ETSI country (owner 11-17): no block holding
+# ---- 10b3d. 5gh chanlist in every country (owner 11-17): no block holding
 # the weather-radar channels 120-128 (600 s CAC), so a move after a radar never
 # lands on one. hostapd 2.12 dfs.c checks chanlist on a block's FIRST channel
 # only (dfs_find_channel: is_in_chanlist(first)), at the width and at each
 # narrower one down to 40 (dfs_downgrade_bandwidth): the list leaves out the
 # first channel of every such block. The configured block stays (the user
-# chose it); US/JP unchanged ----
+# chose it). US and JP too (coordinator 11-17): the driver regdom gives
+# 120-128 a 600 s CAC in every country ----
 W20='100-116 132-144 149-177' W40='100-112 132-144 149-177' FULL='100-144 149-177'
 for cc in DE US JP; do for cw in 100:20 116:20 120:20 124:20 128:20 132:20 100:40 116:40 120:40 124:40 128:40 132:40 100:80 116:80 120:80 128:80 132:80 149:80 100:160 124:160 auto:20 auto:40 auto:80 auto:160; do
 	{ printf 'country=%s\nradio=5gh\nchannel=%s\nwidth=%s\n' "$cc" "${cw%:*}" "${cw#*:}"; net 1 a sae password1 5gh 1; } > "$T/wx"
@@ -629,11 +630,17 @@ done; done > "$T/wx.out"
 check "5gh chanlist DE: 20 drops 120-128, 40/80 drop 116-128, the configured block kept (120/20, 124/20, 128/20, 116/40, 120/40, 124/40, 128/40, 116/80, 120/80, 128/80, 160)" \
 "DE/100:20:0:$W20 DE/116:20:0:$W20 DE/120:20:0:100-120 132-144 149-177 DE/124:20:0:100-116 124 132-144 149-177 DE/128:20:0:100-116 128-144 149-177 DE/132:20:0:$W20 DE/100:40:0:$W40 DE/116:40:0:100-120 132-144 149-177 DE/120:40:0:100-120 132-144 149-177 DE/124:40:0:100-112 124-144 149-177 DE/128:40:0:100-112 124-144 149-177 DE/132:40:0:$W40 DE/100:80:0:$W40 DE/116:80:0:$FULL DE/120:80:0:$FULL DE/128:80:0:$FULL DE/132:80:0:$W40 DE/149:80:0:$W40 DE/100:160:0:$FULL DE/124:160:0:$FULL DE/auto:20:0:$W20 DE/auto:40:0:$W40 DE/auto:80:0:$W40 DE/auto:160:0:$W40" \
 	"$(grep '^DE/' "$T/wx.out" | tr '\n' ' ' | sed 's/ $//')"
-check "control: 5gh chanlist US and JP (non-ETSI): unchanged on every channel/width" "" \
-	"$(grep -E '^(US|JP)/' "$T/wx.out" | grep -v ":0:$FULL\$" | tr '\n' ' ')"
+for cc in US JP; do
+	check "5gh chanlist $cc (non-ETSI DFS region, same 600 s weather CAC): the DE list on every channel/width, the configured block kept" \
+		"$(grep '^DE/' "$T/wx.out" | cut -d/ -f2- | tr '\n' ' ')" "$(grep "^$cc/" "$T/wx.out" | cut -d/ -f2- | tr '\n' ' ')"
+done
+check "US: 100/80 drops 116-128; 120/20 (a user-chosen weather channel) kept" "0:$W40|0:100-120 132-144 149-177" \
+	"$(grep '^US/100:80:' "$T/wx.out" | cut -d: -f3-)|$(grep '^US/120:20:' "$T/wx.out" | cut -d: -f3-)"
+check "JP: auto 20 drops 120-128; 116/80 (a user-chosen weather block) keeps the full list" "0:$W20|0:$FULL" \
+	"$(grep '^JP/auto:20:' "$T/wx.out" | cut -d: -f3-)|$(grep '^JP/116:80:' "$T/wx.out" | cut -d: -f3-)"
 check "control: the matrix ran (72 configs)" "72" "$(grep -c . "$T/wx.out")"
 # the rule re-derived from hostapd dfs.c geometry, not from the generator: for
-# every DE fixed config and every width hostapd may reach from it (w, then
+# every fixed config (DE, US, JP) and every width hostapd may reach from it (w, then
 # 80, 40), no block whose first channel is in the chanlist holds 120-128 unless
 # it is (inside) the configured block; and every non-weather block start of
 # 100-144 stays in. dfs.c starts: 20 every channel; 40 100 108 116 124 132 140;
@@ -658,7 +665,7 @@ wxgeo() { while IFS=: read -r cfg w rc l; do
 		done
 	done
 done; }
-check "chanlist: no reachable dfs.c block with 120-128 outside the configured block; no clean block start lost" "" "$(grep '^DE/[0-9]' "$T/wx.out" | wxgeo)"
+check "chanlist: no reachable dfs.c block with 120-128 outside the configured block; no clean block start lost" "" "$(grep -E '^(DE|US|JP)/[0-9]' "$T/wx.out" | sed 's,^[A-Z]*/,DE/,' | wxgeo)"
 check "control: that check flags the old full list at 100/80 (116@80, 116@40, 124@40) and a list without 132 (lost)" \
 	"100/80:116@40 100/80:124@40 100/80:116@80 100/20:lost132@20 " \
 	"$(printf 'DE/100:80:0:100-144 149-177\nDE/100:20:0:100-116 136-144 149-177\n' | wxgeo)"
