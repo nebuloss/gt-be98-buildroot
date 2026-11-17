@@ -21,7 +21,8 @@
 #      brwifi20 (the gateway network on its bhvid), the AP_VLAN no bridge port; status lists the link
 #   T2 data: c10 pings g10 (3/3) and c20 pings g20; control: c20 (VLAN 220, address of VLAN 10's subnet)
 #      cannot reach g10 (0/3); the frames on the AP_VLAN carry 802.1Q tags 10 and 220 (tcpdump -e)
-#   T3 the rogue STA (not a leaf=) associates and gets NO trunk (MESH-LINK-REFUSED, no bh1), deauthenticated
+#   T3 the rogue STA (not the leaf=) is refused at association (the backhaul BSS's macaddr_acl=1 + accept
+#      file, one leaf per backhaul BSS: design §8.2): never COMPLETED, no AP_VLAN, no bh1
 #   T4 netguard rule 7 at the root: the AP_VLAN enslaved by hand into brwifi10 is detached, bh0.10 kept
 #   T5 the leaf's loop guard: no latch without a loop (control), then a veth "rnr2" from the leaf's brwifi10
 #      to the root's brwifi10 closes a loop through the backhaul: the guard's probe comes back on rnr2, rnr2
@@ -99,7 +100,7 @@ LMAC=$(ip netns exec mleaf cat /sys/class/net/bcawl1/address)
 printf 'radio=2g\nchannel=6\nbackhaul=2g\nssid=mesh-bh\npassphrase=hwsim-mesh-1\nleaf=%s\n' "$LMAC" > "$w/root/list"
 R sh "$S/gt-be98-wifi-gen" -n "$w/root/list" -o "$w/root/run/gt-be98-wifi/gen" -d "2g=bcawl3" -m "2g=$RMAC" \
 	-x "$w/root/run/hostapd" 2> "$w/root/gen.err" || { cat "$w/root/gen.err"; echo "root list refused"; exit 1; }
-check "generator: the backhaul line of the root" "backhaul 2g bcawl3 bcawl3 $RMAC $LMAC" "$(grep '^backhaul ' "$w/root/run/gt-be98-wifi/gen/plan")"
+check "generator: the backhaul line of the root, its one leaf" "backhaul 2g bcawl3 bcawl3 $RMAC|$LMAC" "$(grep '^backhaul ' "$w/root/run/gt-be98-wifi/gen/plan")|$(cat "$w/root/run/gt-be98-wifi/gen/accept-bcawl3")"
 printf 'network=10 name=Ten vlan=10\nnetwork=20 name=Twenty vlan=20 subnet=10.20.0.1/24 mode=gateway bhvid=220\n' > "$w/root/networks.conf"
 ip netns exec mroot ip link add rnr0 type dummy
 R sh "$S/gt-be98-l2" up wifi brwifi10 rnr0 10 && R sh "$S/gt-be98-l2" up wifi brwifi20 rnr0 20 || { echo "root bridges failed"; exit 1; }
@@ -119,7 +120,7 @@ R "$HCLI" -B -r -P "$w/root/hook.pid" -p "$w/root/run/hostapd" -i bcawl3 -a "$S/
 printf 'station=2g\nssid=mesh-bh\nsecurity=sae\npassphrase=hwsim-mesh-1\nrepeater=multiap\ntrunk=1\n' > "$w/leaf/list"
 F sh "$S/gt-be98-wifi-gen" -n "$w/leaf/list" -o "$w/leaf/run/gt-be98-wifi/gen" -d "2g=bcawl1" -m "2g=$LMAC" \
 	-X "$w/leaf/run/wpa_supplicant" 2> "$w/leaf/gen.err" || { cat "$w/leaf/gen.err"; echo "leaf list refused"; exit 1; }
-check "generator: the leaf's bhtrunk line" "bhtrunk bcawl1" "$(grep '^bhtrunk ' "$w/leaf/run/gt-be98-wifi/gen/plan")"
+check "generator: the leaf's bhtrunk line (no Wi-Fi network in its list)" "bhtrunk bcawl1 -" "$(grep '^bhtrunk ' "$w/leaf/run/gt-be98-wifi/gen/plan")"
 printf 'network=10 vlan=10\nnetwork=20 vlan=220\n' > "$w/leaf/networks.conf"
 F sh "$S/gt-be98-l2" uplink bcawl1 && F sh "$S/gt-be98-l2" up wifi brwifi10 bhs 10 && F sh "$S/gt-be98-l2" up wifi brwifi20 bhs 220 ||
 	{ echo "leaf bridges failed"; exit 1; }
@@ -154,9 +155,10 @@ check "T2 the AP_VLAN carries 802.1Q tags 10 and 220" "vlan 10 vlan 220 " "$tags
 printf 'ctrl_interface=%s/rogue/ctl\nnetwork={\n ssid="mesh-bh"\n key_mgmt=SAE\n ieee80211w=2\n sae_pwe=2\n sae_password="hwsim-mesh-1"\n multi_ap_backhaul_sta=1\n scan_ssid=1\n}\n' "$w" > "$w/rogue/sta.conf"
 ip netns exec mrogue iw dev wlan9 set 4addr on; ip netns exec mrogue ip link set wlan9 up
 ip netns exec mrogue "$WPAS" -B -i wlan9 -c "$w/rogue/sta.conf" -P "$w/rogue/wpas.pid" -t -f "$w/rogue/wpas.log"
-until_ 30 test -s "$w/root/run/gt-be98-mesh/refused"
+sleep 20
 GMAC=$(ip netns exec mrogue cat /sys/class/net/wlan9/address)
-check "T3 rogue: refused (status), no bh1" "refused $GMAC no" "$(R sh "$S/gt-be98-mesh" status | grep '^refused') $(ip netns exec mroot test -e /sys/class/net/bh1.10 && echo yes || echo no)"
+check "T3 rogue (not the leaf): never COMPLETED (macaddr_acl=1, one leaf per backhaul BSS), no second AP_VLAN, no bh1" "no 1 no" \
+	"$(ip netns exec mrogue "$WCLI" -p "$w/rogue/ctl" -i wlan9 status 2>/dev/null | grep -q '^wpa_state=COMPLETED' && echo yes || echo no) $(ip netns exec mroot ls /sys/class/net | grep -c '^bcawl3\.sta') $(ip netns exec mroot test -e /sys/class/net/bh1.10 && echo yes || echo no)"
 check "T3 control: the leaf's trunk is still the only one" "1" "$(R sh "$S/gt-be98-l2" trunks | grep -c '^bh')"
 kill "$(cat "$w/rogue/wpas.pid")" 2>/dev/null
 # ---- T4 netguard rule 7 at the root ----

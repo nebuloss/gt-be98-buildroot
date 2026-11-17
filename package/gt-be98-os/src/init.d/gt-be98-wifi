@@ -971,6 +971,11 @@ gen_networks() {
 	mv "$STATE/gen.new" "$STATE/gen"
 	# the generator wrote the configs under gen.new: point the plan at gen
 	sed -i "s#$STATE/gen.new/#$STATE/gen/#g" "$STATE/gen/plan"
+	# the backhaul BSS's leaf list (accept_mac_file=) names a file of gen too
+	for t in "$STATE"/gen/hostapd-*.conf "$STATE"/gen/bss-*.conf; do
+		[ -f "$t" ] && grep -q "^accept_mac_file=$STATE/gen.new/" "$t" &&
+			sed -i "s#^accept_mac_file=$STATE/gen.new/#accept_mac_file=$STATE/gen/#" "$t"
+	done
 	[ "${1:-}" = again ] && return 0
 	while read -r t a b c d; do
 		case $t in

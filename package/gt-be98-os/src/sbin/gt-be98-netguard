@@ -214,10 +214,13 @@ wifi_conf() {
 	# bhs: a mesh leaf's trunk (its station, rule 7)
 	case "$TRUNK" in rnr[0-3]|bhs) ;; *) TRUNK= ;; esac
 	# the root's backhaul BSS (plan line "backhaul <band> <dev> <ifname> ..."): BHIF
-	BHIF=
+	# and its one leaf (the generator's accept-<ifname>): BHLEAF
+	BHIF= BHLEAF=
 	if [ -r "$WIFI_PLAN" ]; then
 		local t a b c
 		while read -r t a b c _; do [ "$t" = backhaul ] && { BHIF=$c; break; }; done < "$WIFI_PLAN"
+		[ -n "$BHIF" ] && [ -r "${WIFI_PLAN%/plan}/accept-$BHIF" ] &&
+			{ read -r BHLEAF _ < "${WIFI_PLAN%/plan}/accept-$BHIF"; } 2>/dev/null
 	fi
 }
 # the gateway networks' VLANs of the web UI's list into GW_VIDS (" 40 41 ",
@@ -353,6 +356,12 @@ bh_port_ok() {
 	bhs.*)	l2_state "$2"
 		[ "$L2T" = bhs ] && [ -n "$L2V" ] && [ "$1" = "bhs.$L2V" ] ;;
 	bh[0-7].*)
+		# the link's peer is the backhaul's one leaf (design §8.2)
+		if [ -n "${BHLEAF:-}" ]; then
+			v=
+			[ -r "$L2_STATE/trunks/${1%%.*}" ] && while read -r k _w; do [ "$k" = peer ] && v=$_w; done < "$L2_STATE/trunks/${1%%.*}"
+			[ "$v" = "$BHLEAF" ] || return 1
+		fi
 		[ -r "$L2_STATE/$2" ] || return 1
 		while read -r k v _w; do [ "$k" = bh ] && [ "$v" = "$1" ] && return 0; done < "$L2_STATE/$2"
 		return 1 ;;
@@ -373,7 +382,7 @@ verdict() {
 	fi
 	case "$1" in
 	bh[0-7].*|bhs.*)
-		bh_port_ok "$1" "$2" || VERDICT="a mesh backhaul VLAN: a port only of the network bridge gt-be98-l2 runs it for"
+		bh_port_ok "$1" "$2" || VERDICT="a mesh backhaul VLAN: a port only of the network bridge gt-be98-l2 runs it for, on the link of the backhaul's leaf"
 		return ;;
 	esac
 	case "$1" in
@@ -912,7 +921,7 @@ selftest() {
 	# rule 7, the mesh backhaul: <expect> <port> <bridge> <its l2 state, printf format> <trunk> <WIFI_VLANS> <backhaul ifname>
 	mcheck() {
 		LPORTS=; LBRIDGE=br-lan; TRUNK=$5; VLANS=$6; BHIF=$7; VN_rnr1= VN_rnr2= VN_rnr3=
-		rm -f "$L2_STATE"/*
+		rm -f "$L2_STATE"/* 2>/dev/null
 		[ -n "$4" ] && printf "$4" > "$L2_STATE/$3"
 		load_lists; verdict "$2" "$3"; c=$VERDICT; [ "$c" = keep ] || c=detach
 		n=$((n + 1))
@@ -921,6 +930,10 @@ selftest() {
 	}
 	R='trunk rnr0\nuplink rnr0\nvid 10\nmade_bridge 1\nmade_vlan 1\nuser wifi\n'
 	mcheck keep   bh0.10 brwifi10 "${R}bh bh0.10 1\n" rnr0 "brwifi10:10" bcawl0-1	# the root's downlink, recorded for the bridge
+	mkdir -p "$L2_STATE/trunks"; printf 'dev bcawl0-1.sta1\nrole down\npeer 02:00:00:00:00:0a\n' > "$L2_STATE/trunks/bh0"
+	BHLEAF=02:00:00:00:00:0a mcheck keep bh0.10 brwifi10 "${R}bh bh0.10 1\n" rnr0 "brwifi10:10" bcawl0-1	# its peer is the leaf
+	BHLEAF=02:00:00:00:00:0b mcheck detach bh0.10 brwifi10 "${R}bh bh0.10 1\n" rnr0 "brwifi10:10" bcawl0-1	# its peer is not the leaf
+	rm -rf "$L2_STATE/trunks"; BHLEAF=
 	mcheck detach bh0.10 brwifi10 "$R" rnr0 "brwifi10:10" bcawl0-1				# control: not recorded
 	mcheck detach bh0.10 brwifi11 "${R}bh bh0.11 1\n" rnr0 "" bcawl0-1			# recorded for another VLAN
 	mcheck detach bh0.10 br-lan "" rnr0 "" bcawl0-1						# never outside brwifi

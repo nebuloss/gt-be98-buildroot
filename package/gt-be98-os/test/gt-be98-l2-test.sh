@@ -261,6 +261,12 @@ L sync; check "bhvid=33 = VLAN 33's VID: sync rc 1, brwifi41 not carried, brwifi
 check "... logged" yes "$(grep -q 'backhaul VID 33 is carried for brwifi31 already' "$T/err" && echo yes || echo no)"
 sed -i 's/bhvid=33/bhvid=444/' "$GT_BE98_NETWORKS"; L sync
 check "control: bhvid back to 444: carried again" brwifi41 "$(master bh0.444)"
+# a gateway network without bhvid= does not cross the backhaul (design §3.4 C3)
+sed -i 's/ bhvid=444//' "$GT_BE98_NETWORKS"
+L sync; check "gateway network 44 without bhvid=: sync drops bh0.444 and bh1.444, carries nothing" "no no |" "$(ex bh0.444) $(ex bh1.444) |$(bhs_ brwifi41)"
+check "control: the VLAN-only network 33 still crosses on its vlan=" brwifi31 "$(master bh0.33)"
+sed -i 's/mode=gateway$/mode=gateway bhvid=444/' "$GT_BE98_NETWORKS"; L sync
+check "control: bhvid=444 back: carried again" "brwifi41 brwifi41" "$(master bh0.444) $(master bh1.444)"
 # the link goes: its VLANs go, the other link's stay
 L trunk-del bcawl0-1.sta1 > "$T/out"; check "trunk-del: rc 0, bh0 freed, its VLANs deleted, bh1's kept" "0 bh0 no no no brwifi31" \
 	"$? $(cat "$T/out") $(ex bh0.33) $(ex bh0.444) $(ex bh0.70) $(master bh1.33)"

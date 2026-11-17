@@ -384,6 +384,84 @@ repeated ones. The file holds the backhaul key and every passphrase. The leaf re
 these SSIDs with the root's network ids; its own Wi-Fi networks and uplink are kept in its store
 and not rendered while it is a leaf.
 
+### 3.5 The OS side as built (lane mesh-os, buildroot `mesh-backhaul-os-2026-11-17`) [READ: the code on that branch]
+
+This section implements §3.4 and §8.2. It does not change §3.4. Where the OS could not follow §3.4 as written, the
+deviation is listed under "Open" and needs a decision.
+
+**Implemented as §3.4 says (the names are the contract's):**
+
+- **C0.** `gt-be98-wifi-gen -F` prints `feature mesh 1`. It still prints `feature wds 0`, and a network's `wds=` is
+  still refused.
+- **C1.** The `backhaul=2g|5gl|6g` block is accepted. 5gh is refused, and so is a block on the radio of an enabled
+  `station=`. Its keys are `ssid=`, `security=sae|psk2sae` (psk2sae is written as SAE on 6g), `passphrase=` and
+  `enabled=`. The generator renders:
+  - a hidden BSS with `multi_ap=1 wds_sta=1 multi_ap_profile=2 multi_ap_vlanid=0`;
+  - no `bridge=` and no `wds_bridge=`;
+  - a sticky slot that counts in `-C`;
+  - the plan line `backhaul <band> <dev> <ifname> <bssid>`.
+- **§8.2, one leaf.** `leaf=<MAC>` is REQUIRED, exactly once. Without it, or with two, the block is refused (web UI:
+  write it from the leaf's station address). The BSS gets `max_num_sta=1`, `macaddr_acl=1` and
+  `accept_mac_file=<gen dir>/accept-<ifname>`, which holds that MAC. A second station is therefore refused at
+  association: hostapd checks the ACL on the device-SME path too, `drv_callbacks.c` `hostapd_notif_assoc`. The
+  hook also deauthenticates any other peer and gives it no trunk. netguard detaches a `bh<k>.<vid>` whose link
+  peer is not that MAC.
+- **C2.** The station takes `trunk=1`, which needs `repeater=multiap` and `enabled=1`. It is refused beside
+  `repeated=1`, `routed=` or a `backhaul=` block. The station config carries `scan_ssid=1` and
+  `multi_ap_backhaul_sta=1`. The plan line is `bhtrunk <dev> <vid,vid,...|->`, with the VIDs of the rendered
+  `vlan=` networks. `gt-be98-gw` refuses every `mode=gateway` line while the plan has a `bhtrunk` line.
+- **C3.** `gt-be98-l2` reads `bhvid=`, which counts only on a `mode=gateway` line (2..4094):
+  - a gateway network without `bhvid=` does not cross the backhaul;
+  - a VLAN-only network crosses on its `vlan=`;
+  - if a backhaul VID is wanted twice, the second bridge is not carried, and this is logged.
+- **C4.** Nothing new on the UI side. `rc-service gt-be98-wifi reload` does the following:
+  - on a root, it starts `hostapd_cli -B -r -a /usr/sbin/gt-be98-mesh` on the backhaul BSS (pid
+    `/run/gt-be98-mesh-<ifname>.pid`), then runs `gt-be98-mesh sync`;
+  - on a leaf, it runs `gt-be98-l2 uplink <dev>`, and `l2.conf` gets `WIFI_TRUNK="bhs"`. gt-be98-lan's jacks
+    and netguard follow that.
+  - The station is brought up before the APs (§8.2), as for every station.
+- **Interface names.**
+  - Root: the AP_VLAN `<bss>.sta<aid>`, and `bh<k>.<vid>` for k = 0..7 (the alias `gt-be98-l2 trunks` lists).
+  - Leaf: `bhs.<vid>` on the station.
+- **State for the UI:** `gt-be98-mesh status` prints the following lines:
+  - `role root|leaf|off`;
+  - `backhaul <band> <ifname> <bssid> leaves=<mac>`;
+  - `link bh<k> <ap_vlan> <peer> vids=<v,...>`;
+  - `refused <mac>`;
+  - `uplink bhs <dev> vids=<v,...>`.
+
+  Syslog tag gt-be98-mesh: `MESH-LINK-UP` / `MESH-LINK-DOWN` / `MESH-LINK-REFUSED`.
+- **Loops.**
+  - A leaf bridge never holds a wired trunk VLAN (netguard rule 7).
+  - The leaf's loop guard is the nft table `bridge gt_be98_bh_guard`. A frame with the station's own source
+    address that enters a leaf bridge off `bhs.*` is dropped and counted. An ARP DAD probe goes out on each
+    `bhs.<vid>` every 30 s. The jack the probe came back on is latched, as a BPDU trip is. Restart gt-be98-lan
+    to clear it.
+
+**Open: needs a decision.**
+
+- **D-MESH-OS1, management over the untagged link.** §3.2 and §3.4 C1/C2 put the untagged AP_VLAN and the leaf's
+  untagged station "into the management bridge", and run `wpa_supplicant -b <mgmt bridge>`. This OS has no
+  management bridge. The box's management is `rnr0` untagged, and bridging `rnr0` is a hardware no-go. So the
+  untagged link is bridged on neither end:
+  - EAPOL stays on the BSS netdev and the station (§8.2), and `wpa_supplicant` runs without `-b`.
+  - A leaf's management address comes from its own wired `rnr0` when it is cabled. That is safe, because `rnr0`
+    is never bridged, so there is no loop.
+  - A wireless-only leaf has no management address yet.
+
+  Options:
+  - (a) a DHCP client on the bridge of one network chosen as the leaf's management VLAN (a new station key, e.g.
+    `mgmt_vid=`);
+  - (b) the root serves a link-local management subnet on the untagged link;
+  - (c) accept IPv6 link-local only (the root reaches the leaf as `fe80::…%<ap_vlan>`).
+
+  Recommendation: (a).
+- **C6 vs the OS's own CLI.** The leaf file is the web UI's JSON, and the OS never reads it. The OS also ships
+  `gt-be98-mesh export|import`, a CLI round trip in the network-list text format with the same content rules.
+  The web UI need not use it.
+- **The slot state** stores the backhaul under the pseudo network id `100000` (the slot file is numeric), not
+  the key `backhaul`. Nothing outside the generator reads it.
+
 ---
 
 ## 4. EasyMesh controller/agent (prplMesh) or a static backhaul

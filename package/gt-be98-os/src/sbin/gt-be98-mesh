@@ -13,8 +13,9 @@
 # makes the AP_VLAN a downlink trunk of gt-be98-l2 (bh<k>: every network
 # bridge gets bh<k>.<backhaul VID>) or lets it go. The untagged AP_VLAN is
 # no bridge port (EAPOL and management only: the root's management is rnr0,
-# which is never bridged). With leaf= MACs in the block, any other backhaul
-# STA is deauthenticated and gets no trunk.
+# which is never bridged). Only the block's one leaf= (the generator's
+# accept-<ifname>: hostapd admits nobody else either, design §8.2) gets a
+# trunk; any other peer is deauthenticated.
 # LEAF (the station has trunk=1, plan line "bhtrunk <dev>"): gt-be98-wifi
 # makes the station gt-be98-l2's uplink trunk bhs (every network bridge on
 # bhs.<vid>); this script only reports it.
@@ -28,7 +29,7 @@
 #                     attached). gt-be98-wifi runs it after every apply
 #   gt-be98-mesh status
 #                     role root|leaf|off, then per role: "backhaul <band>
-#                     <ifname> <bssid> leaves=<macs|any>", "link <alias> <dev>
+#                     <ifname> <bssid> leaves=<mac|->", "link <alias> <dev>
 #                     <peer> vids=<v,...>", "refused <peer>" (root); "uplink
 #                     bhs <dev> vids=<v,...>" (leaf)
 #   gt-be98-mesh export [-o FILE] [-n WIFI_LIST] [-g NETWORKS]
@@ -84,14 +85,21 @@ valid_mac() {
 }
 lower() { echo "$1" | tr 'A-F' 'a-f'; }
 
-# the plan's backhaul line into B_BAND B_DEV B_IF B_BSSID B_LEAVES (rc 1: none)
+# the plan's backhaul line into B_BAND B_DEV B_IF B_BSSID, and its one leaf
+# (the generator's accept-<ifname>, hostapd's accept_mac_file) into B_LEAVES
+# (rc 1: no backhaul)
 bh_plan() {
-	local t a b c d e
+	local t a b c d l
 	B_BAND= B_DEV= B_IF= B_BSSID= B_LEAVES=
 	[ -r "$PLAN" ] || return 1
-	while read -r t a b c d e _; do
+	while read -r t a b c d _; do
 		[ "$t" = backhaul ] || continue
-		B_BAND=$a B_DEV=$b B_IF=$c B_BSSID=$d B_LEAVES=$e
+		B_BAND=$a B_DEV=$b B_IF=$c B_BSSID=$d
+		if [ -r "${PLAN%/plan}/accept-$c" ]; then
+			while read -r l _; do
+				l=$(lower "$l"); valid_mac "$l" && B_LEAVES="${B_LEAVES:+$B_LEAVES,}$l"
+			done < "${PLAN%/plan}/accept-$c"
+		fi
 		return 0
 	done < "$PLAN"
 	return 1
@@ -104,9 +112,9 @@ leaf_plan() {
 	while read -r t a _; do [ "$t" = bhtrunk ] && { B_STA=$a; return 0; }; done < "$PLAN"
 	return 1
 }
-# may backhaul STA $1 have a trunk? (no leaf= list: any)
+# may backhaul STA $1 have a trunk? Only the backhaul's leaf (design §8.2:
+# one leaf per backhaul BSS); no leaf known: none
 leaf_ok() {
-	[ -z "$B_LEAVES" ] || [ "$B_LEAVES" = - ] && return 0
 	case ",$B_LEAVES," in *",$1,"*) return 0 ;; esac
 	return 1
 }
@@ -187,14 +195,8 @@ sync_links() {
 		# the peer is not readable: the trunk's record, else refused when
 		# leaf= is set (never a trunk for an unknown station)
 		[ -n "$p" ] || p=$("$L2" trunks 2>/dev/null | awk -v d="$d" '$2 == d { print $4 }')
-		if [ -z "$p" ] || [ "$p" = - ]; then
-			if [ -n "$B_LEAVES" ] && [ "$B_LEAVES" != - ]; then log "sync: $d: its peer is unread: no trunk (leaf= is set)"; r=1; continue; fi
-			p=
-		fi
-		if [ -n "$p" ]; then link_up "$d" "$p" "$B_IF" || r=1
-		else
-			a=$("$L2" trunk-add "$d") && log "MESH-LINK-UP $a dev=$d peer=unread vids=$(vids_of "$a")" || r=1
-		fi
+		if [ -z "$p" ] || [ "$p" = - ]; then log "sync: $d: its peer is unread: no trunk"; r=1; continue; fi
+		link_up "$d" "$p" "$B_IF" || r=1
 	done
 	return $r
 }
@@ -203,7 +205,7 @@ status() {
 	local a d r p f
 	if bh_plan; then
 		echo "role root"
-		echo "backhaul $B_BAND $B_IF $B_BSSID leaves=$( [ "$B_LEAVES" = - ] && echo any || echo "$B_LEAVES")"
+		echo "backhaul $B_BAND $B_IF $B_BSSID leaves=${B_LEAVES:--}"
 		"$L2" trunks 2>/dev/null | while read -r a d r p; do
 			case "$a" in bh[0-7]) echo "link $a $d $p vids=$(vids_of "$a")" ;; esac
 		done
@@ -231,7 +233,7 @@ export_conf() {
 	function trim(s) { sub(/^[ \t]+/, "", s); sub(/[ \t]+$/, "", s); return s }
 	function flush(    j, skip) {
 		if (blk == "n") {
-			skip = (isrep || isrtd)
+			skip = (isrep || isrtd || (vl in nocross))
 			if (!skip) {
 				for (j = 1; j <= nl; j++) {
 					if (lk[j] == "vlan") print "vlan=" ((lv[j] in bhv) ? bhv[lv[j]] : lv[j])
@@ -240,18 +242,22 @@ export_conf() {
 				nexp++
 			}
 		}
-		nl = 0; isrep = 0; isrtd = 0; blk = ""
+		nl = 0; isrep = 0; isrtd = 0; blk = ""; vl = ""
 	}
 	BEGIN {
-		# the web UI list: the backhaul VID of each VLAN (bhvid=, else vlan=)
+		# the web UI list (design §3.4 C3): a gateway network crosses on its
+		# bhvid= (none: it does not cross), a VLAN-only one on its vlan=
 		while ((getline l < nets) > 0) {
 			if (l ~ /^[ \t]*(#|$)/) continue
-			n = split(l, w, /[ \t]+/); v = ""; x = ""
+			n = split(l, w, /[ \t]+/); v = ""; x = ""; m = ""
 			for (i = 1; i <= n; i++) {
 				if (w[i] ~ /^vlan=/) v = substr(w[i], 6)
 				if (w[i] ~ /^bhvid=/) x = substr(w[i], 7)
+				if (w[i] ~ /^mode=/) m = substr(w[i], 6)
 			}
-			if (v != "" && x ~ /^[1-9][0-9]*$/ && x + 0 <= 4094) bhv[v] = x
+			if (v == "" || m != "gateway") continue
+			if (x ~ /^[1-9][0-9]*$/ && x + 0 >= 2 && x + 0 <= 4094) bhv[v] = x
+			else nocross[v] = 1
 		}
 		print "# gt-be98-mesh leaf v1"
 		print "[wifi]"
@@ -274,6 +280,7 @@ export_conf() {
 	blk == "n" {
 		if (k == "repeated" && v == "1") isrep = 1
 		if (k == "routed") isrtd = 1
+		if (k == "vlan") vl = v
 		# a BSS address, slot or index is the root radios own
 		if (k ~ /^(slot\.|mac\.|bssid)/) next
 		nl++; lk[nl] = k; lv[nl] = v
@@ -306,7 +313,7 @@ export_conf() {
 				if (w[i] ~ /^bhvid=/) x = substr(w[i], 7)
 				if (w[i] ~ /^name=/) nm = w[i]
 			}
-			if (id == "" || v == "") continue
+			if (id == "" || v == "" || (v in nocross)) continue
 			print "network=" id (nm != "" ? " " nm : "") " vlan=" ((v in bhv) ? bhv[v] : v)
 		}
 	}' "$1"

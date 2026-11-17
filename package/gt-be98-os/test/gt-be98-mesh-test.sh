@@ -58,9 +58,10 @@ PLAN=$T/run/gt-be98-wifi/gen/plan
 
 # ---- the root: plan with a backhaul line, two network bridges ----
 port rnr0
-printf 'network=4 name=Lab vlan=44 subnet=192.168.40.1/24 mode=gateway bhvid=444\nnetwork=3 name=Up vlan=30\n' > "$GT_BE98_NETWORKS"
+printf 'network=4 name=Lab vlan=44 subnet=192.168.40.1/24 mode=gateway bhvid=444\nnetwork=3 name=Up vlan=30\nnetwork=5 name=Gw vlan=55 subnet=192.168.55.1/24 mode=gateway\n' > "$GT_BE98_NETWORKS"
 L2 up wifi brwifi4 rnr0 44; L2 up wifi brwifi3 rnr0 30
-printf 'backhaul 5gl bcawl0 bcawl0-1 aa:00:00:00:00:19 02:00:00:00:00:0a,02:00:00:00:00:0b\n' > "$PLAN"
+printf 'backhaul 5gl bcawl0 bcawl0-1 aa:00:00:00:00:19\n' > "$PLAN"
+echo 02:00:00:00:00:0A > "${PLAN%/plan}/accept-bcawl0-1"	# the generator's accept file: the one leaf
 port bcawl0-1.sta1
 H bcawl0-1 WDS-STA-INTERFACE-ADDED ifname=bcawl0-1.sta1 sta_addr=02:00:00:00:00:0A
 check "hook ADDED, a listed leaf (upper case): rc 0, bh0.30 in brwifi3, bh0.444 in brwifi4" "0 brwifi3 brwifi4" "$? $(master bh0.30) $(master bh0.444)"
@@ -77,22 +78,25 @@ H bcawl0-1 WDS-STA-INTERFACE-ADDED ifname=bcawl3.sta1 sta_addr=02:00:00:00:00:0b
 check "an ifname that is not an AP_VLAN of the ctrl ifname: ignored" "no" "$(ex bh1.30)"
 H bcawl0-1 WDS-STA-INTERFACE-ADDED ifname=bcawl0-1.sta2 sta_addr=nonsense
 check "a bad sta_addr: ignored" "no" "$(ex bh1.30)"
-check "status (root): role, backhaul, the link" "role root|backhaul 5gl bcawl0-1 aa:00:00:00:00:19 leaves=02:00:00:00:00:0a,02:00:00:00:00:0b|link bh0 bcawl0-1.sta1 02:00:00:00:00:0a vids=30,444|refused 02:00:00:00:00:99" \
+check "status (root): role, backhaul, the link" "role root|backhaul 5gl bcawl0-1 aa:00:00:00:00:19 leaves=02:00:00:00:00:0a|link bh0 bcawl0-1.sta1 02:00:00:00:00:0a vids=30,444|refused 02:00:00:00:00:99" \
 	"$(H status | tr '\n' '|' | sed 's/|$//')"
-# control: no leaf= list: any backhaul STA
-printf 'backhaul 5gl bcawl0 bcawl0-1 aa:00:00:00:00:19 -\n' > "$PLAN"
+# no accept file (a hand-made BSS): no leaf known, nobody gets a trunk
+rm -f "${PLAN%/plan}/accept-bcawl0-1"
+H bcawl0-1 WDS-STA-INTERFACE-ADDED ifname=bcawl0-1.sta2 sta_addr=02:00:00:00:00:0a
+check "no accept file: even the former leaf gets no trunk" "no" "$(ex bh1.30)"
+# control: the second station IS the leaf now: bh1
+echo 02:00:00:00:00:99 > "${PLAN%/plan}/accept-bcawl0-1"
 H bcawl0-1 WDS-STA-INTERFACE-ADDED ifname=bcawl0-1.sta2 sta_addr=02:00:00:00:00:99
-check "control: no leaf= list: the same peer gets bh1" "brwifi3 no" "$(master bh1.30) $(H status | grep -q '^refused' && echo yes || echo no)"
+check "control: the peer that is the leaf gets bh1, no longer refused" "brwifi3 no" "$(master bh1.30) $(H status | grep -q '^refused 02:00:00:00:00:99' && echo yes || echo no)"
 H bcawl0-1 WDS-STA-INTERFACE-REMOVED ifname=bcawl0-1.sta2 sta_addr=02:00:00:00:00:99; rm -rf "$N/bcawl0-1.sta2"
 check "hook REMOVED: bh1's VLANs deleted, bh0's kept, MESH-LINK-DOWN logged" "no brwifi3 yes" "$(ex bh1.30) $(master bh0.30) $(grep -q 'MESH-LINK-DOWN bh1 dev=bcawl0-1.sta2' "$T/log" && echo yes || echo no)"
 # sync: a link made while hostapd_cli was not attached, one gone
 rm -rf "$N/bcawl0-1.sta1" "$N/bh0.30" "$N/bh0.444"	# hostapd restarted: the AP_VLAN and its VLANs vanished
-port bcawl0-1.sta3; echo 02:00:00:00:00:0b > "$T/peer-bcawl0-1.sta3"
+port bcawl0-1.sta3; echo 02:00:00:00:00:0b > "$T/peer-bcawl0-1.sta3"; echo 02:00:00:00:00:0b > "${PLAN%/plan}/accept-bcawl0-1"
 H sync; check "sync: the gone link's trunk freed, the new AP_VLAN a trunk (peer from its station dump)" "0 bh0 bcawl0-1.sta3 02:00:00:00:00:0b brwifi3" \
 	"$? $(L2 trunks | awk '{ print $1, $2, $4 }') $(master bh0.30)"
-printf 'backhaul 5gl bcawl0 bcawl0-1 aa:00:00:00:00:19 02:00:00:00:00:0a\n' > "$PLAN"
 rm -f "$T/peer-bcawl0-1.sta3"; port bcawl0-1.sta4
-H sync; check "sync with leaf= set: an AP_VLAN whose peer is unread gets no trunk" "no" "$(L2 trunks | grep -q 'bcawl0-1.sta4' && echo yes || echo no)"
+H sync; check "sync: an AP_VLAN whose peer is unread gets no trunk" "no" "$(L2 trunks | grep -q 'bcawl0-1.sta4' && echo yes || echo no)"
 # ---- export (root) -> import (leaf) ----
 cat > "$T/rootlist" <<'X'
 country=DE
@@ -133,6 +137,7 @@ check "export: VLAN 30 as is, the gateway network 44 on its bhvid 444, routed 9 
 check "export: the root's own bssid./station/radio not carried" "0 0 0" "$(grep -c '^bssid' "$T/leaf.mesh") $(grep -c '^ssid=wan' "$T/leaf.mesh") $(grep -c '^radio=' "$T/leaf.mesh")"
 check "export: the leaf's station block (backhaul band, SAE, trunk)" "station=5gl|ssid=mesh-bh|security=sae|passphrase=SECRETbh12|repeater=multiap|trunk=1" \
 	"$(sed -n '/^station=/,/^trunk=/p' "$T/leaf.mesh" | tr '\n' '|' | sed 's/|$//')"
+check "export: the gateway network 5 without bhvid= does not cross (left out)" 0 "$(sed -n '/^\[networks\]/,$p' "$T/leaf.mesh" | grep -c '^network=5 ')"
 check "export: the networks part (no gateway, no subnet, bhvid applied)" "network=4 name=Lab vlan=444|network=3 name=Up vlan=30" \
 	"$(sed -n '/^\[networks\]/,$p' "$T/leaf.mesh" | grep '^network=' | tr '\n' '|' | sed 's/|$//')"
 printf 'network=3\nssid=x\nsecurity=sae\npassphrase=password3\nbands=5gl\nvlan=30\n' > "$T/plain"
@@ -145,7 +150,7 @@ check "import: the leaf's country and radio kept, its old network replaced, the 
 	"$(grep -E '^(country|radio|channel)=' "$T/leaflist" | tr '\n' '|')$(grep -c 'ssid=old' "$T/leaflist")|$(grep -c '^network=' "$T/leaflist")|$(grep -E '^(station|trunk)=' "$T/leaflist" | tr '\n' '|' | sed 's/|$//')"
 check "import: the Wi-Fi list mode 600, the networks list written" "600 network=4 name=Lab vlan=444" "$(stat -c %a "$T/leaflist") $(grep '^network=4' "$T/leafnets")"
 sh "$GT_BE98_WIFI_GEN" -n "$T/leaflist" -o "$T/lo" -m "2g=02:00:00:00:00:10 5gl=02:00:00:00:00:18 5gh=02:00:00:00:00:20 6g=02:00:00:00:00:28" 2> /dev/null
-check "the imported list renders a leaf: bhtrunk on 5gl, net 4 on VLAN 444" "net 4 brwifi4 444 0|bhtrunk bcawl0" "$(grep -E '^(bhtrunk|net 4 )' "$T/lo/plan" | tr '\n' '|' | sed 's/|$//')"
+check "the imported list renders a leaf: bhtrunk on 5gl, net 4 on VLAN 444" "net 4 brwifi4 444 0|bhtrunk bcawl0 30,444" "$(grep -E '^(bhtrunk|net 4 )' "$T/lo/plan" | tr '\n' '|' | sed 's/|$//')"
 cp "$T/leaflist" "$T/leaflist.keep"; cp "$T/leafnets" "$T/leafnets.keep"
 # refusals: nothing written
 sed 's/^# gt-be98-mesh leaf v1$/# something else/' "$T/leaf.mesh" > "$T/bad1"

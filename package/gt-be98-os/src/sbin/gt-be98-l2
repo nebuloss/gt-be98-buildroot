@@ -63,10 +63,11 @@
 #                                 "-" forgets it. A new <dev> moves every
 #                                 bridge running on bhs to it at once
 #   gt-be98-l2 trunks             "<alias> <dev> <down|up> <peer|->" per trunk
-# BACKHAUL VID (D-MESH4): a network's VID on the backhaul is the bhvid= of
-# its line in the web UI's list (/etc/gt-be98-networks.conf, 2..4094), else
-# its vlan=. A gateway network is carried over the backhaul too (the root
-# stays its gateway: the leaf bridges it and never routes it). Two bridges
+# BACKHAUL VID (D-MESH4, design §3.4 C3): a VLAN-only network crosses the
+# backhaul on its vlan=; a gateway network (mode=gateway in the web UI's
+# list, /etc/gt-be98-networks.conf) on the bhvid= of its line (2..4094: the
+# root stays its gateway, the leaf bridges it and never routes it), and not
+# at all without one (an older web UI, or not meant to cross). Two bridges
 # wanting one backhaul VID: the second is not carried (logged). A bridge
 # whose uplink is bhs (a leaf's) never gets a downlink: no loop on a box,
 # and a chain of leaves is not offered.
@@ -318,22 +319,25 @@ yield_bridge() {
 
 # ---- the mesh backhaul (header: trunk-add, trunk-del, uplink) ----
 
-# the backhaul VID of VLAN $1 (D-MESH4, header) into BHV: the bhvid= of the
-# list's line with vlan=$1, else $1 (read with `read`, keys in any order)
+# the backhaul VID of VLAN $1 (header) into BHV ("": not carried): $1, or
+# for a mode=gateway line the bhvid= of it (read with `read`, keys in any order)
 bh_vid() {
-	local l w v x
+	local l w v x m
 	BHV=$1
 	[ -r "$NETWORKS" ] || return 0
 	set -f
 	while IFS= read -r l || [ -n "$l" ]; do
 		case "$l" in ''|'#'*) continue ;; esac
-		v= x=
+		v= x= m=
 		# shellcheck disable=SC2086 # word split, no glob
 		for w in $l; do
-			case "$w" in vlan=*) v=${w#vlan=} ;; bhvid=*) x=${w#bhvid=} ;; esac
+			case "$w" in vlan=*) v=${w#vlan=} ;; bhvid=*) x=${w#bhvid=} ;; mode=*) m=${w#mode=} ;; esac
 		done
 		[ "$v" = "$1" ] || continue
-		valid_vid "$x" && BHV=$x
+		if [ "$m" = gateway ]; then
+			BHV=
+			valid_vid "$x" && [ "$x" != 1 ] && BHV=$x
+		fi
 		break
 	done < "$NETWORKS"
 	set +f
@@ -383,8 +387,8 @@ bh_attach() {
 	local b=$1 a=$2 s w k= made=1 o
 	[ "$S_UPLINK" != bhs ] && [ -n "$S_VID" ] || return 0
 	tr_read "$a" && [ "$T_ROLE" = down ] || return 0
-	bh_vid "$S_VID"; s=$a.$BHV
-	# the alias's member of another VID (bhvid= moved) goes first
+	bh_vid "$S_VID"; s=$a.${BHV:--}
+	# the alias's member of another VID (bhvid= moved or gone) goes first
 	for w in ${S_BH:-}; do
 		if [ "${w%%.*}" = "$a" ] && [ "${w%%:*}" != "$s" ]; then
 			bh_drop "$b" "$w" || { err "$b: backhaul VLAN ${w%%:*} not removed"; k="$k $w"; }
@@ -393,6 +397,7 @@ bh_attach() {
 		k="$k $w"
 	done
 	S_BH=$k; st_write "$b"
+	[ -n "$BHV" ] || return 0	# a gateway network without bhvid=: not carried
 	if bh_taken "$b" "$s"; then
 		err "$s: backhaul VID $BHV is carried for $BH_BY already: $b (VLAN $S_VID) not carried over the backhaul (give it another bhvid=)"
 		return 1

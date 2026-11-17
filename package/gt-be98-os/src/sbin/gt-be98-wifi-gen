@@ -91,8 +91,9 @@
 #       UI reads it: a feature another change adds to the generator shows up
 #       there by itself. Radio keys: feature he (ax=), eht (be=),
 #       twt_responder (twt=), zwdfs, monitor, led; feature station (station= blocks), routed
-#       (routed= networks); feature wds / backhaul (the backhaul= block: the
-#       mesh root), feature trunk (station trunk=1: the mesh leaf).
+#       (routed= networks); feature mesh (the backhaul= block: the mesh root,
+#       and station trunk=1: the mesh leaf; buildroot docs/MESH-BACKHAUL-
+#       DESIGN.md §3.4 C0); feature wds 0 (the network key wds= stays refused).
 #
 # Network list (hostapd-like: key=value, the value is the rest of the line,
 # never quoted; '#' comment lines; a block starts at network= or radio=):
@@ -378,9 +379,9 @@
 #                                   twt 0). TWT is radio-wide in hostapd
 #                                   (radio twt=, feature twt_responder); a
 #                                   network never takes 4-address (WDS)
-#                                   clients: the 4-address peers are the
-#                                   mesh leaves of the backhaul= block
-#                                   (feature wds 1, feature backhaul 1)
+#                                   clients: the 4-address peer is the
+#                                   mesh leaf of the backhaul= block
+#                                   (feature wds 0, feature mesh 1)
 #     slot.<band>=K  mac.<band>=S   optional explicit sticky slot / BSSID
 #                                   index S = 1..7 (0: the anchor's)
 #     bssid.<band>=MAC              optional: this BSS's own address (default
@@ -438,17 +439,19 @@
 #                                   the station's 802.1Q sub-interface
 #                                   bhs.<vid> instead of the wired trunk's
 #                                   <trunk>.<vid> (gt-be98-l2 uplink), the
-#                                   untagged station is no bridge port
-#                                   (EAPOL and management only). No
-#                                   repeated=1 or routed= network beside it,
-#                                   and no backhaul= block (a chain of
+#                                   untagged station is no bridge port (EAPOL
+#                                   and management only). Needs enabled=1.
+#                                   No repeated=1 or routed= network beside
+#                                   it, and no backhaul= block (a chain of
 #                                   leaves is not offered). Plan line
 #                                   bhtrunk. Default 0
-#   backhaul=2g|5gl|5gh|6g          the MESH ROOT: a hidden, dedicated
+#   backhaul=2g|5gl|6g              the MESH ROOT: a hidden, dedicated
 #                                   backhaul BSS on that radio for the mesh
 #                                   leaves (Multi-AP backhaul STAs, station
 #                                   repeater=multiap trunk=1 on a leaf box).
-#                                   At most one backhaul= block. Written as a
+#                                   At most one backhaul= block; 5gh refused
+#                                   (every 5gh channel is DFS), and so is the
+#                                   radio of an enabled station=. Written as a
 #                                   BSS of the radio (a slot like a network's,
 #                                   counted in the per-radio limit) with
 #                                   ignore_broadcast_ssid=1, multi_ap=1
@@ -459,25 +462,27 @@
 #                                   bridge= (the AP_VLAN is gt-be98-l2's
 #                                   trunk: gt-be98-mesh attaches it on
 #                                   hostapd's WDS-STA-INTERFACE-ADDED),
-#                                   max_num_sta=8 (the driver's 4-address
-#                                   links per radio, open-wifi BCA_WDS_MAX).
-#                                   No multi_ap_profile line (hostapd's
-#                                   default, the profile of every box-proven
-#                                   link; the design's profile 2 waits for
-#                                   its arm) and no multi_ap_vlanid (Linux
-#                                   tags, the firmware never). Plan line
-#                                   backhaul (below)
+#                                   multi_ap_profile=2, multi_ap_vlanid=0
+#                                   (Linux tags; a non-zero VID makes the
+#                                   firmware tag the backhaul's EAPOL: design
+#                                   §8.1 G2), ONE leaf (design §8.2, MESH-N1:
+#                                   with two leaves on one backhaul BSS a
+#                                   leaf gets its own broadcasts back):
+#                                   max_num_sta=1, macaddr_acl=1 and
+#                                   accept_mac_file=OUTDIR/accept-<ifname>
+#                                   holding the leaf= address, so another
+#                                   station is refused at association. Plan
+#                                   line backhaul (below)
 #     enabled=0|1                   default 1; 0 keeps the settings, no BSS
 #     ssid=...                      1-32 bytes, never broadcast (hidden)
 #     security=sae|psk2sae          default sae (WPA3-SAE, PMF required);
 #                                   psk2sae: WPA2/WPA3 (an older leaf). 6g:
 #                                   sae (psk2sae is written as sae there)
 #     passphrase=...                8-63 printable ASCII
-#     leaf=aa:bb:cc:dd:ee:ff        optional, repeats (at most 8): the only
-#                                   leaves given a trunk (gt-be98-mesh
-#                                   deauthenticates any other backhaul STA);
-#                                   absent: every Multi-AP backhaul STA that
-#                                   knows the key
+#     leaf=aa:bb:cc:dd:ee:ff        REQUIRED, exactly one: the leaf's station
+#                                   address (the only station admitted;
+#                                   gt-be98-mesh and netguard give no trunk
+#                                   to any other)
 #
 # Schedules (radio= and network= blocks): WINDOWS is 1-32 windows
 # separated by blanks or commas, each DAYS@HH:MM-HH:MM in local time; DAYS
@@ -552,11 +557,12 @@
 #   repeater <dev> <4addr|multiap> <bridge or ->   (a live station with repeater= set:
 #                                               the bridge it joins, - when no
 #                                               repeated network is rendered)
-#   bhtrunk <dev>                              (a live station with trunk=1: the
-#                                               mesh leaf's trunk, gt-be98-l2 uplink)
-#   backhaul <band> <dev> <ifname> <bssid> <leaf MACs, comma-separated, or ->
-#                                              (the backhaul= BSS, on a live radio;
-#                                               its bss line has bridge -)
+#   bhtrunk <dev> <vid,vid,...|->              (a live station with trunk=1: the
+#                                               mesh leaf's trunk, gt-be98-l2 uplink;
+#                                               the VIDs of the vlan= networks rendered)
+#   backhaul <band> <dev> <ifname> <bssid>     (the backhaul= BSS, on a live radio;
+#                                               its bss line has bridge -; its leaf in
+#                                               OUTDIR/accept-<ifname>)
 #   monitor <band> <dev> <MHz> <width> <centre MHz>   (monitor=1 radios)
 #   led <band> <dev> 0|1                       (every radio of -d)
 #   kv <id> <steer 0|1>                        (kv=1 networks on >= 1 radio,
@@ -622,9 +628,8 @@ features() {
 	feature led 1
 	feature bssid 1
 	feature twt 0
-	feature wds 1
-	feature backhaul 1
-	feature trunk 1
+	feature wds 0
+	feature mesh 1
 	feature station 1
 	feature routed 1
 	feature repeater 1
@@ -673,7 +678,7 @@ fi
 umask 077
 if [ "$QUERY" = 0 ]; then
 	mkdir -p "$OUT" || exit 1
-	rm -f "$OUT"/hostapd-*.conf "$OUT"/bss-*.conf "$OUT"/hdr-* "$OUT"/sec-* "$OUT"/sta-*.conf \
+	rm -f "$OUT"/hostapd-*.conf "$OUT"/bss-*.conf "$OUT"/hdr-* "$OUT"/sec-* "$OUT"/sta-*.conf "$OUT"/accept-* \
 		"$OUT"/plan "$OUT"/plan.raw "$OUT"/slots.new "$OUT"/sched
 fi
 S=${SLOTS:-/dev/null}
@@ -1053,7 +1058,7 @@ k == "network" {
 # id BHID (above every network id: its slot and BSSID index are sticky
 # like those of a network), on one radio, hidden, no VLAN, no bridge
 k == "backhaul" {
-	if (!validband(v)) { err("line " FNR ": backhaul 2g|5gl|5gh|6g"); cur = "x"; next }
+	if (!validband(v) || v == "5gh") { err("line " FNR ": backhaul 2g|5gl|6g (5gh: every channel is DFS)"); cur = "x"; next }
 	if (bhi) { err("backhaul " v ": one backhaul= block only (backhaul " bhband " is listed)"); cur = "x"; next }
 	newnet(BHID); cur = "b"; bhi = ci; bhband = v; bhen = 1; nbhleaf = 0
 	bh[ci] = 1; hid[ci] = 1; sec[ci] = "sae"; nb[ci] = 1; hasb[ci, v] = 1
@@ -1101,7 +1106,7 @@ cur == "b" {
 	else if (k == "leaf" && parsemac(v, tmo) && tmo[0] % 2 == 0) {
 		v = tolower(v)
 		if (v in bhleafseen) nerrf(bhi, "backhaul " bhband ": leaf " v " listed twice")
-		else if (nbhleaf >= 8) nerrf(bhi, "backhaul " bhband ": at most 8 leaf= (the driver: 8 4-address links per radio)")
+		else if (nbhleaf >= 1) nerrf(bhi, "backhaul " bhband ": one leaf= only (one leaf per backhaul BSS: design 8.2, MESH-N1)")
 		else { bhleafseen[v] = 1; bhleaf[++nbhleaf] = v }
 	}
 	else if (k == "leaf") nerrf(bhi, "backhaul " bhband ": leaf=" v ": a unicast MAC address")
@@ -1189,6 +1194,8 @@ END {
 			if (!(printable(pass[i]) && length(pass[i]) >= 8 && length(pass[i]) <= 63))
 				nerrf(i, tag ": the backhaul passphrase must be 8-63 printable ASCII characters (SAE)")
 			if (nsta && sttrunk) nerrf(i, tag ": a backhaul= block and a station trunk=1 exclude each other (the box is the mesh root or a leaf: a chain of leaves is not offered)")
+			else if (nsta && stenab && stab == bhband) nerrf(i, tag ": the radio of the station= (the backhaul BSS needs a radio of its own)")
+			if (nbhleaf != 1) nerrf(i, tag ": leaf=<the leaf station address> is required (one leaf per backhaul BSS)")
 			continue
 		}
 		s = sec[i]
@@ -1303,6 +1310,7 @@ END {
 		}
 		# the mesh leaf (header: trunk=1): a Multi-AP backhaul STA
 		if (sttrunk && strep != "multiap") err(tag ": trunk=1 needs repeater=multiap (the mesh leaf is a Multi-AP backhaul STA of the root backhaul BSS)")
+		if (sttrunk && !stenab) err(tag ": trunk=1 needs enabled=1 (a leaf without its station has no uplink)")
 	}
 	for (bi = 1; bi <= nbands; bi++) {
 		b = BANDS[bi]
@@ -1748,7 +1756,15 @@ END {
 			if (maxc[i] != "") print "max_num_sta=" maxc[i] > f
 			# the mesh root backhaul BSS (header: backhaul=): Multi-AP
 			# backhaul BSS, one 4-address AP_VLAN per leaf, 8 leaves
-			if (bh[i]) { print "multi_ap=1" > f; print "wds_sta=1" > f; print "max_num_sta=8" > f }
+			if (bh[i]) {
+				print "multi_ap=1" > f; print "wds_sta=1" > f
+				print "multi_ap_profile=2" > f; print "multi_ap_vlanid=0" > f
+				# one leaf (header): the only station admitted
+				print "max_num_sta=1" > f; print "macaddr_acl=1" > f
+				af = out "/accept-" ifn
+				print bhleaf[1] > af; close(af)
+				print "accept_mac_file=" af > f
+			}
 			# 802.11k/v (kv=1, KV=1 only): neighbor reports, beacon reports
 			# (the AP may ask a client what it hears), BSS transition management
 			if (kv[i]) { print "rrm_neighbor_report=1" > f; print "rrm_beacon_report=1" > f; print "bss_transition=1" > f }
@@ -1844,10 +1860,8 @@ END {
 	}
 	for (i = 1; i <= nnet; i++) if (net[i] in onradio) {
 		if (bh[i]) {
-			lf = ""
-			for (j = 1; j <= nbhleaf; j++) lf = lf (j > 1 ? "," : "") bhleaf[j]
 			for (k = 0; k < cap; k++) if (used[bhband, k] == i) break
-			print "backhaul " bhband " " dev[bhband] " " (k == 0 ? dev[bhband] : dev[bhband] "-" k) " " bssid(bhband, mi[bhband, net[i]]) " " (lf == "" ? "-" : lf) > plan
+			print "backhaul " bhband " " dev[bhband] " " (k == 0 ? dev[bhband] : dev[bhband] "-" k) " " bssid(bhband, mi[bhband, net[i]]) > plan
 			continue
 		}
 		if (rep[i]) print "repeated " net[i] " brwifi" net[i] " " iso[i] > plan
@@ -1889,7 +1903,11 @@ END {
 		for (k = 1; k < cap; k++) if (used[b, k] != "") break
 		print "station " b " " d " " f " " ((k < cap && live[b]) ? d "-" k : "-") > plan
 		if (strep != "0") print "repeater " d " " strep " " ((nrep && (repid in onradio)) ? "brwifi" repid : "-") > plan
-		if (sttrunk) print "bhtrunk " d > plan
+		if (sttrunk) {
+			tv = ""
+			for (j = 1; j <= nnet; j++) if ((net[j] in onradio) && !bh[j] && !rep[j] && rtd[j] == "") tv = tv (tv == "" ? "" : ",") vlan[j]
+			print "bhtrunk " d " " (tv == "" ? "-" : tv) > plan
+		}
 	}
 	for (bi = 1; bi <= nbands; bi++) {
 		b = BANDS[bi]
@@ -1938,8 +1956,8 @@ while read -r t a b c d e f g h; do
 		echo "bss $a $b $c $d $e $f $g $h $(sum "$OUT/sec-$b")" >> "$OUT/plan" ;;
 	net|routed) echo "$t $a $b $c $d" >> "$OUT/plan" ;;
 	repeated|repeater) echo "$t $a $b $c" >> "$OUT/plan" ;;
-	backhaul) echo "$t $a $b $c $d $e" >> "$OUT/plan" ;;
-	bhtrunk) echo "$t $a" >> "$OUT/plan" ;;
+	backhaul) echo "$t $a $b $c $d" >> "$OUT/plan" ;;
+	bhtrunk) echo "$t $a $b" >> "$OUT/plan" ;;
 	station) # station <band> <dev> <conf> <first AP ifname or ->
 		echo "station $a $b $c $(sum "$c") $d" >> "$OUT/plan" ;;
 	monitor) echo "$t $a $b $c $d $e" >> "$OUT/plan" ;;
