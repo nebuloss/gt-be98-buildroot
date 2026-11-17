@@ -646,3 +646,22 @@ wpa_supplicant config.
 - **M1:** tagged VLANs 10/20 over a 4-address link with the RTL as the leaf, two netns with their own MACs.
   Predicted: PASS, and VLAN 20's PCP-5 replies ride a TID-5 link ring.
 - M2, M3 and M5 remain as §5.2 specifies (not written by this lane).
+
+### 8.4 From silicon, run 1117-1807 (q295, imgvj2b), 11-17 — what the OS lane must know before its arms
+
+- ⛔ **No same-box 5 GHz loop on an image with DFS5GH-BAND.** bcawl1 (5gh, PCI dom3) has 5180 MHz and every 5 GHz-low
+  channel DISABLED, and bcawl0 (5gl) has no 5 GHz-high channel. The two 5 GHz radios share no channel, so a box station on
+  bcawl1 cannot join a backhaul AP on bcawl0. The box station's scan with `scan_freq=5180` was refused -22 sixty times,
+  on the image's driver and ours alike. §5.1's box loop, and every arm built on it (driver M0/M3/M5 r2, and mesh-os
+  M3/M4/M6 as written), VOIDs on this image. Options, all needing a decision:
+  - the RTL as the leaf (2.4 GHz; the driver's r3 arms do this for SAE and back-pressure);
+  - a second box;
+  - a bench-only knob that keeps both halves on the bench ko (not built).
+- ✅ The root half works with a non-Broadcom leaf on bsscfg 0 and on a hidden secondary bsscfg (driver M1/M2):
+  - tagged VLANs pass with their VIDs and source MACs;
+  - a VLAN-20 `egress-qos-map` reached TID 5 on air;
+  - leaves are clean (no -2).
+- ⛔→✅ **Group frames:** until open-wifi 8cfc85b7, the root's broadcasts (ARP requests, DHCP offers to new clients) never
+  reached a mac80211 leaf, so the root could not start a flow towards the leaf (GRP 0/5). The fix makes them go 4-address
+  on the link. Until r3 reads GRP=ok, assume root-initiated traffic to the leaf fails on older kos.
+- The AP_VLAN's bsscfg now follows the address hostapd sets on it. Nothing changes for the OS.
