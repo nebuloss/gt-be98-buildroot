@@ -1,0 +1,55 @@
+#!/sbin/openrc-run
+# SPDX-License-Identifier: GPL-2.0
+# Gateway networks (owner 11-17, buildroot docs/ROUTED-NETWORKS-DESIGN.md):
+# a network of the web UI's list (/etc/gt-be98-networks.conf) with
+# mode=gateway gets the box as its gateway: its address on the network's
+# bridge, DHCP/DNS, NAT out of the WAN, the inter-network policy. All the
+# work is /usr/sbin/gt-be98-gw's (its header). In the default runlevel and a
+# clean no-op while no line says mode=gateway (D41's pattern).
+#   reload    the list changed (the web UI; gt-be98-lan and gt-be98-wifi run
+#             it after their own changes: a bridge appeared, moved or went)
+#   reroute   the WAN's lease changed (dhcpcd hook 09-gt-be98-gw, pppd)
+#   features  "features gateway": the web UI offers the gateway mode only
+#             when the OS prints it (the handshake, owner D-GW1)
+# Router mode (gt-be98-router) and gateway networks exclude each other:
+# each refuses while the other is applied (D-GW5).
+description="Gateway networks: the box routes, NATs and serves DHCP/DNS for mode=gateway networks"
+extra_commands="features"
+extra_started_commands="reload reroute"
+
+GWTOOL=${GT_BE98_GW:-/usr/sbin/gt-be98-gw}
+
+depend() {
+	need gt-be98-netguard
+	after gt-be98-drivers gt-be98-wan gt-be98-lan gt-be98-wifi dhcpcd
+	before gt-be98-router
+	use logger
+}
+
+features() { "$GWTOOL" features; }
+
+start() {
+	ebegin "Gateway networks"
+	"$GWTOOL" apply
+	# a network that is refused or has no bridge yet leaves the service
+	# started (logged; a reload re-applies it)
+	eend 0
+}
+
+reload() {
+	ebegin "Gateway networks: re-applying the network list"
+	"$GWTOOL" apply
+	eend $?
+}
+
+reroute() {
+	ebegin "Gateway networks: the WAN changed"
+	"$GWTOOL" reroute
+	eend $?
+}
+
+stop() {
+	ebegin "Stopping the gateway networks"
+	"$GWTOOL" stop
+	eend $?
+}

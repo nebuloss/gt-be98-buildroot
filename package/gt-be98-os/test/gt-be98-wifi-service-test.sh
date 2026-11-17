@@ -156,6 +156,7 @@ vlan_prune() { :; }; br_prune() { :; }; isolate_ports() { :; }
 net_up() { echo "$1" >> "$T/brlog"; echo "up $*" >> "$T/l2log"; return 0; }
 net_prune() { echo "prune $*" >> "$T/l2log"; }
 LAN_FOLLOW=
+GW_FOLLOW=
 ap_override() { :; }	# no web UI file: the settings below
 
 WIFI_NETWORKS="$T/nets" WIFI_SLOTS="$T/slots" WIFI_MAX_BSS=4 HOSTAPD_CONFS=''

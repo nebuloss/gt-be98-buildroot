@@ -582,6 +582,10 @@ cmd_stop() {
 
 # the router (gt-be98-router) follows the WAN when it runs
 router_reroute() {
+	# the gateway networks (gt-be98-gw: table 184, the WAN clash, the NAT)
+	if grep -qs '^net ' "${GW_APPLIED:-/run/gt-be98-gw/applied}"; then
+		rc-service --ifstarted gt-be98-gw reroute >/dev/null 2>&1 &
+	fi
 	[ -f "${ROUTER_APPLIED:-/run/gt-be98-router.applied}" ] || return 0
 	rc-service gt-be98-router reroute >/dev/null 2>&1 &
 }

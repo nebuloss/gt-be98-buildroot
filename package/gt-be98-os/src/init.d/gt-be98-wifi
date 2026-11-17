@@ -194,6 +194,9 @@ WIFI_L2=${GT_BE98_L2:-/usr/sbin/gt-be98-l2}
 # after a reload the wired LAN's VLAN jacks re-resolve their networks (a
 # network's VLAN changed or went away: gt-be98-l2 evicted the jacks)
 LAN_FOLLOW=${GT_BE98_LAN_FOLLOW-rc-service --ifstarted gt-be98-lan reload}
+# then the gateway networks (gt-be98-gw): a network bridge appeared, moved
+# or went, and a gateway network's address follows its bridge
+GW_FOLLOW=${GT_BE98_GW_FOLLOW-rc-service --ifstarted gt-be98-gw reload}
 STEER_PID=$RUNDIR/gt-be98-wifi-steer.pid
 REPROBE_PID=$RUNDIR/gt-be98-wifi-reprobe.pid
 STA_MON_PID=$RUNDIR/gt-be98-wifi-sta.pid
@@ -1577,6 +1580,9 @@ start() {
 		ewarn "gt-be98-wifi started DEGRADED: a part of the configuration failed (above); \`rc-service gt-be98-wifi status\` lists it, a failed radio is retried"
 		slog "started DEGRADED: a part of the configuration failed (rc-service gt-be98-wifi status)"
 	fi
+	# a restart re-made the SSIDs' bridges: the gateway addresses follow
+	# shellcheck disable=SC2086 # a command line
+	[ -n "$GW_FOLLOW" ] && $GW_FOLLOW > /dev/null 2>&1
 	svc_unlock
 	return 0
 }
@@ -1600,6 +1606,8 @@ reload() {
 	steer_apply	# a kv network added or gone
 	# shellcheck disable=SC2086 # a command line
 	[ -n "$LAN_FOLLOW" ] && $LAN_FOLLOW > /dev/null 2>&1
+	# shellcheck disable=SC2086 # a command line
+	[ -n "$GW_FOLLOW" ] && $GW_FOLLOW > /dev/null 2>&1
 	leds_apply	# led= of the list may have changed
 	svc_unlock
 	return $rc

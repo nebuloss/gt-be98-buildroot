@@ -1,0 +1,11 @@
+# dhcpcd hook (sourced): when the WAN uplink gets or changes its IPv4 lease,
+# re-apply the gateway networks (gt-be98-gw reroute: table 184 follows the
+# WAN's gateway, and a network whose subnet now holds the WAN address runs
+# local, NAT refused). Does nothing unless gt-be98-gw applied a network.
+case "$reason" in BOUND|RENEW|REBIND|REBOOT|STATIC|EXPIRE|NOCARRIER) ;; *) return 0 2>/dev/null || exit 0 ;; esac
+grep -qs '^net ' /run/gt-be98-gw/applied || { return 0 2>/dev/null || exit 0; }
+_wan=$(/usr/sbin/gt-be98-wan ifname 2>/dev/null); _wan=${_wan:-rnr0}
+if [ "$interface" = "$_wan" ]; then
+	rc-service --ifstarted gt-be98-gw reroute >/dev/null 2>&1 &
+fi
+unset _wan

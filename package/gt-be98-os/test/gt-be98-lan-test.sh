@@ -835,6 +835,39 @@ o=$(seqf)
 [ $r = 0 ] && [ "$o" = "modprobe rtl8372|put jack_profiles 4=930 5=off 6=921+940 7=off|put jack_block 0|nft -c -f -|nft -f -|l2 up lan brwifi100003 rnr0 930 rnr1|l2 up lan brwifi9 rnr0 921 rnr1|l2 up lan brwifi100005 rnr0 940 rnr1|" ] &&
 	ok "service: jack 4 on a network without an SSID (brwifi100003 + rnr0.930, lan its user), jack 6 tagged 940 (brwifi100005), 921 the SSID's brwifi9" || ko "service no-SSID: rc $r [$o]"
 GT_BE98_NETWORKS="$T/nets.conf" svcj stop > /dev/null
+# the gateway networks follow every reload and start that bridged jacks
+# (GW_FOLLOW: rc-service --ifstarted gt-be98-gw reload); control: an empty conf
+printf '#!/bin/sh\necho "gwfollow $*" >> "$SVCT/seq"\n' > "$T/svc/bin/gwfollow"; chmod +x "$T/svc/bin/gwfollow"
+rm -f "$T/svc/applied" "$T/svc/tripped" "$T/svc/putn"; : > "$T/svc/modules"
+: > "$T/svc/seq"; GT_BE98_GW_FOLLOW="$T/svc/bin/gwfollow reload" GT_BE98_NETWORKS="$T/nets.conf" svcj start
+o=$(seqf); case "$o" in *"l2 up lan brwifi100005 rnr0 940 rnr1|gwfollow reload|") ok "start: gt-be98-gw reload follows the bridges (last)" ;; *) ko "start gw follow: [$o]" ;; esac
+: > "$T/svc/seq"; GT_BE98_GW_FOLLOW="$T/svc/bin/gwfollow reload" GT_BE98_NETWORKS="$T/nets.conf" svcj reload
+o=$(seqf); case "$o" in *"|gwfollow reload|") ok "reload: gt-be98-gw reload follows (last)" ;; *) ko "reload gw follow: [$o]" ;; esac
+GT_BE98_NETWORKS="$T/nets.conf" svcj stop > /dev/null
+printf 'LAN_PORTS=""\n' > "$T/lan.conf"; rm -f "$T/svc/applied"
+: > "$T/svc/seq"; GT_BE98_GW_FOLLOW="$T/svc/bin/gwfollow reload" svcj start
+[ ! -s "$T/svc/seq" ] && ok "control: an empty conf's start runs no gt-be98-gw reload (nothing bridged)" || ko "empty conf gw follow: [$(tr '\n' '|' < "$T/svc/seq")]"
+# the forwarding owner: the routed LAN holds ip_forward as "lan", stop releases it
+r=$(
+	eerror() { :; }; ewarn() { :; }; ebegin() { :; }; eend() { :; }
+	LAN_CONF_FILE="$T/lan.conf"; GT_BE98_FWD="$T/svc/bin/fwd"; . "$SRC/init.d/gt-be98-lan"
+	APPLIED="$T/fwd.applied"; : > "$APPLIED"; LAN_ADDR=192.168.50.1/24; LAN_BRIDGE=br-lan
+	printf '#!/bin/sh\necho "fwd $*" >> "%s"\n' "$T/fwd.log" > "$T/svc/bin/fwd"; chmod +x "$T/svc/bin/fwd"; : > "$T/fwd.log"
+	lan_wan() { echo rnr0; }; nat_clash() { :; }; lan_nft() { :; }; lan_route_table() { :; }; ip() { :; }
+	lan_routed_apply; lan_routed_apply
+	printf '%s' "$(tr '\n' '|' < "$T/fwd.log")$(grep -c '^ipfwd lan$' "$APPLIED")"
+	while read -r k v w x; do [ "$k" = ipfwd ] && "$FWD" release lan; done < "$APPLIED"
+	echo "|$(tail -n1 "$T/fwd.log")"
+)
+[ "$r" = "fwd hold lan|1|fwd release lan" ] && ok "routed LAN: forwarding held once as lan (gt-be98-fwd), released at stop" || ko "routed LAN fwd: [$r]"
+# router mode and gateway networks exclude each other (D-GW5): router refused while gt-be98-gw applied a network
+printf 'net 4 brwifi100004 192.168.40.1/24\n' > "$T/gw.applied"
+mkdir -p "$T/router"; printf 'ROUTER_WAN="rnr0"\nROUTER_LANS="bcawl3=192.168.83.1/24"\n' > "$T/router/router.conf"
+r=$( ( eerror() { echo "E $*"; }; ROUTER_DIR="$T/router"; GT_BE98_LAN_APPLIED="$T/none"; GT_BE98_GW_APPLIED="$T/gw.applied"; . "$SRC/init.d/gt-be98-router"; load_conf ) 2>&1; echo "rc=$?")
+case "$r" in *"gateway networks are applied"*rc=1) ok "router mode refused while gateway networks are applied" ;; *) ko "router vs gw: [$r]" ;; esac
+: > "$T/gw.applied"
+r=$( ( eerror() { echo "E $*"; }; ROUTER_DIR="$T/router"; GT_BE98_LAN_APPLIED="$T/none"; GT_BE98_GW_APPLIED="$T/gw.applied"; . "$SRC/init.d/gt-be98-router"; load_conf ) 2>&1; echo "rc=$?")
+[ "$r" = "rc=0" ] && ok "control: no gateway network applied: router load_conf rc 0" || ko "router control: [$r]"
 # persistence: the networks file is saved and restored (a cold boot does not wait for the web UI)
 for k in AUTOSAVE_WATCH ALLOW_PATHS; do
 	sed -n "s/^$k=\"\(.*\)\"$/ \1 /p" "$SRC/conf.d/gt-be98-jffs" | grep -q ' etc/gt-be98-networks.conf ' && ok "conf.d/gt-be98-jffs $k lists etc/gt-be98-networks.conf" || ko "$k lacks the networks file"

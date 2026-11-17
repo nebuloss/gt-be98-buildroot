@@ -14,7 +14,7 @@ GT_BE98_OS_LOCAL_CONF = $(call qstrip,$(BR2_PACKAGE_GT_BE98_OS_LOCAL_CONF))
 
 GT_BE98_OS_SERVICES = gt-be98-watchdog gt-be98-netguard gt-be98-jffs gt-be98-drivers gt-be98-wifi gt-be98-leds \
 	gt-be98-telnet gt-be98-boot-done gt-be98-persist gt-be98-autosave gt-be98-router gt-be98-lan gt-be98-netconsole \
-	gt-be98-hostkeys gt-be98-wan \
+	gt-be98-hostkeys gt-be98-wan gt-be98-gw \
 	sshd dhcpcd chronyd \
 	syslogd dnsmasq
 
@@ -30,7 +30,7 @@ define GT_BE98_OS_INSTALL_TARGET_CMDS
 		gt-be98-macaddr gt-be98-netguard gt-be98-save gt-be98-nandcheck \
 		gt-be98-nandpage gt-be98-autosave gt-be98-wifi-gen gt-be98-wifi-sched \
 		gt-be98-leds gt-be98-wifi-sta gt-be98-wifi-reprobe gt-be98-wan \
-		gt-be98-wps gt-be98-wifi-steer gt-be98-l2; do \
+		gt-be98-wps gt-be98-wifi-steer gt-be98-l2 gt-be98-fwd gt-be98-gw; do \
 		$(INSTALL) -D -m 0755 $(@D)/sbin/$$f $(TARGET_DIR)/usr/sbin/$$f || exit 1; \
 	done
 	for s in $(GT_BE98_OS_SERVICES); do \
@@ -47,6 +47,8 @@ define GT_BE98_OS_INSTALL_TARGET_CMDS
 		$(TARGET_DIR)/lib/dhcpcd/dhcpcd-hooks/07-gt-be98-wan
 	$(INSTALL) -D -m 0644 $(@D)/dhcpcd-hooks/08-gt-be98-lan \
 		$(TARGET_DIR)/lib/dhcpcd/dhcpcd-hooks/08-gt-be98-lan
+	$(INSTALL) -D -m 0644 $(@D)/dhcpcd-hooks/09-gt-be98-gw \
+		$(TARGET_DIR)/lib/dhcpcd/dhcpcd-hooks/09-gt-be98-gw
 	mkdir -p $(TARGET_DIR)/etc/gt-be98-wan && chmod 0700 $(TARGET_DIR)/etc/gt-be98-wan
 	mkdir -p $(TARGET_DIR)/rom $(TARGET_DIR)/overlay $(TARGET_DIR)/data \
 		$(TARGET_DIR)/etc/ssh/authorized_keys $(TARGET_DIR)/etc/syslog.d
@@ -97,8 +99,10 @@ define GT_BE98_OS_FINALIZE
 	# gt-be98-wan does nothing without /etc/gt-be98-wan/wan.conf (DHCP on rnr0)
 	# gt-be98-lan (D41) does nothing until /etc/conf.d/gt-be98-lan names a
 	# VLAN jack (LAN_PORT_<port>) or LAN_PORTS: the switch stays in reset
+	# gt-be98-gw does nothing until /etc/gt-be98-networks.conf has a
+	# mode=gateway line
 	for s in dhcpcd sshd chronyd gt-be98-drivers gt-be98-netconsole gt-be98-autosave \
-		gt-be98-boot-done gt-be98-leds gt-be98-wan gt-be98-lan; do \
+		gt-be98-boot-done gt-be98-leds gt-be98-wan gt-be98-lan gt-be98-gw; do \
 		ln -sfn /etc/init.d/$$s $(TARGET_DIR)/etc/runlevels/default/$$s; done
 	GT_BE98_LOCAL_CONF="$(GT_BE98_OS_LOCAL_CONF)" TARGET_DIR="$(TARGET_DIR)" \
 		GT_BE98_RELEASE="$(BR2_PACKAGE_GT_BE98_OS_RELEASE)" \

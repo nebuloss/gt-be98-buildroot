@@ -1,0 +1,757 @@
+#!/bin/sh
+# SPDX-License-Identifier: GPL-2.0
+# gt-be98-gw: GATEWAY NETWORKS (buildroot docs/ROUTED-NETWORKS-DESIGN.md).
+# A network of the web UI's list (/etc/gt-be98-networks.conf) whose line
+# says mode=gateway is routed by the box: its address on the network's
+# bridge, DHCP and DNS (one dnsmasq for all of them), policy routing and NAT
+# out of the WAN, and the inter-network policy (UniFi's: networks reach each
+# other, isolate=1 per network; the box's management on mgmt=1 networks).
+# A line without mode=, or mode=vlan, is a VLAN-only network (the upstream
+# router is its gateway): this tool never touches it, whatever its subnet=
+# (owner D-GW1). With no gateway network this tool is a clean no-op.
+#
+#   gt-be98-gw apply      (re)apply the list: networks no longer gateway (or
+#                         refused, or moved) are stopped first, then
+#                         gt-be98-l2 sync (their VLAN's trunk sub-interface:
+#                         removed for a gateway network, carried again for a
+#                         VLAN-only one), then the rule set, the addresses,
+#                         the routes, dnsmasq, forwarding
+#   gt-be98-gw reroute    the WAN's lease or netdev changed (dhcpcd hook
+#                         09-gt-be98-gw, pppd ip-up/down via gt-be98-wan):
+#                         apply again (the WAN default of table GW_TABLE, the
+#                         WAN-subnet clash, the NAT)
+#   gt-be98-gw stop       everything this tool applied is undone (the bridges
+#                         stay gt-be98-l2's, still without a trunk VLAN while
+#                         the file says mode=gateway)
+#   gt-be98-gw status     one line per network: "net <id> <state> <bridge|->
+#                         <cidr> <isolate> <mgmt> starts=<n> refusals=<n>
+#                         why=<text>", then "wan <netdev>", "forwarding 0|1"
+#   gt-be98-gw features   "features gateway" (the web UI's handshake: it
+#                         offers the gateway mode only when the OS says so)
+#   gt-be98-gw nft-text <wan>     the rule set of the current state (tests)
+#   gt-be98-gw dnsmasq-text       dnsmasq's config of the current state (tests)
+#
+# networks.conf (written by the web UI; parsed, never sourced; keys in any
+# order, unknown keys ignored):
+#   network=<id> name=<pct> vlan=<vid> subnet=<A.B.C.D/P> mode=gateway
+#   isolate=0|1 mgmt=0|1 [dhcp=0|1 dhcp_start=<ip> dhcp_end=<ip> lease=<t>]
+# isolate (default 0): no forwarding to or from any other gateway network
+# (internet kept). mgmt (default 1, 0 when isolate=1 and mgmt= is absent):
+# the box's SSH (22) and web UI (80, 443) reachable from that network. DHCP
+# (67), DNS (53) and ICMP are always accepted from a gateway network. dhcp
+# defaults to 1 with the range .100-.199 of a /24 or larger (the first and
+# last host of a smaller subnet, the gateway address excluded); dhcp_start /
+# dhcp_end (both or neither) and lease= (<n>m|<n>h|<n>d|infinite, default
+# 12h) are the web UI's phase-3 fields, re-checked here.
+#
+# PER NETWORK, one object (state $GW/net/<id>): init (the line parsed and
+# checked), start (address + policy rules on its bridge), stop (both
+# removed, the conntrack entries of its subnet deleted), destroy (state
+# gone). States: inactive (refused, or no bridge yet: why=), local (address,
+# DHCP and DNS, no NAT: the WAN's address is inside its subnet, or the WAN
+# port is a LAN jack; the inter-network policy still applies), routed
+# (address, DHCP, DNS, NAT out of the WAN). Counters: starts, refusals.
+#
+# REFUSED (logged; that network only, never the whole file): a subnet that
+# is not RFC 1918 /16../30 with a host address (D-GW9); VLAN 1 (Default:
+# the trunk's untagged management) or outside 2..4094; a subnet overlapping
+# an earlier gateway network's (file order), an address the box has on any
+# interface but the WAN (the USB lifeline, br-lan's LAN_ADDR, a Wi-Fi
+# station's routed network), LAN_ADDR or a station routed= network not up
+# yet; a VID equal to WAN_VLAN; more than GW_MAX (16) gateway networks; the
+# bridge carrying an address this tool did not set; router mode applied
+# (gt-be98-router: the two exclude each other, D-GW5). A bad DHCP field turns
+# that network's DHCP off (logged), the rest of it runs.
+#
+# THE BRIDGE is gt-be98-l2's, never created here: resolved by VID from
+# `gt-be98-l2 list` (an SSID's brwifi<id>, or gt-be98-lan's brwifi<100000+id>
+# for a network without an SSID). It must run with "trunk -" (no
+# <trunk>.<vid>: the two-gateway rule): this tool holds it ($GW/hold/<br>)
+# while its address is set, so gt-be98-l2 never carries the VLAN upstream
+# under it, and lets go only after the address is gone. A network with no
+# bridge yet (no SSID, no jack on it) is inactive until one appears:
+# gt-be98-lan and gt-be98-wifi run `rc-service gt-be98-gw reload` after
+# their own changes (a lan-only bridge yields its VLAN to an SSID's bridge:
+# the address follows).
+#
+# ROUTING: `ip rule iif <br> lookup main suppress_prefixlength 0` (the box's
+# connected routes: other gateway networks, the WAN subnet) then `ip rule
+# iif <br> lookup GW_TABLE`, a table holding only the WAN's default route
+# (`unreachable default` without one: never leaked through another default
+# route, such as the USB lifeline's). By input interface, never by source
+# (that would capture dnsmasq's own replies).
+# POLICY: table inet gt_be98_gw (forward: replies and DNATed flows into a
+# network, each network to the WAN (routed ones), networks to each other
+# unless isolated, nothing else in or out; input: DHCP, DNS, ICMP, the
+# management ports on mgmt networks, nothing else); table ip gt_be98_gw_nat
+# (masquerade of the routed subnets out of the WAN). A drop in any table is
+# final, so it composes with gt_be98_wan, webui and gt_be98_lan. Every apply
+# that NARROWS access (a network isolated, its management turned off, its
+# NAT refused, the network stopped) deletes the affected conntrack entries:
+# a flow the Runner offloaded before the change would otherwise keep running
+# in hardware (the flow cache drops an entry whose conntrack dies).
+# FORWARDING: held as "gw" (gt-be98-fwd) while any network is local/routed.
+# Hooks left for later phases: static leases (dhcp-hostsfile $GW/dhcp-hosts,
+# re-read on SIGHUP), IPv6 (off on the bridges: gt-be98-l2), G6b offload.
+set -u
+RUNDIR=${GT_BE98_RUN:-/run}
+GW=${GT_BE98_GW_STATE:-$RUNDIR/gt-be98-gw}
+NETWORKS=${GT_BE98_NETWORKS:-/etc/gt-be98-networks.conf}
+SYSNET=${GT_BE98_SYSNET:-/sys/class/net}
+L2=${GT_BE98_L2:-/usr/sbin/gt-be98-l2}
+WANT=${GT_BE98_WAN:-/usr/sbin/gt-be98-wan}
+FWD=${GT_BE98_FWD:-/usr/sbin/gt-be98-fwd}
+LAN_CONF=${GT_BE98_LAN_CONF:-/etc/conf.d/gt-be98-lan}
+LAN_APPLIED=${GT_BE98_LAN_APPLIED:-$RUNDIR/gt-be98-lan.applied}
+STA_ROUTED=${GT_BE98_STA_ROUTED:-$RUNDIR/gt-be98-wifi/sta/routed.applied}
+ROUTER_APPLIED=${GT_BE98_ROUTER_APPLIED:-$RUNDIR/gt-be98-router.applied}
+RESOLV=${GT_BE98_GW_RESOLV:-/etc/resolv.conf}
+GW_TABLE=184
+GW_PRIO=184		# suppress rule; the table rule is GW_PRIO + 1
+GW_MAX=16
+NFT_TABLE=gt_be98_gw
+NAT_TABLE=gt_be98_gw_nat
+MGMT_PORTS="22, 80, 443"
+
+log() { logger -t gt-be98-gw -- "$*" 2>/dev/null; echo "gt-be98-gw: $*" >&2; }
+
+lock() {
+	local n=0 o
+	mkdir -p "$GW/net" "$GW/hold" || return 1
+	chmod 755 "$GW" 2>/dev/null
+	while ! mkdir "$GW/.lock" 2>/dev/null; do
+		o=$(cat "$GW/.lock/pid" 2>/dev/null)
+		if [ -n "$o" ] && ! kill -0 "$o" 2>/dev/null; then rm -rf "$GW/.lock"; continue; fi
+		n=$((n + 1)); [ $n -ge 60 ] && { rm -rf "$GW/.lock"; n=0; continue; }
+		sleep 1
+	done
+	echo $$ > "$GW/.lock/pid"
+}
+unlock() { rm -rf "$GW/.lock"; }
+
+# ---- IPv4 arithmetic ----------------------------------------------------------------
+ip_ok() {
+	local IFS=. a b c d x
+	case "$1" in *[!0-9.]*|.*|*.|*..*) return 1 ;; esac
+	set -- $1
+	[ $# = 4 ] || return 1
+	for x; do case "$x" in ''|0[0-9]*) return 1 ;; esac; [ "$x" -le 255 ] || return 1; done
+}
+ip2n() { local IFS=.; set -- $1; echo $(( ($1 << 24) + ($2 << 16) + ($3 << 8) + $4 )); }
+n2ip() { echo "$(( ($1 >> 24) & 255 )).$(( ($1 >> 16) & 255 )).$(( ($1 >> 8) & 255 )).$(( $1 & 255 ))"; }
+mask_of() { echo $(( $1 ? (0xffffffff << (32 - $1)) & 0xffffffff : 0 )); }
+# a.b.c.d/len -> its subnet a.b.c.0/len
+subnet_of() { local l=${1#*/} m; m=$(mask_of "$l"); echo "$(n2ip $(( $(ip2n "${1%/*}") & m )))/$l"; }
+# 0 when the two CIDRs overlap
+cidr_overlap() {
+	local l m
+	l=${1#*/}; [ "${2#*/}" -lt "$l" ] && l=${2#*/}
+	m=$(mask_of "$l")
+	[ $(( $(ip2n "${1%/*}") & m )) -eq $(( $(ip2n "${2%/*}") & m )) ]
+}
+# a gateway CIDR (D-GW9): RFC 1918, /16../30, a host address; why on stdout
+cidr_why() {
+	local a=${1%/*} l=${1#*/} n m b
+	case "$1" in */*) ;; *) echo "subnet '$1': a gateway address with its prefix (A.B.C.D/P)"; return ;; esac
+	case "$l" in ''|0*|*[!0-9]*) echo "subnet '$1': prefix /16../30"; return ;; esac
+	ip_ok "$a" || { echo "subnet '$1': not an IPv4 address"; return; }
+	[ "$l" -ge 16 ] && [ "$l" -le 30 ] || { echo "subnet '$1': prefix /16../30 (D-GW9)"; return; }
+	n=$(ip2n "$a"); m=$(mask_of "$l"); b=$(( n & m ))
+	cidr_overlap "$1" 10.0.0.0/8 || cidr_overlap "$1" 172.16.0.0/12 || cidr_overlap "$1" 192.168.0.0/16 ||
+		{ echo "subnet '$1': not a private (RFC 1918) range (D-GW9)"; return; }
+	[ "$n" != "$b" ] || { echo "subnet '$1': $a is the network address"; return; }
+	[ "$n" != $(( b | (~m & 0xffffffff) )) ] || { echo "subnet '$1': $a is the broadcast address"; return; }
+}
+# the default DHCP range of gateway CIDR $1: "<start> <end>"
+dhcp_default() {
+	local n l m b bc s e
+	n=$(ip2n "${1%/*}"); l=${1#*/}; m=$(mask_of "$l"); b=$(( n & m )); bc=$(( b | (~m & 0xffffffff) ))
+	if [ "$l" -le 24 ]; then s=$(( b + 100 )) e=$(( b + 199 ))
+	else s=$(( b + 1 )) e=$(( bc - 1 )); fi
+	[ $s = "$n" ] && s=$(( s + 1 ))
+	[ $e = "$n" ] && e=$(( e - 1 ))
+	echo "$(n2ip $s) $(n2ip $e)"
+}
+# a DHCP range $2..$3 of gateway CIDR $1: inside it, not the network,
+# broadcast or gateway address, start <= end; why on stdout
+range_why() {
+	local n l m b bc s e
+	ip_ok "$2" && ip_ok "$3" || { echo "dhcp_start/dhcp_end '$2'..'$3': IPv4 addresses"; return; }
+	n=$(ip2n "${1%/*}"); l=${1#*/}; m=$(mask_of "$l"); b=$(( n & m )); bc=$(( b | (~m & 0xffffffff) ))
+	s=$(ip2n "$2"); e=$(ip2n "$3")
+	[ $(( s & m )) = $b ] && [ $(( e & m )) = $b ] || { echo "DHCP range $2..$3 outside $(subnet_of "$1")"; return; }
+	[ $s -le $e ] || { echo "DHCP range $2..$3: start after end"; return; }
+	[ $s != $b ] && [ $e != $bc ] || { echo "DHCP range $2..$3 holds the network or broadcast address"; return; }
+	[ $n -lt $s ] || [ $n -gt $e ] || { echo "DHCP range $2..$3 holds the gateway address ${1%/*}"; return; }
+}
+
+# ---- the network list -----------------------------------------------------------------
+# the mode=gateway lines of the list, one per line, in file order:
+# "<id> <vid> <subnet|-> <isolate|-> <mgmt|-> <dhcp|-> <start|-> <end|-> <lease|->"
+# (- = the key is absent; values with a character outside the expected set
+# are kept as "?" so that the check refuses them, never re-interpreted)
+gw_lines() {
+	[ -r "$NETWORKS" ] || return 0
+	awk '
+		function v(k, re) { if (!(k in f)) return "-"; if (f[k] !~ re) return "?"; return f[k] }
+		/^[ \t]*(#|$)/ { next }
+		{ split("", f)
+		  for (i = 1; i <= NF; i++) { k = $i; sub(/=.*/, "", k); f[k] = substr($i, length(k) + 2) }
+		  if (f["mode"] != "gateway") next
+		  print v("network", "^[0-9]+$"), v("vlan", "^[0-9]+$"), v("subnet", "^[0-9./]+$"),
+			v("isolate", "^[01]$"), v("mgmt", "^[01]$"), v("dhcp", "^[01]$"),
+			v("dhcp_start", "^[0-9.]+$"), v("dhcp_end", "^[0-9.]+$"), v("lease", "^[0-9a-z]+$") }' "$NETWORKS"
+}
+
+# ---- what the box has -------------------------------------------------------------------
+# the WAN netdev (gt-be98-wan's; rnr0 when it reports none) and its config
+wan_ctx() {
+	local l
+	WAN_IF=$("$WANT" ifname 2>/dev/null)
+	case "$WAN_IF" in ''|*[!A-Za-z0-9_.-]*) WAN_IF=rnr0 ;; esac
+	WAN_VLAN= WAN_ADDR= WAN_PORT=rnr0
+	for l in $("$WANT" check 2>/dev/null); do
+		case "$l" in
+		WAN_VLAN=*) WAN_VLAN=${l#*=} ;; WAN_ADDR=*) WAN_ADDR=${l#*=} ;; WAN_PORT=*) WAN_PORT=${l#*=} ;;
+		esac
+	done
+}
+# every IPv4 address of the box: "<dev> <cidr>" per line
+box_addrs() { ip -4 -o addr show 2>/dev/null | awk '{ for (i = 1; i < NF; i++) if ($i == "inet") { d = $2; sub(/@.*/, "", d); print d, $(i + 1) } }'; }
+# configured but maybe not up yet: br-lan's LAN_ADDR, the station's routed networks
+conf_nets() {
+	local a b c
+	a=$(sed -n 's/^LAN_ADDR="\{0,1\}\([0-9./]*\)"\{0,1\}$/\1/p' "$LAN_CONF" 2>/dev/null | tail -n1)
+	[ -n "$a" ] && echo "LAN_ADDR(gt-be98-lan) $a"
+	if [ -r "$STA_ROUTED" ]; then
+		while read -r b c _; do [ -n "${c:-}" ] && echo "routed(gt-be98-wifi-sta,$b) $c"; done < "$STA_ROUTED"
+	fi
+}
+# is the WAN port a VLAN jack of gt-be98-lan (LAN_PORT_<port> native=)?
+wan_port_jack() {
+	case "$WAN_PORT" in rnr[23]) ;; *) return 1 ;; esac
+	grep -q "^LAN_PORT_$WAN_PORT=\"\{0,1\}[^\"]*native=[0-9]" "$LAN_CONF" 2>/dev/null &&
+		! grep -q "^LAN_PORT_$WAN_PORT=\"\{0,1\}[^\"]*enabled=0" "$LAN_CONF" 2>/dev/null
+}
+
+# ---- one network: init / check ----------------------------------------------------------
+# net_init <id> <vid> <subnet> <isolate> <mgmt> <dhcp> <start> <end> <lease>
+# into N_*; N_ERR the refusal (shape), N_DWHY why its DHCP is off
+net_init() {
+	N_ID=$1 N_VID=$2 N_CIDR=$3 N_ERR= N_DWHY= N_LOCAL=
+	N_ISO=$4; [ "$N_ISO" = - ] && N_ISO=0
+	N_MGMT=$5; if [ "$N_MGMT" = - ]; then N_MGMT=1; [ "$N_ISO" = 1 ] && N_MGMT=0; fi
+	N_DHCP=$6; [ "$N_DHCP" = - ] && N_DHCP=1
+	N_LEASE=$9; [ "$N_LEASE" = - ] && N_LEASE=12h
+	N_SUB=
+	case "$N_ID" in ''|0*|*[!0-9]*) N_ERR="network id '$1'"; return ;; esac
+	[ ${#N_ID} -le 5 ] || { N_ERR="network id '$1' (1..99999)"; return; }
+	case "$N_VID" in ''|0*|*[!0-9]*) N_ERR="vlan '$2' (2..4094)"; return ;; esac
+	[ "$N_VID" = 1 ] && { N_ERR="VLAN 1 is Default, the trunk's untagged management: never a gateway network"; return; }
+	[ ${#N_VID} -le 4 ] && [ "$N_VID" -ge 2 ] && [ "$N_VID" -le 4094 ] || { N_ERR="vlan '$2' (2..4094)"; return; }
+	case "$N_ISO$N_MGMT$N_DHCP" in *[!01]*) N_ERR="isolate/mgmt/dhcp: 0 or 1"; return ;; esac
+	N_ERR=$(cidr_why "$N_CIDR"); [ -z "$N_ERR" ] || return
+	N_SUB=$(subnet_of "$N_CIDR")
+	[ "$N_DHCP" = 1 ] || return 0
+	case "$N_LEASE" in
+	infinite) ;;
+	[1-9]*) case "${N_LEASE%[mhd]}" in *[!0-9]*) N_DWHY="lease '$N_LEASE' (<n>m, <n>h, <n>d or infinite)" ;; esac ;;
+	*) N_DWHY="lease '$N_LEASE' (<n>m, <n>h, <n>d or infinite)" ;;
+	esac
+	if [ "$7" = - ] && [ "$8" = - ]; then
+		set -- $(dhcp_default "$N_CIDR"); N_START=$1 N_END=$2
+	elif [ "$7" = - ] || [ "$8" = - ]; then
+		N_DWHY="dhcp_start and dhcp_end: both or neither"
+	else
+		N_START=$7 N_END=$8
+		[ -n "$N_DWHY" ] || N_DWHY=$(range_why "$N_CIDR" "$N_START" "$N_END")
+	fi
+	[ -z "$N_DWHY" ] || N_DHCP=0
+}
+
+# state file of network $1: "key value" lines
+st_get() { sed -n "s/^$2 //p" "$GW/net/$1" 2>/dev/null | head -n1; }
+# st_set <id> "<key> <value>"...: those keys replaced, the others kept
+st_set() {
+	local id=$1 k x
+	shift
+	cp "$GW/net/$id" "$GW/net/$id.new" 2>/dev/null || : > "$GW/net/$id.new"
+	for x; do
+		k=${x%% *}
+		grep -v "^$k " "$GW/net/$id.new" > "$GW/net/$id.tmp"; echo "$x" >> "$GW/net/$id.tmp"
+		mv -f "$GW/net/$id.tmp" "$GW/net/$id.new"
+	done
+	mv -f "$GW/net/$id.new" "$GW/net/$id"
+}
+counter() { local v; v=$(st_get "$1" "$2"); case "$v" in ''|*[!0-9]*) v=0 ;; esac; echo "$v"; }
+
+# ---- one network: stop / destroy --------------------------------------------------------
+# the network applied as state $1 leaves: address and rules removed, the
+# conntrack entries of its subnet deleted (narrowing), the bridge let go
+net_stop() {
+	local id=$1 b c s
+	b=$(st_get "$id" bridge); c=$(st_get "$id" cidr); s=$(st_get "$id" state)
+	if [ -n "$b" ] && [ "$b" != - ]; then
+		ip rule del iif "$b" priority "$GW_PRIO" 2>/dev/null
+		ip rule del iif "$b" priority $((GW_PRIO + 1)) 2>/dev/null
+		[ -n "$c" ] && [ "$c" != - ] && ip addr del "$c" dev "$b" 2>/dev/null
+		rm -f "$GW/hold/$b"
+	fi
+	case "$s" in local|routed) ct_del "$(subnet_of "$c")" ;; esac
+	sed -i "/^net $id /d" "$GW/applied" 2>/dev/null
+}
+net_destroy() { rm -f "$GW/net/$1"; }
+
+# conntrack entries from or to subnet $1 (and, given $2, only between $1 and $2)
+ct_del() {
+	command -v conntrack >/dev/null 2>&1 || return 0
+	if [ -n "${2:-}" ]; then
+		conntrack -D -s "$1" -d "$2" >/dev/null 2>&1
+		conntrack -D -s "$2" -d "$1" >/dev/null 2>&1
+	else
+		conntrack -D -s "$1" >/dev/null 2>&1
+		conntrack -D -d "$1" >/dev/null 2>&1
+	fi
+	return 0
+}
+
+# ---- the rule set, the routes, dnsmasq ------------------------------------------------------
+# the active networks of the state into A_* lists (bridges), A_NAT (subnets)
+active_sets() {
+	local f id s b
+	A_GW= A_ISO= A_MGMT= A_NATB= A_NAT=
+	for f in "$GW/net"/*; do
+		[ -f "$f" ] || continue
+		id=${f##*/}; case "$id" in *.new) continue ;; esac
+		s=$(st_get "$id" state); b=$(st_get "$id" bridge)
+		case "$s" in local|routed) ;; *) continue ;; esac
+		A_GW="$A_GW${A_GW:+, }$b"
+		[ "$(st_get "$id" isolate)" = 1 ] && A_ISO="$A_ISO${A_ISO:+, }$b"
+		[ "$(st_get "$id" mgmt)" = 1 ] && A_MGMT="$A_MGMT${A_MGMT:+, }$b"
+		[ "$s" = routed ] && { A_NATB="$A_NATB${A_NATB:+, }$b"; A_NAT="$A_NAT${A_NAT:+, }$(st_get "$id" subnet)"; }
+	done
+}
+set_text() {	# <name> <elements, ", " separated>
+	echo "	set $1 {"
+	echo "		type ifname;"
+	[ -n "$2" ] && echo "		elements = { $2 }"
+	echo "	}"
+}
+# the rule set (stdout) for WAN netdev $1; nothing but the deletes when no
+# network is active
+nft_text() {
+	local w=$1
+	active_sets
+	echo "# generated by gt-be98-gw - do not edit"
+	echo "table inet $NFT_TABLE {}"
+	echo "delete table inet $NFT_TABLE"
+	echo "table ip $NAT_TABLE {}"
+	echo "delete table ip $NAT_TABLE"
+	[ -n "$A_GW" ] || return 0
+	echo "table inet $NFT_TABLE {"
+	set_text gw "$A_GW"
+	set_text iso "$A_ISO"
+	set_text mgmt "$A_MGMT"
+	set_text nat "$A_NATB"
+	cat <<-EOF
+		chain forward {
+			type filter hook forward priority filter; policy accept;
+			oifname @gw ct state established,related accept
+			oifname @gw ct status dnat accept
+			iifname @nat oifname "$w" accept
+			iifname @iso counter drop
+			oifname @iso counter drop
+			iifname @gw oifname @gw accept
+			iifname @gw counter drop
+			oifname @gw counter drop
+		}
+		chain input {
+			type filter hook input priority filter; policy accept;
+			iifname @gw ct state established,related accept
+			iifname @gw udp dport 67 accept
+			iifname @gw meta l4proto { tcp, udp } th dport 53 accept
+			iifname @gw meta l4proto icmp accept
+			iifname @mgmt tcp dport { $MGMT_PORTS } accept
+			iifname @gw counter drop
+		}
+	}
+	EOF
+	[ -n "$A_NAT" ] || return 0
+	cat <<-EOF
+	table ip $NAT_TABLE {
+		chain postrouting {
+			type nat hook postrouting priority srcnat; policy accept;
+			oifname "$w" ip saddr { $A_NAT } masquerade
+		}
+	}
+	EOF
+}
+nft_apply() {
+	local f=$GW/gw.nft
+	nft_text "$1" > "$f.new" || return 1
+	if nft -c -f "$f.new" && nft -f "$f.new"; then
+		mv -f "$f.new" "$f"
+		[ -n "$A_GW" ] || rm -f "$f"	# nothing loaded: nothing to undo
+		return 0
+	fi
+	log "rule set rejected ($f.new kept): gateway networks get no forwarding"
+	return 1
+}
+
+# table GW_TABLE: the WAN's default route only, else unreachable
+route_table() {
+	local gw
+	ip route flush table "$GW_TABLE" 2>/dev/null
+	gw=$(ip -4 route show default dev "$1" 2>/dev/null | sed -n 's/^default via \([0-9.]*\).*/\1/p' | head -n1)
+	if [ -n "$gw" ]; then
+		ip route replace default via "$gw" dev "$1" table "$GW_TABLE"
+	elif ip -4 route show default dev "$1" 2>/dev/null | grep -q '^default'; then
+		ip route replace default dev "$1" table "$GW_TABLE"
+	else
+		log "$1 has no default route yet: the gateway networks reach the internet with its lease"
+		ip route replace unreachable default table "$GW_TABLE"
+	fi
+}
+
+# dnsmasq's config (stdout) for the active networks; nothing when none
+dnsmasq_text() {
+	local f id s b c
+	active_sets
+	[ -n "$A_GW" ] || return 0
+	echo "# generated by gt-be98-gw - do not edit"
+	echo "bind-dynamic"
+	echo "except-interface=lo"
+	# never on the WAN, never on the trunk / management port (etc/dnsmasq.conf)
+	echo "except-interface=rnr0"
+	[ "$WAN_IF" = rnr0 ] || echo "except-interface=$WAN_IF"
+	echo "resolv-file=$RESOLV"
+	echo "pid-file=$GW/dnsmasq.pid"
+	echo "dhcp-leasefile=$GW/leases"
+	echo "dhcp-hostsfile=$GW/dhcp-hosts"
+	echo "dhcp-authoritative"
+	for f in "$GW/net"/*; do
+		[ -f "$f" ] || continue
+		id=${f##*/}; case "$id" in *.new) continue ;; esac
+		s=$(st_get "$id" state); b=$(st_get "$id" bridge); c=$(st_get "$id" cidr)
+		case "$s" in local|routed) ;; *) continue ;; esac
+		echo "interface=$b"
+		[ "$(st_get "$id" dhcp)" = 1 ] || continue
+		echo "dhcp-range=set:n$id,$(st_get "$id" dhcp_start),$(st_get "$id" dhcp_end),$(n2ip "$(mask_of "${c#*/}")"),$(st_get "$id" lease)"
+		echo "dhcp-option=tag:n$id,option:router,${c%/*}"
+		echo "dhcp-option=tag:n$id,option:dns-server,${c%/*}"
+	done
+}
+pid_alive() { local p; p=$(cat "$1" 2>/dev/null) && [ -n "$p" ] && kill -0 "$p" 2>/dev/null; }
+dnsmasq_stop() {
+	[ -f "$GW/dnsmasq.pid" ] || return 0
+	start-stop-daemon --stop --pidfile "$GW/dnsmasq.pid" --retry TERM/5/KILL/2 >/dev/null 2>&1
+	rm -f "$GW/dnsmasq.pid"
+}
+# (re)start dnsmasq when its config changed or it died; stopped when no network
+dnsmasq_apply() {
+	local t
+	t=$(dnsmasq_text)
+	if [ -z "$t" ]; then dnsmasq_stop; rm -f "$GW/dnsmasq.conf"; return 0; fi
+	[ -f "$GW/dhcp-hosts" ] || : > "$GW/dhcp-hosts"
+	if [ "$t" = "$(cat "$GW/dnsmasq.conf" 2>/dev/null)" ] && pid_alive "$GW/dnsmasq.pid"; then return 0; fi
+	dnsmasq_stop
+	printf '%s\n' "$t" > "$GW/dnsmasq.conf"
+	dnsmasq --conf-file="$GW/dnsmasq.conf" || { log "dnsmasq did not start: no DHCP/DNS on the gateway networks"; return 1; }
+}
+
+# ---- apply ---------------------------------------------------------------------------------
+# the bridge gt-be98-l2 runs VLAN $1 on into BR and its trunk into BRT ("" none)
+l2_bridge() {
+	local b t v
+	BR= BRT=
+	while read -r b t v _; do
+		[ "$v" = "$1" ] && { BR=$b BRT=$t; return 0; }
+	done <<-EOF
+	$("$L2" list 2>/dev/null)
+	EOF
+	return 1
+}
+
+cmd_apply() {
+	local f id vid sub iso mgmt dh st en le acc= n=0 why l d c b s rc=0 prev_iso prev_mgmt prev_s prev_why old
+	local addrs cnets nat_why=
+	if [ -f "$ROUTER_APPLIED" ] && [ -n "$(gw_lines)" ]; then
+		router_refused=1
+	else
+		router_refused=
+	fi
+	wan_ctx
+	addrs=$(box_addrs); cnets=$(conf_nets)
+	wan_port_jack && nat_why="the WAN port $WAN_PORT is a LAN jack (LAN_PORT_$WAN_PORT): no NAT through it"
+	: > "$GW/wanted.new"
+	# init + check every gateway line (file order: the first one keeps a subnet)
+	while read -r id vid sub iso mgmt dh st en le; do
+		[ -n "$id" ] || continue
+		net_init "$id" "$vid" "$sub" "$iso" "$mgmt" "$dh" "$st" "$en" "$le"
+		why=$N_ERR
+		case "$N_ID" in ''|0*|*[!0-9]*) log "a mode=gateway line without a valid network= id: skipped"; continue ;; esac
+		if [ -z "$why" ] && [ -n "$router_refused" ]; then why="router mode is applied (gt-be98-router): gateway networks and router mode exclude each other (D-GW5)"; fi
+		if [ -z "$why" ]; then
+			case " $acc " in *" $N_ID "*) why="network $N_ID listed twice" ;; esac
+		fi
+		if [ -z "$why" ] && [ -n "$WAN_VLAN" ] && [ "$WAN_VLAN" = "$N_VID" ]; then
+			why="VLAN $N_VID is the WAN's VLAN (WAN_VLAN): one VLAN id, one meaning"
+		fi
+		if [ -z "$why" ]; then
+			while read -r l c _; do
+				[ -n "$l" ] || continue
+				case " $acc " in *" $l:"*) ;; *) continue ;; esac
+				cidr_overlap "$c" "$N_CIDR" && { why="subnet $N_CIDR overlaps gateway network ${l%%:*}'s $c"; break; }
+			done <<-EOF
+			$(cat "$GW/wanted.new")
+			EOF
+		fi
+		if [ -z "$why" ]; then
+			while read -r d c; do
+				[ -n "${c:-}" ] && ip_ok "${c%/*}" || continue
+				[ "$d" = "$WAN_IF" ] && continue
+				# this tool's own addresses (a network re-applied)
+				grep -qs "^net [0-9]* $d $c\$" "$GW/applied" && continue
+				cidr_overlap "$c" "$N_CIDR" && { why="subnet $N_CIDR overlaps the box's $c on $d"; break; }
+			done <<-EOF
+			$addrs
+			EOF
+		fi
+		if [ -z "$why" ]; then
+			while read -r d c; do
+				[ -n "${c:-}" ] && ip_ok "${c%/*}" || continue
+				cidr_overlap "$c" "$N_CIDR" && { why="subnet $N_CIDR overlaps $d $c"; break; }
+			done <<-EOF
+			$cnets
+			EOF
+		fi
+		if [ -z "$why" ]; then
+			n=$((n + 1))
+			[ $n -le $GW_MAX ] || why="more than $GW_MAX gateway networks (the cap of phase 1)"
+		fi
+		# the WAN inside the subnet: the network runs local (no NAT)
+		N_LOCAL=$nat_why
+		if [ -z "$why" ] && [ -z "$N_LOCAL" ]; then
+			while read -r d c; do
+				[ "$d" = "$WAN_IF" ] && [ -n "${c:-}" ] && cidr_overlap "$c" "$N_CIDR" &&
+					{ N_LOCAL="the WAN address $c ($WAN_IF) is inside $N_SUB"; break; }
+			done <<-EOF
+			$addrs
+			EOF
+			[ -z "$N_LOCAL" ] && [ -n "$WAN_ADDR" ] && ip_ok "${WAN_ADDR%/*}" && cidr_overlap "$WAN_ADDR" "$N_CIDR" &&
+				N_LOCAL="the static WAN_ADDR $WAN_ADDR is inside $N_SUB"
+		fi
+		[ -z "$why" ] && acc="$acc $N_ID:"
+		[ -z "$why" ] && echo "$N_ID $N_CIDR" >> "$GW/wanted.new"
+		# the per-network record of this apply (start reads it)
+		{
+			echo "want 1"; echo "vid $N_VID"; echo "cidr $N_CIDR"; echo "subnet ${N_SUB:--}"
+			echo "isolate $N_ISO"; echo "mgmt $N_MGMT"; echo "dhcp $N_DHCP"
+			echo "dhcp_start ${N_START:--}"; echo "dhcp_end ${N_END:--}"; echo "lease $N_LEASE"
+			echo "refused ${why:+1}"; echo "why_refused $why"; echo "why_local $N_LOCAL"; echo "why_dhcp $N_DWHY"
+		} > "$GW/plan.$N_ID"
+		[ -z "$N_DWHY" ] || [ -n "$why" ] || log "network $N_ID: DHCP off: $N_DWHY"
+		N_START= N_END=
+	done <<-EOF
+	$(gw_lines)
+	EOF
+	mv -f "$GW/wanted.new" "$GW/wanted"
+	# 1. stop what is no longer wanted as it runs (gone, refused, moved)
+	for f in "$GW/net"/*; do
+		[ -f "$f" ] || continue
+		id=${f##*/}; case "$id" in *.new) continue ;; esac
+		s=$(st_get "$id" state)
+		if [ ! -f "$GW/plan.$id" ] || [ -n "$(sed -n 's/^refused //p' "$GW/plan.$id")" ]; then
+			case "$s" in local|routed) log "network $id: stopped"; net_stop "$id" ;; esac
+			[ -f "$GW/plan.$id" ] || { net_destroy "$id"; continue; }
+			continue
+		fi
+		b=$(st_get "$id" bridge); c=$(st_get "$id" cidr)
+		vid=$(sed -n 's/^vid //p' "$GW/plan.$id")
+		case "$s" in local|routed) ;; *) continue ;; esac
+		l2_bridge "$vid"
+		if [ "$c" != "$(sed -n 's/^cidr //p' "$GW/plan.$id")" ] || [ "$b" != "$BR" ]; then
+			log "network $id: moved ($b $c -> ${BR:-no bridge} $(sed -n 's/^cidr //p' "$GW/plan.$id")): restarted"
+			net_stop "$id"
+			st_set "$id" "state inactive" "bridge -"
+		fi
+	done
+	# 2. the trunk sub-interfaces follow the modes (no hold left on a stopped bridge)
+	"$L2" sync || rc=1
+	# 3. start / keep each wanted network (its state record)
+	[ -f "$GW/applied" ] || : > "$GW/applied"
+	for f in "$GW"/plan.*; do
+		[ -f "$f" ] || continue
+		id=${f##*/plan.}
+		prev_s=$(st_get "$id" state); prev_iso=$(st_get "$id" isolate); prev_mgmt=$(st_get "$id" mgmt)
+		prev_why=$(st_get "$id" why)
+		old=$(st_get "$id" bridge)
+		why=$(sed -n 's/^why_refused //p' "$f")
+		s=inactive b=-
+		if [ -z "$why" ]; then
+			vid=$(sed -n 's/^vid //p' "$f"); c=$(sed -n 's/^cidr //p' "$f")
+			if ! l2_bridge "$vid"; then
+				why="no bridge for VLAN $vid yet (no SSID and no LAN port on the network)"
+			elif [ "$BRT" != - ]; then
+				why="$BR still carries the trunk VLAN $BRT.$vid (gt-be98-l2 sync failed): not a gateway while bridged upstream"
+			else
+				b=$BR
+				# an address this tool did not set: another owner's bridge
+				d=$(ip -4 -o addr show dev "$b" 2>/dev/null | awk '{ for (i = 1; i < NF; i++) if ($i == "inet") print $(i + 1) }' | grep -vx "$c" | head -n1)
+				if [ -n "$d" ]; then
+					why="$b carries $d, an address gt-be98-gw did not set: refused (one address owner per bridge)"; b=-
+				else
+					# held now (gt-be98-l2 never carries the VLAN under
+					# it); the address comes once the rule set is loaded
+					: > "$GW/hold/$b"
+					s=routed
+					[ -z "$(sed -n 's/^why_local //p' "$f")" ] || s=local
+					START="${START:-} $id"
+				fi
+			fi
+		fi
+		[ -n "$why" ] || why=$(sed -n 's/^why_local //p' "$f")
+		# running before, refused now (found at start): stopped first
+		if [ "$s" = inactive ]; then
+			case "$prev_s" in local|routed) net_stop "$id" ;; esac
+		fi
+		[ "$s" = inactive ] && [ "$prev_s" != inactive ] && [ -n "$prev_s" ] && log "network $id: inactive: $why"
+		[ "$s" != "$prev_s" ] && [ "$s" != inactive ] && log "network $id: $s on $b ($c)${why:+: $why}"
+		# narrowing: the conntrack entries a policy change no longer allows
+		case "$prev_s:$s" in routed:local) LOCAL_NARROW="${LOCAL_NARROW:-} $id" ;; esac
+		if [ "$s" != inactive ] && [ "$prev_s" = "$s" ]; then
+			[ "$prev_mgmt" = 1 ] && [ "$(sed -n 's/^mgmt //p' "$f")" = 0 ] && MGMT_NARROW="${MGMT_NARROW:-} $id"
+			[ "$prev_iso" = 0 ] && [ "$(sed -n 's/^isolate //p' "$f")" = 1 ] && ISO_NARROW="${ISO_NARROW:-} $id"
+		fi
+		{
+			echo "state $s"; echo "bridge $b"
+			sed -n '/^\(vid\|cidr\|subnet\|isolate\|mgmt\|dhcp\|dhcp_start\|dhcp_end\|lease\) /p' "$f"
+			echo "why $why"
+			if [ "$s" != inactive ] && [ "$prev_s" != "$s" ]; then echo "starts $(( $(counter "$id" starts) + 1 ))"
+			else echo "starts $(counter "$id" starts)"; fi
+			# a refusal counted once per reason (re-applied: the same one)
+			if [ -n "$(sed -n 's/^refused //p' "$f")" ] && [ "$prev_why" != "$why" ]; then
+				echo "refusals $(( $(counter "$id" refusals) + 1 ))"
+			else echo "refusals $(counter "$id" refusals)"; fi
+		} > "$GW/net/$id.tmp"
+		mv -f "$GW/net/$id.tmp" "$GW/net/$id"
+		[ "$old" != "$b" ] && [ -n "$old" ] && [ "$old" != - ] && rm -f "$GW/hold/$old"
+		rm -f "$f"
+	done
+	# 4. the rule set FIRST (no address of a gateway network is up without
+	# it: forwarding may already be held by another owner), then the
+	# addresses and policy rules, then the conntrack entries it no longer
+	# allows
+	active_sets
+	if [ -n "$A_GW" ] || [ -f "$GW/gw.nft" ]; then
+		nft_apply "$WAN_IF" || { rc=1; START=; stop_all_active; }
+	fi
+	for id in ${START:-}; do
+		b=$(st_get "$id" bridge); c=$(st_get "$id" cidr)
+		if ip addr replace "$c" dev "$b"; then
+			ip rule del iif "$b" priority "$GW_PRIO" 2>/dev/null
+			ip rule del iif "$b" priority $((GW_PRIO + 1)) 2>/dev/null
+			ip rule add iif "$b" lookup main suppress_prefixlength 0 priority "$GW_PRIO"
+			ip rule add iif "$b" lookup "$GW_TABLE" priority $((GW_PRIO + 1))
+			sed -i "/^net $id /d" "$GW/applied"; echo "net $id $b $c" >> "$GW/applied"
+		else
+			log "network $id: $c on $b: address refused"; rc=1
+			rm -f "$GW/hold/$b"
+			st_set "$id" "state inactive" "bridge -" "why $c on $b: address refused"
+			REDO=1
+		fi
+	done
+	START=
+	[ -z "${REDO:-}" ] || { REDO=; nft_apply "$WAN_IF" || rc=1; }
+	narrow
+	# 5. routes, DHCP/DNS, forwarding
+	active_sets
+	if [ -n "$A_GW" ]; then
+		route_table "$WAN_IF"
+		dnsmasq_apply || rc=1
+		"$FWD" hold gw || rc=1
+		grep -qx "fwd" "$GW/applied" || echo fwd >> "$GW/applied"
+	elif [ -f "$GW/gw.nft" ] || grep -qx fwd "$GW/applied" 2>/dev/null; then
+		# the last gateway network left: what was applied goes
+		ip route flush table "$GW_TABLE" 2>/dev/null
+		dnsmasq_stop; rm -f "$GW/dnsmasq.conf"
+		if grep -qx fwd "$GW/applied" 2>/dev/null; then "$FWD" release gw; sed -i '/^fwd$/d' "$GW/applied"; fi
+		rm -f "$GW/gw.nft"
+	fi
+	return $rc
+}
+# the rule set could not be loaded: no network runs (inactive, held nothing)
+stop_all_active() {
+	local f id
+	for f in "$GW/net"/*; do
+		[ -f "$f" ] || continue
+		id=${f##*/}; case "$id" in *.new|*.tmp) continue ;; esac
+		case "$(st_get "$id" state)" in local|routed) ;; *) continue ;; esac
+		net_stop "$id"
+		st_set "$id" "state inactive" "bridge -" "why the rule set was rejected (nft): no gateway network runs without it"
+	done
+}
+# the narrowing of this apply (ISO_NARROW, MGMT_NARROW: network ids)
+narrow() {
+	local id x a b
+	for id in ${ISO_NARROW:-}; do
+		a=$(st_get "$id" subnet)
+		for x in "$GW/net"/*; do
+			x=${x##*/}; [ "$x" != "$id" ] || continue
+			case "$(st_get "$x" state)" in local|routed) ;; *) continue ;; esac
+			b=$(st_get "$x" subnet); ct_del "$a" "$b"
+		done
+		log "network $id: isolated (its flows to and from the other networks deleted)"
+	done
+	for id in ${MGMT_NARROW:-}; do
+		a=$(st_get "$id" subnet)
+		if command -v conntrack >/dev/null 2>&1; then
+			for x in 22 80 443; do conntrack -D -s "$a" -p tcp --dport "$x" >/dev/null 2>&1; done
+		fi
+		log "network $id: management off (its management sessions deleted)"
+	done
+	for id in ${LOCAL_NARROW:-}; do
+		ct_del "$(st_get "$id" subnet)"
+		log "network $id: NAT refused (its flows deleted)"
+	done
+	ISO_NARROW= MGMT_NARROW= LOCAL_NARROW=
+}
+
+cmd_stop() {
+	local f id
+	for f in "$GW/net"/*; do
+		[ -f "$f" ] || continue
+		id=${f##*/}; case "$id" in *.new|*.tmp) continue ;; esac
+		net_stop "$id"; net_destroy "$id"
+	done
+	nft delete table inet "$NFT_TABLE" 2>/dev/null
+	nft delete table ip "$NAT_TABLE" 2>/dev/null
+	ip route flush table "$GW_TABLE" 2>/dev/null
+	dnsmasq_stop
+	if grep -qx fwd "$GW/applied" 2>/dev/null; then "$FWD" release gw; fi
+	rm -f "$GW/applied" "$GW/wanted" "$GW/dnsmasq.conf" "$GW/gw.nft" "$GW"/plan.* "$GW/hold"/* 2>/dev/null
+	return 0
+}
+
+cmd_status() {
+	local f id
+	for f in "$GW/net"/*; do
+		[ -f "$f" ] || continue
+		id=${f##*/}; case "$id" in *.new|*.tmp) continue ;; esac
+		echo "net $id $(st_get "$id" state) $(st_get "$id" bridge) $(st_get "$id" cidr) isolate=$(st_get "$id" isolate) mgmt=$(st_get "$id" mgmt) starts=$(counter "$id" starts) refusals=$(counter "$id" refusals) why=$(st_get "$id" why)"
+	done
+	wan_ctx
+	echo "wan $WAN_IF"
+	echo "forwarding $("$FWD" held gw && echo 1 || echo 0)"
+}
+
+c=${1:-}; [ $# -gt 0 ] && shift
+case "$c" in
+apply|reroute) lock || exit 1; cmd_apply; r=$?; unlock; exit $r ;;
+stop)	lock || exit 1; cmd_stop; r=$?; unlock; exit $r ;;
+status)	cmd_status ;;
+features) echo "features gateway" ;;
+nft-text) [ $# = 1 ] || exit 2; nft_text "$1" ;;
+dnsmasq-text) wan_ctx; dnsmasq_text ;;
+*)	sed -n '/^#   gt-be98-gw apply/,/^#   gt-be98-gw dnsmasq-text/p' "$0" | sed 's/^# \{0,1\}//' >&2; exit 2 ;;
+esac
