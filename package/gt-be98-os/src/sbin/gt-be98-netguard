@@ -105,6 +105,8 @@ LAN_CONF=${GT_BE98_LAN_CONF:-/etc/conf.d/gt-be98-lan}
 L2_STATE=${GT_BE98_L2_STATE:-${GT_BE98_RUN:-/run}/gt-be98-l2}
 LAN_APPLIED=${GT_BE98_LAN_APPLIED:-${GT_BE98_RUN:-/run}/gt-be98-lan.applied}
 LAN_TRIPPED=${GT_BE98_LAN_TRIPPED:-${GT_BE98_RUN:-/run}/gt-be98-lan.tripped}
+# the latch lock, shared with gt-be98-lan (its lan_lock_try: the same code)
+LAN_LOCK=$LAN_TRIPPED.lock
 NETWORKS=${GT_BE98_NETWORKS:-/etc/gt-be98-networks.conf}
 # the RTL8372 driver's sysfs directory (one device; GT_BE98_RTL8372: a fixed
 # directory, the offline tests)
@@ -454,7 +456,36 @@ jack_block_sync() {
 }
 # the BPDU guard (header): latch the VLAN jacks whose counter moved, and the
 # 2.5G jacks a BPDU source on rnr1.<V> is attributed to
+# the latch lock (gt-be98-lan's header, "the latch lock"): never waited
+# for; a sweep that does not get it skips the latching (the next one runs it)
+lan_lock_try() {
+	local p
+	if mkdir "$LAN_LOCK" 2>/dev/null; then echo $$ > "$LAN_LOCK/pid"; return 0; fi
+	p=; { read -r p < "$LAN_LOCK/pid"; } 2>/dev/null
+	if [ -n "$p" ] && ! kill -0 "$p" 2>/dev/null; then
+		rm -rf "$LAN_LOCK"
+		mkdir "$LAN_LOCK" 2>/dev/null && { echo $$ > "$LAN_LOCK/pid"; return 0; }
+	fi
+	return 1
+}
+# the guard under the latch lock: every reading it latches on (the applied
+# file, the nft counters, jack_status, the tripped file) is taken after the
+# last clear by gt-be98-lan and written before the next one
 guard() {
+	local p
+	if lan_lock_try; then
+		guard_locked
+		rm -rf "$LAN_LOCK"
+	fi
+	# the latched ports, for verdict: never a bridge port (detached by the
+	# sweep below, at once after the trip and every time after)
+	TRIP_LIST=$NL
+	[ -r "$LAN_TRIPPED" ] || return 0
+	while read -r p _; do
+		[ -n "$p" ] && TRIP_LIST="$TRIP_LIST$p$NL"
+	done < "$LAN_TRIPPED"
+}
+guard_locked() {
 	local l p n a b c d jk=
 	l= JACKS_APPLIED=
 	if [ -r "$LAN_APPLIED" ]; then
@@ -507,13 +538,6 @@ guard() {
 	fi
 	[ -z "$jk" ] || loop_guard
 	jack_block_sync
-	# the latched ports, for verdict: never a bridge port (detached by the
-	# sweep below, at once after the trip and every time after)
-	TRIP_LIST=$NL
-	[ -r "$LAN_TRIPPED" ] || return 0
-	while read -r p _; do
-		[ -n "$p" ] && TRIP_LIST="$TRIP_LIST$p$NL"
-	done < "$LAN_TRIPPED"
 }
 tripped() { case "${TRIP_LIST:-}" in *"$NL$1$NL"*) return 0 ;; esac; return 1; }
 sweep() {

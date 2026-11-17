@@ -139,6 +139,8 @@ WIFI_CONFS=${GT_BE98_WIFI_CONFS:-/etc/conf.d/gt-be98-wifi-ap /etc/conf.d/gt-be98
 NETWORKS_FILE=${GT_BE98_NETWORKS:-/etc/gt-be98-networks.conf}
 GUARD_TABLE=gt_be98_lan_guard
 TRIPPED=${GT_BE98_LAN_TRIPPED:-/run/gt-be98-lan.tripped}
+# the latch lock, shared with gt-be98-netguard (a directory: mkdir is atomic)
+LAN_LOCK=$TRIPPED.lock
 # the RTL8372 driver's sysfs directory (one device; GT_BE98_RTL8372: a fixed
 # directory, the offline tests), how long a jack_profiles write is retried
 # while the configurator runs (-EAGAIN), and the module list
@@ -911,7 +913,7 @@ switch_release() {
 	fi
 }
 
-reload() {
+reload_locked() {
 	load_conf || return 1
 	[ -f $APPLIED ] || { eerror "gt-be98-lan is not applied"; return 1; }
 	ebegin "Wired LAN: VLAN jacks ${VPORTS:-none}, 2.5G jacks ${JACKS:-none}"
@@ -923,7 +925,7 @@ reload() {
 	return $r
 }
 
-start() {
+start_locked() {
 	load_conf || return 1
 	: > $APPLIED
 	rm -f "$TRIPPED" "$TRIPPED.src" "$TRIPPED.loop"
@@ -1018,7 +1020,7 @@ brlan_start() {
 	eend 0
 }
 
-stop() {
+stop_locked() {
 	local k v w x mods=
 	ebegin "Stopping the wired LAN"
 	# first the switch: every 2.5G jack off (isolated: nothing in or out),
@@ -1067,3 +1069,39 @@ stop() {
 	rm -f "$TRIPPED" "$TRIPPED.src" "$TRIPPED.loop"
 	eend 0
 }
+
+# ---- the latch lock (gt-be98-netguard takes the same one) ----
+# The latch (tripped, .src, .loop, jack_block) has two writers: this service
+# (start clears it, every set re-writes it) and gt-be98-netguard (a BPDU or an
+# RLDP loop latches a jack). q293 O: a restart 3 s after a loop ended left
+# jack 6 latched: netguard read loop=1 from the switch as it was before the
+# restart and wrote the latch after the restart had cleared it. So each
+# writer holds this lock over its whole read-decide-write: netguard never
+# acts on a reading older than the last clear, and the restart reloads the
+# driver it loaded, so a loop seen after it is a fresh detection.
+lan_lock_try() {
+	local p
+	if mkdir "$LAN_LOCK" 2>/dev/null; then echo $$ > "$LAN_LOCK/pid"; return 0; fi
+	p=; { read -r p < "$LAN_LOCK/pid"; } 2>/dev/null
+	# a holder that died with it: taken over
+	if [ -n "$p" ] && ! kill -0 "$p" 2>/dev/null; then
+		rm -rf "$LAN_LOCK"
+		mkdir "$LAN_LOCK" 2>/dev/null && { echo $$ > "$LAN_LOCK/pid"; return 0; }
+	fi
+	return 1
+}
+# held for this service's start / stop / reload; a netguard sweep holds it
+# for well under a second; after 20 s the service goes on unlocked (logged)
+lan_lock() {
+	local n=0
+	LOCK_HELD=
+	while ! lan_lock_try; do
+		[ $n -lt 20 ] || { ewarn "the latch lock $LAN_LOCK is held (pid $(cat "$LAN_LOCK/pid" 2>/dev/null)): going on without it"; return 0; }
+		sleep 1; n=$((n + 1))
+	done
+	LOCK_HELD=1
+}
+lan_unlock() { [ -z "${LOCK_HELD:-}" ] || rm -rf "$LAN_LOCK"; LOCK_HELD=; }
+start() { local r; lan_lock; start_locked; r=$?; lan_unlock; return $r; }
+stop() { local r; lan_lock; stop_locked; r=$?; lan_unlock; return $r; }
+reload() { local r; lan_lock; reload_locked; r=$?; lan_unlock; return $r; }
