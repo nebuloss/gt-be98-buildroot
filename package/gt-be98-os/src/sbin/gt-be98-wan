@@ -383,8 +383,57 @@ ppp_pids() {
 		done
 	} | grep -x '[0-9][0-9]*' | sort -u
 }
+# ---- the PPPoE session record: $RUN/ppp.state, KEY=VALUE, written by the
+# ip-up / ip-down hooks (pppd runs them), reset when pppd is started. Every
+# value is validated before it is written (pppd's environment is the peer's:
+# ACNAME is the concentrator's own name, any bytes).
+PPP_STATE=$RUN/ppp.state
+uptime_s() { cut -d. -f1 /proc/uptime 2>/dev/null || echo 0; }
+ppp_get() { sed -n "s/^$1=//p" "$PPP_STATE" 2>/dev/null | tail -n1; }
+# ppp_put KEY VALUE...: those keys replaced (a VALUE "" removes the key)
+ppp_put() {
+	local k v t=$PPP_STATE.new
+	mkdir -p "$RUN" 2>/dev/null
+	cp "$PPP_STATE" "$t" 2>/dev/null || : > "$t"
+	while [ $# -ge 2 ]; do
+		k=$1 v=$2; shift 2
+		grep -v "^$k=" "$t" > "$t.2"; mv -f "$t.2" "$t"
+		[ -n "$v" ] && echo "$k=$v" >> "$t"
+	done
+	mv -f "$t" "$PPP_STATE"
+}
+cnt() { case "$1" in ''|*[!0-9]*) echo 0 ;; *) echo "$1" ;; esac; }
+# the concentrator's name, kept printable: letters, digits, . _ - and space, 64 max
+acname_clean() { printf '%s' "$1" | LC_ALL=C tr -cd 'A-Za-z0-9._ -' | cut -c1-64; }
+# The last failure of the RUNNING pppd (its pid in pppd's own syslog lines,
+# so an older pppd's lines never count), cleared by its last IPCP success
+# ("local  IP address"). One word: auth_failed (PAP/CHAP refused: user or
+# password), no_server (no PADO: no concentrator answered on this port/VLAN),
+# no_session (PADI answered, no PADS), lcp_timeout, link_dead (LCP echoes
+# unanswered), peer_hangup (PADT, or the server's LCP Terminate-Request). "" = none seen.
+# Read from the syslog file (etc/syslog.conf: every pppd line reaches it);
+# PPP_LOG_LINES bounds the read. An unreadable log is said so (ppp_log=unread),
+# never reported as "no error".
+SYSLOG=${GT_BE98_SYSLOG:-/var/log/messages}
+ppp_last_error() {
+	tail -n "${PPP_LOG_LINES:-4000}" "$SYSLOG" 2>/dev/null | awk -v t="pppd[$1]:" '
+		index($0, t) == 0 { next }
+		/local  IP address/ { e = "" }
+		/(PAP|CHAP|MS-CHAP|EAP) authentication failed/ { e = "auth_failed" }
+		/Timeout waiting for PADO/ { e = "no_server" }
+		/Timeout waiting for PADS/ { e = "no_session" }
+		/LCP: timeout sending Config-Requests/ { e = "lcp_timeout" }
+		/No response to [0-9]+ echo-requests/ { e = "link_dead" }
+		/Modem hangup|LCP terminated by peer/ { e = "peer_hangup" }
+		END { print e }'
+}
 
 # ---- nftables ---------------------------------------------------------------------
+# the WAN's own MTU (the PPPoE payload, or WAN_MTU; "" = the port's) and the
+# TCP MSS a SYN through it is clamped to: MTU - 40 (IPv4: 20 + 20) or - 60
+# (IPv6: 40 + 20). PPPoE 1492 -> 1452 / 1432.
+wan_mtu() { if [ "$W_PROTO" = pppoe ]; then echo "$P_MTU"; else echo "$W_MTU"; fi; }
+mss_of() { local m; m=$(wan_mtu); [ -n "$m" ] || return 0; if [ "$1" = 6 ]; then echo $((m - 60)); else echo $((m - 40)); fi; }
 # table inet gt_be98_wan: MSS clamp on a reduced-MTU WAN, the IPv6 forward
 # filter of the delegated LANs, and the box's own input from a WAN that is
 # not the default one (only replies, ICMP, DHCP client replies)
@@ -398,6 +447,23 @@ render_nft() {
 	if [ "$W_PROTO" = pppoe ] || [ -n "$W_MTU" ]; then
 		echo "		oifname \"$i\" tcp flags syn tcp option maxseg size set rt mtu"
 		echo "		iifname \"$i\" tcp flags syn tcp option maxseg size set rt mtu"
+		# and a FIXED cap from the WAN's own MTU, both directions. `rt mtu`
+		# alone does not clamp a SYN-ACK coming IN from the WAN: it is
+		# min(dst_mtu of the packet's route = the LAN's 1500, the MTU of the
+		# route back to the packet's SOURCE) and that second lookup
+		# (nft_rt.c get_tcpmss -> nf_ip_route = ip_route_output_key, daddr
+		# only) is a plain output lookup: no iif, so the gateway networks'
+		# `iif <br> lookup 184` rules never match it and main's best default
+		# decides. With any default preferred over the WAN's (the management
+		# lease, the USB lifeline: the WAN's PPPoE default is metric 4000)
+		# that is a 1500 route, and a LAN client is told MSS 1460 by a server
+		# behind a 1492 PPPoE link. The kernel only ever LOWERS an MSS
+		# (nft_exthdr.c "increase can cause connection to stall"), so the
+		# fixed cap never raises a smaller one.
+		echo "		meta nfproto ipv4 oifname \"$i\" tcp flags syn tcp option maxseg size set $(mss_of 4)"
+		echo "		meta nfproto ipv4 iifname \"$i\" tcp flags syn tcp option maxseg size set $(mss_of 4)"
+		echo "		meta nfproto ipv6 oifname \"$i\" tcp flags syn tcp option maxseg size set $(mss_of 6)"
+		echo "		meta nfproto ipv6 iifname \"$i\" tcp flags syn tcp option maxseg size set $(mss_of 6)"
 	fi
 	if [ -n "$W_PD_LANS" ]; then
 		echo "		iifname \"$i\" meta nfproto ipv6 ct state established,related accept"
@@ -539,6 +605,7 @@ cmd_start() {
 			chmod 700 "$RUN/ppp-ip-$r"
 		done
 		( umask 077; render_ppp > "$RUN/pppd.conf" )
+		rm -f "$PPP_STATE"; ppp_put started "$(uptime_s)"
 		pppd file "$RUN/pppd.conf" </dev/null >/dev/null 2>&1 9>&- && put pppd 1 || { log "pppd did not start"; return 1; }
 	fi
 	log "WAN: $W_PROTO on $W_LOWER (netdev $W_IF)${W_PD_LANS:+, IPv6 prefix delegation to $W_PD_LANS}"
@@ -725,7 +792,36 @@ cmd_status() {
 	for a in $W_PD_LANS; do
 		echo "pd6_$a=$(ip -6 -o addr show dev "$a" scope global 2>/dev/null | awk '{print $4; exit}')"
 	done
+	if [ -n "$(mss_of 4)" ]; then echo "mss4=$(mss_of 4)"; echo "mss6=$(mss_of 6)"; fi
+	[ "$W_PROTO" = pppoe ] && ppp_status
 	echo "applied=$([ -f "$APPLIED" ] && echo 1 || echo 0)"
+}
+# the PPPoE session: ppp_state down (no pppd) | connecting (pppd runs, no
+# IPv4 on pppoe-wan yet) | up; while up its age, addresses, DNS and the
+# concentrator; reconnects = sessions after the first since pppd started;
+# ppp_error the running pppd's last failure (see ppp_last_error)
+ppp_status() {
+	local p a u
+	p=$(ppp_pids | head -n1)
+	a=$(ip -4 -o addr show dev "$PPP_IF" 2>/dev/null | awk '{print $4; exit}')
+	if [ -z "$p" ]; then echo "ppp_state=down"
+	elif [ -n "$a" ]; then echo "ppp_state=up"
+	else echo "ppp_state=connecting"; fi
+	u=$(cnt "$(ppp_get ups)")
+	echo "ppp_sessions=$u"
+	echo "ppp_reconnects=$([ "$u" -gt 1 ] && echo $((u - 1)) || echo 0)"
+	if [ -n "$p" ] && [ -n "$a" ] && [ -n "$(ppp_get up_at)" ]; then
+		echo "ppp_uptime=$(( $(uptime_s) - $(cnt "$(ppp_get up_at)") ))"
+		echo "ppp_local=$(ppp_get local)"; echo "ppp_peer=$(ppp_get peer)"
+		echo "ppp_dns=$(ppp_get dns)"; echo "ppp_ac=$(ppp_get ac)"
+	fi
+	echo "ppp_mtu=$(cat "$SYSNET/$PPP_IF/mtu" 2>/dev/null)"
+	echo "ppp_last_connect=$(ppp_get last_connect)"
+	if [ -n "$p" ] && [ -z "$a" ]; then
+		if [ -r "$SYSLOG" ]; then echo "ppp_log=read"; echo "ppp_error=$(ppp_last_error "$p")"
+		else echo "ppp_log=unread"; echo "ppp_error="; fi
+	fi
+	return 0
 }
 
 # ---- hooks (dhcpcd 07-gt-be98-wan, pppd ip-up/ip-down) ------------------------------
@@ -776,21 +872,27 @@ route6() {
 	done
 }
 cmd_hook() {
-	local ev=${1:-} f
+	local ev=${1:-} f d l r s
 	shift 2>/dev/null
 	case "$ev" in
 	ip-up)	# pppd: IFACE TTY SPEED LOCAL REMOTE IPPARAM; env DNS1 DNS2
 		mkdir -p "$RESOLV_DIR"
 		f=$RESOLV_DIR/$PPP_IF.ppp
 		: > "$f"
-		for s in ${DNS1:-} ${DNS2:-}; do ipv4_ok "$s" && echo "nameserver $s" >> "$f"; done
+		d=
+		for s in ${DNS1:-} ${DNS2:-}; do ipv4_ok "$s" && { echo "nameserver $s" >> "$f"; d="$d${d:+ }$s"; }; done
 		resolv_rebuild
-		log "PPPoE up: ${1:-?} local ${4:-?} peer ${5:-?}"
+		l=${4:-}; ipv4_ok "$l" || l=; r=${5:-}; ipv4_ok "$r" || r=
+		ppp_put ups $(( $(cnt "$(ppp_get ups)") + 1 )) up_at "$(uptime_s)" local "$l" peer "$r" \
+			dns "$d" ac "$(acname_clean "${ACNAME:-}")"
+		log "PPPoE up: ${1:-?} local ${4:-?} peer ${5:-?} session $(ppp_get ups)"
 		router_reroute ;;
 	ip-down)
 		rm -f "$RESOLV_DIR/$PPP_IF.ppp"
 		[ -d "$RESOLV_DIR" ] && resolv_rebuild
-		log "PPPoE down: ${1:-?}"
+		[ -f "$PPP_STATE" ] && ppp_put up_at "" local "" peer "" dns "" ac "" \
+			down_at "$(uptime_s)" last_connect "$(cnt "${CONNECT_TIME:-}")"
+		log "PPPoE down: ${1:-?}${CONNECT_TIME:+ after ${CONNECT_TIME} s}"
 		router_reroute ;;
 	dhcpcd)	# env: reason interface (dhcpcd hook)
 		load "$(active_conf)" >/dev/null 2>&1 || return 0

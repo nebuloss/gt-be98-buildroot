@@ -266,6 +266,14 @@ check "no WAN default route: table 184 unreachable default" "ip route replace un
 echo "default dev pppoe-wan scope link" > "$T/route-pppoe-wan"; echo pppoe-wan > "$T/wanif"
 run apply; check "PPPoE: default dev pppoe-wan, NAT and dnsmasq exclusion follow the WAN netdev" "ip route replace default dev pppoe-wan table 184 yes yes" \
 	"$(log '^ip route replace') $(yn has "$N" 'oifname "pppoe-wan" ip saddr') $(yn grep -qx except-interface=pppoe-wan "$D")"
+# the PPPoE session drops (pppd's ip-down: its default route is gone) and comes back (ip-up):
+# the reroute each hook runs leaves table 184 unreachable, then on pppoe-wan again; the NAT
+# keeps naming pppoe-wan throughout (a name: valid while the netdev is absent)
+rm -f "$T/route-pppoe-wan"; run reroute
+check "PPPoE down: table 184 unreachable (never leaked to the management default), NAT still on pppoe-wan" "ip route replace unreachable default table 184 yes" \
+	"$(log '^ip route replace') $(yn has "$N" 'oifname "pppoe-wan" ip saddr')"
+echo "default dev pppoe-wan scope link" > "$T/route-pppoe-wan"; run reroute
+check "  PPPoE up again: default dev pppoe-wan in table 184" "ip route replace default dev pppoe-wan table 184" "$(log '^ip route replace')"
 run stop
 # 15b. the shared router MAC (G6b): every gateway bridge takes rnr1's MAC, before its address
 rm -f "$T/route-pppoe-wan"; echo rnr0 > "$T/wanif"; echo "default via 10.9.0.1 dev rnr0 proto dhcp" > "$T/route-rnr0"

@@ -575,6 +575,118 @@ wan start 2>/dev/null
 check "AP mode (default WAN, no router): no nft at all, rnr0 unfiltered" "" "$(grep '^nft' "$FAKE/log")"
 wan stop 2>/dev/null
 
+# ---- 9. the MSS cap: a FIXED clamp from the WAN's own MTU, both directions -----------------
+# (`rt mtu` alone leaves a SYN-ACK coming IN from the WAN at 1460 whenever main's best default
+# is not the WAN's: nft_rt.c get_tcpmss's reverse lookup is a plain output lookup)
+reset
+printf 'WAN_PROTO=pppoe\nWAN_VLAN=835\nPPPOE_USER=u\n' > "$T/etc/wan.conf"
+wan start 2>/dev/null
+for d in oifname iifname; do
+	check "mss: pppoe 1492, $d: IPv4 capped at 1452" yes "$(yes_no grep -qF "meta nfproto ipv4 $d \"pppoe-wan\" tcp flags syn tcp option maxseg size set 1452" "$T/run/wan.nft")"
+	check "mss: pppoe 1492, $d: IPv6 capped at 1432" yes "$(yes_no grep -qF "meta nfproto ipv6 $d \"pppoe-wan\" tcp flags syn tcp option maxseg size set 1432" "$T/run/wan.nft")"
+done
+check "  the rt mtu rules are kept (PMTU exceptions below the link MTU)" 2 "$(grep -c 'maxseg size set rt mtu' "$T/run/wan.nft")"
+check "status: mss4/mss6 of the pppoe WAN" "mss4=1452 mss6=1432" "$(wan status | grep -E '^mss[46]=' | tr '\n' ' ' | sed 's/ $//')"
+wan stop 2>/dev/null
+reset
+printf 'WAN_PROTO=pppoe\nPPPOE_USER=u\nPPPOE_MTU=1480\n' > "$T/etc/wan.conf"
+wan start 2>/dev/null
+check "mss: PPPOE_MTU=1480 -> 1440 / 1420" "yes yes" "$(yes_no grep -q 'ipv4 oifname "pppoe-wan" .* set 1440$' "$T/run/wan.nft") $(yes_no grep -q 'ipv6 iifname "pppoe-wan" .* set 1420$' "$T/run/wan.nft")"
+wan stop 2>/dev/null
+reset
+printf 'WAN_PROTO=static\nWAN_VLAN=835\nWAN_ADDR=192.0.2.10/24\nWAN_GW=192.0.2.1\nWAN_MTU=1400\n' > "$T/etc/wan.conf"
+wan start 2>/dev/null
+check "mss: static WAN_MTU=1400 on a VLAN -> 1360 on rnr0.835" yes "$(yes_no grep -qF 'meta nfproto ipv4 iifname "rnr0.835" tcp flags syn tcp option maxseg size set 1360' "$T/run/wan.nft")"
+wan stop 2>/dev/null
+reset
+printf 'WAN_PROTO=dhcp\nWAN_VLAN=835\n' > "$T/etc/wan.conf"
+wan start 2>/dev/null
+check "  control: a VLAN WAN at the port MTU: no clamp at all, no mss in status" "0 0" "$(grep -c maxseg "$T/run/wan.nft") $(wan status | grep -c '^mss')"
+wan stop 2>/dev/null
+# the rule text parses (nft -c needs CAP_NET_ADMIN: a user+net namespace; NFT_REAL=<path> to run it)
+if [ -n "${NFT_REAL:-}" ] && unshare -rn true 2>/dev/null; then
+	reset; printf 'WAN_PROTO=pppoe\nWAN_VLAN=835\nPPPOE_USER=u\n' > "$T/etc/wan.conf"; wan start 2>/dev/null
+	check "nft -c accepts the pppoe rule file (real nft, userns)" 0 "$(unshare -rn "$NFT_REAL" -c -f "$T/run/wan.nft" >/dev/null 2>&1; echo $?)"
+	sed 's/set 1452$/set 14520000/' "$T/run/wan.nft" > "$T/bad.nft"
+	check "  control: an out-of-range MSS is rejected by the same nft" 1 "$(unshare -rn "$NFT_REAL" -c -f "$T/bad.nft" >/dev/null 2>&1; echo $?)"
+	wan stop 2>/dev/null
+else
+	echo "SKIP nft -c of the rule text (NFT_REAL unset or no user namespace)"
+fi
+
+# ---- 10. the PPPoE session record and status ---------------------------------------------
+reset
+printf 'WAN_PROTO=pppoe\nWAN_VLAN=835\nPPPOE_USER=u\nPPPOE_PASS=s3cr3tpw\n' > "$T/etc/wan.conf"
+wan start 2>/dev/null
+pp=$(head -n1 "$T/run/ppp-wan.pid")
+mkdir -p "$T/net/pppoe-wan"; echo 1492 > "$T/net/pppoe-wan/mtu"
+export GT_BE98_SYSLOG="$T/messages"
+: > "$T/messages"
+st() { wan status | sed -n "s/^$1=//p"; }
+check "pppd started, no address: connecting, 0 sessions, no error yet" "connecting|0|0|read|" \
+	"$(st ppp_state)|$(st ppp_sessions)|$(st ppp_reconnects)|$(st ppp_log)|$(st ppp_error)"
+cat > "$T/messages" <<X
+Nov 17 10:00:01 box pppd[1]: PAP authentication failed
+Nov 17 10:00:02 box pppd[$pp]: Plugin pppoe.so loaded.
+Nov 17 10:00:03 box pppd[$pp]: PPP session is 7
+Nov 17 10:00:04 box pppd[$pp]: PAP authentication failed
+X
+check "wrong password: auth_failed (the running pppd's own line)" auth_failed "$(st ppp_error)"
+sed -i "s/pppd\[$pp\]: PAP authentication failed/pppd[$pp]: Connection terminated./" "$T/messages"
+check "  control: the same line from ANOTHER pppd pid does not count" "" "$(st ppp_error)"
+echo "Nov 17 10:00:05 box pppd[$pp]: Timeout waiting for PADO packets" >> "$T/messages"
+check "no concentrator answers: no_server" no_server "$(st ppp_error)"
+echo "Nov 17 10:00:06 box pppd[$pp]: No response to 3 echo-requests" >> "$T/messages"
+check "LCP echoes lost: link_dead (the LAST failure wins)" link_dead "$(st ppp_error)"
+echo "Nov 17 10:00:07 box pppd[$pp]: local  IP address 100.64.0.2" >> "$T/messages"
+check "  an IPCP success after it clears the error" "" "$(st ppp_error)"
+echo "Nov 17 10:00:08 box pppd[$pp]: Modem hangup" >> "$T/messages"
+check "the session dropped by the peer (PADT): peer_hangup" peer_hangup "$(st ppp_error)"
+echo "Nov 17 10:00:09 box pppd[$pp]: local  IP address 100.64.0.2" >> "$T/messages"
+echo "Nov 17 10:00:10 box pppd[$pp]: LCP terminated by peer" >> "$T/messages"
+check "the server ends the session (LCP Terminate-Request): peer_hangup" peer_hangup "$(st ppp_error)"
+mv "$T/messages" "$T/messages.x"
+check "syslog unreadable: said so, never 'no error'" "unread|" "$(st ppp_log)|$(st ppp_error)"
+mv "$T/messages.x" "$T/messages"
+# ip-up: the record; the peer's environment is validated
+echo "2: pppoe-wan    inet 100.64.0.2 peer 100.64.0.1/32 scope global pppoe-wan" > "$FAKE/addr4-pppoe-wan"
+ACNAME='isp-bras 1;$(reboot)<x>' DNS1=192.0.2.53 DNS2=bogus wan hook ip-up pppoe-wan /dev/null 0 100.64.0.2 100.64.0.1 wan 2>/dev/null
+check "ip-up: up, session 1, no reconnect, local/peer/dns/ac recorded" "up|1|0|100.64.0.2|100.64.0.1|192.0.2.53|isp-bras 1rebootx" \
+	"$(st ppp_state)|$(st ppp_sessions)|$(st ppp_reconnects)|$(st ppp_local)|$(st ppp_peer)|$(st ppp_dns)|$(st ppp_ac)"
+check "  up: uptime a number, mtu 1492, no error line while up" "yes|1492|0" \
+	"$(case "$(st ppp_uptime)" in ''|*[!0-9]*) echo no ;; *) echo yes ;; esac)|$(st ppp_mtu)|$(wan status | grep -c '^ppp_error=')"
+check "  the record never holds the password" no "$(yes_no grep -q s3cr3tpw "$T/run/ppp.state")"
+check "  nor does the status" no "$(yes_no sh -c "$SH $W status | grep -q s3cr3tpw")"
+# a server-side drop and the reconnect (pppd persist)
+CONNECT_TIME=42 wan hook ip-down pppoe-wan 2>/dev/null
+rm -f "$FAKE/addr4-pppoe-wan"
+check "ip-down: connecting again, the last session's length kept, addresses gone" "connecting|42|" \
+	"$(st ppp_state)|$(st ppp_last_connect)|$(st ppp_local)"
+echo "2: pppoe-wan    inet 100.64.0.3 peer 100.64.0.1/32 scope global pppoe-wan" > "$FAKE/addr4-pppoe-wan"
+ACNAME=bras DNS1=192.0.2.53 wan hook ip-up pppoe-wan /dev/null 0 100.64.0.3 100.64.0.1 wan 2>/dev/null
+check "the reconnect: up, 2 sessions = 1 reconnect, the new address" "up|2|1|100.64.0.3" \
+	"$(st ppp_state)|$(st ppp_sessions)|$(st ppp_reconnects)|$(st ppp_local)"
+# the gateway networks follow each session (gt-be98-gw reroute: table 184, the NAT)
+printf 'net 4 brwifi100004 192.168.40.1/24\n' > "$T/gw.applied"; : > "$FAKE/log"
+GW_APPLIED="$T/gw.applied" CONNECT_TIME=5 wan hook ip-down pppoe-wan 2>/dev/null
+GW_APPLIED="$T/gw.applied" DNS1=192.0.2.53 wan hook ip-up pppoe-wan /dev/null 0 100.64.0.3 100.64.0.1 wan 2>/dev/null
+i=0; while [ $i -lt 20 ] && [ "$(grep -c 'rc-service --ifstarted gt-be98-gw reroute' "$FAKE/log")" -lt 2 ]; do sleep 0.1; i=$((i + 1)); done
+check "ip-down + ip-up with a gateway network applied: gt-be98-gw reroute run by each" 2 "$(grep -c 'rc-service --ifstarted gt-be98-gw reroute' "$FAKE/log")"
+: > "$T/gw.applied"; : > "$FAKE/log"
+GW_APPLIED="$T/gw.applied" DNS1=192.0.2.53 wan hook ip-up pppoe-wan /dev/null 0 100.64.0.3 100.64.0.1 wan 2>/dev/null; sleep 0.3
+check "  control: no gateway network applied: no gw reroute" 0 "$(grep -c 'gt-be98-gw reroute' "$FAKE/log")"
+DNS1=192.0.2.53 wan hook ip-up pppoe-wan /dev/null 0 '1.2.3.4;x' 100.64.0.1 wan 2>/dev/null
+check "  a bogus local address is not recorded" "" "$(st ppp_local)"
+wan stop 2>/dev/null
+check "stop: pppd gone -> ppp_state=down" down "$(st ppp_state)"
+wan start 2>/dev/null
+check "a new pppd: the record restarts (0 sessions)" "0" "$(st ppp_sessions)"
+wan stop 2>/dev/null
+rm -f "$FAKE/addr4-pppoe-wan"; rm -rf "$T/net/pppoe-wan"; unset GT_BE98_SYSLOG
+reset
+printf 'WAN_PROTO=dhcp\nWAN_VLAN=835\n' > "$T/etc/wan.conf"
+check "  control: a non-PPPoE WAN prints no ppp_* line" 0 "$(wan status | grep -c '^ppp_')"
+
 echo "gt-be98-wan-test ($SH): $((n - fail))/$n ok"
 [ $fail -eq 0 ] && echo "all passed"
 [ $fail -eq 0 ]
