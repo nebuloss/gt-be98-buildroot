@@ -396,3 +396,55 @@ GT-BE98 exists. With a second box, M6 becomes the real two-box test and the loop
 | D-MESH6 | Accept that plain 4-address (non-Multi-AP) peers cannot use our root? | Yes. The firmware drops them before the host. A Multi-AP backhaul STA is the supported peer (any recent wpa_supplicant). |
 | D-MESH7 | PVE bridge + netns for arms M1/M2 (RTL as a VLAN-trunk leaf) | Allow: same class as A1F's veth, restored by the arm. |
 | D-MESH8 | RT-BE92U role, and ASUS (DWDS/AiMesh) interop | A Media Bridge for one network (M7). In AP mode, the first third-party 4-address AP for our station half (M8). Interop with ASUS DWDS on our root (firmware-native links, driver-made `wds*` netdevs) goes in phase C only if the owner wants a stock ASUS node in the mesh. AiMesh itself (ASUS vendor IEs, `cfg_server` protocol) is out of scope. |
+
+---
+
+## 8. Driver part, built (lane mesh-bh, 2026-11-17) — for the mesh OS lane
+
+Driver branch: open-wifi `om-mesh-bh-2026-11-17` (base `om-int-2026-11-17`). Details, citations and the root causes are in
+open-wifi `docs/MESH-BACKHAUL-DRIVER.md`. Nothing below has run on silicon yet: arms M0 and M1 are pre-registered.
+Decisions D-MESH1..7 were adopted as recommended. **No module parameter was added**: everything follows hostapd and
+wpa_supplicant config.
+
+### 8.1 What changed against §2.5
+
+| gap | result |
+|---|---|
+| G1 back-pressure | On shipped defaults (`tx_sbf=1`) the AP_VLAN already behaves like the main netdev: its frames wait in the link ring set's host queue (SBF + CoDel, stock's per-flow model). The drop at `bca_netdev.c:2132` is reachable only at `tx_sbf=0`. There, it is now a real stop/wake of the AP_VLAN's own queue. ⇒ M4/M5 at shipped defaults read AQM drops, not a driver defect |
+| G2 tags | The firmware passes host 802.1Q tags untouched both ways by default (ROM read: `vlan_mode` 0 and never strips; `map_8021q_settings` 0). **The OS must keep `multi_ap_vlanid=0`**: with a non-zero value the firmware tags the backhaul's EAPOL. New: a tag's PCP now picks the Wi-Fi TID, so an `egress-qos-map` on `bh<k>.<vid>` is honoured. Before, every tagged frame rode best effort |
+| G3 secondary BSS | Two defects, both fixed. (1) A link's WLC_E_IF re-pointed a secondary BSS's own firmware interface. (2) The AP_VLAN took bsscfg 0 as its parent, which put the link's group frames on the fronthaul's ring. The AP_VLAN's parent is now the BSS whose address it carries |
+| G6 -2 on leave | The firmware frees the link itself when the leaf's SCB goes (WLC_E_IF del comes first). The -2 meant "no SCB", and nothing leaked. The driver now sends no disarm for a link the firmware already freed |
+| G4 SAE | Nothing on the 4-address path depends on the AKM (read end to end). The firmware side is M3 |
+
+### 8.2 Interface names and behaviour the OS can rely on
+
+- **Root backhaul BSS:** any AP netdev of the radio, primary or `bss=` secondary. hostapd needs `multi_ap=1`, `wds_sta=1`
+  and `multi_ap_vlanid=0`. Leave `bridge=`/`wds_bridge=` unset if the hook enslaves the link itself (§3.2).
+- **Root link netdev:** hostapd's AP_VLAN `<bss-ifname>.sta<aid>`, e.g. `bcawl0.sta1`.
+  - Lifetime: from the leaf's association to its leave. hostapd announces it with `WDS-STA-INTERFACE-ADDED` and
+    `WDS-STA-INTERFACE-REMOVED`.
+  - TX: one queue. Unicast TX goes to the leaf whatever the destination address.
+  - RX: the leaf's frames and everything behind it. EAPOL stays on the BSS netdev, where hostapd reads it.
+  - Carrier is on while the interface exists.
+  - Its name plus `.<vid>` can pass IFNAMSIZ, so use short names: `ip link add link <ap_vlan> name bh<k>.<vid> type vlan id <vid>` (G8).
+- **Group frames:** they go out on the backhaul BSS's broadcast ring, so they reach every station of that BSS.
+  ⚠ **With two leaves on one backhaul BSS, leaf A gets its own broadcasts back** (open-wifi ledger MESH-N1, open). Keep
+  one leaf per backhaul BSS until that is fixed. The minimal feature (§1.3) has one.
+- **Leaf station:** `iw dev <sta> set 4addr on` before the join, then `wpa_supplicant -b <mgmt bridge>` with
+  `multi_ap_backhaul_sta=1`. `bhs.<vid>` sub-interfaces on the station netdev are the network bridges' uplinks.
+  ⚠ **If the leaf also serves APs on the backhaul radio (AP+STA), bring the station up before the APs.** `map_profile`
+  and `dwds` need the radio's core-down window, which an already-beaconing AP closes. The driver logs `NOT applied` in
+  that case.
+- **Limits:** 8 links per radio; the ninth leaf is refused and logged. Runner offload stays off the link's RX (CPU path).
+- **State for the UI:**
+  - `iw dev <ap_vlan> station dump` now lists the backhaul BSS's stations.
+  - `/sys/kernel/debug/bca/domN/wds` has the counters and one line per link (`wds.link bsscfg B <mac> ifidx I vlan
+    <ap_vlan> rx R tx T fw_freed F txq_stop M`).
+
+### 8.3 Arms (orch, pre-registered: `logs/prereg/PREREG-mesh-bh-2026-11-17.txt`)
+
+- **M0:** the 11-05 loop on the current image's driver and on the new ko, plus a station-ended leave. Predicted: PASS
+  on both; LEAVE=OLD (the -2) on the image, FIXED on the new ko.
+- **M1:** tagged VLANs 10/20 over a 4-address link with the RTL as the leaf, two netns with their own MACs.
+  Predicted: PASS, and VLAN 20's PCP-5 replies ride a TID-5 link ring.
+- M2, M3 and M5 remain as §5.2 specifies (not written by this lane).
