@@ -40,8 +40,9 @@
 #                     DHCP replies and the management ports 22, 80, 443
 #                     (sshd and the web UI: sshd listens on every address,
 #                     the web UI on every address of MGMT_IF, which holds
-#                     bhm0). bhm0's address is stable: 02 + the last five
-#                     octets of the station's address. "-": all of it undone
+#                     bhm0). bhm0's address is stable: 06 + the last five
+#                     octets of the station's address (never the station's
+#                     own: the loop guard drops those). "-": all of it undone
 #   gt-be98-mesh status
 #                     role root|leaf|off, then per role: "backhaul <band>
 #                     <ifname> <bssid> leaves=<mac|->", "link <alias> <dev>
@@ -270,13 +271,18 @@ mgmt_nft() {
 	}
 	EOF
 }
-# a stable address for bhm0: 02 + the station's last five octets
+# a stable address for bhm0: 06 (locally administered, unicast, below every
+# BSS block prefix 62..da) + the station's last five octets; 0e when the
+# station's own first octet is 06. Never the station's address: the leaf's
+# loop guard drops every frame sourced by the station that enters a bridge
+# off bhs.*, so a management port with that address would be cut off
 mgmt_mac() {
-	local a
+	local a p=06
 	leaf_plan || return 1
 	{ read -r a < "$SYSNET/$B_STA/address"; } 2>/dev/null || return 1
 	valid_mac "$a" || return 1
-	echo "02:${a#*:}"
+	[ "${a%%:*}" = 06 ] && p=0e
+	echo "$p:${a#*:}"
 }
 mgmt_up() {
 	local b=$1 mac d=$M/dhcpcd conf=$M/bhm0.dhcpcd.conf

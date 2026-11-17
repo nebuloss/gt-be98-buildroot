@@ -198,7 +198,7 @@ check "T5 control: the backhaul VLANs stay" "brwifi10 brwifi20" "$(mst mleaf bhs
 mkdir -p "$w/t7/www" "$w/t7/www8080"; echo mesh-mgmt-ok > "$w/t7/www/index.html"; echo must-not-answer > "$w/t7/www8080/index.html"
 printf 'start 10.10.0.100\nend 10.10.0.110\ninterface eth0\nlease_file %s/t7/udhcpd.leases\npidfile %s/t7/udhcpd.pid\noption subnet 255.255.255.0\noption router 10.10.0.1\noption dns 10.10.0.1\n' "$w" "$w" > "$w/t7/udhcpd.conf"
 : > "$w/t7/udhcpd.leases"
-ip netns exec g10 busybox udhcpd "$w/t7/udhcpd.conf"
+ip netns exec g10 busybox udhcpd -f "$w/t7/udhcpd.conf" > "$w/t7/udhcpd.log" 2>&1 & echo $! > "$w/t7/udhcpd.pid"
 # dhcpcd -B -q -f CONF -c SCRIPT -4 IF, as the box runs it: busybox udhcpc, its events handed to SCRIPT in dhcpcd's environment
 cat > "$w/t7/dhcpcd" <<'X'
 #!/bin/sh
@@ -220,8 +220,8 @@ exit 0
 X
 chmod +x "$w/t7/dhcpcd" "$w/t7/udhcpc-adapter"
 F env GT_BE98_DHCPCD="$w/t7/dhcpcd" sh "$S/gt-be98-mesh" mgmt brwifi10
-check "T7 bhm0p in the management VLAN's leaf bridge, bhm0 no port, the firewall loaded" "brwifi10 - yes" \
-	"$(mst mleaf bhm0p) $(mst mleaf bhm0)- $(ip netns exec mleaf nft list table inet gt_be98_mesh_mgmt > /dev/null 2>&1 && echo yes || echo no)"
+check "T7 bhm0p in the management VLAN's leaf bridge, bhm0 no port, the firewall loaded, bhm0's address not the station's" "brwifi10 - yes yes" \
+	"$(mst mleaf bhm0p) $(mst mleaf bhm0)- $(ip netns exec mleaf nft list table inet gt_be98_mesh_mgmt > /dev/null 2>&1 && echo yes || echo no) $([ "$(ip netns exec mleaf cat /sys/class/net/bhm0/address)" != "$LMAC" ] && echo yes || echo no)"
 until_ 30 sh -c "ip netns exec mleaf ip -4 addr show dev bhm0 | grep -q 'inet 10.10.0.1[01][0-9]/24'"
 MA=$(ip netns exec mleaf ip -4 addr show dev bhm0 | sed -n 's/.*inet \(10\.10\.0\.[0-9]*\)\/24.*/\1/p' | head -n1)
 check "T7 bhm0 leased an address of VLAN 10 from the root's DHCP server, across the backhaul" yes "$(case "$MA" in 10.10.0.1[01][0-9]) echo yes ;; *) echo "no ($MA)" ;; esac)"
@@ -229,7 +229,8 @@ check "T7 gt-be98-mesh status: the mgmt line with the lease" "mgmt bhm0 brwifi10
 check "T7 the leaf's default route via VLAN 10's router, metric 2500" yes "$(ip netns exec mleaf ip route show default | grep -q 'via 10.10.0.1 dev bhm0 .*metric 2500' && echo yes || echo no)"
 ssh-keygen -q -t ed25519 -N '' -f "$w/t7/hostkey"
 ip netns exec mleaf "$(command -v sshd || echo /usr/sbin/sshd)" -f /dev/null -o "HostKey=$w/t7/hostkey" -o Port=22 -o "PidFile=$w/t7/sshd.pid" -o UsePAM=no
-ip netns exec mleaf busybox httpd -p 80 -h "$w/t7/www"; ip netns exec mleaf busybox httpd -p 8080 -h "$w/t7/www8080"
+ip netns exec mleaf busybox httpd -f -p 80 -h "$w/t7/www" & echo $! > "$w/t7/httpd80.pid"
+ip netns exec mleaf busybox httpd -f -p 8080 -h "$w/t7/www8080" & echo $! > "$w/t7/httpd8080.pid"
 sleep 1
 check "T7 ssh answers on the management address (from VLAN 10 at the root)" yes "$(ip netns exec g10 sh -c "echo | nc -w 3 $MA 22" 2>/dev/null | grep -q '^SSH-2.0' && echo yes || echo no)"
 check "T7 http answers on the management address" mesh-mgmt-ok "$(ip netns exec g10 curl -s -m 3 "http://$MA/" 2>/dev/null)"
@@ -237,8 +238,7 @@ check "T7 control: port 8080 on the same address is dropped (table inet gt_be98_
 check "T7 control: the leaf's 8080 listener itself works (from the leaf's own loopback)" must-not-answer "$(ip netns exec mleaf curl -s -m 3 "http://127.0.0.1:8080/" 2>/dev/null)"
 F sh "$S/gt-be98-mesh" mgmt -
 check "T7 mgmt -: bhm0 and the firewall gone" "no no" "$(ip netns exec mleaf test -e /sys/class/net/bhm0 && echo yes || echo no) $(ip netns exec mleaf nft list table inet gt_be98_mesh_mgmt > /dev/null 2>&1 && echo yes || echo no)"
-for f in "$w/t7/sshd.pid" "$w/t7/udhcpd.pid"; do [ -f "$f" ] && kill "$(cat "$f")" 2>/dev/null; done
-pkill -f "busybox httpd -p 80 -h $w/t7" 2>/dev/null; pkill -f "busybox httpd -p 8080 -h $w/t7" 2>/dev/null
+for f in "$w/t7/sshd.pid" "$w/t7/udhcpd.pid" "$w/t7/httpd80.pid" "$w/t7/httpd8080.pid"; do [ -f "$f" ] && kill "$(cat "$f")" 2>/dev/null; done
 # ---- T6 the leaf leaves ----
 kill "$(cat "$w/leaf/wpas.pid")" 2>/dev/null
 until_ 15 sh -c "! ip netns exec mroot test -e /sys/class/net/bh0.10"
