@@ -154,6 +154,26 @@ WANA=10.0.0.95/24; printf 'brwifi60 10.60.0.0/16\n' > "$T/sta.routed"
 [ -z "$(lan_fn nat_clash rnr0)" ] && ok "nat_clash: station network 10.60.0.0/16 -> none" || ko "nat_clash: false station clash"
 printf 'brwifi60 10.60.0.0/16\nbrwifi50 192.168.50.0/24\n' > "$T/sta.routed"
 case "$(lan_fn nat_clash rnr0)" in *"station routed network 192.168.50.0/24"*) ok "nat_clash: station network 192.168.50.0/24 -> refused";; *) ko "nat_clash: station clash not seen";; esac
+# the real wan_addrs on the kernel's text (a fake ip): a point-to-point PPPoE address is LOCAL/32 (q294's gt-be98-gw twin)
+lan_ip() {
+	(
+		eerror() { :; }; ebegin() { :; }; eend() { :; }; ewarn() { :; }
+		LAN_CONF_FILE="$T/lan.conf"; GT_BE98_STA_ROUTED="$T/sta.routed"
+		. "$SRC/init.d/gt-be98-lan"
+		ip() { printf '%s\n' "$IPOUT"; }
+		LAN_ADDR=192.168.50.1/24; "$@"
+	)
+}
+: > "$T/sta.routed"
+IPOUT='7: pppoe-wan    inet 198.51.100.10 peer 198.51.100.1/32 scope global pppoe-wan\       valid_lft forever preferred_lft forever'; export IPOUT
+[ "$(lan_ip wan_addrs pppoe-wan)" = 198.51.100.10/32 ] && ok "wan_addrs: the PPPoE point-to-point address -> 198.51.100.10/32" || ko "wan_addrs peer form: got [$(lan_ip wan_addrs pppoe-wan)]"
+[ -z "$(lan_ip nat_clash pppoe-wan)" ] && ok "nat_clash: a PPPoE address outside the LAN -> none" || ko "nat_clash: false PPPoE clash"
+IPOUT='7: pppoe-wan    inet 192.168.50.9 peer 198.51.100.1/32 scope global pppoe-wan'
+case "$(lan_ip nat_clash pppoe-wan)" in *"WAN address 192.168.50.9/32"*) ok "nat_clash: a PPPoE address inside the LAN -> refused (was never seen)";; *) ko "nat_clash: PPPoE clash not seen: [$(lan_ip nat_clash pppoe-wan)]";; esac
+IPOUT='2: rnr0    inet 10.0.0.95/24 brd 10.0.0.255 scope global rnr0'
+[ "$(lan_ip wan_addrs rnr0)" = 10.0.0.95/24 ] && ok "wan_addrs: control: a plain address keeps its prefix" || ko "wan_addrs plain: got [$(lan_ip wan_addrs rnr0)]"
+ov 0 192.168.50.9 192.168.50.1/24
+ov 1 198.51.100.10 192.168.50.1/24
 
 # 3. gt-be98-router LAN names: <expect 0|1> <ROUTER_LANS>
 router_case() {

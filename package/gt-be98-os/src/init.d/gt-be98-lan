@@ -437,12 +437,17 @@ lan_wan() {
 	echo "$w"
 }
 
-# the WAN's IPv4 addresses (CIDR), one per line
-wan_addrs() { ip -4 -o addr show dev "$1" 2>/dev/null | sed -n 's/.* inet \([0-9.]*\/[0-9]*\) .*/\1/p'; }
+# the WAN's IPv4 addresses (CIDR), one per line. A point-to-point address
+# (pppd's PPPoE WAN: "inet LOCAL peer PEER/32") is LOCAL/32: the prefix after
+# "peer" is the peer's. The old sed wanted "inet A/len " and skipped it, so a
+# PPPoE address inside LAN_ADDR was never seen as a clash (the gt-be98-gw
+# reader's twin, q294)
+wan_addrs() { ip -4 -o addr show dev "$1" 2>/dev/null | awk '{ for (i = 1; i < NF; i++) if ($i == "inet") { a = $(i + 1); if (a !~ /\//) a = a "/32"; print a } }'; }
 
 # a.b.c.d -> integer; a.b.c.d/len -> "network len"
 ip2n() { local IFS=.; set -- $1; echo $(( ($1 << 24) + ($2 << 16) + ($3 << 8) + $4 )); }
-net_of() {
+net_of() {	# an operand without /len is one host (/32)
+	case "$1" in */*) ;; *) set -- "$1/32" ;; esac
 	local n m l=${1#*/}
 	n=$(ip2n "${1%/*}"); m=$(( l ? (0xffffffff << (32 - l)) & 0xffffffff : 0 ))
 	echo "$(( n & m )) $l"
