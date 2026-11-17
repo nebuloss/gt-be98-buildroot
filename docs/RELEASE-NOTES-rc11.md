@@ -42,7 +42,7 @@ To be filled when `imgint8` is built:
 | `ml-bootfs.itb` | *(imgint8)* |
 
 **Candidate source state:** imgint7 is the image every q302 arm ran on.
-imgint8 = imgint7 + the PPPoE uplink length-bound fix, if q303 passes.
+imgint8 = imgint7 + the PPPoE uplink length-bound fix (q303) + the IPv6 state past DAD.
 
 - **imgint7 build id:** `20261117T212409Z-138353a2b783-rw-jffs`
 - **imgint7 rootfs:**
@@ -54,7 +54,7 @@ imgint8 = imgint7 + the PPPoE uplink length-bound fix, if q303 passes.
 |---|---|
 | gt-be98-buildroot | `br-int8-2026-11-17` (= `br-int7` `ef45815` + `br-gw6-v6state` `6ed78d1` + the RC11 pin commit) |
 | open-wifi (`bca_pcie_ipc.ko`) | `om-mesh-int-2026-11-17` `4040667a` |
-| open-ethernet (Runner, kernel series, `rtl8372.ko`) | `oe-int-2026-11-17` `199918f` (RC11: `oe-int2-2026-11-17` `8a18fa5` if q303 passes) |
+| open-ethernet (Runner, kernel series, `rtl8372.ko`) | `oe-int2-2026-11-17` `8a18fa5` (= `oe-int` `199918f` + the PPPoE uplink bound `12183e8`) |
 | web UI (gt-be98-webui-go) | `wu-mesh-int-2026-11-17` `1cebbe7` |
 | hostapd | 2.12 with the local patches `0001`, `0002`, `0003` (new: the `no_pri_sec_switch` config item) |
 | Linux / Buildroot | 7.2.9 / 2026.08 (kernel configuration unchanged since RC7) |
@@ -169,9 +169,10 @@ ingress and pushed on egress (jack ↔ untagged WAN).
 - Routed IPv4 over the PPPoE WAN, with stock's per-packet length op.
 - **Downlink offloaded** (q301): 0.30 → 0.09 cores/Gbit, CPU fraction
   0.002.
-- **Uplink:** not offloaded on imgint6, because the length bound was
-  3 bytes short. The fix is `oe-pppoe-push-bound-2026-11-17` `12183e8`;
-  RC11 carries it if q303 passes.
+- **Uplink offloaded too** (q303): the length bound was 3 bytes short on
+  imgint6 (uplink not offloaded). With `oe-pppoe-push-bound-2026-11-17`
+  `12183e8` the uplink runs at 0.09 cores/Gbit against 1.13 on the CPU path,
+  and the largest offloaded IP packet is exactly 1492 B.
 
 **L3-FDB:** a routed entry behind a bridge is re-checked against the bridge
 FDB and the neighbour table, so it follows its client when the client
@@ -302,7 +303,7 @@ Box: q296 webui-catchup ALL PASS.
 | q300 | imgint6 | GW1 + GW2 PASS; mesh M1 M2 MR MR-ACL M3 M4 |
 | q301 | imgint6 | G6b T/WIRE PASS, GW4 REFUTED (D42); IPv6 S/GW5M/GW5D/GW5S/GW5L/WIRE PASS; PPPoE downlink offload |
 | q302 | imgint7 | mesh M6 + driver M6L PASS; GW1 + GW2 regression PASS; fixed-primary PASS |
-| q303 | imgint7 + bench ko | PPPoE uplink length-bound fix: *(pending)* |
+| q303 | imgint7 + bench ko | **PPPoE uplink offloaded:** O-up LON 0.09 cores/Gbit (CPU fraction 0.000) vs LOFF 1.13; the BD sweep gives the largest offloaded IP packet 1492 B exactly (max_pkt_len 1514), the fixed rule's prediction, refuting the old one. The remaining REFUTED cells (capture count, H1 719/1000, bd_fit) are capture artefacts of the arm |
 
 **Regression set and 30-minute release soak** (on imgint8):
 `logs/prereg/RC11-REGRESSION-QUEUE.sh` + `logs/prereg/rc11-soak.sh` in the
@@ -315,7 +316,6 @@ lab tools, run once. Results to be filled in.
   WAN) needs the two-tag rewrite. That lives only in the parked
   rt-ipv6-offload lane, so such flows stay on the CPU. The L3-FDB box arm
   is VOID for the same reason (host-tested only).
-- **PPPoE uplink offload:** in RC11 only if q303 passes.
 
 **Wi-Fi**
 - **D36–D40:** MLO on 5 GHz is pending.
