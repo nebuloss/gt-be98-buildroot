@@ -38,7 +38,10 @@
 #  Neighbor Report bit not sent; box-verified q287) + om-dfs-owner-2026-11-17 be929950 (DFS-OWNER: one owner of
 #  the move after an in-service radar, hostapd CSA owns it; box-verified q289) + the ledger row RUNNER-E2E-ONETAG
 #  (doc-only); no module parameter added)
-GT_BE98_OPEN_WIFI_VERSION = 6f86ecab52f2cca53daaf0b294d9ef334986c37e
+# om-int-2026-11-17 2026-11-17 8c565b68 (imgint4: 6f86ecab + the index regeneration e9d3da38 + om-rebind-ch40 69384cb3
+#  (radio_rebind's default named in one place, the G4 V2 move declaration; no behaviour change, default still 0)
+#  + the RUNNER-L3-FDB ledger rows c17d40ac (doc-only))
+GT_BE98_OPEN_WIFI_VERSION = 8c565b68699bf5d22a74fcf73fe20a22889995e4
 GT_BE98_OPEN_WIFI_SITE = git@github.com:nebuloss/gt-be98-open-wifi.git
 GT_BE98_OPEN_WIFI_SITE_METHOD = git
 GT_BE98_OPEN_WIFI_LICENSE = GPL-2.0-only

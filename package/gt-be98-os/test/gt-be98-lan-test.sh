@@ -983,5 +983,55 @@ svcj start > /dev/null
 [ ! -e "$T/svc/tripped.loop" ] && ok "start clears it too" || ko "start keeps .loop"
 svcj stop > /dev/null
 
+# 4i. q293 O: `rc-service gt-be98-lan restart` (the web UI's "Clear guard")
+# must clear an RLDP latch and a BPDU trip, and a latch must never come back
+# from a reading taken before the clear: gt-be98-netguard and gt-be98-lan
+# share the latch lock (tripped.lock). A loop seen by the reloaded driver
+# (a fresh detection) latches again.
+ngsweep() {	# one netguard sweep on the service's own fake files
+	mkdir -p "$T/svc/ngrun" "$T/svc/ngnet"
+	printf '#!/bin/sh\nexit 0\n' > "$T/svc/bin/logger"; chmod +x "$T/svc/bin/logger"
+	GT_BE98_SYSNET="$T/svc/ngnet" GT_BE98_RUN="$T/svc/ngrun" GT_BE98_LAN_APPLIED="$T/svc/applied" GT_BE98_LAN_TRIPPED="$T/svc/tripped" \
+		GT_BE98_LAN_CONF="$T/lan.conf" GT_BE98_WIFI_L2="$T/svc/none" GT_BE98_RTL8372="$T/svc/rtl" PATH="$T/svc/bin:$PATH" \
+		sh "$SRC/sbin/gt-be98-netguard" --sweep 2>/dev/null
+}
+jsl() { printf 'port=4 link=down speed=? vid=1 blocked=0 tagged=none enabled=1 loop=0 loop_pair=-\nport=5 link=down speed=? vid=1 blocked=0 tagged=none enabled=1 loop=0 loop_pair=-\nport=6 link=up speed=1000 vid=1 blocked=0 tagged=none enabled=1 loop=%s loop_pair=%s\nport=7 link=down speed=? vid=1 blocked=0 tagged=none enabled=1 loop=0 loop_pair=-\n' "$1" "$2" > "$T/svc/rtl/jack_status"; }
+latch() { echo "$( { tr '\n' ' ' < "$T/svc/tripped"; } 2>/dev/null)|$( { tr '\n' ' ' < "$T/svc/tripped.loop"; } 2>/dev/null)|$( { cat "$T/svc/tripped.src"; } 2>/dev/null)|$(cat "$T/svc/rtl/jack_block")"; }
+printf 'LAN_PORTS="rnr1"\n' > "$T/lan.conf"
+rm -rf "$T/svc/applied" "$T/svc/tripped" "$T/svc/tripped.loop" "$T/svc/tripped.src" "$T/svc/tripped.lock"; : > "$T/svc/modules"; echo 0x00 > "$T/svc/rtl/jack_block"
+svcj start > /dev/null; jsl 1 6; ngsweep
+[ "$(latch)" = "jack6 |jack6 6 ||64" ] && ok "O: the routed LAN, jack_status loop=1 on jack 6: latched (.loop 'jack6 6'), jack_block 64" || ko "O latch: [$(latch)]"
+svcj reload > /dev/null; [ "$(cat "$T/svc/rtl/jack_block")" = 64 ] && ok "O: reload keeps jack_block 64" || ko "O reload: $(cat "$T/svc/rtl/jack_block")"
+echo rnr2 >> "$T/svc/tripped"; echo "02:00:00:00:a0:07 921" > "$T/svc/tripped.src"	# a BPDU trip too
+# the race of q293: a netguard sweep holds the lock (it read loop=1 before the restart) and writes its latch late;
+# the restart must wait for it, so its clear comes AFTER that write
+printf '#!/bin/sh\necho "sleep $*" >> "$SVCT/seq"\nexec /bin/sleep "$@"\n' > "$T/svc/bin/sleep"; chmod +x "$T/svc/bin/sleep"
+/bin/sleep 30 & hp=$!
+mkdir "$T/svc/tripped.lock"; echo $hp > "$T/svc/tripped.lock/pid"
+( svcj stop; svcj start ) > /dev/null 2>&1 & rp=$!
+/bin/sleep 2
+w=$( [ -e "$T/svc/tripped" ] && [ -s "$T/svc/applied" ] && echo waited || echo ran)
+echo jack6 >> "$T/svc/tripped"; echo "jack6 6" >> "$T/svc/tripped.loop"	# the late write of the stale reading
+rm -rf "$T/svc/tripped.lock"; kill $hp 2>/dev/null; wait $hp 2>/dev/null
+wait $rp
+[ "$w" = waited ] && ok "O race: the restart waits while netguard holds the latch lock" || ko "O race: the restart did not wait"
+jsl '?' -; [ "$(latch)" = "|||0" ] && [ ! -e "$T/svc/tripped.lock" ] && ok "O race: after the restart the RLDP latch, its .loop and the BPDU trip are gone, jack_block 0, the lock released" || ko "O race clear: [$(latch)]"
+# while the SERVICE holds the lock, a sweep latches nothing (it reads nothing of a state being cleared)
+/bin/sleep 30 & hp=$!; mkdir "$T/svc/tripped.lock"; echo $hp > "$T/svc/tripped.lock/pid"
+jsl 1 6; ngsweep
+[ "$(latch)" = "|||0" ] && ok "O: a sweep while gt-be98-lan holds the lock writes no latch" || ko "O lock held: [$(latch)]"
+rm -rf "$T/svc/tripped.lock"; kill $hp 2>/dev/null; wait $hp 2>/dev/null
+# the reloaded driver: configuring (loop=?), then no loop: nothing; then a FRESH detection: latched again
+jsl '?' -; ngsweep; jsl 0 -; ngsweep
+[ "$(latch)" = "|||0" ] && ok "O: after the restart, the reloaded driver's loop=? then loop=0: not re-latched" || ko "O fresh 0: [$(latch)]"
+jsl 1 6; ngsweep
+[ "$(latch)" = "jack6 |jack6 6 ||64" ] && ok "O: a loop the reloaded driver detects (loop=1): latched again" || ko "O fresh 1: [$(latch)]"
+# a holder that died with the lock: the next sweep takes it over
+svcj stop > /dev/null; svcj start > /dev/null
+mkdir "$T/svc/tripped.lock"; echo 999999 > "$T/svc/tripped.lock/pid"; jsl 1 6; ngsweep
+[ "$(latch)" = "jack6 |jack6 6 ||64" ] && [ ! -e "$T/svc/tripped.lock" ] && ok "a lock left by a dead holder: taken over, released" || ko "stale lock: [$(latch)]"
+svcj stop > /dev/null
+printf '#!/bin/sh\necho "sleep $*" >> "$SVCT/seq"\n' > "$T/svc/bin/sleep"; chmod +x "$T/svc/bin/sleep"
+
 echo "gt-be98-lan-test: $pass ok, $fail failed"
 [ $fail -eq 0 ]

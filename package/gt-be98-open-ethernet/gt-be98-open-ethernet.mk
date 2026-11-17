@@ -61,7 +61,10 @@
 # oe-int-2026-11-17 2026-11-17 ea41e01 (imgint3: bc4801d + rtl8372-rldp-portoff 6681199: RLDP's live state from
 #  LOOPED_STATE 0x1090 (LOOP_STATE 0x108c is a latch, q290 B/U STICKY), LOOPPAIR's nibble = the port, the re-arm
 #  removed; driver/rtl8372 only, no conflict; no linux-dirclean)
-GT_BE98_OPEN_ETHERNET_VERSION = ea41e01ddceb1ed9b0db92b02f260383b1553baa
+# oe-int-2026-11-17 2026-11-17 199918f (imgint4: ea41e01 + oe-l3-fdb-2026-11-17 3e2c4da (RUNNER-L3-FDB: a routed entry
+#  behind a bridge is re-checked against the FDB and the neighbour table; driver/runner + tools; no conflict; no
+#  linux-dirclean). The rldp branch's own pin (6681199) is already inside oe-int (ea41e01).
+GT_BE98_OPEN_ETHERNET_VERSION = 199918fbd3ad1a70d5555640b74d0b85763de2c7
 GT_BE98_OPEN_ETHERNET_SITE = git@github.com:nebuloss/gt-be98-open-ethernet.git
 GT_BE98_OPEN_ETHERNET_SITE_METHOD = git
 GT_BE98_OPEN_ETHERNET_LICENSE = GPL-2.0
