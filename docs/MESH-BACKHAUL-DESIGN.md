@@ -428,8 +428,13 @@ wpa_supplicant config.
   - Carrier is on while the interface exists.
   - Its name plus `.<vid>` can pass IFNAMSIZ, so use short names: `ip link add link <ap_vlan> name bh<k>.<vid> type vlan id <vid>` (G8).
 - **Group frames:** they go out on the backhaul BSS's broadcast ring, so they reach every station of that BSS.
-  ⚠ **With two leaves on one backhaul BSS, leaf A gets its own broadcasts back** (open-wifi ledger MESH-N1, open). Keep
-  one leaf per backhaul BSS until that is fixed. The minimal feature (§1.3) has one.
+  ⚠ **With two leaves on one backhaul BSS, leaf A gets its own broadcasts back** (open-wifi ledger MESH-N1, open).
+  **Decided 11-17: one leaf per backhaul BSS; the OS lane must ENFORCE it** (the minimal feature, §1.3, has one):
+  - the generator accepts exactly one `leaf=<MAC>` per backhaul block;
+  - the backhaul BSS gets `max_num_sta=1` and a MAC accept list holding only that leaf (`macaddr_acl=1` +
+    `accept_mac_file`), so a second Multi-AP station is refused at association, not just by convention;
+  - netguard refuses an AP_VLAN whose peer is not the configured leaf (§3.2 already proposes it).
+  The rule lifts only when the driver sends a link's group frames 4-address unicast on its own ring (MESH-N1).
 - **Leaf station:** `iw dev <sta> set 4addr on` before the join, then `wpa_supplicant -b <mgmt bridge>` with
   `multi_ap_backhaul_sta=1`. `bhs.<vid>` sub-interfaces on the station netdev are the network bridges' uplinks.
   ⚠ **If the leaf also serves APs on the backhaul radio (AP+STA), bring the station up before the APs.** `map_profile`
