@@ -166,6 +166,12 @@
 #                                   channel's own block stays in it (the
 #                                   user chose it; at 160 MHz the only
 #                                   block, 100-128: list unchanged))
+#                                   A numeric channel on 5gl/5gh/6g is
+#                                   written no_pri_sec_switch=1: hostapd
+#                                   keeps the configured primary (without
+#                                   it a 20/40 scan may swap it with the
+#                                   secondary, 36 -> 40; needs the OS
+#                                   hostapd patch 0003); not with auto
 #                                   2g: 20, 40 (40: rendered at 20 MHz
 #                                   with a warning while HT40_2G=0, see
 #                                   below); 5gl/5gh: 20, 40, 80, 160
@@ -1550,6 +1556,11 @@ END {
 			# transmit beamformer, SU and MU: stock 6 GHz txbf_bfr_cap 255
 			print "he_su_beamformer=1" > hdr; print "he_mu_beamformer=1" > hdr
 			if (w == 320 || rbe[b]) { print "eht_su_beamformer=1" > hdr; print "eht_mu_beamformer=1" > hdr }
+			# the configured primary (as on 5 GHz, below; 6 GHz is never ACS
+			# here). hostapd 2.12 runs no 20/40 scan on 6 GHz
+			# (hostapd_check_ht_capab returns first): written for a hostapd
+			# that does, a no-op today
+			print "no_pri_sec_switch=1" > hdr
 		} else {
 			print "hw_mode=a" > hdr; print "channel=" (acs ? "acs_survey" : ch) > hdr
 			print "ieee80211n=1" > hdr; print "ieee80211ac=1" > hdr
@@ -1600,6 +1611,15 @@ END {
 			print "chanlist=" (b == "5gl" ? "36-64" : chl5gh(w, ch, !acs)) > hdr
 			# ACS on 5gh: no block holding 120-128 (above), in MHz
 			if (acs && b == "5gh") print "freqlist=" (w == 20 ? "5500-5580" : "5500-5560") ",5660-5720,5745-5885" > hdr
+			# a numeric channel keeps its primary (owner 11-17): hostapd
+			# 2.12 hw_features.c check_40mhz_5g otherwise swaps primary and
+			# secondary after its pre-start scan when beacons are heard on
+			# the secondary only (36/80 came up on 5200 in 4 of 60 starts,
+			# rebind lane); no_pri_sec_switch=1 skips that scan
+			# (ieee80211n_check_40mhz). A configuration item only with the
+			# OS hostapd patch 0003 (2.12 has the field, not the key). Not
+			# for ACS: acs.c sets the primary and secondary itself
+			if (!acs) print "no_pri_sec_switch=1" > hdr
 		}
 		# ACS: two survey passes, the count that completed on the box
 		# (1027-1233: 2.4 GHz channel 13, 5 GHz channel 48, AP-ENABLED)
