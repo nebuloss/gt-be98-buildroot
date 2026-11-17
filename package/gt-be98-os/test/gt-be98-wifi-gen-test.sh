@@ -887,6 +887,25 @@ for cc in FR DE GB CA -; do
 		"$(hdr_has bcawl0 channel=52) $(hdr_has bcawl0 ieee80211h=1)"
 done
 conf_ok "zwdfs dropped (ETSI)"
+# [open-wifi ZW-ETSI] the one switch (zwetsi5gh): 0 drops zwdfs=1 on 5gh in an
+# ETSI region like 5gl; flipped to 1 (a copy of the generator) 5gh writes it,
+# 5gl is still dropped, and an FCC country is unchanged
+{ printf 'country=DE\nradio=5gl\nzwdfs=1\nchannel=52\nwidth=80\nradio=5gh\nzwdfs=1\nchannel=100\nwidth=40\n'; net 1 a sae password1 "5gl 5gh" 1; } > "$T/x4z"
+rm -f "$T/slots"; gen "$T/x4z" -c; check "ZW-ETSI switch 0, country=DE: zwdfs=1 on 5gh and 5gl both dropped, both warned" "0 no no 1 1" \
+	"$? $(hdr_has bcawl1 enable_background_radar=1) $(hdr_has bcawl0 enable_background_radar=1) $(grep -c 'radio 5gh: zwdfs=1 ignored' "$T/err") $(grep -c 'radio 5gl: zwdfs=1 ignored' "$T/err")"
+check "ZW-ETSI: the generator has exactly one switch, and it is 0" "1 1" \
+	"$(grep -c '^function zwetsi5gh()' "$G") $(grep -c '^function zwetsi5gh() { return 0 }$' "$G")"
+sed 's/^function zwetsi5gh() { return 0 }$/function zwetsi5gh() { return 1 }/' "$G" > "$T/gen-zw1"
+if cmp -s "$G" "$T/gen-zw1"; then check "ZW-ETSI: the switch flip changed the generator" changed same; else
+	G0=$G; G=$T/gen-zw1
+	rm -f "$T/slots"; gen "$T/x4z" -c; check "ZW-ETSI switch 1, country=DE: 5gh writes enable_background_radar=1, 5gl still dropped" "0 yes no 0 1" \
+		"$? $(hdr_has bcawl1 enable_background_radar=1) $(hdr_has bcawl0 enable_background_radar=1) $(grep -c 'radio 5gh: zwdfs=1 ignored' "$T/err") $(grep -c 'radio 5gl: zwdfs=1 ignored' "$T/err")"
+	conf_ok "zwdfs 5gh ETSI (switch 1)"
+	sed 's/^country=DE$/country=US/' "$T/x4z" > "$T/x4zu"
+	rm -f "$T/slots"; gen "$T/x4zu" -c; check "ZW-ETSI switch 1, country=US: both radios write it, no warning" "0 yes yes no" \
+		"$? $(hdr_has bcawl1 enable_background_radar=1) $(hdr_has bcawl0 enable_background_radar=1) $(grep -q 'zwdfs' "$T/err" && echo yes || echo no)"
+	G=$G0
+fi
 # monitor: the radio carries no BSS, its networks keep their slots
 { net 1 a sae password1 "2g 5gh" 1; net 2 b sae password2 5gh 2; } > "$T/x5"
 rm -f "$T/slots"; gen "$T/x5"; check "monitor control: 5gh carries two BSSes" "bcawl1 bcawl1-1" \
