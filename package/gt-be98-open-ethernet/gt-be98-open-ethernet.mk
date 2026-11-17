@@ -64,7 +64,10 @@
 # oe-int-2026-11-17 2026-11-17 199918f (imgint4: ea41e01 + oe-l3-fdb-2026-11-17 3e2c4da (RUNNER-L3-FDB: a routed entry
 #  behind a bridge is re-checked against the FDB and the neighbour table; driver/runner + tools; no conflict; no
 #  linux-dirclean). The rldp branch's own pin (6681199) is already inside oe-int (ea41e01).
-GT_BE98_OPEN_ETHERNET_VERSION = 199918fbd3ad1a70d5555640b74d0b85763de2c7
+# oe-int2-2026-11-17 2026-11-17 8a18fa5 (imgint8 / RC11: oe-int 199918f + oe-pppoe-push-bound 12183e8: the PPPoE push
+#  max_pkt_len bound is MTU+L2+1+4 (stock's formula), so the uplink is offloaded; q303: LON 0.09 cores/Gbit vs LOFF 1.13,
+#  bd_hw_max_ip 1492; driver/runner + tools only; no linux-dirclean)
+GT_BE98_OPEN_ETHERNET_VERSION = 8a18fa525d50decc77a019ef791504fbf9c7bbdf
 GT_BE98_OPEN_ETHERNET_SITE = git@github.com:nebuloss/gt-be98-open-ethernet.git
 GT_BE98_OPEN_ETHERNET_SITE_METHOD = git
 GT_BE98_OPEN_ETHERNET_LICENSE = GPL-2.0
