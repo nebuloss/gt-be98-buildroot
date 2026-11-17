@@ -270,7 +270,14 @@ flows: an offloaded unicast flow never reaches the bridge (LAN3 q254: the
 jack's port at state 0, its ping still 5/5). Enforce L2 policy through
 netdev events (detach from the bridge, link down): the bridge flushes the
 port's FDB and the Runner flow cache drops the port's flows
-(NETDEV_CHANGEUPPER / NETDEV_DOWN -> fc_flush_dev). Only `tagged=none` for now: tagged VLANs on the jacks need
+(NETDEV_CHANGEUPPER / NETDEV_DOWN -> fc_flush_dev). The 2.5G jacks are also
+watched by the RTL8372's own loop detection (RLDP: the switch's probe frame
+came back to a jack, a loop through a dumb switch that sends no BPDU):
+gt-be98-netguard latches such a jack exactly like a BPDU's (`jack_block`,
+cleared by `rc-service gt-be98-lan restart`). A jack profile `enabled=0`
+powers the jack's PHY down (no link for the peer); a reload that leaves no
+2.5G jack enabled unloads `rtl8372.ko`, which holds the switch in reset as
+at boot. Only `tagged=none` for now: tagged VLANs on the jacks need
 the RTL8372 VLAN table. `reload` re-applies the jacks (gt-be98-wifi runs it
 after its own reload). Router mode / D19 Option A, dormant unless set:
 `LAN_PORTS` (empty by default; `rnr1` =

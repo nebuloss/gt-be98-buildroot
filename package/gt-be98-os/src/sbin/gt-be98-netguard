@@ -74,6 +74,14 @@
 # the jack is cut inside the switch, the other jacks of VLAN V keep
 # working); the mask is written again whenever the driver's differs (a
 # module reload; gt-be98-lan also writes it after every jack_profiles).
+# Loop guard (RLDP): the RTL8372 probes its four jacks with its own frames
+# and flags a jack whose probe comes back (a loop through equipment that
+# sends no BPDU: a dumb switch with two of its ports cabled, two jacks into
+# one switch). While gt-be98-lan has a jack set applied (its "jacks" line)
+# each sweep reads the driver's jack_status; a jack with loop=1 is latched
+# like a BPDU's: a "jack<N>" line of the tripped file, its looped-with port
+# in the .loop companion, the switch's jack_block (the driver re-arms its
+# probes when a jack is unblocked, so a restart judges the jack afresh).
 # Not a bridge port state: a port state is bridge-level policy, which the
 # Runner's offloaded bridged flows bypass (an offloaded unicast flow never
 # reaches the bridge: q254 B, ping 5/5 after the trip with state 0). The
@@ -392,6 +400,40 @@ jack_trip() {
 	echo "$1 $2" >> "$LAN_TRIPPED.src"
 	log "BPDU guard: a BPDU from $1 entered on rnr1.$2 (a 2.5G jack of VLAN $2 reaches a switch: a loop risk): jack(s) ${ATT:-none} latched off ($ATT_HOW; rc-service gt-be98-lan restart clears it)"
 }
+# a jack_status line $1 ("port=6 link=up ... loop=1 loop_pair=6") into
+# JS_PORT (4..7, "" otherwise), JS_LOOP (1, 0, ?: not read, "": an older
+# driver) and JS_PAIR (the looped-with port, - unknown)
+js_parse() {
+	local w
+	JS_PORT= JS_LOOP= JS_PAIR=-
+	set -f
+	# shellcheck disable=SC2086 # word split, no glob
+	set -- $1
+	set +f
+	for w; do
+		case "$w" in
+		port=[4-7]) JS_PORT=${w#port=} ;;
+		loop=*) JS_LOOP=${w#loop=} ;;
+		loop_pair=[0-9]) JS_PAIR=${w#loop_pair=} ;;
+		esac
+	done
+}
+# the loop guard (header): every jack the driver reports in a loop, latched
+loop_guard() {
+	local l n f x
+	rtl_dir || return 0
+	[ -r "$RTL/jack_status" ] || return 0
+	while IFS= read -r l || [ -n "$l" ]; do
+		js_parse "$l"
+		[ -n "$JS_PORT" ] && [ "$JS_LOOP" = 1 ] || continue
+		n=$JS_PORT f=0
+		[ -r "$LAN_TRIPPED" ] && while read -r x _; do [ "$x" = "jack$n" ] && f=1; done < "$LAN_TRIPPED"
+		[ $f = 1 ] && continue
+		echo "jack$n" >> "$LAN_TRIPPED"
+		echo "jack$n $JS_PAIR" >> "$LAN_TRIPPED.loop"
+		log "loop guard: the switch's RLDP probe came back to jack $n (looped with port $JS_PAIR: a loop through equipment that sends no BPDU): jack $n latched off (rc-service gt-be98-lan restart clears it)"
+	done < "$RTL/jack_status"
+}
 # the latched jacks (jack<N> lines) as the driver's jack_block: written when
 # the driver's differs (after a module reload, or a write gt-be98-lan missed)
 jack_block_sync() {
@@ -413,12 +455,13 @@ jack_block_sync() {
 # the BPDU guard (header): latch the VLAN jacks whose counter moved, and the
 # 2.5G jacks a BPDU source on rnr1.<V> is attributed to
 guard() {
-	local l p n a b c d
+	local l p n a b c d jk=
 	l= JACKS_APPLIED=
 	if [ -r "$LAN_APPLIED" ]; then
 		while read -r a b c d _; do
 			case "$a" in
 			guard) l=guard ;;
+			jacks) jk=1 ;;	# a jack set is in the switch: the loop guard runs
 			# jack|jacktag <n> <bridge> <vid>: the VLANs each jack carries
 			jack|jacktag) [ -n "${d:-}" ] && JACKS_APPLIED="$JACKS_APPLIED $b:$d" ;;
 			esac
@@ -462,6 +505,7 @@ guard() {
 		done < "$LAN_TRIPPED.seen"
 		rm -f "$LAN_TRIPPED.seen"
 	fi
+	[ -z "$jk" ] || loop_guard
 	jack_block_sync
 	# the latched ports, for verdict: never a bridge port (detached by the
 	# sweep below, at once after the trip and every time after)
@@ -678,6 +722,38 @@ selftest() {
 	gcheck keep   rnr2    brwifi7 " 40 " -    rnr0 40 "" "" 40			# a bare jack native 40 in the gateway bridge
 	gcheck detach rnr2    brwifi7 " 40 " -    rnr0 40 "" "" 41			# control: its native is another VLAN
 	GW_VIDS=' '
+	# the loop guard: the driver's jack_status line -> <expect "port loop pair"> <line>
+	scheck() {
+		js_parse "$2"
+		n=$((n + 1))
+		if [ "$JS_PORT $JS_LOOP $JS_PAIR" = "$1" ]; then echo "ok   jack_status '$2' -> '$1'"
+		else echo "FAIL jack_status '$2': want '$1' got '$JS_PORT $JS_LOOP $JS_PAIR'"; fail=$((fail + 1)); fi
+	}
+	scheck "6 1 6" "port=6 link=up speed=1000 vid=921 blocked=0 tagged=none enabled=1 loop=1 loop_pair=6"
+	scheck "5 0 -" "port=5 link=down speed=? vid=off blocked=0 tagged=none enabled=0 loop=0 loop_pair=-"
+	scheck "7 ? -" "port=7 link=down speed=? vid=off blocked=0 tagged=none enabled=1 loop=? loop_pair=-"	# RLDP not running
+	scheck "4  -" "port=4 link=up speed=2500 vid=921 blocked=0 tagged=none"		# an older driver: no loop word
+	scheck " 1 4" "port=3 link=up speed=10000 loop=1 loop_pair=4"			# never a jack: the uplink
+	scheck "6 1 -" "port=6 loop=1 loop_pair=12"					# a pair out of range: unknown
+	# the loop guard on a driver directory: <expect tripped lines|loop lines> <jack_status lines>
+	RTLT=$(mktemp -d)
+	lgcheck() {
+		printf "$2" > "$RTLT/jack_status"; : > "$RTLT/jack_block"
+		LAN_TRIPPED=$RTLT/tripped RTL_GLOB=$RTLT
+		[ -n "${3:-}" ] || rm -f "$LAN_TRIPPED" "$LAN_TRIPPED.loop"
+		loop_guard
+		c="$({ tr '\n' ' ' < "$LAN_TRIPPED"; } 2>/dev/null)|$({ tr '\n' ' ' < "$LAN_TRIPPED.loop"; } 2>/dev/null)"
+		n=$((n + 1))
+		if [ "$c" = "$1" ]; then echo "ok   loop guard: '$1'"
+		else echo "FAIL loop guard: want '$1' got '$c'"; fail=$((fail + 1)); fi
+	}
+	lgcheck "jack6 |jack6 6 " "port=4 loop=0 loop_pair=-\nport=5 loop=0 loop_pair=-\nport=6 loop=1 loop_pair=6\nport=7 loop=0 loop_pair=-\n"
+	lgcheck "jack6 |jack6 6 " "port=6 loop=1 loop_pair=6\n" again		# still looped: latched once, not twice
+	lgcheck "jack6 jack4 jack5 |jack6 6 jack4 5 jack5 4 " "port=4 loop=1 loop_pair=5\nport=5 loop=1 loop_pair=4\n" again	# jacks 4 and 5 added to the latched 6
+	lgcheck "jack4 jack5 |jack4 5 jack5 4 " "port=4 loop=1 loop_pair=5\nport=5 loop=1 loop_pair=4\n"	# two jacks cabled into one switch: both latched
+	lgcheck "|" "port=4 loop=0 loop_pair=-\nport=6 loop=? loop_pair=-\nport=7 link=up\n"	# control: no loop, unread, an older driver
+	lgcheck "|" "port=3 loop=1 loop_pair=4\n"						# control: the uplink is never latched
+	rm -rf "$RTLT"; LAN_TRIPPED=/nonexistent RTL_GLOB=/nonexistent
 	rm -rf "$L2_STATE"
 	rm -f "$WIFI_STATIONS" "$WIFI_REPEATERS"
 	echo "selftest: $((n - fail))/$n ok"

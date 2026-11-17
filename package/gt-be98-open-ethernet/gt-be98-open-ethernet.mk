@@ -44,7 +44,11 @@
 #  writer: driver/rtl8372 per-jack TAGGED VIDs - jack_profiles "<n>=<native>+<t>,..", a jack with tagged VIDs a
 #  tagged member of each and accept-all with the ingress filter on, jack_status tagged=; host test and docs; no
 #  module parameter; only driver/rtl8372, tests and docs differ from 17e5dfc: no linux-dirclean needed)
-GT_BE98_OPEN_ETHERNET_VERSION = befea834a5f94f1f0ff39d77df9b8514abffc2f7
+# oe rtl8372-rldp-portoff 2026-11-17 8bc950f (on befea83: driver/rtl8372 only - the switch's RLDP loop
+#  detection on the jacks (jack_status loop= loop_pair=, re-armed when jack_block frees a jack), sysfs
+#  jack_disabled (a jack's PHY powered down), debugfs rtl8372/loop; host test tests/rtl8372-jack; no module
+#  parameter; only driver/rtl8372, tests and docs differ from befea83: no linux-dirclean needed)
+GT_BE98_OPEN_ETHERNET_VERSION = 8bc950fff172e11b3d750012492199f3a11827a1
 GT_BE98_OPEN_ETHERNET_SITE = git@github.com:nebuloss/gt-be98-open-ethernet.git
 GT_BE98_OPEN_ETHERNET_SITE_METHOD = git
 GT_BE98_OPEN_ETHERNET_LICENSE = GPL-2.0

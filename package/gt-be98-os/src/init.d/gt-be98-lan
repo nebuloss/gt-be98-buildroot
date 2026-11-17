@@ -25,7 +25,11 @@
 #     profile is refused (the jack off); a listed VID with no network is not
 #     carried (logged), the jack's other VLANs are. A jack without a
 #     profile, disabled, refused or without a network for its native is off
-#     in the switch. VLAN 1 is never a jack's (bare rnr1: LAN_PORTS=rnr1, the
+#     in the switch; a DISABLED one (enabled=0) is also switched off: its
+#     PHY powered down (the driver's jack_disabled), link LED dark, no
+#     carrier for the peer. No jack enabled at all after a reload: the
+#     switch goes back to its boot state (the module this service loaded is
+#     unloaded, which holds the RTL8372 in reset). VLAN 1 is never a jack's (bare rnr1: LAN_PORTS=rnr1, the
 #     routed LAN, which writes 4=1 5=1 6=1 7=1 and is refused together with
 #     an enabled jack profile).
 #   - the bare ports rnr2, rnr3: LAN_PORT_<port>="native=<vid> tagged=none",
@@ -64,7 +68,13 @@
 # cuts the jack(s)
 # in the switch (jack_block: no forwarding, learned entries flushed); the
 # latch ("jack<n>" lines of the tripped file) is re-written after every
-# jack_profiles write. The box never sends BPDUs into a trunk VLAN either
+# jack_profiles write. The RTL8372's own loop detection (RLDP: the switch's
+# probe frame came back to a jack, a loop through equipment that sends no
+# BPDU, a dumb switch) latches the same way: the driver reports loop=1 in
+# jack_status, gt-be98-netguard writes the jack<n> line (and its reason in
+# the tripped file's .loop companion) and the jack is cut by jack_block, the
+# latch and its clearing exactly the BPDU guard's.
+# The box never sends BPDUs into a trunk VLAN either
 # (dropped on <trunk>.<vid> egress). A tripped port is never re-attached,
 # not by netguard, not by a reload, until `rc-service gt-be98-lan restart`.
 # The general rule: bridge-level L2 policy (port state, bridge nft rules) is
@@ -177,14 +187,15 @@ valid_vid() {
 }
 
 # profile KEY $1 ("native=<vid> tagged=<t> [enabled=0|1]") into P_NATIVE
-# ("" = no jack: empty or enabled=0) and P_TAGGED ("" none, "all", or the
+# ("" = no jack: empty or enabled=0), P_DISABLED (1: enabled=0, the port is
+# switched off, not only out of every VLAN) and P_TAGGED ("" none, "all", or the
 # listed VIDs, space-separated, as written); rc 1 refused, the reason in
 # P_ERR. $2 = jack: a 2.5G jack, <t> = none|all|<vid>[,<vid>...] (each
 # 2..4094, not the native, distinct, at most JACK_TAGGED_MAX); else <t> =
 # none only (a bare port).
 profile_parse() {
 	local v w k t n tagged=none enabled=1
-	P_NATIVE= P_TAGGED= P_ERR=
+	P_NATIVE= P_TAGGED= P_ERR= P_DISABLED=
 	v=$(conf_get "$1" 'a-z0-9=, ')
 	if [ -z "$v" ]; then
 		[ -z "$(conf_get "$1" '^"')" ] && return 0
@@ -199,7 +210,7 @@ profile_parse() {
 		*) P_ERR="$1: '$w' refused (native=, tagged=, enabled=)"; P_NATIVE=; return 1 ;;
 		esac
 	done
-	case "$enabled" in 0) P_NATIVE=; return 0 ;; 1) ;; *) P_ERR="$1: enabled=$enabled refused (0|1)"; P_NATIVE=; return 1 ;; esac
+	case "$enabled" in 0) P_NATIVE= P_DISABLED=1; return 0 ;; 1) ;; *) P_ERR="$1: enabled=$enabled refused (0|1)"; P_NATIVE=; return 1 ;; esac
 	valid_vid "$P_NATIVE" || { P_ERR="$1: native=$P_NATIVE refused (a VLAN id 1-4094)"; P_NATIVE=; return 1; }
 	case "$tagged" in none) return 0 ;; esac
 	[ "${2:-}" = jack ] || { P_ERR="$1: tagged=$tagged refused: a bare port carries its native VLAN only (tagged=none)"; P_NATIVE=; return 1; }
@@ -245,10 +256,13 @@ vports_conf() {
 # other jacks are unaffected). VLAN 1 is refused: it is the untagged LAN on
 # bare rnr1, i.e. LAN_PORTS=rnr1 (the routed LAN), never a jack's VLAN.
 # JACK_KEYS: 1 when a LAN_JACK_<n> line has a non-empty value (absent or
-# empty: that jack has no profile, it is off).
+# empty: that jack has no profile, it is off). JDISABLED: the jacks whose
+# profile says enabled=0 ("4 6"): off AND switched off (the driver's
+# jack_disabled: the PHY powered down, the link LED dark, the peer sees no
+# carrier); a jack without a profile or with a refused one is only off.
 jacks_conf() {
 	local n key
-	JACKS= JACK_KEYS=0
+	JACKS= JACK_KEYS=0 JDISABLED=
 	for n in 4 5 6 7; do
 		eval "JNATIVE_$n= JTAGGED_$n="
 		[ -z "$(conf_get "LAN_JACK_$n" '^"')" ] || JACK_KEYS=1
@@ -259,6 +273,7 @@ jacks_conf() {
 		key=LAN_JACK_
 	else
 		profile_parse LAN_PORT_rnr1 jack || { eerror "$P_ERR: the four 2.5G jacks are off"; return 0; }
+		[ -z "$P_DISABLED" ] || JDISABLED="4 5 6 7"
 		[ -n "$P_NATIVE" ] || return 0
 		[ "$P_NATIVE" != 1 ] || { eerror "LAN_PORT_rnr1: native=1 refused: VLAN 1 is the untagged LAN on bare rnr1 (LAN_PORTS=rnr1): the four 2.5G jacks are off"; return 0; }
 		key=
@@ -266,6 +281,7 @@ jacks_conf() {
 	for n in 4 5 6 7; do
 		if [ -n "$key" ]; then
 			profile_parse "$key$n" jack || { eerror "$P_ERR: jack $n off"; continue; }
+			[ -z "$P_DISABLED" ] || JDISABLED="${JDISABLED:+$JDISABLED }$n"
 			[ -n "$P_NATIVE" ] || continue
 			[ "$P_NATIVE" != 1 ] || { eerror "$key$n: native=1 refused: VLAN 1 is the untagged LAN on bare rnr1 (LAN_PORTS=rnr1): jack $n off"; continue; }
 		fi
@@ -657,9 +673,35 @@ jack_latch() {
 	fi
 	echo $m
 }
+# the jacks switched off (JDISABLED, enabled=0) as the absolute
+# jack_disabled mask (stdout, decimal)
+jack_down() {
+	local m=0 n
+	for n in ${JDISABLED:-}; do m=$(( m | (1 << n) )); done
+	echo $m
+}
+# the switched-off jacks to the driver's jack_disabled (their PHYs powered
+# down), written when one is wanted or the driver has one down (a driver
+# without the attribute: nothing to undo, a wanted one logged). Never fatal:
+# such a jack is off in the set already, only its link stays up.
+jacks_power() {
+	local m c
+	m=$(jack_down)
+	if [ -e "$RTL_DIR/jack_disabled" ]; then
+		c=; { read -r c < "$RTL_DIR/jack_disabled"; } 2>/dev/null
+		case "$c" in ''|*[!0-9a-fA-Fx]*) c=0 ;; esac
+		[ "$m" != 0 ] || [ $(( c )) != 0 ] || return 0
+		rtl_put jack_disabled "$m" && return 0
+		ewarn "jack_disabled $m not written (${RTL_ERR##*: }): the disabled jack(s) ${JDISABLED:-} are off but keep their link"
+	elif [ "$m" != 0 ]; then
+		ewarn "the RTL8372 driver has no jack_disabled: the disabled jack(s) $JDISABLED are off but keep their link"
+	fi
+	return 0
+}
 # write the whole set $1 to jack_profiles (retried while the configurator
 # runs: -EAGAIN, up to $2 s, SWITCH_WAIT by default), then the latch to
-# jack_block (a module reload lost it). A latch that cannot be written: the
+# jack_block (a module reload lost it), then the switched-off jacks
+# (jack_disabled). A latch that cannot be written: the
 # latched jacks are written off instead (never left forwarding). rc 1 when
 # the set is not in the switch.
 jacks_write() {
@@ -684,7 +726,8 @@ jacks_write() {
 	done
 	m=$(jack_latch)
 	rtl_put jack_block "$m" && {
-		[ "$m" = 0 ] || ewarn "2.5G jacks latched off by the BPDU guard (jack_block $m): rc-service gt-be98-lan restart clears it"
+		[ "$m" = 0 ] || ewarn "2.5G jacks latched off by the loop guard (BPDU or RLDP, jack_block $m): rc-service gt-be98-lan restart clears it"
+		jacks_power
 		return 0
 	}
 	eerror "jack_block $m not written (${RTL_ERR##*: }): the latched jacks are written off"
@@ -693,6 +736,7 @@ jacks_write() {
 		case $(( m & (1 << ${w%%=*}) )) in 0) o="${o:+$o }$w" ;; *) o="${o:+$o }${w%%=*}=off" ;; esac
 	done
 	rtl_put jack_profiles "$o" || { eerror "jack_profiles '$o' not written (${RTL_ERR##*: })"; return 1; }
+	jacks_power
 }
 
 # wait up to LAN_IFACE_WAIT s for netdev $1; rc 1 when it never came
@@ -740,21 +784,29 @@ vports_apply() {
 		jw="$jw $p:$b:$v"
 		jack_tagged "$p" "$v" "$tg" || rc=1
 	done
-	# the switch: written whenever a jack is wanted or a set was written
-	# before (a jack that leaves its VLAN is off in the switch before its
-	# bridge goes); a set the switch did not take bridges no jack
-	# (never while rnr1 is in LAN_PORTS: the routed LAN owns the set, and
-	# load_conf refuses it with a jack profile)
-	case " $LAN_PORTS " in *" rnr1 "*) jw= JT= ;; *)
-	if [ -n "$jw" ] || grep -q '^jacks ' $APPLIED 2>/dev/null; then
-		[ -z "$jw" ] || switch_load
+	# the switch: written whenever a jack is wanted (a jack that leaves its
+	# VLAN is off in the switch before its bridge goes); a set the switch did
+	# not take bridges no jack. No jack wanted any more while a set was
+	# written: the switch as at boot (switch_release: the module this
+	# service loaded unloaded, the switch held in reset, every jack dark).
+	# Never while rnr1 is in LAN_PORTS: the routed LAN owns the set, and
+	# load_conf refuses it with a jack profile.
+	case " $LAN_PORTS " in
+	*" rnr1 "*) jw= JT=
+		# the routed LAN's set is its own; a jack switched off or on is not
+		rtl_dir && jacks_power ;;
+	*)
+	if [ -n "$jw" ]; then
+		switch_load
 		set=$(jack_set "$jw" "$JT")
 		if jacks_write "$set"; then
 			sed -i '/^jacks /d' $APPLIED; echo "jacks $set" >> $APPLIED
-		elif [ -n "$jw" ]; then
+		else
 			eerror "the 2.5G jacks are not bridged (their VLANs are not set in the switch)"
 			rc=1; jw= JT=
 		fi
+	elif grep -q '^jacks \|^module rtl8372$' $APPLIED 2>/dev/null; then
+		switch_release
 	fi ;;
 	esac
 	if [ -n "$jw" ] && ! iface_wait rnr1; then
@@ -839,6 +891,26 @@ switch_load() {
 	fi
 }
 
+# no 2.5G jack wanted any more (reload): the switch as a fresh boot leaves it.
+# The module this service loaded is unloaded (its remove holds the switch in
+# reset: no jack has a link, the disabled ones included); one this service
+# did not load stays, with every jack written off and switched as configured.
+switch_release() {
+	if grep -qx 'module rtl8372' $APPLIED 2>/dev/null; then
+		if rmmod rtl8372; then
+			sed -i '/^module rtl8372$/d; /^jacks /d' $APPLIED
+			einfo "Wired LAN: no 2.5G jack enabled: rtl8372 unloaded, the switch held in reset (as at boot)"
+			return 0
+		fi
+		ewarn "rtl8372 could not be unloaded: the 2.5G jacks are written off instead"
+	fi
+	if jacks_write "$JACKS_OFF" 5; then
+		sed -i '/^jacks /d' $APPLIED
+	else
+		ewarn "the 2.5G jacks could not be set off: they keep their VLANs until rtl8372 unloads"
+	fi
+}
+
 reload() {
 	load_conf || return 1
 	[ -f $APPLIED ] || { eerror "gt-be98-lan is not applied"; return 1; }
@@ -854,7 +926,7 @@ reload() {
 start() {
 	load_conf || return 1
 	: > $APPLIED
-	rm -f "$TRIPPED" "$TRIPPED.src"
+	rm -f "$TRIPPED" "$TRIPPED.src" "$TRIPPED.loop"
 	if [ -z "$LAN_PORTS" ] && [ -z "$VPORTS" ] && [ -z "$JACKS" ]; then
 		einfo "Wired LAN: nothing configured (LAN_PORTS, LAN_PORT_<port>, LAN_JACK_<n>): the jacks stay off"
 		return 0
@@ -992,6 +1064,6 @@ stop() {
 		done
 		rm -f $APPLIED
 	fi
-	rm -f "$TRIPPED" "$TRIPPED.src"
+	rm -f "$TRIPPED" "$TRIPPED.src" "$TRIPPED.loop"
 	eend 0
 }
