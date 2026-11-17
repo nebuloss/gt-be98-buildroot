@@ -505,6 +505,25 @@ is the leaf station's 4-address TX of a tagged foreign-SA frame, or the root's t
 directions, the RTL as a mac80211 leaf, the box as root) and RL2B (foreign SA, untagged, the box as leaf) each passed
 one half of that.
 
+**q300 settled both (imgint6).** Results: M1, M2, MR and MRA PASS, so a stranger is refused by the accept list. M3 and
+M4 PASS. M6 VOID-LEAF-L2 again ("bhs.20 is not a port of brwifi120").
+
+- **The OS M6:** `gt-be98-l2` applied the two-gateway rule to the leaf's bridge. The one box's VLAN 20 is the root's
+  gateway network, so `up ... brwifi120 bhs 20` got "trunk -", and `bhs.20` was never made. That is a product defect:
+  a leaf whose list keeps a `mode=gateway` line would lose that network the same way. Fixed on this branch (`951e9af`):
+  - the rule acts on the WIRED trunks only;
+  - a bridge on `bhs` carries every VID;
+  - `gt-be98-gw` never takes a `bhs` bridge as a gateway bridge. On the one box, `brwifi120` sorts before the root's
+    `brwifi20`.
+
+  Tests: `gt-be98-l2-test.sh`, `gt-be98-gw-test.sh` (with a positive control), and hwsim T8.
+- **The driver lane's tagged M6L-LOOP and M6L-NS (DROP-AT=leaf_front):** netguard rule 7 detached the hand-made
+  `bhs.20` from `brl20`. Both runs' dmesg have "gt-be98-netguard: detached bhs.20 from bridge brl20 (a mesh backhaul
+  VLAN: a port only of the network bridge gt-be98-l2 runs it for ...)". `bhs.<vid>` and `bh[0-7].<vid>` are the OS's
+  names: netguard admits them only in a `brwifi` bridge that `gt-be98-l2` records. M6L-UNTAG had no `bhs.*` and passed.
+  This is not the driver, the firmware or the leaf bridge itself. A hand-built bench leaf must use other names (as
+  `mbh0.*` already does on the root side), e.g. `mbhs.<vid>`, or build the leaf with `gt-be98-l2 uplink` / `up`.
+
 r4 of the OS arm (`orch/bin/mesh-arms-r4.sh`) reads, in M6:
 - the rx/tx/drop counters of bcawl1, bhs.20, brwifi120, bcawl3, the AP_VLAN, bh0.20 and brwifi20, before and after
   the client phase;

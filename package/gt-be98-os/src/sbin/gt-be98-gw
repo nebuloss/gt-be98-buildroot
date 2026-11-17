@@ -1024,6 +1024,10 @@ l2_bridge() {
 	local b t v
 	BR= BRT=
 	while read -r b t v _; do
+		# a mesh leaf's bridge (uplink bhs) is never a gateway bridge: on a
+		# box that is also a root, the root's bridge of the VID is (q300 M6:
+		# brwifi120 on bhs.20 sorted before the root's brwifi20)
+		[ "$t" = bhs ] && continue
 		[ "$v" = "$1" ] && { BR=$b BRT=$t; return 0; }
 	done <<-EOF
 	$("$L2" list 2>/dev/null)
