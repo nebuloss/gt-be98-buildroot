@@ -256,7 +256,9 @@
 #                                   ZW-N3: the driver refuses a background
 #                                   CAC there, and hostapd 2.12 then fails
 #                                   the radio's setup: the AP would not
-#                                   start)
+#                                   start). [ZW-ETSI] one switch in this
+#                                   file (zwetsi5gh, 0 today) lets 5gh
+#                                   write it in ETSI too
 #     monitor=0|1                   1: the radio is a monitor, no BSS: its
 #                                   networks are not rendered there (they
 #                                   keep their slots) and the plan gets a
@@ -727,6 +729,15 @@ function validband(b) { return b == "2g" || b == "5gl" || b == "5gh" || b == "6g
 # bca_reg.c bca_reg_dfs_region: US = FCC, JP = JP, every other country ETSI;
 # its wiphy is self-managed, so the wireless-regdb region is not the one used)
 function dfsetsi(c) { return c != "US" && c != "JP" }
+# [open-wifi ZW-ETSI, owner 2026-11-17] THE ONE SWITCH: zwdfs=1 on 5gh in an
+# ETSI region. The driver now runs a background CAC there on the 5 GHz-high
+# radio only (bcawl1), for the 6 min ETSI Off-Channel minimum; 5gl keeps the
+# refusal. 0 (today) = dropped as before. Set to 1 only after the box arm
+# orch bin/dfs5gh-bgcac-arm.sh passes AND hostapd can start 5gh with no
+# DFS-available channel (hostapd 2.12 dfs.c: with enable_background_radar=1
+# a start whose channel is not available needs an AVAILABLE temp channel, and
+# every 5gh channel is DFS in ETSI, so a cold boot fails the radio setup).
+function zwetsi5gh() { return 0 }
 # MAC "aa:bb:cc:dd:ee:ff" -> o[0..5]; 1 on success
 function parsemac(m, o,    i, p, n) {
 	m = tolower(m)
@@ -1351,7 +1362,7 @@ END {
 		# interface setup, so enable_background_radar=1 would keep the radio
 		# down. Dropped, not refused: a zwdfs=1 stored before a country
 		# change must not stop the radio
-		else if (rzw[b] && dfsetsi(country)) {
+		else if (rzw[b] && dfsetsi(country) && !(b == "5gh" && zwetsi5gh())) {
 			warn("radio " b ": zwdfs=1 ignored: zero-wait DFS (background CAC) is not offered in country " country " (an ETSI DFS region: US and JP only), enable_background_radar is not written")
 			rzw[b] = 0
 		}
