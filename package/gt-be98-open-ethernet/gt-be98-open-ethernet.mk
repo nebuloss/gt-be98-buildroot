@@ -53,7 +53,12 @@
 #  offloaded, tag popped / pushed) and oe-eth-ports-2026-11-17-r c851e63 (E3: core-7 TX_TASK_DS_0/1 r9 as
 #  stock on every load; G3: rnr2 reports its UNIMAC MIB in ip -s link / ethtool -S); no conflicts; only
 #  driver/runner, driver/rtl8372, tests, tools and docs differ from befea83: no linux-dirclean needed)
-GT_BE98_OPEN_ETHERNET_VERSION = 9880e991923563e6aa933b7cb1676bb5a8ac8a34
+# oe-int-2026-11-17 2026-11-17 bc4801d (imgint2: 9880e99 + merges of oe-eth-ports-g2-2026-11-17 afb30c3 (G2:
+#  EXT_CFG1 MAX_PKT_SIZE 10272 as stock, W0 q286 read 1536), oe-pppoe-offload-2026-11-17 4f1feca (RUNNER-PPPOE:
+#  routed IPv4 over the PPPoE WAN offloaded, stock length op) and oe-b2-pop-2026-11-17 2af4780 (RUNNER-E2E-ONETAG:
+#  bare port <-> trunk VLAN pop/push; 6 additive conflict hunks, both behaviours kept, 87b53b9) + the flow
+#  check's PPPoE cut (bc4801d); only driver/runner, tests, tools and docs differ from 9880e99: no linux-dirclean)
+GT_BE98_OPEN_ETHERNET_VERSION = bc4801def0101b2bcfae5b599f0ce7f6b9035dcc
 GT_BE98_OPEN_ETHERNET_SITE = git@github.com:nebuloss/gt-be98-open-ethernet.git
 GT_BE98_OPEN_ETHERNET_SITE_METHOD = git
 GT_BE98_OPEN_ETHERNET_LICENSE = GPL-2.0
