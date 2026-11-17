@@ -267,6 +267,13 @@ L sync; check "gateway network 44 without bhvid=: sync drops bh0.444 and bh1.444
 check "control: the VLAN-only network 33 still crosses on its vlan=" brwifi31 "$(master bh0.33)"
 sed -i 's/mode=gateway$/mode=gateway bhvid=444/' "$GT_BE98_NETWORKS"; L sync
 check "control: bhvid=444 back: carried again" "brwifi41 brwifi41" "$(master bh0.444) $(master bh1.444)"
+# the two-gateway rule is about the wired trunk: a leaf's bridge on bhs carries a mode=gateway VID (q300 M6)
+port bcawl5
+L uplink bcawl5
+L up wifi brwifi144 bhs 44; check "a gateway network's VID on the leaf uplink bhs: bhs.44 made, in brwifi144, state trunk bhs" "0 brwifi144 bhs" "$? $(master bhs.44) $(st brwifi144 trunk)"
+check "control: the root's gateway bridge on rnr0 stays without rnr0.44" "no -" "$(ex rnr0.44) $(st brwifi41 trunk)"
+L sync; check "sync leaves the leaf's bhs.44 in place (no gateway mode on bhs)" "0 brwifi144" "$? $(master bhs.44)"
+L down wifi brwifi144; L uplink -
 # the link goes: its VLANs go, the other link's stay
 L trunk-del bcawl0-1.sta1 > "$T/out"; check "trunk-del: rc 0, bh0 freed, its VLANs deleted, bh1's kept" "0 bh0 no no no brwifi31" \
 	"$? $(cat "$T/out") $(ex bh0.33) $(ex bh0.444) $(ex bh0.70) $(master bh1.33)"

@@ -574,6 +574,14 @@ S=$here/..
 fol() { awk -v f="$2" '/^'"$2"'\(\) \{/ { x = 1 } x && /GW_FOLLOW/ { n++ } x && /^}/ { x = 0 } END { print n + 0 }' "$1"; }
 check "gt-be98-wifi: start and reload run GW_FOLLOW (rc-service --ifstarted gt-be98-gw reload)" "1 1 yes" \
 	"$(fol "$S/src/init.d/gt-be98-wifi" start) $(fol "$S/src/init.d/gt-be98-wifi" reload) $(yn grep -q 'GW_FOLLOW=${GT_BE98_GW_FOLLOW-rc-service --ifstarted gt-be98-gw reload}' "$S/src/init.d/gt-be98-wifi")"
+# a box that is a mesh root and runs a leaf bridge of the same VID (the one-box M6): the gateway bridge is the
+# root's, never the one on bhs (listed first here, as brwifi120 sorts before brwifi20)
+cp "$T/l2list" "$T/l2list.keep"
+printf 'brwifi100 bhs 40 meshleaf\nbrwifi100004 - 40 lan\n' > "$T/l2list"; sh "$GWT" apply > /dev/null 2>&1
+check "a leaf bridge (trunk bhs) of the same VID listed first: network 4 on the root's brwifi100004" brwifi100004 "$(st 4 bridge)"
+printf 'brwifi100 bhs 40 meshleaf\n' > "$T/l2list"; sh "$GWT" apply > /dev/null 2>&1
+check "control: only the bhs bridge: network 4 never takes it" no "$([ "$(st 4 bridge)" = brwifi100 ] && echo yes || echo no)"
+cp "$T/l2list.keep" "$T/l2list"; sh "$GWT" apply > /dev/null 2>&1
 # a MESH LEAF (the Wi-Fi plan's bhtrunk line) runs no gateway network; control: the line gone
 mkdir -p "$T/run/gt-be98-wifi/gen"; echo 'bhtrunk bcawl1 10' > "$T/run/gt-be98-wifi/gen/plan"
 sh "$GWT" apply > /dev/null 2>&1

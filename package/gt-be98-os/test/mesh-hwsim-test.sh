@@ -33,6 +33,9 @@
 #      on every address, as the web UI on MGMT_IF bhm0) answer on that address; control: a listener on 8080 is
 #      dropped by table inet gt_be98_mesh_mgmt. (The box's dhcpcd is not on a build host: a dhcpcd-shaped
 #      wrapper runs busybox udhcpc and calls gt-be98-mesh as dhcpcd would.)
+#   T8 a mode=gateway line for a VID in the LEAF's own list (q300 M6: the one box's leaf bridge got "trunk -"):
+#      the re-up and a sync keep bhs.220 in the leaf bridge (the two-gateway rule is about the wired trunk) and
+#      c20 still reaches g20 over the backhaul
 #   T6 the leaf leaves: WDS-STA-INTERFACE-REMOVED frees the trunk (no bh0.*, gt-be98-l2 trunks empty)
 # Exit 0 only when every cell is as expected.
 set -u
@@ -239,6 +242,11 @@ check "T7 control: the leaf's 8080 listener itself works (from the leaf's own lo
 F sh "$S/gt-be98-mesh" mgmt -
 check "T7 mgmt -: bhm0 and the firewall gone" "no no" "$(ip netns exec mleaf test -e /sys/class/net/bhm0 && echo yes || echo no) $(ip netns exec mleaf nft list table inet gt_be98_mesh_mgmt > /dev/null 2>&1 && echo yes || echo no)"
 for f in "$w/t7/sshd.pid" "$w/t7/udhcpd.pid" "$w/t7/httpd80.pid" "$w/t7/httpd8080.pid"; do [ -f "$f" ] && kill "$(cat "$f")" 2>/dev/null; done
+# ---- T8 a gateway VID on the leaf's bhs ----
+printf 'network=10 vlan=10\nnetwork=20 vlan=220 subnet=10.20.0.1/24 mode=gateway\n' > "$w/leaf/networks.conf"
+F sh "$S/gt-be98-l2" up wifi brwifi20 bhs 220; F sh "$S/gt-be98-l2" sync
+check "T8 a mode=gateway VID on the leaf: bhs.220 stays in brwifi20 after up + sync" brwifi20 "$(mst mleaf bhs.220)"
+check "T8 c20 -> g20 still crosses the backhaul" 3 "$(pg c20 10.20.0.1)"
 # ---- T6 the leaf leaves ----
 kill "$(cat "$w/leaf/wpas.pid")" 2>/dev/null
 until_ 15 sh -c "! ip netns exec mroot test -e /sys/class/net/bh0.10"
