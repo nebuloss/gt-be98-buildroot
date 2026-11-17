@@ -78,7 +78,9 @@
 # upstream router's DHCP and the box's would both answer the segment). The
 # VLAN id keeps its meaning on the LAN side (the jacks' rnr1.<vid>, bare
 # jacks, tagged jack trunks, BSSes). The state records "trunk -" and the
-# trunk the users asked for as "uplink <trunk>". A line without mode= is VLAN
+# trunk the users asked for as "uplink <trunk>". The rule is about the WIRED
+# trunks only: a mesh leaf's uplink bhs leads to the root, the network's
+# gateway, and carries a mode=gateway VID like any other. A line without mode= is VLAN
 # only, whatever its subnet= (the explicit key, owner D-GW1). While
 # gt-be98-gw holds a bridge (its address on it: $GW_HOLD/<bridge>) the trunk
 # sub-interface stays out even when the file says VLAN only again:
@@ -528,6 +530,12 @@ cmd_up() {
 		err "$s is bridged in $o already: $b refused"; return 1
 	done
 	vid_mode "$v" "$b"
+	# the two-gateway rule is about the WIRED upstream: a mesh leaf's uplink
+	# bhs leads to the ROOT, which is every network's gateway, so a VID the
+	# web UI's list calls mode=gateway is carried on bhs like any other
+	# (q300 M6: the one box's leaf bridge on bhs.20 got "trunk -" because the
+	# root's VLAN 20 is a gateway network, and bhs.20 was never made)
+	[ "$t" = bhs ] && MODE=vlan
 	if [ "$MODE" = vlan ]; then
 		o=$(master_of "$s")
 		[ -z "$o" ] || [ "$o" = "$b" ] || { err "$s is a port of $o: $b refused"; return 1; }
@@ -657,6 +665,8 @@ cmd_sync() {
 		[ -n "$S_VID" ] && valid_trunk "$S_UPLINK" || continue
 		# the backhaul VLANs follow the backhaul VID (bhvid= may have moved)
 		bh_attach_all "$b" || r=1
+		# a leaf's bridge on bhs: no gateway mode (cmd_up)
+		[ "$S_UPLINK" = bhs ] && continue
 		vid_mode "$S_VID" "$b"
 		if [ "$MODE" = gateway ] && [ "$S_TRUNK" != - ]; then
 			if sub_drop "$b"; then
