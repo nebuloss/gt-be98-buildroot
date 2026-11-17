@@ -58,7 +58,10 @@
 #  routed IPv4 over the PPPoE WAN offloaded, stock length op) and oe-b2-pop-2026-11-17 2af4780 (RUNNER-E2E-ONETAG:
 #  bare port <-> trunk VLAN pop/push; 6 additive conflict hunks, both behaviours kept, 87b53b9) + the flow
 #  check's PPPoE cut (bc4801d); only driver/runner, tests, tools and docs differ from 9880e99: no linux-dirclean)
-GT_BE98_OPEN_ETHERNET_VERSION = bc4801def0101b2bcfae5b599f0ce7f6b9035dcc
+# oe-int-2026-11-17 2026-11-17 ea41e01 (imgint3: bc4801d + rtl8372-rldp-portoff 6681199: RLDP's live state from
+#  LOOPED_STATE 0x1090 (LOOP_STATE 0x108c is a latch, q290 B/U STICKY), LOOPPAIR's nibble = the port, the re-arm
+#  removed; driver/rtl8372 only, no conflict; no linux-dirclean)
+GT_BE98_OPEN_ETHERNET_VERSION = ea41e01ddceb1ed9b0db92b02f260383b1553baa
 GT_BE98_OPEN_ETHERNET_SITE = git@github.com:nebuloss/gt-be98-open-ethernet.git
 GT_BE98_OPEN_ETHERNET_SITE_METHOD = git
 GT_BE98_OPEN_ETHERNET_LICENSE = GPL-2.0
