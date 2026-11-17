@@ -45,7 +45,9 @@
 #  4-address link on a secondary BSS, its AP_VLAN back-pressure, the leave the firmware is owed; no module parameter))
 # om-mesh-int-2026-11-17 2026-11-17 83cb2973 (imgint5: + om-mesh-bh bca7f518: R2 at address-set (the AP_VLAN parent chosen
 #  again when hostapd sets the MAC), R6 (a bound AP_VLAN's group frames on the link's own ring, 4-address))
-GT_BE98_OPEN_WIFI_VERSION = 83cb297362a66bdce6af74dfe08329a739fb9292
+# om-mesh-int-2026-11-17 2026-11-17 8137daeb (imgint5b: 83cb2973 + om-int 74526e96 = om-rebind-ch40 7c216637 (ledger) +
+#  om-rebind-flip-r 67b5c4b6: radio_rebind DEFAULT 1 (INV-RECOVERY; q296 rebind-ch40-arm-r2 PASS both cells, 6/6))
+GT_BE98_OPEN_WIFI_VERSION = 8137daeb665c6ab64f3118f410f8dc1ef18251b4
 GT_BE98_OPEN_WIFI_SITE = git@github.com:nebuloss/gt-be98-open-wifi.git
 GT_BE98_OPEN_WIFI_SITE_METHOD = git
 GT_BE98_OPEN_WIFI_LICENSE = GPL-2.0-only
