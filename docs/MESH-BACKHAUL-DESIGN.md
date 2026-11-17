@@ -357,6 +357,17 @@ trunk=1
 - New plan line: `bhtrunk <dev> <vid,vid,...|->` (the VIDs the trunk carries now). The web UI shows
   it with the station's `wpa_cli status`, its lease file and `iw dev <dev> station dump`.
 
+**C2a. Leaf management: `mgmt_vid=<vid>` on the `station=` block (appended 11-17, D-MESH-OS1 adopted).** Only with
+`trunk=1`. The value is the `vlan=` of one of the list's networks (the trunk carries those). Absent: the first `vlan=`
+network of the list. The web UI's leaf import writes it, by default the first VLAN-only network's backhaul VID. The OS
+then adds a plan line `bhmgmt <vid> <bridge>`. On it, `gt-be98-mesh mgmt` gives the leaf its management address:
+- a veth `bhm0`/`bhm0p`, with `bhm0p` a port of that network's bridge;
+- DHCP on `bhm0`, and a default route at metric 2500;
+- `table inet gt_be98_mesh_mgmt`, which lets in on `bhm0` only replies, ICMP, DHCP replies and TCP 22/80/443.
+
+sshd listens on every address. The web UI listens on `bhm0` through `MGMT_IF="eth0 rnr0 bhm0"` (the OS's
+platform default). The address shows in `gt-be98-mesh status` as `mgmt bhm0 <bridge> <vid> <A.B.C.D/P|->`.
+
 **C3. Gateway networks: `bhvid=` on `/etc/gt-be98-networks.conf`.** On a root only, every
 `mode=gateway` line gets ` bhvid=<vid>` appended last (after the IPv6 keys): the VLAN the network
 takes on the backhaul trunk. Default its own VLAN ID (D-MESH4; a gateway network's VLAN is not on
@@ -438,7 +449,21 @@ deviation is listed under "Open" and needs a decision.
     `bhs.<vid>` every 30 s. The jack the probe came back on is latched, as a BPDU trip is. Restart gt-be98-lan
     to clear it.
 
-**Open: needs a decision.**
+**D-MESH-OS1, ADOPTED 11-17 (option a): `mgmt_vid=` (§3.4 C2a), built as described there.**
+
+What protects the other management paths, for comparison (read in code, `b399e31`+):
+- **The wired management port `rnr0` (untagged):** no input filter in the OS. It is the owner's LAN.
+- **The WAN** (`gt-be98-wan`, a VLAN/PPPoE WAN or router mode): replies, ICMP, DHCP client replies, an optional
+  source allow-list, then drop. The web UI additionally drops its WAN_BLOCK_PORTS there.
+- **A gateway network** (`gt-be98-gw`): replies, DHCP, DNS, ICMP, DHCPv6, plus 22/80/443 only on `mgmt=1`
+  networks, then drop.
+
+The leaf's `bhm0` follows the WAN's shape plus the gateway networks' management ports: replies, ICMP, DHCP client
+replies, TCP 22/80/443, then drop. netguard admits `bhm0p` only in the bridge of the `bhmgmt` line and `bhm0` in no
+bridge. `bhm0`'s MAC is `06:` + the station's last five octets, never the station's own address, because the loop
+guard drops every frame sourced by the station that enters off `bhs.*`.
+
+**Former open point (kept for the record):**
 
 - **D-MESH-OS1, management over the untagged link.** §3.2 and §3.4 C1/C2 put the untagged AP_VLAN and the leaf's
   untagged station "into the management bridge", and run `wpa_supplicant -b <mgmt bridge>`. This OS has no
