@@ -1,7 +1,9 @@
-# dhcpcd hook (sourced): IPv6 events of the WAN (gt-be98-wan) rebuild the
-# policy routing of the delegated LANs. Does nothing without WAN_PD_LANS.
+# dhcpcd hook (sourced): IPv6 events of the WAN (gt-be98-wan) record the
+# delegated prefix (gt-be98-wan pd6; the gateway networks follow it) and
+# rebuild the policy routing of the delegated LANs. Does nothing without
+# WAN_IPV6=1. The lease (new_dhcp6_ia_pd1_*) is in the environment.
 case "$reason" in
-ROUTERADVERT|BOUND6|RENEW6|REBIND6|REBOOT6|INFORM6|DELEGATED6|EXPIRE6|NOCARRIER|CARRIER) ;;
+ROUTERADVERT|BOUND6|RENEW6|REBIND6|REBOOT6|INFORM6|DELEGATED6|EXPIRE6|RELEASE6|STOP6|STOPPED|DEPARTED|NOCARRIER|CARRIER) ;;
 *) return 0 2>/dev/null || exit 0 ;;
 esac
 [ -x /usr/sbin/gt-be98-wan ] && reason="$reason" interface="$interface" \

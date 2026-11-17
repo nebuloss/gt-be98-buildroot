@@ -6,7 +6,10 @@
 # call; gt-be98-l2 (list from a file, sync logged), gt-be98-wan (ifname,
 # check from files), nft (logs, copies the file; a file with REFUSE is
 # rejected), conntrack, dnsmasq (a sleeper writing its pid file, counting
-# the SIGHUPs it gets in $FAKE/hups), start-stop-daemon. The real gt-be98-fwd writes a fake ip_forward file.
+# the SIGHUPs it gets in $FAKE/hups), start-stop-daemon. The real gt-be98-fwd
+# writes fake ip_forward and IPv6 forwarding files. IPv6: `ip -6` keeps the
+# box's IPv6 addresses ($FAKE/addrs6), gt-be98-wan pd6 answers $FAKE/pd6, the
+# bridges' IPv6 sysctls are files under $FAKE/procnet.
 # The generated rule sets are also checked by the kernel's parser
 # (`unshare -rn nft -c -f`, with a bad-rule-set control) when available.
 # Every check has a control that differs in one input.
@@ -20,9 +23,10 @@ export FAKE="$T" GT_BE98_RUN="$T/run" GT_BE98_NETWORKS="$T/networks.conf" GT_BE9
 	GT_BE98_WAN="$T/bin/wan" GT_BE98_FWD="$FWDT" GT_BE98_FWD_SYSCTL="$T/ip_forward" \
 	GT_BE98_LAN_CONF="$T/lan.conf" GT_BE98_LAN_APPLIED="$T/run/gt-be98-lan.applied" \
 	GT_BE98_STA_ROUTED="$T/run/sta.routed" GT_BE98_ROUTER_APPLIED="$T/run/gt-be98-router.applied" \
-	GT_BE98_GW_RESOLV="$T/resolv.conf" GT_BE98_SYSNET="$T/sys" GT_BE98_DHCP_HOSTS="$T/dhcp-hosts.conf"
+	GT_BE98_GW_RESOLV="$T/resolv.conf" GT_BE98_SYSNET="$T/sys" GT_BE98_DHCP_HOSTS="$T/dhcp-hosts.conf" \
+	GT_BE98_FWD_SYSCTL6="$T/ip6_forward" GT_BE98_PROCNET="$T/procnet"
 mkdir -p "$T/bin" "$T/run" "$T/sys"
-echo 0 > "$T/ip_forward"; : > "$T/addrs"; : > "$T/l2list"; echo rnr0 > "$T/wanif"; : > "$T/wancheck"
+echo 0 > "$T/ip_forward"; echo 0 > "$T/ip6_forward"; : > "$T/addrs"; : > "$T/addrs6"; : > "$T/l2list"; echo rnr0 > "$T/wanif"; : > "$T/wancheck"
 # ip: addresses in $FAKE/addrs ("<dev> <cidr>"), routes from route-<dev>
 cat > "$T/bin/ip" <<'X'
 #!/bin/sh
@@ -34,11 +38,15 @@ case "$*" in
 "addr del "*)	grep -vx "$5 $3" "$FAKE/addrs" > "$FAKE/a.new"; mv "$FAKE/a.new" "$FAKE/addrs" ;;
 "-4 route show default dev "*)	cat "$FAKE/route-$6" 2>/dev/null ;;
 "link set dev "*" address "*)	[ -f "$FAKE/refuse-mac" ] && exit 2; mkdir -p "$FAKE/sys/$4"; echo "$6" > "$FAKE/sys/$4/address" ;;
+"-6 -o addr show scope global")	n=1; while read -r d c; do echo "$n: $d    inet6 $c scope global"; n=$((n+1)); done < "$FAKE/addrs6" ;;
+"-6 addr replace "*)	[ -f "$FAKE/refuse-addr6" ] && exit 2; grep -vx "$6 $4" "$FAKE/addrs6" > "$FAKE/a6.new"; echo "$6 $4" >> "$FAKE/a6.new"; mv "$FAKE/a6.new" "$FAKE/addrs6" ;;
+"-6 addr del "*)	grep -vx "$6 $4" "$FAKE/addrs6" > "$FAKE/a6.new"; mv "$FAKE/a6.new" "$FAKE/addrs6" ;;
+"-6 route show default dev "*)	cat "$FAKE/route6-$6" 2>/dev/null ;;
 esac
 exit 0
 X
 printf '#!/bin/sh\necho "l2 $*" >> "$FAKE/log"\n[ "$1" = list ] && cat "$FAKE/l2list"\nexit 0\n' > "$T/bin/l2"
-printf '#!/bin/sh\ncase "$1" in ifname) cat "$FAKE/wanif" ;; check) cat "$FAKE/wancheck" ;; esac\n' > "$T/bin/wan"
+printf '#!/bin/sh\ncase "$1" in ifname) cat "$FAKE/wanif" ;; check) cat "$FAKE/wancheck" ;; pd6) cat "$FAKE/pd6" 2>/dev/null ;; esac\n' > "$T/bin/wan"
 cat > "$T/bin/nft" <<'X'
 #!/bin/sh
 echo "nft $*" >> "$FAKE/log"
@@ -92,11 +100,11 @@ F release gw
 # ===== gt-be98-gw =====
 # 1. no file, a VLAN-only line, a subnet without mode=: a clean no-op
 rm -f "$GT_BE98_NETWORKS"
-run apply; check "no networks file: rc 0, nothing touched (no ip addr/rule, nft, dnsmasq, l2 up)" "0 " "$rc $(log '^(ip (addr|rule)|nft|dnsmasq)')"
+run apply; check "no networks file: rc 0, nothing touched (no ip addr/rule, IPv6, nft, dnsmasq, l2 up)" "0 " "$rc $(log '^(ip (addr|rule)|ip -6|nft|dnsmasq)')"
 NETS "network=3 name=Up vlan=30 subnet=192.168.30.1/24" "network=5 name=V vlan=50 subnet=192.168.50.1/24 mode=vlan"
 run apply; check "subnets without mode=gateway (D-GW1): nothing touched" "0 " "$rc $(log '^(ip (addr|rule)|nft|dnsmasq)')"
 check "... ip_forward untouched" 0 "$(cat "$T/ip_forward")"
-check "features" "features gateway" "$(sh "$GWT" features)"
+check "features: gateway and ipv6 (the web UI's handshake)" "features gateway ipv6" "$(sh "$GWT" features)"
 # 2. one gateway network on its bridge (gt-be98-l2 runs it with trunk -)
 NETS "network=3 name=Up vlan=30 subnet=192.168.30.1/24" "network=4 name=Lab vlan=40 subnet=192.168.40.1/24 mode=gateway isolate=0 mgmt=1"
 echo "brwifi100004 - 40 lan" > "$T/l2list"
@@ -115,8 +123,8 @@ N=$G/gw.nft
 check "nft: gw set = the bridge, nat set = it, iso empty, mgmt = it" "yes yes yes yes" \
 	"$(yn grep -A2 'set gw {' "$N" | grep -q 'elements = { brwifi100004 }' && echo yes) $(sed -n '/set nat {/,/}/p' "$N" | grep -q 'brwifi100004' && echo yes || echo no) $(sed -n '/set iso {/,/}/p' "$N" | grep -q elements && echo no || echo yes) $(sed -n '/set mgmt {/,/}/p' "$N" | grep -q brwifi100004 && echo yes || echo no)"
 check "nft: masquerade of the subnet out of the WAN" yes "$(yn has "$N" 'oifname "rnr0" ip saddr { 192.168.40.0/24 } masquerade')"
-check "nft: internet only for @nat, nothing else out, nothing unsolicited in" "yes yes yes" \
-	"$(yn has "$N" 'iifname @nat oifname "rnr0" accept') $(yn has "$N" 'iifname @gw counter drop') $(yn has "$N" 'oifname @gw counter drop')"
+check "nft: internet only for @nat (IPv4), nothing else out, nothing unsolicited in" "yes yes yes" \
+	"$(yn has "$N" 'iifname @nat oifname "rnr0" meta nfproto ipv4 accept') $(yn has "$N" 'iifname @gw counter drop') $(yn has "$N" 'oifname @gw counter drop')"
 check "nft: input: DHCP, DNS, ICMP always, management on @mgmt" "yes yes yes yes" \
 	"$(yn has "$N" 'iifname @gw udp dport 67 accept') $(yn has "$N" 'th dport 53 accept') $(yn has "$N" 'meta l4proto icmp accept') $(yn has "$N" 'iifname @mgmt tcp dport { 22, 80, 443 } accept')"
 D=$G/dnsmasq.conf
@@ -241,7 +249,7 @@ run apply; check "mode=vlan again: address, rules, hold removed, flows deleted, 
 check "... no gateway network left: tables deleted, dnsmasq stopped, forwarding back to 0, no hold" "yes yes 0 no no" \
 	"$(yn grep -q 'delete table inet gt_be98_gw' "$T/last.nft") $(yn grep -q 'start-stop-daemon --stop' "$T/log") $(cat "$T/ip_forward") $(ex "$G/hold/brwifi8") $(ex "$G/net/4")"
 check "... and the tables are not re-created (only the deletes)" no "$(yn grep -q '^table inet gt_be98_gw {$' "$T/last.nft")"
-run apply; check "control: the next apply with none: nothing touched" "" "$(log '^(nft|ip (addr|rule|route)|dnsmasq|start-stop)')"
+run apply; check "control: the next apply with none: nothing touched" "" "$(log '^(nft|ip (addr|rule|route)|ip -6|dnsmasq|start-stop)')"
 # 11. the rule set rejected: no network runs (no address without the rule set)
 NETS "network=4 name=Lab vlan=40 subnet=192.168.40.1/24 mode=gateway"; printf 'brwifi100004 - 40 lan\n' > "$T/l2list"
 cp "$GWT" "$T/gwrefuse"; sed -i 's/echo "# generated by gt-be98-gw - do not edit"$/echo "# generated by gt-be98-gw - do not edit REFUSE"/' "$T/gwrefuse"
@@ -402,6 +410,155 @@ check "P3: the cap: 256 static leases served, the 257th refused" "256 1" "$(grep
 printf '1700000000 02:00:00:00:00:99 10.41.0.99 * *\n' > "$G/leases"
 run stop; check "P3: stop: the hosts file removed, the lease table kept" "no yes" "$(ex "$H") $(ex "$G/leases")"
 rm -f "$GT_BE98_DHCP_HOSTS" "$G/leases"
+# 17. IPv6 (phase 5): a /64 of the WAN's delegated prefix per network, RA from the one dnsmasq
+v6on() { mkdir -p "$T/procnet/ipv6/conf/$1"; for k in disable_ipv6 accept_ra autoconf; do echo 1 > "$T/procnet/ipv6/conf/$1/$k"; done; }
+sc() { cat "$T/procnet/ipv6/conf/$1/$2" 2>/dev/null; }
+s6() { sed -n "s/^$2 //p" "$G/net/$1" 2>/dev/null; }
+${SH:-sh} "$GWT" stop >/dev/null 2>&1
+rm -f "$T/route-pppoe-wan"; echo rnr0 > "$T/wanif"; echo "default via 10.9.0.1 dev rnr0 proto dhcp" > "$T/route-rnr0"
+v6on brwifi100004; v6on brwifi7
+printf 'brwifi100004 - 40 lan\nbrwifi7 - 41 wifi\n' > "$T/l2list"
+echo "rnr0 2001:db8:ffff::5/64" > "$T/addrs6"
+echo "default via fe80::1 dev rnr0 proto ra metric 1003" > "$T/route6-rnr0"
+NETS "network=4 name=Lab vlan=40 subnet=192.168.40.1/24 mode=gateway ipv6=slaac ipv6_prefix_id=7" \
+	"network=6 name=Guest vlan=41 subnet=10.41.0.1/16 mode=gateway ipv6=dhcpv6"
+# a. the WAN without IPv6, then without a prefix yet: waiting, RA lines ready, nothing on the bridges
+: > "$T/wancheck"; rm -f "$T/pd6"
+run apply; check "IPv6: WAN_IPV6=0: both waiting, said why, no IPv6 address, IPv6 off on the bridges" "waiting waiting yes  1 0" \
+	"$(s6 4 v6) $(s6 6 v6) $(yn grep -q 'WAN has IPv6 off' "$G/net/4") $(log '^ip -6 addr') $(sc brwifi100004 disable_ipv6) $(cat "$T/ip6_forward")"
+printf 'WAN_IPV6=1\nWAN_PD_LANS=""\n' > "$T/wancheck"
+run reroute; check "IPv6: WAN_IPV6=1, no delegated prefix yet: waiting (no DHCPv6-PD yet)" "waiting yes " \
+	"$(s6 4 v6) $(yn grep -q 'no delegated prefix' "$G/net/4") $(log '^ip -6 addr')"
+check "IPv6: dnsmasq: enable-ra, slaac = ra-stateless on 4, dhcpv6 = a stateful range on 6, DNS = the gateway" \
+	"enable-ra|dhcp-range=set:n4,::,constructor:brwifi100004,ra-stateless,64,12h|dhcp-option=tag:n4,option6:dns-server,[::]|dhcp-range=set:n6,::1000,::1fff,constructor:brwifi7,64,12h|dhcp-option=tag:n6,option6:dns-server,[::]" \
+	"$(grep -E '^(enable-ra|dhcp-range=set:n[0-9]+,:|dhcp-option=tag:n[0-9]+,option6)' "$D" | tr '\n' '|' | sed 's/|$//')"
+pid6=$(cat "$G/dnsmasq.pid")
+# b. the prefix arrives (gt-be98-wan's dhcpcd hook -> reroute)
+echo "2001:db8:aa00::/56 1800 3600" > "$T/pd6"
+run reroute; check "IPv6: PD 2001:db8:aa00::/56: 4 gets id 7, 6 the lowest free (1)" \
+	"active 2001:db8:aa00:7::/64 active 1 2001:db8:aa00:1::/64" "$(s6 4 v6) $(s6 4 prefix6) $(s6 6 v6) $(s6 6 pid6) $(s6 6 prefix6)"
+check "... the gateway addresses <64>::1 with the delegation's lifetimes" \
+	"ip -6 addr replace 2001:db8:aa00:7::1/64 dev brwifi100004 valid_lft 3600 preferred_lft 1800|ip -6 addr replace 2001:db8:aa00:1::1/64 dev brwifi7 valid_lft 3600 preferred_lft 1800" \
+	"$(log '^ip -6 addr replace')"
+check "... IPv6 on on both bridges, no RA accepted, no autoconf" "0 0 0 0" \
+	"$(sc brwifi100004 disable_ipv6) $(sc brwifi100004 accept_ra) $(sc brwifi100004 autoconf) $(sc brwifi7 disable_ipv6)"
+check "... the rule set BEFORE the IPv6 address" yes \
+	"$(awk '/^nft -f/ { n = NR } /^ip -6 addr replace/ && !a { a = NR } END { print (n && a && n < a) ? "yes" : "no" }' "$T/log")"
+check "... IPv6 policy rules: main without its default, then table 184" \
+	"ip -6 rule add iif brwifi100004 lookup main suppress_prefixlength 0 priority 184|ip -6 rule add iif brwifi100004 lookup 184 priority 185|ip -6 rule add iif brwifi7 lookup main suppress_prefixlength 0 priority 184|ip -6 rule add iif brwifi7 lookup 184 priority 185" \
+	"$(log '^ip -6 rule add')"
+check "... table 184 (IPv6): the WAN's IPv6 default; the delegated prefix unreachable in main" \
+	"ip -6 route replace default via fe80::1 dev rnr0 table 184|ip -6 route replace unreachable 2001:db8:aa00::/56 metric 4184" "$(log '^ip -6 route replace')"
+check "... IPv6 forwarding held as gw (gt-be98-fwd -6), IPv4 too" "1 1 yes" "$(cat "$T/ip6_forward") $(cat "$T/ip_forward") $(yn F -6 held gw)"
+check "... dnsmasq NOT restarted by the prefix (its lines name the bridge only)" "$pid6" "$(cat "$G/dnsmasq.pid")"
+check "nft: v6 set = both bridges; IPv6 out of the WAN for @v6 only, IPv4 for @nat only" "yes yes yes" \
+	"$(sed -n '/set v6 {/,/}/p' "$N" | grep -q 'elements = { brwifi100004, brwifi7 }' && echo yes || echo no) $(yn has "$N" 'iifname @v6 oifname "rnr0" meta nfproto ipv6 accept') $(yn has "$N" 'iifname @nat oifname "rnr0" meta nfproto ipv4 accept')"
+check "nft: WAN -> network: replies only (no NAT66: nothing new in), ICMPv6 and DHCPv6 to the box" "yes yes yes yes" \
+	"$(yn has "$N" 'oifname @gw ct state established,related accept') $(yn has "$N" 'oifname @gw counter drop') $(yn has "$N" 'iifname @gw meta l4proto ipv6-icmp accept') $(yn has "$N" 'iifname @gw udp dport 547 accept')"
+check "nft: no NAT66 (no ip6 nat table, masquerade IPv4 only)" "no yes" "$(yn grep -q 'table ip6' "$N") $(yn has "$N" 'table ip gt_be98_gw_nat')"
+check "nft: the isolate drops come after the IPv6 internet accept (an isolated network keeps IPv6 internet)" yes \
+	"$(awk '/iifname @v6 oifname/ { v = NR } /iifname @iso counter drop/ { i = NR } END { print (v && i && v < i) ? "yes" : "no" }' "$N")"
+nftcheck "$N"; r=$?; [ $r = 2 ] || { check "nft -c (kernel parser): the IPv6 rule set" 0 $r; [ $r = 0 ] || cat "$T/nft.err"; }
+check "status: net6 lines, pd6, forwarding6" \
+	"net6 4 slaac active 2001:db8:aa00:7::/64 id=7 why=|net6 6 dhcpv6 active 2001:db8:aa00:1::/64 id=1 why=|pd6 2001:db8:aa00::/56|forwarding6 1" \
+	"$(sh "$GWT" status | grep -E '^(net6|pd6|forwarding6)' | tr '\n' '|' | sed 's/|$//')"
+check "status: the IPv4 line format unchanged (the web UI's parser)" "net 4 routed brwifi100004 192.168.40.1/24 isolate=0 mgmt=1" \
+	"$(sh "$GWT" status | grep '^net 4 ' | cut -d' ' -f1-7)"
+# c. a renew (same prefix, new lifetimes): the lifetimes follow, nothing else
+echo "2001:db8:aa00::/56 7200 14400" > "$T/pd6"
+run reroute; check "IPv6 renew: lifetimes renewed, no rule re-added, no flow deleted" \
+	"ip -6 addr replace 2001:db8:aa00:7::1/64 dev brwifi100004 valid_lft 14400 preferred_lft 7200||" \
+	"$(log '^ip -6 addr replace' | cut -d'|' -f1)|$(log '^ip -6 rule add')|$(log '^conntrack')"
+# d. the WAN's IPv6 server delegates another prefix: renumbered, the old /64's flows deleted
+echo "2001:db8:bb00::/56 1800 3600" > "$T/pd6"
+run reroute; check "IPv6 renumber: 4 on 2001:db8:bb00:7::/64, old address gone, new one on" "2001:db8:bb00:7::/64 no yes" \
+	"$(s6 4 prefix6) $(yn grep -qx 'brwifi100004 2001:db8:aa00:7::1/64' "$T/addrs6") $(yn grep -qx 'brwifi100004 2001:db8:bb00:7::1/64' "$T/addrs6")"
+check "... the old /64's conntrack entries deleted (-f ipv6), the old prefix route replaced" "yes yes yes" \
+	"$(yn grep -qx 'conntrack -D -f ipv6 -s 2001:db8:aa00:7::/64' "$T/log") $(yn grep -qx 'ip -6 route del unreachable 2001:db8:aa00::/56 metric 4184' "$T/log") $(yn grep -qx 'ip -6 route replace unreachable 2001:db8:bb00::/56 metric 4184' "$T/log")"
+# e. isolate 0 -> 1: IPv6 flows between the /64s deleted too
+NETS "network=4 name=Lab vlan=40 subnet=192.168.40.1/24 mode=gateway ipv6=slaac ipv6_prefix_id=7 isolate=1" \
+	"network=6 name=Guest vlan=41 subnet=10.41.0.1/16 mode=gateway ipv6=dhcpv6"
+run apply; check "IPv6 isolate narrowing: 4<->6 IPv6 flows deleted" "yes yes" \
+	"$(yn grep -qx 'conntrack -D -f ipv6 -s 2001:db8:bb00:7::/64 -d 2001:db8:bb00:1::/64' "$T/log") $(yn grep -qx 'conntrack -D -f ipv6 -s 2001:db8:bb00:1::/64 -d 2001:db8:bb00:7::/64' "$T/log")"
+# f. ipv6=off on 6: its IPv6 leaves (address, rules, IPv6 off on the bridge, flows), 4 untouched
+NETS "network=4 name=Lab vlan=40 subnet=192.168.40.1/24 mode=gateway ipv6=slaac ipv6_prefix_id=7" \
+	"network=6 name=Guest vlan=41 subnet=10.41.0.1/16 mode=gateway ipv6=off"
+run apply; check "ipv6=off on 6: rules, address removed, IPv6 off, flows deleted; 4 kept" \
+	"off 1 no yes yes active" \
+	"$(s6 6 v6) $(sc brwifi7 disable_ipv6) $(yn grep -q '^brwifi7 ' "$T/addrs6") $(yn grep -qx 'ip -6 rule del iif brwifi7 priority 185' "$T/log") $(yn grep -qx 'conntrack -D -f ipv6 -s 2001:db8:bb00:1::/64' "$T/log") $(s6 4 v6)"
+check "... dnsmasq without 6's IPv6 lines, 4's kept" "no yes" "$(yn grep -q 'constructor:brwifi7' "$D") $(yn grep -q 'constructor:brwifi100004' "$D")"
+check "... 4 untouched (no address removed, no rule re-added: only its lifetimes refreshed)" "" "$(log '^ip -6 (addr del|rule (add|del)) .*brwifi100004')"
+# g. refusals (that network's IPv6 only; its IPv4 runs), each with a control
+v6r() {	# <label> <want v6 of network 6> <line 6> [<why pattern>]
+	NETS "network=4 name=Lab vlan=40 subnet=192.168.40.1/24 mode=gateway ipv6=slaac ipv6_prefix_id=7" "$3"
+	run apply
+	check "IPv6 $1" "$2 routed${4:+ yes}" "$(s6 6 v6) $(st 6 state)${4:+ $(yn grep -q "$4" "$G/net/6")}"
+}
+v6r "refused: a prefix id taken by an earlier network" refused "network=6 vlan=41 subnet=10.41.0.1/16 mode=gateway ipv6=slaac ipv6_prefix_id=07" "prefix ID 7 is taken"
+v6r "control: another id" active "network=6 vlan=41 subnet=10.41.0.1/16 mode=gateway ipv6=slaac ipv6_prefix_id=8"
+v6r "refused: an id that does not fit the /56 (100)" refused "network=6 vlan=41 subnet=10.41.0.1/16 mode=gateway ipv6=slaac ipv6_prefix_id=100" "does not fit the delegated 2001:db8:bb00::/56"
+v6r "control: ff fits" active "network=6 vlan=41 subnet=10.41.0.1/16 mode=gateway ipv6=slaac ipv6_prefix_id=ff"
+v6r "refused: a bad ipv6_prefix_id" refused "network=6 vlan=41 subnet=10.41.0.1/16 mode=gateway ipv6=slaac ipv6_prefix_id=12345" "1 to 4 hex digits"
+v6r "a bad ipv6= value: IPv6 off, said why" off "network=6 vlan=41 subnet=10.41.0.1/16 mode=gateway ipv6=on" "off, slaac or dhcpv6"
+printf 'WAN_IPV6=1\nWAN_PD_LANS="brwifi1 brwifi7"\n' > "$T/wancheck"
+v6r "refused: the bridge is a WAN_PD_LANS LAN (gt-be98-wan's IPv6)" refused "network=6 vlan=41 subnet=10.41.0.1/16 mode=gateway ipv6=slaac" "delegated LAN of the WAN"
+check "... no RA for it in dnsmasq (gt-be98-wan's RA serves it)" no "$(yn grep -q 'constructor:brwifi7' "$D")"
+printf 'WAN_IPV6=1\nWAN_PD_LANS="brwifi1 brwifi2"\n' > "$T/wancheck"
+v6r "refused: id 1 = a WAN_PD_LANS LAN's /64 (ids 0..1)" refused "network=6 vlan=41 subnet=10.41.0.1/16 mode=gateway ipv6=slaac ipv6_prefix_id=1" "is taken"
+v6r "auto id after the WAN_PD_LANS ones: 2" active "network=6 vlan=41 subnet=10.41.0.1/16 mode=gateway ipv6=slaac"
+check "... auto = 2" 2 "$(s6 6 pid6)"
+printf 'WAN_IPV6=1\nWAN_PD_LANS=""\n' > "$T/wancheck"
+echo "eth0 2001:db8:bb00:9::5/64" >> "$T/addrs6"
+v6r "refused: the /64 overlaps an address of the box elsewhere" refused "network=6 vlan=41 subnet=10.41.0.1/16 mode=gateway ipv6=slaac ipv6_prefix_id=9" "overlaps the box's 2001:db8:bb00:9::5/64 on eth0"
+v6r "control: id a" active "network=6 vlan=41 subnet=10.41.0.1/16 mode=gateway ipv6=slaac ipv6_prefix_id=a"
+grep -v '^eth0 ' "$T/addrs6" > "$T/a6"; mv "$T/a6" "$T/addrs6"
+# h. a /64 delegation: the only id is 0
+echo "2001:db8:cc00:5::/64 1800 3600" > "$T/pd6"
+NETS "network=4 name=Lab vlan=40 subnet=192.168.40.1/24 mode=gateway ipv6=slaac"
+run apply; check "IPv6 /64 delegation: auto id 0, the whole /64" "active 0 2001:db8:cc00:5::/64" "$(s6 4 v6) $(s6 4 pid6) $(s6 4 prefix6)"
+NETS "network=4 name=Lab vlan=40 subnet=192.168.40.1/24 mode=gateway ipv6=slaac" "network=6 vlan=41 subnet=10.41.0.1/16 mode=gateway ipv6=slaac"
+run apply; check "... a second network: no /64 left, refused" "refused yes" "$(s6 6 v6) $(yn grep -q 'no free /64 left' "$G/net/6")"
+# i. the prefix lost (EXPIRE6: pd6 prints nothing): IPv6 off everywhere, forwarding6 released
+rm -f "$T/pd6"
+run reroute; check "IPv6 prefix lost: waiting, address gone, IPv6 off, forwarding6 0, prefix route gone" "waiting no 1 0 yes" \
+	"$(s6 4 v6) $(yn grep -q '^brwifi100004 ' "$T/addrs6") $(sc brwifi100004 disable_ipv6) $(cat "$T/ip6_forward") $(yn grep -qx 'ip -6 route del unreachable 2001:db8:cc00:5::/64 metric 4184' "$T/log")"
+check "... IPv4 untouched (routed, IPv4 forwarding 1)" "routed 1" "$(st 4 state) $(cat "$T/ip_forward")"
+# j. the kernel refuses the IPv6 address: refused, the rule set re-applied without it
+echo "2001:db8:aa00::/56 1800 3600" > "$T/pd6"; touch "$T/refuse-addr6"
+NETS "network=4 name=Lab vlan=40 subnet=192.168.40.1/24 mode=gateway ipv6=slaac ipv6_prefix_id=7"
+run apply; check "IPv6 address refused: rc 1, refused, v6 set empty, IPv6 off again, IPv4 routed" "1 refused no 1 routed" \
+	"$rc $(s6 4 v6) $(sed -n '/set v6 {/,/}/p' "$N" | grep -q elements && echo yes || echo no) $(sc brwifi100004 disable_ipv6) $(st 4 state)"
+rm -f "$T/refuse-addr6"
+run apply; check "control: accepted: active" "0 active" "$rc $(s6 4 v6)"
+# k. mgmt narrowing: the IPv6 management sessions too
+NETS "network=4 name=Lab vlan=40 subnet=192.168.40.1/24 mode=gateway ipv6=slaac ipv6_prefix_id=7 mgmt=0"
+run apply; check "mgmt 1 -> 0: the IPv6 management sessions deleted" yes "$(yn grep -qx 'conntrack -D -f ipv6 -s 2001:db8:aa00:7::/64 -p tcp --dport 443' "$T/log")"
+# l. the network becomes VLAN only: its IPv6 leaves before gt-be98-l2 sync (no hold left with IPv6 on)
+NETS "network=4 name=Lab vlan=40 subnet=192.168.40.1/24 mode=vlan ipv6=slaac ipv6_prefix_id=7"
+run apply; check "VLAN only again: IPv6 address removed and IPv6 off BEFORE l2 sync, forwarding6 0" "yes 1 0" \
+	"$(awk '/^ip -6 addr del 2001:db8:aa00:7::1\/64 dev brwifi100004/ { d = NR } /^l2 sync/ { s = NR } END { print (d && s && d < s) ? "yes" : "no" }' "$T/log") $(sc brwifi100004 disable_ipv6) $(cat "$T/ip6_forward")"
+# m. stop: everything IPv6 undone
+NETS "network=4 name=Lab vlan=40 subnet=192.168.40.1/24 mode=gateway ipv6=slaac ipv6_prefix_id=7"; run apply
+run stop; check "stop: IPv6 address, rules, table, prefix route, forwarding6, IPv6 off" "no yes yes yes 0 1" \
+	"$(yn grep -q '^brwifi100004 ' "$T/addrs6") $(yn grep -qx 'ip -6 rule del iif brwifi100004 priority 185' "$T/log") $(yn grep -qx 'ip -6 route flush table 184' "$T/log") $(yn grep -qx 'ip -6 route del unreachable 2001:db8:aa00::/56 metric 4184' "$T/log") $(cat "$T/ip6_forward") $(sc brwifi100004 disable_ipv6)"
+# n. the IPv6 arithmetic
+V() { ${SH:-sh} "$GWT" v6calc "$@"; }
+check "v6calc net64: /56 id 7, /48 id 1, /56 id ff, a prefix with host bits (masked)" \
+	"2001:db8:aa00:7::|2001:db8:0:1::|2001:db8:aa00:ff::|2001:db8:ab:cd01::" \
+	"$(V net64 2001:db8:aa00::/56 7)|$(V net64 2001:db8::/48 1)|$(V net64 2001:db8:aa00::/56 255)|$(V net64 2001:db8:ab:cd12::/56 1)"
+check "v6calc net64 refuses: id 256 in a /56, id 1 in a /64, a /65, not IPv6" "1 1 1 1" \
+	"$(V net64 2001:db8:aa00::/56 256 >/dev/null; echo $?) $(V net64 2001:db8:1:2::/64 1 >/dev/null; echo $?) $(V net64 2001:db8::/65 0 >/dev/null; echo $?) $(V net64 10.0.0.0/56 1 >/dev/null; echo $?)"
+check "v6calc canon (RFC 5952)" "2001:db8::1:0:0:1|1:0:0:2::3|2001:db8::" \
+	"$(V canon 2001:0db8:0000:0000:0001:0000:0000:0001)|$(V canon 1:0:0:2:0:0:0:3)|$(V canon 2001:DB8:0:0:0:0:0:0)"
+check "v6calc ov: inside / another /64 / a covering /32" "0 1 0" \
+	"$(V ov 2001:db8:aa07::5/64 2001:db8:aa07::/64; echo $?) $(V ov 2001:db8:aa08::5/64 2001:db8:aa07::/64; echo $?) $(V ov 2001:db8::/32 2001:db8:aa07::/64; echo $?)"
+# o. IPv6 forwarding helper (gt-be98-fwd -6): independent of IPv4
+F -6 hold wan; check "fwd -6: hold wan: IPv6 1, IPv4 untouched" "1 0" "$(cat "$T/ip6_forward") $(cat "$T/ip_forward")"
+F -6 hold gw; F -6 release wan; check "fwd -6: wan leaves while gw holds: stays 1" "1 yes no" "$(cat "$T/ip6_forward") $(yn F -6 held gw) $(yn F -6 held wan)"
+F -6 release gw; check "fwd -6: the last holder leaves: 0" 0 "$(cat "$T/ip6_forward")"
+F hold gw; check "fwd: an IPv4 holder is not an IPv6 one" "1 0 no" "$(cat "$T/ip_forward") $(cat "$T/ip6_forward") $(yn F -6 held gw)"
+F release gw
+check "fwd -6: status" "ipv6_forwarding 0" "$(F -6 status)"
 # 16. the wiring (text checks of the image's files)
 S=$here/..
 fol() { awk -v f="$2" '/^'"$2"'\(\) \{/ { x = 1 } x && /GW_FOLLOW/ { n++ } x && /^}/ { x = 0 } END { print n + 0 }' "$1"; }
@@ -409,7 +566,7 @@ check "gt-be98-wifi: start and reload run GW_FOLLOW (rc-service --ifstarted gt-b
 	"$(fol "$S/src/init.d/gt-be98-wifi" start) $(fol "$S/src/init.d/gt-be98-wifi" reload) $(yn grep -q 'GW_FOLLOW=${GT_BE98_GW_FOLLOW-rc-service --ifstarted gt-be98-gw reload}' "$S/src/init.d/gt-be98-wifi")"
 check "gt-be98-os.mk: the tools, the service, the dhcpcd hook installed; gt-be98-gw in the default runlevel" "yes yes yes yes" \
 	"$(yn grep -q 'gt-be98-l2 gt-be98-fwd gt-be98-gw; do' "$S/gt-be98-os.mk") $(yn grep -q 'gt-be98-hostkeys gt-be98-wan gt-be98-gw' "$S/gt-be98-os.mk") $(yn grep -q 'dhcpcd-hooks/09-gt-be98-gw$' "$S/gt-be98-os.mk") $(yn grep -q 'gt-be98-lan gt-be98-gw; do' "$S/gt-be98-os.mk")"
-check "the service answers features (an extra command, so when stopped too)" "features|features gateway" \
+check "the service answers features (an extra command, so when stopped too)" "features|features gateway ipv6" \
 	"$(GT_BE98_GW="$GWT"; extra_commands=; . "$S/src/init.d/gt-be98-gw"; echo "$extra_commands|$(features)")"
 check "no routed owner writes ip_forward itself any more (gt-be98-fwd only)" "" \
 	"$(grep -ln 'ip_forward=\|net.ipv4.ip_forward' "$S/src/init.d/"* "$S/src/sbin/"* | grep -v 'gt-be98-fwd$' | tr '\n' ' ')"

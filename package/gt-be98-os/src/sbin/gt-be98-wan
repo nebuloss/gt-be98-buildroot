@@ -21,6 +21,10 @@
 #   gt-be98-wan revert             drop the trial config now and re-apply
 #   gt-be98-wan status             key=value state of the WAN
 #   gt-be98-wan hook ...           called by dhcpcd (07-gt-be98-wan) and pppd
+#   gt-be98-wan pd6                the prefix the WAN's DHCPv6 lease delegates:
+#                                  "<prefix>/<len> <preferred s> <valid s>"
+#                                  (remaining; 4294967295 = infinite), rc 1
+#                                  and nothing printed when there is none
 #   gt-be98-wan input-nft TABLE IF [--igmp] [CIDR...]
 #                                  print an nft file: table inet TABLE with the
 #                                  WAN input filter on IF, plus accept from
@@ -47,6 +51,12 @@
 #   (an MTU above the port's on a VLAN WAN raises the port too: on rnr0 the
 #   management port's own MTU; every MTU set is restored at stop)
 #   WAN_IPV6=0|1   WAN_PD_LANS="brwifi1 br-lan"   WAN_PD_LEN=48..64
+#   (WAN_IPV6=1 always asks a delegated prefix, IA_PD, with WAN_PD_LEN as
+#   the size hint; the WAN_PD_LANS get /64 number 0..n-1 of it from dhcpcd,
+#   and the gateway networks (gt-be98-gw, ipv6= in the network list) take
+#   their /64s from what is left: this tool records the prefix ($RUN/pd6,
+#   `pd6`) and runs `gt-be98-gw reroute` when it changes. Without
+#   WAN_PD_LANS dhcpcd assigns it to no interface ("ia_pd ... -"))
 # Settings: /etc/conf.d/gt-be98-wan (paths, IFACE_WAIT, WAN_TABLE6).
 set -u
 PATH=$PATH:/usr/sbin:/usr/bin:/sbin:/bin
@@ -75,6 +85,8 @@ WIFI_L2=${GT_BE98_WIFI_L2:-/run/gt-be98-wifi/l2.conf}
 WIFI_AP=${GT_BE98_WIFI_AP:-/etc/conf.d/gt-be98-wifi-ap}
 LAN_CONF=${GT_BE98_LAN_CONF:-/etc/conf.d/gt-be98-lan}
 SELF=${GT_BE98_WAN_SELF:-/usr/sbin/gt-be98-wan}
+FWD=${GT_BE98_FWD:-/usr/sbin/gt-be98-fwd}
+PD6=$RUN/pd6
 IFACE_WAIT=${IFACE_WAIT:-20}
 WAN_TABLE6=${WAN_TABLE6:-182}
 PPP_IF=pppoe-wan
@@ -287,6 +299,10 @@ render_dhcpcd() {
 			pd="ia_pd 2${W_PD_LEN:+/::/$W_PD_LEN}"
 			sla=0
 			for i in $lans; do pd="$pd $i/$sla/64"; sla=$((sla + 1)); done
+			# no LAN listed: requested, assigned to none (dhcpcd.conf(5):
+			# an ia_pd without an interface assigns a /64 to EVERY other
+			# interface); the gateway networks take theirs from pd6
+			[ -n "$lans" ] || pd="$pd -"
 			echo "$pd"
 		fi
 	fi
@@ -588,9 +604,9 @@ cmd_start() {
 		else log "wan.nft rejected (no MSS clamp / IPv6 filter / input filter)"; fi
 	fi
 	if [ -n "$W_PD_LANS" ]; then
-		v=$(sysctl -n net.ipv6.conf.all.forwarding 2>/dev/null)
-		put fwd6 "${v:-0}"
-		sysctl -q -w net.ipv6.conf.all.forwarding=1
+		# IPv6 forwarding held by name (gt-be98-fwd -6: gt-be98-gw's
+		# gateway networks hold it too, the last holder restores 0)
+		"$FWD" -6 hold wan && put fwd6 1
 		render_ra > "$RUN/dnsmasq-ra.conf"
 		start-stop-daemon --start --exec /usr/sbin/dnsmasq --pidfile "$RUN/dnsmasq-ra.pid" -- \
 			--conf-file="$RUN/dnsmasq-ra.conf" </dev/null >/dev/null 2>&1 9>&- && put ra 1
@@ -633,8 +649,8 @@ cmd_stop() {
 		start-stop-daemon --stop --exec /usr/sbin/dnsmasq --pidfile "$RUN/dnsmasq-ra.pid" --retry TERM/5/KILL/2
 		rm -f "$RUN/dnsmasq-ra.pid"
 	fi
-	# forwarding back to what it was (the image's 0 when that was unreadable)
-	v=$(got fwd6); [ -n "$v" ] && sysctl -q -w "net.ipv6.conf.all.forwarding=$v"
+	# IPv6 forwarding let go (it stays on while gt-be98-gw holds it)
+	[ -n "$(got fwd6)" ] && "$FWD" -6 release wan
 	[ "$(got nft)" = 1 ] && nft delete table inet $NFT_TABLE 2>/dev/null
 	ip -6 rule show 2>/dev/null | sed -n "s/^[0-9]*:.*iif \([^ ]*\) lookup $WAN_TABLE6.*/\1/p" |
 		while read -r i; do ip -6 rule del iif "$i" table "$WAN_TABLE6" 2>/dev/null; done
@@ -647,12 +663,16 @@ cmd_stop() {
 	return 0
 }
 
-# the router (gt-be98-router) follows the WAN when it runs
-router_reroute() {
-	# the gateway networks (gt-be98-gw: table 184, the WAN clash, the NAT)
+# the gateway networks (gt-be98-gw: table 184, the WAN clash, the NAT, the
+# IPv6 prefixes) follow the WAN when one runs
+gw_reroute() {
 	if grep -qs '^net ' "${GW_APPLIED:-/run/gt-be98-gw/applied}"; then
 		rc-service --ifstarted gt-be98-gw reroute >/dev/null 2>&1 &
 	fi
+}
+# the router (gt-be98-router) follows the WAN when it runs
+router_reroute() {
+	gw_reroute
 	[ -f "${ROUTER_APPLIED:-/run/gt-be98-router.applied}" ] || return 0
 	rc-service gt-be98-router reroute >/dev/null 2>&1 &
 }
@@ -792,6 +812,7 @@ cmd_status() {
 	for a in $W_PD_LANS; do
 		echo "pd6_$a=$(ip -6 -o addr show dev "$a" scope global 2>/dev/null | awk '{print $4; exit}')"
 	done
+	echo "pd6=$(cmd_pd6 | awk '{print $1}')"
 	if [ -n "$(mss_of 4)" ]; then echo "mss4=$(mss_of 4)"; echo "mss6=$(mss_of 6)"; fi
 	[ "$W_PROTO" = pppoe ] && ppp_status
 	echo "applied=$([ -f "$APPLIED" ] && echo 1 || echo 0)"
@@ -871,6 +892,50 @@ route6() {
 		ip -6 rule add iif "$i" table "$WAN_TABLE6" priority "$WAN_TABLE6"
 	done
 }
+# ---- the delegated prefix (IA_PD of the WAN's DHCPv6 lease) ----------------------------
+# recorded from dhcpcd's hook environment (dhcpcd-definitions.conf: define6
+# 25 index ia_pd, encap 26 index prefix: pltime vltime length prefix) as
+# "<prefix>/<len> <pltime> <vltime> <uptime then> <WAN netdev>" in $PD6; a
+# lease without a usable IA_PD prefix (absent, longer than /64, no valid
+# lifetime) clears it. Read back only for the WAN netdev it was leased on and
+# while WAN_IPV6=1 (a WAN changed since leaves no stale prefix behind)
+pd6_line() { cat "$PD6" 2>/dev/null; }
+uptime_s() { cut -d. -f1 "${GT_BE98_UPTIME:-/proc/uptime}" 2>/dev/null || echo 0; }
+pd6_record() {
+	local p=${new_dhcp6_ia_pd1_prefix1:-} l=${new_dhcp6_ia_pd1_prefix1_length:-}
+	local pl=${new_dhcp6_ia_pd1_prefix1_pltime:-} vl=${new_dhcp6_ia_pd1_prefix1_vltime:-}
+	case "$p" in *:*) ;; *) pd6_clear; return 0 ;; esac
+	case "$p" in *[!0-9A-Fa-f:]*) pd6_clear; return 0 ;; esac
+	num_in "$l" 1 64 && num_in "$vl" 1 4294967295 && num_in "${pl:-0}" 0 4294967295 ||
+		{ log "DHCPv6: delegated prefix '$p/$l' (valid ${vl:-?} s) not usable: ignored"; pd6_clear; return 0; }
+	[ "${pl:-0}" -le "$vl" ] || pl=$vl
+	mkdir -p "$RUN"
+	[ "$(awk '{print $1}' "$PD6" 2>/dev/null)" = "$p/$l" ] || log "DHCPv6: delegated prefix $p/$l"
+	printf '%s/%s %s %s %s %s\n' "$p" "$l" "${pl:-0}" "$vl" "$(uptime_s)" "$W_IF" > "$PD6.new" && mv -f "$PD6.new" "$PD6"
+}
+pd6_clear() {
+	[ -f "$PD6" ] || return 0
+	log "DHCPv6: delegated prefix $(awk '{print $1}' "$PD6") gone (${reason:-stop})"
+	rm -f "$PD6"
+}
+# pd6: the recorded prefix with its remaining lifetimes; nothing once expired
+cmd_pd6() {
+	local p pl vl t i now e
+	load "$(active_conf)" >/dev/null 2>&1 || return 1
+	[ "$W_IPV6" = 1 ] || return 1
+	[ -f "$PD6" ] || return 1
+	read -r p pl vl t i _ < "$PD6" || return 1
+	[ -n "$p" ] && [ -n "$t" ] && [ "$i" = "$W_IF" ] || return 1
+	now=$(uptime_s); e=$((now - t)); [ $e -ge 0 ] || e=0
+	if [ "$vl" != 4294967295 ]; then
+		[ "$vl" -gt "$e" ] || return 1
+		vl=$((vl - e))
+	fi
+	if [ "$pl" != 4294967295 ]; then
+		if [ "$pl" -gt "$e" ]; then pl=$((pl - e)); else pl=0; fi
+	fi
+	echo "$p $pl $vl"
+}
 cmd_hook() {
 	local ev=${1:-} f d l r s
 	shift 2>/dev/null
@@ -894,12 +959,25 @@ cmd_hook() {
 			down_at "$(uptime_s)" last_connect "$(cnt "${CONNECT_TIME:-}")"
 		log "PPPoE down: ${1:-?}${CONNECT_TIME:+ after ${CONNECT_TIME} s}"
 		router_reroute ;;
-	dhcpcd)	# env: reason interface (dhcpcd hook)
+	dhcpcd)	# env: reason interface (dhcpcd hook), new_dhcp6_ia_pd1_* (the lease)
 		load "$(active_conf)" >/dev/null 2>&1 || return 0
 		[ "${interface:-}" = "$W_IF" ] || return 0
-		[ -n "$W_PD_LANS" ] || return 0
+		[ "$W_IPV6" = 1 ] || return 0
+		f=$(pd6_line)
 		case "${reason:-}" in
-		ROUTERADVERT|BOUND6|RENEW6|REBIND6|REBOOT6|INFORM6|DELEGATED6|EXPIRE6|NOCARRIER|CARRIER) route6 ;;
+		BOUND6|RENEW6|REBIND6|REBOOT6) pd6_record ;;
+		EXPIRE6|RELEASE6|STOP6|STOPPED|DEPARTED) pd6_clear ;;
+		esac
+		if [ -n "$W_PD_LANS" ]; then
+			case "${reason:-}" in
+			ROUTERADVERT|BOUND6|RENEW6|REBIND6|REBOOT6|INFORM6|DELEGATED6|EXPIRE6|NOCARRIER|CARRIER) route6 ;;
+			esac
+		fi
+		# the gateway networks follow: a new, renewed or lost prefix, a
+		# new IPv6 default route (an RA)
+		case "${reason:-}" in
+		ROUTERADVERT|EXPIRE6|RELEASE6|STOP6|STOPPED|DEPARTED) gw_reroute ;;
+		*) [ "$f" = "$(pd6_line)" ] || gw_reroute ;;
 		esac ;;
 	*) die "hook: ip-up | ip-down | dhcpcd" ;;
 	esac
@@ -925,6 +1003,7 @@ revert)		shift; lock; cmd_revert "$@" ;;
 status)		cmd_status ;;
 watch)		mkdir -p "$RUN"; chmod 700 "$RUN"; cmd_watch ;;
 hook)		shift; cmd_hook "$@" ;;
+pd6)		cmd_pd6 ;;
 input-nft)	shift; cmd_input_nft "$@" ;;
-*)		sed -n '3,26s/^# \{0,1\}//p' "$0"; exit 2 ;;
+*)		sed -n '3,30s/^# \{0,1\}//p' "$0"; exit 2 ;;
 esac

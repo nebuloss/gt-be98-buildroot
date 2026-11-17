@@ -201,8 +201,11 @@ mkdir -p "$T/run/gt-be98-gw/hold"; : > "$T/run/gt-be98-gw/hold/brwifi30"
 check "mode 30 with gt-be98-gw holding brwifi30: gateway" gateway "$(L mode 30 brwifi30)"
 check "control: mode 30 of another bridge: vlan" vlan "$(L mode 30 brwifi31)"
 L sync; check "sync while held: still no rnr0.30" "no -" "$(ex rnr0.30) $(st brwifi30 trunk)"
+mkdir -p "$T/procnet/ipv6/conf/brwifi30"; echo 0 > "$T/procnet/ipv6/conf/brwifi30/disable_ipv6"
 L up lan brwifi30 rnr0 30 rnr1; check "up while held: still no rnr0.30" "0 no" "$? $(ex rnr0.30)"
+check "up while held: the bridge's IPv6 left to gt-be98-gw (disable_ipv6 not rewritten)" 0 "$(cat "$T/procnet/ipv6/conf/brwifi30/disable_ipv6")"
 rm -f "$T/run/gt-be98-gw/hold/brwifi30"
+L up lan brwifi30 rnr0 30 rnr1; check "control: up when not held: IPv6 off on the bridge (disable_ipv6=1)" 1 "$(cat "$T/procnet/ipv6/conf/brwifi30/disable_ipv6")"
 L sync; check "released, then sync: rnr0.30 carried again, rnr1.30 kept" "0 brwifi30 brwifi30" "$? $(master rnr0.30) $(master rnr1.30)"
 # the last down of a gateway bridge: nothing of a trunk to delete, bridge gone
 L down wifi brwifi9; ip link set dev rnr3 nomaster; L down lan brwifi9
