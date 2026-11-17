@@ -91,7 +91,8 @@
 #       UI reads it: a feature another change adds to the generator shows up
 #       there by itself. Radio keys: feature he (ax=), eht (be=),
 #       twt_responder (twt=), zwdfs, monitor, led; feature station (station= blocks), routed
-#       (routed= networks).
+#       (routed= networks); feature wds / backhaul (the backhaul= block: the
+#       mesh root), feature trunk (station trunk=1: the mesh leaf).
 #
 # Network list (hostapd-like: key=value, the value is the rest of the line,
 # never quoted; '#' comment lines; a block starts at network= or radio=):
@@ -374,10 +375,12 @@
 #                                   the plan's kv line. Dropped with kv=1
 #                                   while KV=0 (-F feature steer)
 #     twt=0|1  wds=0|1              network level: refused (-F: feature
-#                                   twt 0, feature wds 0). TWT is radio-wide
-#                                   in hostapd (radio twt=, feature
-#                                   twt_responder); wds is reserved for
-#                                   4-address clients
+#                                   twt 0). TWT is radio-wide in hostapd
+#                                   (radio twt=, feature twt_responder); a
+#                                   network never takes 4-address (WDS)
+#                                   clients: the 4-address peers are the
+#                                   mesh leaves of the backhaul= block
+#                                   (feature wds 1, feature backhaul 1)
 #     slot.<band>=K  mac.<band>=S   optional explicit sticky slot / BSSID
 #                                   index S = 1..7 (0: the anchor's)
 #     bssid.<band>=MAC              optional: this BSS's own address (default
@@ -427,6 +430,54 @@
 #                                   Either one is bridged into the repeated=
 #                                   network's bridge; routed= networks need
 #                                   repeater=0 (a bridge port routes nothing)
+#     trunk=0|1                     1: the MESH LEAF (buildroot docs/MESH-
+#                                   BACKHAUL-DESIGN.md §1.1, §3): the station
+#                                   is the leaf's TRUNK to a root's backhaul
+#                                   BSS (repeater=multiap required): every
+#                                   vlan= network of the list is bridged to
+#                                   the station's 802.1Q sub-interface
+#                                   bhs.<vid> instead of the wired trunk's
+#                                   <trunk>.<vid> (gt-be98-l2 uplink), the
+#                                   untagged station is no bridge port
+#                                   (EAPOL and management only). No
+#                                   repeated=1 or routed= network beside it,
+#                                   and no backhaul= block (a chain of
+#                                   leaves is not offered). Plan line
+#                                   bhtrunk. Default 0
+#   backhaul=2g|5gl|5gh|6g          the MESH ROOT: a hidden, dedicated
+#                                   backhaul BSS on that radio for the mesh
+#                                   leaves (Multi-AP backhaul STAs, station
+#                                   repeater=multiap trunk=1 on a leaf box).
+#                                   At most one backhaul= block. Written as a
+#                                   BSS of the radio (a slot like a network's,
+#                                   counted in the per-radio limit) with
+#                                   ignore_broadcast_ssid=1, multi_ap=1
+#                                   (backhaul BSS: the firmware and hostapd
+#                                   admit Multi-AP backhaul STAs only),
+#                                   wds_sta=1 (hostapd makes each leaf's
+#                                   4-address AP_VLAN <ifname>.sta<aid>), no
+#                                   bridge= (the AP_VLAN is gt-be98-l2's
+#                                   trunk: gt-be98-mesh attaches it on
+#                                   hostapd's WDS-STA-INTERFACE-ADDED),
+#                                   max_num_sta=8 (the driver's 4-address
+#                                   links per radio, open-wifi BCA_WDS_MAX).
+#                                   No multi_ap_profile line (hostapd's
+#                                   default, the profile of every box-proven
+#                                   link; the design's profile 2 waits for
+#                                   its arm) and no multi_ap_vlanid (Linux
+#                                   tags, the firmware never). Plan line
+#                                   backhaul (below)
+#     enabled=0|1                   default 1; 0 keeps the settings, no BSS
+#     ssid=...                      1-32 bytes, never broadcast (hidden)
+#     security=sae|psk2sae          default sae (WPA3-SAE, PMF required);
+#                                   psk2sae: WPA2/WPA3 (an older leaf). 6g:
+#                                   sae (psk2sae is written as sae there)
+#     passphrase=...                8-63 printable ASCII
+#     leaf=aa:bb:cc:dd:ee:ff        optional, repeats (at most 8): the only
+#                                   leaves given a trunk (gt-be98-mesh
+#                                   deauthenticates any other backhaul STA);
+#                                   absent: every Multi-AP backhaul STA that
+#                                   knows the key
 #
 # Schedules (radio= and network= blocks): WINDOWS is 1-32 windows
 # separated by blanks or commas, each DAYS@HH:MM-HH:MM in local time; DAYS
@@ -501,6 +552,11 @@
 #   repeater <dev> <4addr|multiap> <bridge or ->   (a live station with repeater= set:
 #                                               the bridge it joins, - when no
 #                                               repeated network is rendered)
+#   bhtrunk <dev>                              (a live station with trunk=1: the
+#                                               mesh leaf's trunk, gt-be98-l2 uplink)
+#   backhaul <band> <dev> <ifname> <bssid> <leaf MACs, comma-separated, or ->
+#                                              (the backhaul= BSS, on a live radio;
+#                                               its bss line has bridge -)
 #   monitor <band> <dev> <MHz> <width> <centre MHz>   (monitor=1 radios)
 #   led <band> <dev> 0|1                       (every radio of -d)
 #   kv <id> <steer 0|1>                        (kv=1 networks on >= 1 radio,
@@ -566,7 +622,9 @@ features() {
 	feature led 1
 	feature bssid 1
 	feature twt 0
-	feature wds 0
+	feature wds 1
+	feature backhaul 1
+	feature trunk 1
 	feature station 1
 	feature routed 1
 	feature repeater 1
@@ -631,10 +689,10 @@ function warn(m) { print "gt-be98-wifi-gen: warning: " m > "/dev/stderr" }
 # else the list is refused
 function nerrf(i, m,    p) {
 	if (!skipbad) { err(m); return }
-	p = "network " net[i] ": "
+	p = (bh[i] ? "backhaul " bhband : "network " net[i]) ": "
 	if (index(m, p) == 1) m = substr(m, length(p) + 1)
 	bad[i] = 1
-	warn("network " net[i] " skipped: " m)
+	warn(substr(p, 1, length(p) - 2) " skipped: " m)
 }
 function trim(s) { sub(/^[ \t]+/, "", s); sub(/[ \t]+$/, "", s); return s }
 # decimal, no leading zero; NB values cut out of a line are strings: compare
@@ -954,6 +1012,8 @@ BEGIN {
 		bpok[t[i]] = 1
 	}
 	nsta = 0
+	# the backhaul= pseudo network id (header): above every network=
+	BHID = 100000; bhi = 0
 	if (havenow) { split(now, t, " "); tdow = t[1] + 0; tmin = hm(t[2]) }
 }
 # ---- slot state: "<band> <slot> <net> <index>" ----
@@ -974,16 +1034,29 @@ FILENAME == slotsf {
 	k = trim(substr($0, 1, eq - 1)); v = substr($0, eq + 1)
 	if (k != "ssid" && k != "passphrase" && k != "radius_secret" && k != "radius_acct_secret") v = trim(v)
 }
-k == "network" {
-	if (!isnum(v) || v + 0 < 1 || v + 0 > 99999) { err("line " FNR ": network id 1..99999"); cur = "x"; next }
-	if (v in nid) { err("network " v " listed twice"); cur = "x"; next }
-	nnet++; net[nnet] = v; nid[v] = nnet; cur = "n"; ci = nnet
+function newnet(v) {
+	nnet++; net[nnet] = v; nid[v] = nnet; ci = nnet
 	sec[ci] = ""; ssid[ci] = ""; pass[ci] = ""; vlan[ci] = ""; hid[ci] = 0; iso[ci] = 0; maxc[ci] = ""
 	nsch[ci] = ""
 	aw[ci] = ""; alim[ci] = 0; nasw[ci] = 0
 	nb[ci] = 0; nra[ci] = 0
 	rs[ci] = ""; rp[ci] = ""; rk[ci] = ""; as[ci] = ""; ap[ci] = ""; ak[ci] = ""
-	rtd[ci] = ""; rep[ci] = 0; kv[ci] = 0; wps[ci] = 0; steer[ci] = 0
+	rtd[ci] = ""; rep[ci] = 0; kv[ci] = 0; wps[ci] = 0; steer[ci] = 0; bh[ci] = 0
+}
+k == "network" {
+	if (!isnum(v) || v + 0 < 1 || v + 0 > 99999) { err("line " FNR ": network id 1..99999"); cur = "x"; next }
+	if (v in nid) { err("network " v " listed twice"); cur = "x"; next }
+	newnet(v); cur = "n"
+	next
+}
+# the mesh root backhaul BSS (header: backhaul=): a network of its own,
+# id BHID (above every network id: its slot and BSSID index are sticky
+# like those of a network), on one radio, hidden, no VLAN, no bridge
+k == "backhaul" {
+	if (!validband(v)) { err("line " FNR ": backhaul 2g|5gl|5gh|6g"); cur = "x"; next }
+	if (bhi) { err("backhaul " v ": one backhaul= block only (backhaul " bhband " is listed)"); cur = "x"; next }
+	newnet(BHID); cur = "b"; bhi = ci; bhband = v; bhen = 1; nbhleaf = 0
+	bh[ci] = 1; hid[ci] = 1; sec[ci] = "sae"; nb[ci] = 1; hasb[ci, v] = 1
 	next
 }
 k == "radio" {
@@ -996,7 +1069,7 @@ k == "station" {
 	if (!validband(v)) { err("line " FNR ": station 2g|5gl|5gh|6g"); cur = "x"; next }
 	if (nsta) { err("station " v ": one station= block only (station " stab " is listed)"); cur = "x"; next }
 	nsta = 1; stab = v; cur = "s"; stenab = 1; stssid = ""; stsec = ""; stpass = ""; stbssid = ""
-	strep = "0"
+	strep = "0"; sttrunk = 0
 	next
 }
 cur == "" {
@@ -1015,7 +1088,24 @@ cur == "s" {
 	else if (k == "bssid") stbssid = v
 	else if (k == "repeater" && (v == "0" || v == "4addr" || v == "multiap")) strep = v
 	else if (k == "repeater") err("station " stab ": repeater=" v " refused (0, 4addr or multiap)")
+	else if (k == "trunk" && (v == "0" || v == "1")) sttrunk = v + 0
 	else err("station " stab ": unknown key " k)	# never echo a value that may be a secret
+	next
+}
+cur == "b" {
+	if (k == "enabled" && (v == "0" || v == "1")) bhen = v + 0
+	else if (k == "ssid") ssid[bhi] = v
+	else if (k == "security" && (v == "sae" || v == "psk2sae")) sec[bhi] = v
+	else if (k == "security") nerrf(bhi, "backhaul " bhband ": security=" v " refused (sae or psk2sae)")
+	else if (k == "passphrase") pass[bhi] = v
+	else if (k == "leaf" && parsemac(v, tmo) && tmo[0] % 2 == 0) {
+		v = tolower(v)
+		if (v in bhleafseen) nerrf(bhi, "backhaul " bhband ": leaf " v " listed twice")
+		else if (nbhleaf >= 8) nerrf(bhi, "backhaul " bhband ": at most 8 leaf= (the driver: 8 4-address links per radio)")
+		else { bhleafseen[v] = 1; bhleaf[++nbhleaf] = v }
+	}
+	else if (k == "leaf") nerrf(bhi, "backhaul " bhband ": leaf=" v ": a unicast MAC address")
+	else nerrf(bhi, "backhaul " bhband ": unknown key " k)	# never echo a value that may be a secret
 	next
 }
 cur == "r" {
@@ -1084,12 +1174,23 @@ END {
 	# the top 6 GHz channel a 320 MHz block may reach (-6, else by country)
 	T6 = (sixtop != "") ? sixtop + 0 : (country == "US") ? 233 : 93
 	# ---- validate each network ----
+	# backhaul enabled=0: its settings kept, no BSS (like a deleted network,
+	# it loses its sticky slot)
+	if (bhi && !bhen) { delete hasb[bhi, bhband]; nb[bhi] = 0 }
 	for (i = 1; i <= nnet; i++) {
-		id = net[i]; tag = "network " id
+		id = net[i]; tag = bh[i] ? "backhaul " bhband : "network " id
+		if (bh[i] && !bhen) continue
 		if (length(ssid[i]) < 1 || length(ssid[i]) > 32 || ssid[i] ~ /[\001-\037\177]/)
 			nerrf(i, tag ": ssid must be 1-32 bytes, no control characters")
-		else if (ssid[i] in ssidseen) nerrf(i, tag ": ssid also used by network " ssidseen[ssid[i]])
-		else ssidseen[ssid[i]] = id
+		else if (ssid[i] in ssidseen) nerrf(i, tag ": ssid also used by " ssidseen[ssid[i]])
+		else ssidseen[ssid[i]] = tag
+		# the backhaul BSS: SAE (or WPA2/WPA3) only, no VLAN, no bridge
+		if (bh[i]) {
+			if (!(printable(pass[i]) && length(pass[i]) >= 8 && length(pass[i]) <= 63))
+				nerrf(i, tag ": the backhaul passphrase must be 8-63 printable ASCII characters (SAE)")
+			if (nsta && sttrunk) nerrf(i, tag ": a backhaul= block and a station trunk=1 exclude each other (the box is the mesh root or a leaf: a chain of leaves is not offered)")
+			continue
+		}
 		s = sec[i]
 		if (s == "open" || s == "owe" || s == "open-owe") {
 			if (pass[i] != "") nerrf(i, tag ": security " s " takes no passphrase")
@@ -1141,6 +1242,7 @@ END {
 			if (hid[i]) nerrf(i, tag ": wps=1 refused with hidden=1 (hostapd turns WPS off on a hidden SSID)")
 		}
 		if (rep[i]) {
+			if (nsta && sttrunk) nerrf(i, tag ": repeated=1 excludes the station trunk=1 (the mesh leaf carries every vlan= network over its trunk)")
 			if (vlan[i] != "" || rtd[i] != "") nerrf(i, tag ": repeated=1 excludes vlan= and routed= (the network is bridged to the Wi-Fi uplink)")
 			if (nrep++) nerrf(i, tag ": repeated=1: network " repid " is already repeated (one network per station uplink)")
 			else repid = id
@@ -1199,6 +1301,8 @@ END {
 			if (!parsemac(stbssid, o) || o[0] % 2) err(tag ": bssid " stbssid ": a unicast MAC address")
 			else stbssid = tolower(stbssid)
 		}
+		# the mesh leaf (header: trunk=1): a Multi-AP backhaul STA
+		if (sttrunk && strep != "multiap") err(tag ": trunk=1 needs repeater=multiap (the mesh leaf is a Multi-AP backhaul STA of the root backhaul BSS)")
 	}
 	for (bi = 1; bi <= nbands; bi++) {
 		b = BANDS[bi]
@@ -1487,7 +1591,7 @@ END {
 	# ---- render ----
 	plan = out "/plan.raw"
 	printf "" > plan	# exists even for an empty list
-	for (i = 1; i <= nnet; i++) if (i in bad) print "skipped " net[i] > plan
+	for (i = 1; i <= nnet; i++) if (i in bad) print "skipped " (bh[i] ? "backhaul" : net[i]) > plan
 	for (bi = 1; bi <= nbands; bi++) {
 		b = BANDS[bi]
 		if (!live[b] || nmem[b] == 0) continue
@@ -1620,12 +1724,14 @@ END {
 		for (k = 0; k < cap; k++) {
 			i = used[b, k]; if (i == "") continue
 			id = net[i]; ifn = (k == 0) ? d : d "-" k
-			a = bssid(b, mi[b, id]); br = "brwifi" id
+			a = bssid(b, mi[b, id]); br = bh[i] ? "-" : "brwifi" id
 			f = out "/sec-" ifn
-			print "# network " id " slot " k " (BSSID index " mi[b, id] ")" > f
+			print "# " (bh[i] ? "backhaul" : "network " id) " slot " k " (BSSID index " mi[b, id] ")" > f
 			print "ctrl_interface=" ctrl > f
 			print "bssid=" a > f
-			print "bridge=" br > f
+			# the backhaul BSS has no bridge (header: its AP_VLANs are
+			# gt-be98-l2 trunks, attached by gt-be98-mesh)
+			if (!bh[i]) print "bridge=" br > f
 			print ssidline(ssid[i]) > f
 			print "utf8_ssid=1" > f
 			# REQUIRED: without WMM the firmware RSN capabilities (0x000c) do
@@ -1640,6 +1746,9 @@ END {
 			if (hid[i]) print "ignore_broadcast_ssid=1" > f
 			if (iso[i]) print "ap_isolate=1" > f
 			if (maxc[i] != "") print "max_num_sta=" maxc[i] > f
+			# the mesh root backhaul BSS (header: backhaul=): Multi-AP
+			# backhaul BSS, one 4-address AP_VLAN per leaf, 8 leaves
+			if (bh[i]) { print "multi_ap=1" > f; print "wds_sta=1" > f; print "max_num_sta=8" > f }
 			# 802.11k/v (kv=1, KV=1 only): neighbor reports, beacon reports
 			# (the AP may ask a client what it hears), BSS transition management
 			if (kv[i]) { print "rrm_neighbor_report=1" > f; print "rrm_beacon_report=1" > f; print "bss_transition=1" > f }
@@ -1650,7 +1759,9 @@ END {
 				if (alim[i]) print "airtime_bss_limit=1" > f
 				for (aj = 1; aj <= nasw[i]; aj++) print "airtime_sta_weight=" asw[i, aj] > f
 			}
-			if (rnr && b != "6g") print "rnr=1" > f
+			# (the hidden backhaul BSS is never advertised: no RNR, no 6 GHz
+			# discovery frames)
+			if (rnr && b != "6g" && !bh[i]) print "rnr=1" > f
 			# 6 GHz in-band discovery, one frame every 20 TU (802.11ax: a 6 GHz AP
 			# sends unsolicited broadcast probe responses or FILS discovery frames),
 			# so a client need not wait for a 100 TU beacon. Radio scope in the
@@ -1663,7 +1774,7 @@ END {
 			# probe responses (a passive scan learns every BSS, the Multiple-BSSID
 			# secondaries included), else FILS discovery. Written on every 6 GHz BSS
 			# so a secondary asks what the anchor runs
-			if (b == "6g") {
+			if (b == "6g" && !bh[i]) {
 				if (ch % 16 == 5) print "unsol_bcast_probe_resp_interval=20" > f
 				else print "fils_discovery_max_interval=20" > f
 			}
@@ -1732,6 +1843,13 @@ END {
 		}
 	}
 	for (i = 1; i <= nnet; i++) if (net[i] in onradio) {
+		if (bh[i]) {
+			lf = ""
+			for (j = 1; j <= nbhleaf; j++) lf = lf (j > 1 ? "," : "") bhleaf[j]
+			for (k = 0; k < cap; k++) if (used[bhband, k] == i) break
+			print "backhaul " bhband " " dev[bhband] " " (k == 0 ? dev[bhband] : dev[bhband] "-" k) " " bssid(bhband, mi[bhband, net[i]]) " " (lf == "" ? "-" : lf) > plan
+			continue
+		}
 		if (rep[i]) print "repeated " net[i] " brwifi" net[i] " " iso[i] > plan
 		else if (rtd[i] != "") print "routed " net[i] " brwifi" net[i] " " rtd[i] " " iso[i] > plan
 		else print "net " net[i] " brwifi" net[i] " " vlan[i] " " iso[i] > plan
@@ -1771,6 +1889,7 @@ END {
 		for (k = 1; k < cap; k++) if (used[b, k] != "") break
 		print "station " b " " d " " f " " ((k < cap && live[b]) ? d "-" k : "-") > plan
 		if (strep != "0") print "repeater " d " " strep " " ((nrep && (repid in onradio)) ? "brwifi" repid : "-") > plan
+		if (sttrunk) print "bhtrunk " d > plan
 	}
 	for (bi = 1; bi <= nbands; bi++) {
 		b = BANDS[bi]
@@ -1819,6 +1938,8 @@ while read -r t a b c d e f g h; do
 		echo "bss $a $b $c $d $e $f $g $h $(sum "$OUT/sec-$b")" >> "$OUT/plan" ;;
 	net|routed) echo "$t $a $b $c $d" >> "$OUT/plan" ;;
 	repeated|repeater) echo "$t $a $b $c" >> "$OUT/plan" ;;
+	backhaul) echo "$t $a $b $c $d $e" >> "$OUT/plan" ;;
+	bhtrunk) echo "$t $a" >> "$OUT/plan" ;;
 	station) # station <band> <dev> <conf> <first AP ifname or ->
 		echo "station $a $b $c $(sum "$c") $d" >> "$OUT/plan" ;;
 	monitor) echo "$t $a $b $c $d $e" >> "$OUT/plan" ;;

@@ -218,5 +218,64 @@ L down lan brwifi100004; ip link del dev rnr0.44
 printf 'trunk rnr0\nvid 60\nmade_bridge 0\nmade_vlan 0\nuser lan\n' > "$T/run/gt-be98-l2/brwifi60"
 check "an old state (no uplink line) lists as before" "brwifi60 rnr0 60 lan" "$(L list | grep '^brwifi60')"
 rm -f "$T/run/gt-be98-l2/brwifi60"
+# 12. THE MESH BACKHAUL (buildroot docs/MESH-BACKHAUL-DESIGN.md): the root's
+# downlink trunks bh<k> (a leaf's AP_VLAN) and the leaf's uplink trunk bhs
+bhs_() { sed -n 's/^bh //p' "$T/run/gt-be98-l2/$1" 2>/dev/null | tr '\n' ' '; }
+printf 'network=4 name=Lab vlan=44 subnet=192.168.40.1/24 mode=gateway bhvid=444\nnetwork=3 name=Up vlan=33\nnetwork=7 name=B vlan=70 bhvid=0\n' > "$GT_BE98_NETWORKS"
+L up wifi brwifi41 rnr0 44; L up wifi brwifi31 rnr0 33
+port bcawl0-1.sta1
+L trunk-add bcawl0-1.sta1 02:00:00:00:00:AA > "$T/out"; check "trunk-add: rc 0, alias bh0 printed" "0 bh0" "$? $(cat "$T/out")"
+check "... bh0.33 (VLAN 33, no bhvid) in brwifi31, VLAN 33 of the AP_VLAN" "brwifi31 yes" "$(master bh0.33) $(grep -q '^bh0.33 | 33 | bcawl0-1.sta1$' "$T/vlancfg" && echo yes || echo no)"
+check "... the gateway network 44 carried on its bhvid=444: bh0.444 in brwifi41" "brwifi41" "$(master bh0.444)"
+check "... no bh0.44 (the bhvid wins)" no "$(ex bh0.44)"
+check "... recorded as made members" "bh0.33 1 |bh0.444 1 " "$(bhs_ brwifi31)|$(bhs_ brwifi41)"
+check "... the untagged AP_VLAN is no bridge port" "-" "$(master bcawl0-1.sta1)-"
+check "trunks: bh0 bcawl0-1.sta1 down 02:00:00:00:00:aa (lower case)" "bh0 bcawl0-1.sta1 down 02:00:00:00:00:aa" "$(L trunks)"
+L trunk-add bcawl0-1.sta1 > "$T/out"; check "trunk-add of the same dev again: the same alias, nothing new" "0 bh0 brwifi31" "$? $(cat "$T/out") $(master bh0.33)"
+# a bridge that comes later gets the downlink at its up
+L up wifi brwifi71 rnr0 70; check "a bridge made after the link: bh0.70 (bhvid=0 is not a VID: its vlan=) at its up" "0 brwifi71" "$? $(master bh0.70)"
+# a second link: bh1
+port bcawl0-1.sta2
+L trunk-add bcawl0-1.sta2 > "$T/out"; check "a second link: bh1, bh1.33 in brwifi31" "bh1 brwifi31 brwifi31" "$(cat "$T/out") $(master bh1.33) $(master bh0.33)"
+# the leaf's bridges (uplink bhs) never get a downlink: no loop on a box
+port bcawl1
+L up wifi brwifi131 bhs 33; check "up on bhs without an uplink: refused" 1 $?
+L uplink bcawl1; check "uplink bcawl1: rc 0, trunks lists bhs up" "0 bhs bcawl1 up -" "$? $(L trunks | grep '^bhs')"
+L up wifi brwifi131 bhs 33; check "leaf bridge brwifi131 on bhs.33: bhs.33 = VLAN 33 of bcawl1, in brwifi131" "0 brwifi131 yes" \
+	"$? $(master bhs.33) $(grep -q '^bhs.33 | 33 | bcawl1$' "$T/vlancfg" && echo yes || echo no)"
+check "... the leaf bridge got NO downlink (bh0/bh1 stay in brwifi31 only)" "|brwifi31 brwifi31" "$(bhs_ brwifi131)|$(master bh0.33) $(master bh1.33)"
+check "... the leaf's station is no bridge port" "-" "$(master bcawl1)-"
+check "control: the root bridge on rnr0.33 keeps its uplink" brwifi31 "$(master rnr0.33)"
+# the station moves to another radio: bhs.33 follows
+port bcawl2
+L uplink bcawl2; check "uplink moves to bcawl2: bhs.33 now VLAN 33 of bcawl2, in brwifi131" "0 brwifi131 yes no" \
+	"$? $(master bhs.33) $(grep -q '^bhs.33 | 33 | bcawl2$' "$T/vlancfg" && echo yes || echo no) $(grep -q '^bhs.33 | 33 | bcawl1$' "$T/vlancfg" && echo yes || echo no)"
+L down wifi brwifi131; check "leaf bridge down: bhs.33 deleted" "no no" "$(ex bhs.33) $(ex brwifi131)"
+L uplink -; check "uplink -: no bhs trunk" "" "$(L trunks | grep '^bhs')"
+# bhvid moved: sync moves the downlinks
+sed -i 's/bhvid=444/bhvid=445/' "$GT_BE98_NETWORKS"
+L sync; check "sync after bhvid 444 -> 445: bh0.445 and bh1.445 in brwifi41, bh0.444 gone" "brwifi41 brwifi41 no" "$(master bh0.445) $(master bh1.445) $(ex bh0.444)"
+# two bridges wanting one backhaul VID: the second is not carried
+sed -i 's/bhvid=445/bhvid=33/' "$GT_BE98_NETWORKS"
+L sync; check "bhvid=33 = VLAN 33's VID: sync rc 1, brwifi41 not carried, brwifi31 keeps bh0.33" "1 brwifi31 -" "$? $(master bh0.33) $(bhs_ brwifi41)-"
+check "... logged" yes "$(grep -q 'backhaul VID 33 is carried for brwifi31 already' "$T/err" && echo yes || echo no)"
+sed -i 's/bhvid=33/bhvid=444/' "$GT_BE98_NETWORKS"; L sync
+check "control: bhvid back to 444: carried again" brwifi41 "$(master bh0.444)"
+# the link goes: its VLANs go, the other link's stay
+L trunk-del bcawl0-1.sta1 > "$T/out"; check "trunk-del: rc 0, bh0 freed, its VLANs deleted, bh1's kept" "0 bh0 no no no brwifi31" \
+	"$? $(cat "$T/out") $(ex bh0.33) $(ex bh0.444) $(ex bh0.70) $(master bh1.33)"
+check "... trunks lists bh1 only" "bh1 bcawl0-1.sta2 down -" "$(L trunks)"
+L trunk-add bcawl0-1.sta1 > "$T/out"; check "a link again: the lowest free alias bh0" "bh0 brwifi31" "$(cat "$T/out") $(master bh0.33)"
+# refusals
+check "trunk-add of an absent dev: refused" 1 "$(L trunk-add bcawl0-1.sta9 > /dev/null; echo $?)"
+check "trunk-add of a wired port: refused" 1 "$(L trunk-add rnr0 > /dev/null; echo $?)"
+check "trunk-add with a bad peer: refused" 1 "$(port bcawl0-1.sta3; L trunk-add bcawl0-1.sta3 nomac > /dev/null; echo $?)"
+for k in 3 4 5 6 7 8 9; do port bcawl0-1.sta1$k; L trunk-add bcawl0-1.sta1$k > /dev/null; done
+check "a 9th link: refused (8 aliases)" 1 "$(L trunk-add bcawl0-1.sta3 > /dev/null; echo $?)"
+for k in 3 4 5 6 7 8 9; do L trunk-del bcawl0-1.sta1$k > /dev/null; done
+# the last user of a root bridge: its backhaul VLANs go with it
+L down wifi brwifi71; check "last down of brwifi71: bh0.70 and bh1.70 deleted, bridge gone" "no no no" "$(ex bh0.70) $(ex bh1.70) $(ex brwifi71)"
+# the VLAN of a root bridge changes: the downlinks follow
+L up wifi brwifi31 rnr0 32; check "brwifi31 VLAN 33 -> 32: bh0.32 and bh1.32 in it, bh0.33 gone" "0 brwifi31 brwifi31 no" "$? $(master bh0.32) $(master bh1.32) $(ex bh0.33)"
 echo "gt-be98-l2-test: $pass ok, $fail failed"
 [ $fail -eq 0 ]

@@ -45,6 +45,14 @@ done
 cat > "$T/bin/hostapd_cli" <<'X'
 #!/bin/sh
 # hostapd_cli -p DIR -i NAME raw CMD [ARG] (global) | -i NAME status (a BSS)
+# | -B -r -P PID -p DIR -i NAME -a ACTION (the mesh hook: logged, a fake
+# daemon's pid written)
+case " $* " in *" -a "*)
+	echo "action $*" >> "$FAKE/meshlog"
+	pf=; while [ $# -gt 0 ]; do [ "$1" = -P ] && pf=$2; shift; done
+	sh "$FAKE/bin/fakeproc" hostapd_cli-mesh > /dev/null 2>&1 < /dev/null & echo $! > "$pf"
+	exit 0 ;;
+esac
 ifn=
 while [ $# -gt 0 ]; do case $1 in -i) ifn=$2; shift 2 ;; -p) shift 2 ;; raw) shift; break ;; *) break ;; esac; done
 S=$FAKE/hapd
@@ -764,6 +772,36 @@ fi
 # gt-be98-l2 that logs its arguments
 check "VLAN bridges: net_up with bridge, trunk, VLAN (gt-be98-l2)" "yes" "$(grep -q '^up brwifi30 rnr0 30$' "$T/l2log" && echo yes || echo no)"
 check "the stop lets go of every VLAN bridge (net_prune of nothing)" "yes" "$(grep -qx 'prune ' "$T/l2log" && echo yes || echo no)"
+# THE MESH (buildroot docs/MESH-BACKHAUL-DESIGN.md): a leaf (station trunk=1)
+# bridges its networks on bhs, a root (backhaul=) runs the hostapd_cli hook
+printf '#!/bin/sh\necho "$*" >> "%s/l2mesh"\n[ "$1" = trunks ] && [ -f "%s/l2bhs" ] && echo "bhs bcawl0 up -"\nexit 0\n' "$T" "$T" > "$T/bin/fake-l2m"
+printf '#!/bin/sh\necho "$*" >> "%s/meshlog"\n' "$T" > "$T/bin/fake-mesh"
+chmod +x "$T/bin/fake-l2m" "$T/bin/fake-mesh"
+WIFI_L2="$T/bin/fake-l2m" WIFI_MESH="$T/bin/fake-mesh"
+for p in 0:a4 1:a8 2:ac 3:a0; do	# the radios as at the start (earlier sections removed some)
+	mkdir -p "$T/net/bcawl${p%%:*}/phy80211"; echo "phy${p%%:*}" > "$T/net/bcawl${p%%:*}/phy80211/name"
+	echo "00:00:5e:00:53:${p#*:}" > "$T/net/bcawl${p%%:*}/address"
+done
+{ printf 'radio=5gl\nchannel=36\nwidth=80\n'; sta; printf 'repeater=multiap\ntrunk=1\n'; net 1 a sae password1 "2g 5gl" 1; } > "$T/nets"
+l0=$(wc -l < "$T/l2log"); : > "$T/l2mesh"; : > "$T/meshlog"; apply
+check "leaf: rc 0, uplink bcawl0 (gt-be98-l2), the network bridged on bhs, l2.conf trunk bhs" "0 uplink bcawl0 yes yes" \
+	"$rc $(grep '^uplink' "$T/l2mesh") $(tail -n +$((l0 + 1)) "$T/l2log" | grep -q '^up brwifi1 bhs 1$' && echo yes || echo no) $(grep -q '^WIFI_TRUNK="bhs"$' "$T/run/gt-be98-wifi/l2.conf" && echo yes || echo no)"
+check "leaf: the station is no repeater bridge port (repeaters empty), no mesh hook" "|0" "$(cat "$T/run/gt-be98-wifi/repeaters")|$(grep -c '^action' "$T/meshlog")"
+touch "$T/l2bhs"
+{ printf 'radio=5gl\nchannel=36\nwidth=80\n'; net 1 a sae password1 "2g 5gl" 1; printf 'backhaul=5gl\nssid=mesh-bh\npassphrase=meshpass12\n'; } > "$T/nets"
+l0=$(wc -l < "$T/l2log"); : > "$T/l2mesh"; : > "$T/meshlog"; apply
+check "root: rc 0, the backhaul BSS bcawl0-1 added, the network on rnr0 again" "0 yes yes" \
+	"$rc $(echo "$cmds" | grep -q 'bcawl0' && echo yes || echo no) $(tail -n +$((l0 + 1)) "$T/l2log" | grep -q '^up brwifi1 rnr0 1$' && echo yes || echo no)"
+check "root: hostapd_cli -B -r -a gt-be98-mesh on the backhaul BSS, then sync; the former leaf's uplink forgotten" \
+	"action -B -r -P $T/run/gt-be98-mesh-bcawl0-1.pid -p $T/run/hostapd -i bcawl0-1 -a $T/bin/fake-mesh|sync|uplink -" \
+	"$(grep -E '^(action|sync)' "$T/meshlog" | tr '\n' '|')$(grep '^uplink' "$T/l2mesh")"
+rm -f "$T/l2bhs"; : > "$T/meshlog"; apply
+check "root unchanged: the hook kept (not started again), synced" "0|sync" "$(grep -c '^action' "$T/meshlog")|$(tr '\n' '|' < "$T/meshlog" | sed 's/|$//')"
+{ printf 'radio=5gl\nchannel=36\nwidth=80\n'; net 1 a sae password1 "2g 5gl" 1; } > "$T/nets"
+p=$(cat "$T/run/gt-be98-mesh-bcawl0-1.pid"); : > "$T/meshlog"; apply
+check "backhaul removed: its hook stopped (pid file gone, process gone)" "no no" \
+	"$([ -f "$T/run/gt-be98-mesh-bcawl0-1.pid" ] && echo yes || echo no) $(kill -0 "$p" 2>/dev/null && echo yes || echo no)"
+WIFI_L2=/usr/sbin/gt-be98-l2 WIFI_MESH=/nonexistent
 (
 	unset -f net_up net_prune
 	. "${SVC:-$here/../src/init.d/gt-be98-wifi}"

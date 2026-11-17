@@ -39,8 +39,37 @@
 #                                 does with <vid>'s trunk sub-interface
 #   gt-be98-l2 sync               every bridge's trunk sub-interface made to
 #                                 follow its mode (removed for a gateway
-#                                 network, added back for a VLAN-only one):
+#                                 network, added back for a VLAN-only one),
+#                                 and its backhaul VLANs to their VID:
 #                                 gt-be98-gw runs it after each change
+#   gt-be98-l2 trunk-add <dev> [<peer MAC>]
+#                                 MESH ROOT: a leaf's 4-address link (the
+#                                 AP_VLAN hostapd made, <bss>.sta<aid>) is a
+#                                 DOWNLINK trunk: it gets the alias bh<k>
+#                                 (k = 0..7, the lowest free; printed; the
+#                                 same alias again for a dev already added)
+#                                 and every network bridge whose uplink is a
+#                                 wired trunk gets bh<k>.<bhvid> (created,
+#                                 IPv6 off, up, enslaved, recorded as the
+#                                 bridge's "bh" member). The untagged
+#                                 AP_VLAN itself is no bridge port (EAPOL
+#                                 and management only). gt-be98-mesh runs
+#                                 it on hostapd's WDS-STA-INTERFACE-ADDED
+#   gt-be98-l2 trunk-del <dev>    the link went: its bh<k>.<vid> deleted
+#                                 (the ones made here), the alias freed
+#   gt-be98-l2 uplink <dev>|-     MESH LEAF: the 4-address station <dev> is
+#                                 the UPLINK trunk "bhs" (`up <user> <bridge>
+#                                 bhs <vid>` then makes bhs.<vid> on <dev>);
+#                                 "-" forgets it. A new <dev> moves every
+#                                 bridge running on bhs to it at once
+#   gt-be98-l2 trunks             "<alias> <dev> <down|up> <peer|->" per trunk
+# BACKHAUL VID (D-MESH4): a network's VID on the backhaul is the bhvid= of
+# its line in the web UI's list (/etc/gt-be98-networks.conf, 2..4094), else
+# its vlan=. A gateway network is carried over the backhaul too (the root
+# stays its gateway: the leaf bridges it and never routes it). Two bridges
+# wanting one backhaul VID: the second is not carried (logged). A bridge
+# whose uplink is bhs (a leaf's) never gets a downlink: no loop on a box,
+# and a chain of leaves is not offered.
 # GATEWAY NETWORKS (the two-gateway rule; buildroot docs/ROUTED-NETWORKS-
 # DESIGN.md §1): a network of the web UI's list (/etc/gt-be98-networks.conf)
 # whose line says mode=gateway is routed by the box (gt-be98-gw: its address,
@@ -86,7 +115,35 @@ valid_bridge() {
 	case "$1" in brwifi[0-9]*) ;; *) return 1 ;; esac
 	case "${1#brwifi}" in *[!0-9]*) return 1 ;; esac
 }
-valid_trunk() { case "$1" in rnr[0-3]) return 0 ;; *) return 1 ;; esac; }
+valid_trunk() { case "$1" in rnr[0-3]|bhs) return 0 ;; *) return 1 ;; esac; }
+# a mesh link netdev: an AP_VLAN (<bss>.sta<aid>) or a Wi-Fi station
+valid_link() {
+	case "$1" in bcawl[0-9]*|wlan[0-9]*) ;; *) return 1 ;; esac
+	case "$1" in *[!A-Za-z0-9._-]*) return 1 ;; esac
+	[ ${#1} -le 15 ]
+}
+valid_mac() {
+	case "$1" in [0-9a-f][0-9a-f]:[0-9a-f][0-9a-f]:[0-9a-f][0-9a-f]:[0-9a-f][0-9a-f]:[0-9a-f][0-9a-f]:[0-9a-f][0-9a-f]) return 0 ;; esac
+	return 1
+}
+TR=$L2/trunks
+# trunk alias $1 into T_DEV T_ROLE T_PEER (rc 1: none)
+tr_read() {
+	local k v
+	T_DEV= T_ROLE= T_PEER=-
+	[ -f "$TR/$1" ] || return 1
+	while read -r k v _; do
+		case "$k" in dev) T_DEV=$v ;; role) T_ROLE=$v ;; peer) T_PEER=$v ;; esac
+	done < "$TR/$1"
+	[ -n "$T_DEV" ]
+}
+# the netdev a trunk name stands for: rnr* itself, bhs the leaf's station
+trunk_dev() {
+	case "$1" in
+	bhs) tr_read bhs && echo "$T_DEV" ;;
+	*) echo "$1" ;;
+	esac
+}
 valid_wired() { case "$1" in rnr[1-3]) return 0 ;; *) return 1 ;; esac; }
 valid_vid() {
 	case "$1" in ''|0*|*[!0-9]*) return 1 ;; esac
@@ -114,7 +171,7 @@ unlock() { rm -rf "$L2/.lock"; }
 # S_WIRED: "<user>:<dev>:<made>" words)
 st_read() {
 	local k v w x
-	S_TRUNK= S_UPLINK= S_VID= S_MB=0 S_MV=0 S_USERS= S_WIRED=
+	S_TRUNK= S_UPLINK= S_VID= S_MB=0 S_MV=0 S_USERS= S_WIRED= S_BH=
 	[ -f "$L2/$1" ] || return 1
 	while read -r k v w x; do
 		case "$k" in
@@ -122,6 +179,7 @@ st_read() {
 		made_bridge) S_MB=$v ;; made_vlan) S_MV=$v ;;
 		user) S_USERS="$S_USERS $v" ;;
 		wired) S_WIRED="$S_WIRED $v:$w:$x" ;;
+		bh) S_BH="$S_BH $v:$w" ;;
 		esac
 	done < "$L2/$1"
 	[ -n "$S_UPLINK" ] || S_UPLINK=$S_TRUNK
@@ -134,6 +192,7 @@ st_write() {
 		echo "made_bridge $S_MB"; echo "made_vlan $S_MV"
 		for u in $S_USERS; do echo "user $u"; done
 		for w in $S_WIRED; do u=${w#*:}; echo "wired ${w%%:*} ${u%%:*} ${u#*:}"; done
+		for w in ${S_BH:-}; do echo "bh ${w%%:*} ${w#*:}"; done
 	} > "$L2/$1.new" && mv -f "$L2/$1.new" "$L2/$1"
 }
 
@@ -212,16 +271,18 @@ vid_mode() {
 # the trunk sub-interface $S_TRUNK.$S_VID of bridge $1: created or adopted,
 # IPv6 off, up, enslaved, not isolated (S_* written as it goes)
 sub_up() {
-	local b=$1 t=$S_TRUNK v=$S_VID s=$S_TRUNK.$S_VID o
+	local b=$1 t=$S_TRUNK v=$S_VID s=$S_TRUNK.$S_VID o d
+	# the netdev under the trunk name (bhs: the leaf's station)
+	d=$(trunk_dev "$t"); [ -n "$d" ] || { err "trunk $t: no netdev (gt-be98-l2 uplink)"; return 1; }
 	o=$(master_of "$s")
 	[ -z "$o" ] || [ "$o" = "$b" ] || { err "$s is a port of $o: $b refused"; return 1; }
-	if [ $(( $(cat "$SYSNET/$t/flags" 2>/dev/null || echo 0) & 1 )) = 0 ]; then
-		ip link set dev "$t" up || { err "trunk $t: up failed"; return 1; }
+	if [ $(( $(cat "$SYSNET/$d/flags" 2>/dev/null || echo 0) & 1 )) = 0 ]; then
+		ip link set dev "$d" up || { err "trunk $d: up failed"; return 1; }
 	fi
 	if [ -e "$SYSNET/$s" ]; then
-		vlan_is "$s" "$t" "$v" || { err "$s exists and is not VLAN $v of $t"; return 1; }
+		vlan_is "$s" "$d" "$v" || { err "$s exists and is not VLAN $v of $d"; return 1; }
 	else
-		ip link add link "$t" name "$s" type vlan id "$v" || { err "cannot create $s"; return 1; }
+		ip link add link "$d" name "$s" type vlan id "$v" || { err "cannot create $s"; return 1; }
 		S_MV=1; st_write "$b"
 	fi
 	ipv6_off "$s"
@@ -255,18 +316,196 @@ yield_bridge() {
 	[ ! -f "$L2/$1" ]
 }
 
+# ---- the mesh backhaul (header: trunk-add, trunk-del, uplink) ----
+
+# the backhaul VID of VLAN $1 (D-MESH4, header) into BHV: the bhvid= of the
+# list's line with vlan=$1, else $1 (read with `read`, keys in any order)
+bh_vid() {
+	local l w v x
+	BHV=$1
+	[ -r "$NETWORKS" ] || return 0
+	set -f
+	while IFS= read -r l || [ -n "$l" ]; do
+		case "$l" in ''|'#'*) continue ;; esac
+		v= x=
+		# shellcheck disable=SC2086 # word split, no glob
+		for w in $l; do
+			case "$w" in vlan=*) v=${w#vlan=} ;; bhvid=*) x=${w#bhvid=} ;; esac
+		done
+		[ "$v" = "$1" ] || continue
+		valid_vid "$x" && BHV=$x
+		break
+	done < "$NETWORKS"
+	set +f
+	return 0
+}
+# backhaul member $2 ("<sub>:<made>") of bridge $1 leaves it: deleted when
+# this tool created it, else only released
+bh_drop() {
+	local d=${2%%:*} m=${2#*:}
+	[ -e "$SYSNET/$d" ] || return 0
+	if [ "$m" = 1 ]; then
+		ip link del dev "$d" || return 1
+	elif [ "$(master_of "$d")" = "$1" ]; then
+		ip link set dev "$d" nomaster || return 1
+	fi
+}
+# the backhaul members of bridge $1 (state S_*) of alias $2 ("" = all) leave
+# it; S_BH keeps the others (and one whose removal failed); state written
+bh_prune() {
+	local w k=
+	for w in ${S_BH:-}; do
+		if [ -n "$2" ] && [ "${w%%.*}" != "$2" ]; then k="$k $w"; continue; fi
+		bh_drop "$1" "$w" && continue
+		err "$1: backhaul VLAN ${w%%:*} not removed"
+		k="$k $w"
+	done
+	S_BH=$k
+	[ -f "$L2/$1" ] && st_write "$1"
+	return 0
+}
+# is backhaul sub-interface $2 recorded by another bridge than $1?
+bh_taken() {
+	local f o k v _w
+	for f in "$L2"/brwifi*; do
+		[ -f "$f" ] || continue
+		o=${f##*/}; case "$o" in *.new) continue ;; esac
+		[ "$o" = "$1" ] && continue
+		while read -r k v _w; do
+			[ "$k" = bh ] && [ "$v" = "$2" ] && { BH_BY=$o; return 0; }
+		done < "$f"
+	done
+	return 1
+}
+# downlink trunk $2 (bh<k>) carries bridge $1's backhaul VID (state S_* of
+# $1 loaded; written as it goes). A leaf's bridge (uplink bhs) never: rc 0
+bh_attach() {
+	local b=$1 a=$2 s w k= made=1 o
+	[ "$S_UPLINK" != bhs ] && [ -n "$S_VID" ] || return 0
+	tr_read "$a" && [ "$T_ROLE" = down ] || return 0
+	bh_vid "$S_VID"; s=$a.$BHV
+	# the alias's member of another VID (bhvid= moved) goes first
+	for w in ${S_BH:-}; do
+		if [ "${w%%.*}" = "$a" ] && [ "${w%%:*}" != "$s" ]; then
+			bh_drop "$b" "$w" || { err "$b: backhaul VLAN ${w%%:*} not removed"; k="$k $w"; }
+			continue
+		fi
+		k="$k $w"
+	done
+	S_BH=$k; st_write "$b"
+	if bh_taken "$b" "$s"; then
+		err "$s: backhaul VID $BHV is carried for $BH_BY already: $b (VLAN $S_VID) not carried over the backhaul (give it another bhvid=)"
+		return 1
+	fi
+	o=$(master_of "$s")
+	[ -z "$o" ] || [ "$o" = "$b" ] || { err "$s is a port of $o: $b not carried over the backhaul"; return 1; }
+	[ -e "$SYSNET/$T_DEV" ] || { err "backhaul link $T_DEV ($a) not present: $b not carried"; return 1; }
+	case " $S_BH " in *" $s:"*) made=${S_BH#*" $s:"}; made=${made%% *} ;; *)
+		if [ -e "$SYSNET/$s" ]; then
+			vlan_is "$s" "$T_DEV" "$BHV" || { err "$s exists and is not VLAN $BHV of $T_DEV"; return 1; }
+			made=0
+		else
+			ip link add link "$T_DEV" name "$s" type vlan id "$BHV" || { err "cannot create $s"; return 1; }
+		fi
+		S_BH="$S_BH $s:$made"; st_write "$b" ;;
+	esac
+	ipv6_off "$s"
+	ip link set dev "$s" up || { err "$s: up failed"; return 1; }
+	[ "$(master_of "$s")" = "$b" ] || ip link set dev "$s" master "$b" ||
+		{ err "$s: enslave into $b failed"; return 1; }
+	bridge link set dev "$s" isolated off 2>/dev/null
+	return 0
+}
+# every downlink trunk carries bridge $1 (state loaded); rc 1 when one could not
+bh_attach_all() {
+	local f r=0
+	for f in "$TR"/bh[0-7]; do
+		[ -f "$f" ] || continue
+		bh_attach "$1" "${f##*/}" || r=1
+	done
+	return $r
+}
+cmd_trunk_add() {
+	local d=$1 p=${2:-} a= k f b r=0
+	valid_link "$d" || { err "backhaul link '$d' refused"; return 1; }
+	[ -e "$SYSNET/$d" ] || { err "backhaul link $d not present"; return 1; }
+	p=$(echo "$p" | tr 'A-F' 'a-f')
+	[ -z "$p" ] || valid_mac "$p" || { err "backhaul link $d: peer '$p' refused"; return 1; }
+	mkdir -p "$TR" || return 1
+	for f in "$TR"/bh[0-7]; do
+		tr_read "${f##*/}" && [ "$T_DEV" = "$d" ] && { a=${f##*/}; break; }
+	done
+	if [ -z "$a" ]; then
+		for k in 0 1 2 3 4 5 6 7; do [ -f "$TR/bh$k" ] || { a=bh$k; break; }; done
+		[ -n "$a" ] || { err "backhaul link $d refused: 8 links already (bh0..bh7)"; return 1; }
+	fi
+	printf 'dev %s\nrole down\npeer %s\n' "$d" "${p:--}" > "$TR/$a.new" && mv -f "$TR/$a.new" "$TR/$a" || return 1
+	for f in "$L2"/brwifi*; do
+		[ -f "$f" ] || continue
+		b=${f##*/}; case "$b" in *.new) continue ;; esac
+		st_read "$b" || continue
+		bh_attach "$b" "$a" || r=1
+	done
+	echo "$a"
+	return $r
+}
+cmd_trunk_del() {
+	local d=$1 a= f b
+	valid_link "$d" || { err "backhaul link '$d' refused"; return 1; }
+	for f in "$TR"/bh[0-7]; do
+		tr_read "${f##*/}" && [ "$T_DEV" = "$d" ] && { a=${f##*/}; break; }
+	done
+	[ -n "$a" ] || return 0
+	for f in "$L2"/brwifi*; do
+		[ -f "$f" ] || continue
+		b=${f##*/}; case "$b" in *.new) continue ;; esac
+		st_read "$b" || continue
+		bh_prune "$b" "$a"
+	done
+	rm -f "$TR/$a"
+	echo "$a"
+}
+cmd_uplink() {
+	local d=$1 old= f b r=0
+	tr_read bhs && old=$T_DEV
+	if [ "$d" = - ]; then rm -f "$TR/bhs"; return 0; fi
+	valid_link "$d" || { err "uplink '$d' refused"; return 1; }
+	mkdir -p "$TR" || return 1
+	printf 'dev %s\nrole up\npeer -\n' "$d" > "$TR/bhs.new" && mv -f "$TR/bhs.new" "$TR/bhs" || return 1
+	[ -n "$old" ] && [ "$old" != "$d" ] || return 0
+	# the station moved: every bridge on bhs gets its bhs.<vid> on the new one
+	for f in "$L2"/brwifi*; do
+		[ -f "$f" ] || continue
+		b=${f##*/}; case "$b" in *.new) continue ;; esac
+		st_read "$b" || continue
+		[ "$S_TRUNK" = bhs ] || continue
+		sub_drop "$b" || { err "$b: bhs.$S_VID (on $old) not removed"; r=1; continue; }
+		S_MV=0; st_write "$b"
+		sub_up "$b" || r=1
+	done
+	return $r
+}
+cmd_trunks() {
+	local f
+	for f in "$TR"/bhs "$TR"/bh[0-7]; do
+		[ -f "$f" ] || continue
+		tr_read "${f##*/}" && echo "${f##*/} $T_DEV $T_ROLE $T_PEER"
+	done
+}
+
 cmd_up() {
 	local u=$1 b=$2 t=$3 v=$4 s=$3.$4 w=${5:-} ws= f o p x made
 	valid_user "$u" || { err "user '$u' refused"; return 1; }
 	valid_bridge "$b" || { err "bridge '$b' refused (brwifiN only)"; return 1; }
-	valid_trunk "$t" || { err "trunk '$t' refused (rnr0..rnr3)"; return 1; }
+	valid_trunk "$t" || { err "trunk '$t' refused (rnr0..rnr3, bhs)"; return 1; }
 	valid_vid "$v" || { err "VLAN '$v' refused (1-4094)"; return 1; }
 	if [ -n "$w" ]; then
 		valid_wired "$w" || { err "wired port '$w' refused (rnr1..rnr3)"; return 1; }
 		[ "$w" != "$t" ] || { err "wired port $w is the trunk: refused"; return 1; }
 		ws=$w.$v
 	fi
-	[ -e "$SYSNET/$t" ] || { err "trunk $t not present: $b not bridged"; return 1; }
+	x=$(trunk_dev "$t")
+	[ -n "$x" ] && [ -e "$SYSNET/$x" ] || { err "trunk $t not present: $b not bridged"; return 1; }
 	[ -z "$w" ] || [ -e "$SYSNET/$w" ] || { err "wired port $w not present: $b not bridged"; return 1; }
 	# one bridge per VLAN of a trunk (a lan-only bridge of a network
 	# without an SSID yields to the Wi-Fi's: header)
@@ -300,6 +539,9 @@ cmd_up() {
 		# every user's wired members are of the old VLAN too
 		wired_prune "$b" "" ""
 		[ -z "$S_WIRED" ] || { err "$b: a wired member of the old VLAN could not be removed"; return 1; }
+		# and the backhaul downlinks carried the old VLAN's backhaul VID
+		bh_prune "$b" ""
+		[ -z "$S_BH" ] || { err "$b: a backhaul VLAN of the old VLAN could not be removed"; return 1; }
 		# the wired members joined the OLD VLAN: evicted (never carried
 		# into another VLAN), and their users must come back with `up`
 		if [ -d "$SYSNET/$b/brif" ]; then
@@ -338,6 +580,9 @@ cmd_up() {
 		{ err "$b: setup failed"; return 1; }
 	# a gateway network: no trunk sub-interface (header)
 	if [ "$MODE" = vlan ]; then sub_up "$b" || return 1; fi
+	# the mesh root's downlink trunks (bh<k>): their backhaul VLAN of this
+	# bridge (none on a leaf's bridge); a failure is logged, the bridge runs
+	bh_attach_all "$b"
 	# the user's wired member: what it named, and nothing else of its own
 	wired_prune "$b" "$u" "$ws"; st_write "$b"
 	[ -n "$ws" ] || return 0
@@ -378,6 +623,8 @@ cmd_down() {
 	S_USERS=$n
 	wired_prune "$b" "$u" ""
 	if [ -n "$S_USERS" ]; then st_write "$b"; return 0; fi
+	# the last user: the backhaul VLANs of the bridge go with it
+	bh_prune "$b" ""
 	if [ "$S_MB" = 1 ] && [ -d "$SYSNET/$b/brif" ]; then
 		for p in "$SYSNET/$b/brif"/*; do
 			[ -e "$p" ] || [ -L "$p" ] || continue
@@ -397,12 +644,14 @@ cmd_down() {
 # every bridge's trunk sub-interface follows its mode (header); rc 1 when one
 # could not
 cmd_sync() {
-	local f b r=0
+	local f b r=0 x
 	for f in "$L2"/brwifi*; do
 		[ -f "$f" ] || continue
 		b=${f##*/}; case "$b" in *.new) continue ;; esac
 		st_read "$b" || continue
 		[ -n "$S_VID" ] && valid_trunk "$S_UPLINK" || continue
+		# the backhaul VLANs follow the backhaul VID (bhvid= may have moved)
+		bh_attach_all "$b" || r=1
 		vid_mode "$S_VID" "$b"
 		if [ "$MODE" = gateway ] && [ "$S_TRUNK" != - ]; then
 			if sub_drop "$b"; then
@@ -412,7 +661,8 @@ cmd_sync() {
 				err "$b: $S_UPLINK.$S_VID could not be removed (gateway network)"; r=1
 			fi
 		elif [ "$MODE" = vlan ] && [ "$S_TRUNK" = - ]; then
-			[ -e "$SYSNET/$S_UPLINK" ] || { err "$b: trunk $S_UPLINK not present: VLAN $S_VID not carried"; r=1; continue; }
+			x=$(trunk_dev "$S_UPLINK")
+			[ -n "$x" ] && [ -e "$SYSNET/$x" ] || { err "$b: trunk $S_UPLINK not present: VLAN $S_VID not carried"; r=1; continue; }
 			S_TRUNK=$S_UPLINK S_MV=0; st_write "$b"
 			if sub_up "$b"; then
 				err "$b: VLAN $S_VID is VLAN only again: $S_UPLINK.$S_VID carried (sync)"
@@ -448,5 +698,12 @@ mode)	[ $# = 1 ] || [ $# = 2 ] || { err "usage: mode <vid> [<bridge>]"; exit 2; 
 	valid_vid "$1" || exit 2
 	vid_mode "$1" "${2:-}"; echo "$MODE" ;;
 sync)	lock || exit 1; cmd_sync; r=$?; unlock; exit $r ;;
-*)	err "usage: up|down|vid|list|mode|sync"; exit 2 ;;
+trunk-add) [ $# = 1 ] || [ $# = 2 ] || { err "usage: trunk-add <dev> [<peer MAC>]"; exit 2; }
+	lock || exit 1; cmd_trunk_add "$@"; r=$?; unlock; exit $r ;;
+trunk-del) [ $# = 1 ] || { err "usage: trunk-del <dev>"; exit 2; }
+	lock || exit 1; cmd_trunk_del "$@"; r=$?; unlock; exit $r ;;
+uplink)	[ $# = 1 ] || { err "usage: uplink <dev>|-"; exit 2; }
+	lock || exit 1; cmd_uplink "$@"; r=$?; unlock; exit $r ;;
+trunks)	cmd_trunks ;;
+*)	err "usage: up|down|vid|list|mode|sync|trunk-add|trunk-del|uplink|trunks"; exit 2 ;;
 esac

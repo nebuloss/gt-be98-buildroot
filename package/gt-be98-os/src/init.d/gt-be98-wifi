@@ -140,6 +140,20 @@
 # lets each into: generator repeater=, repeated=1), $STATE/vifs the virtual
 # interfaces this service created, $STATE/routed the routed networks.
 #
+# Mesh backhaul (buildroot docs/MESH-BACKHAUL-DESIGN.md; gt-be98-mesh): a
+# ROOT (a backhaul= block, plan line "backhaul <band> <dev> <ifname> ...")
+# runs the hidden backhaul BSS like any other BSS, plus `hostapd_cli -r -a
+# gt-be98-mesh` on it (pid /run/gt-be98-mesh-<ifname>.pid): hostapd's
+# WDS-STA-INTERFACE-ADDED/-REMOVED make each leaf's AP_VLAN a downlink trunk
+# of gt-be98-l2 (bh<k>.<backhaul VID> in every network bridge), and
+# `gt-be98-mesh sync` after every apply catches the links that came or went
+# while it was not attached. A LEAF (station trunk=1, plan line "bhtrunk
+# <dev>") bridges every VLAN network on the station's bhs.<vid> instead of
+# <WIFI_TRUNK>.<vid>: the effective trunk is "bhs" (gt-be98-l2 uplink
+# <dev>, l2.conf WIFI_TRUNK="bhs", so gt-be98-lan's jacks and netguard
+# follow), never the wired trunk (a leaf never bridges its wired port with
+# the backhaul). The station itself stays no bridge port.
+#
 # Wi-Fi networks are pure L2: each network is a bridge brwifiN holding its
 # BSSes and the 802.1Q sub-interface <trunk>.<vid> of the wired trunk port;
 # no address on the box, no NAT. Besides the network list, settings (same
@@ -191,6 +205,7 @@ WIFI_STA=${GT_BE98_WIFI_STA:-/usr/sbin/gt-be98-wifi-sta}
 WIFI_REPROBE=${GT_BE98_WIFI_REPROBE:-/usr/sbin/gt-be98-wifi-reprobe}
 WIFI_STEER=${GT_BE98_WIFI_STEER:-/usr/sbin/gt-be98-wifi-steer}
 WIFI_L2=${GT_BE98_L2:-/usr/sbin/gt-be98-l2}
+WIFI_MESH=${GT_BE98_WIFI_MESH:-/usr/sbin/gt-be98-mesh}
 # after a reload the wired LAN's VLAN jacks re-resolve their networks (a
 # network's VLAN changed or went away: gt-be98-l2 evicted the jacks)
 LAN_FOLLOW=${GT_BE98_LAN_FOLLOW-rc-service --ifstarted gt-be98-lan reload}
@@ -231,6 +246,9 @@ ap_override() {
 }
 
 valid_trunk() { case "$1" in rnr[0-3]) return 0 ;; *) return 1 ;; esac; }
+# the effective trunk of the network bridges: a wired one, or the mesh
+# leaf's station (bhs, header: Mesh backhaul)
+valid_net_trunk() { valid_trunk "$1" || [ "$1" = bhs ]; }
 
 # 1..4094, decimal, no leading zero
 valid_vid() {
@@ -1226,8 +1244,14 @@ apply_hostapd() {
 	# start, header: Lifecycle); any other failure is one part of it
 	APPLY_HARD=0
 	gen_networks || { APPLY_HARD=1; return 1; }
+	# the mesh leaf (plan bhtrunk): its station is the network bridges' trunk
+	LEAF_STA=$(awk '$1 == "bhtrunk" { print $2; exit }' "$plan" 2>/dev/null)
+	if [ -n "$LEAF_STA" ]; then
+		WIFI_TRUNK=bhs
+		"$WIFI_L2" uplink "$LEAF_STA" || { eerror "mesh leaf: $LEAF_STA not made the uplink trunk: no network bridged"; rc=1; }
+	fi
 	t=${WIFI_TRUNK:-rnr0}
-	valid_trunk "$t" || { eerror "trunk '$t' refused (rnr0..rnr3): no Wi-Fi network bridged"; t=; rc=1; }
+	valid_net_trunk "$t" || { eerror "trunk '$t' refused (rnr0..rnr3): no Wi-Fi network bridged"; t=; rc=1; }
 	check_vlans || rc=1
 	write_l2
 	write_leds
@@ -1322,6 +1346,7 @@ apply_hostapd() {
 		sta_mon_apply
 		mon_apply || rc=1
 		ids_prune "$(ids_want "")"
+		mesh_apply || rc=1
 		return $rc
 	fi
 	# the process: (re)started when dead or started with other arguments
@@ -1354,7 +1379,60 @@ apply_hostapd() {
 	# the monitors, now that hostapd released their radios
 	mon_apply || rc=1
 	ids_prune "$(ids_want "$want")"
+	mesh_apply || rc=1
 	return $rc
+}
+
+# ---- the mesh backhaul (header: Mesh backhaul) ----
+
+pid_alive() {
+	local p
+	p=$(cat "$1" 2>/dev/null) || return 1
+	[ -n "$p" ] && kill -0 "$p" 2>/dev/null
+}
+
+# the hostapd_cli action daemons on backhaul BSSes other than $1 stopped
+mesh_hooks_stop() {
+	local f i
+	for f in "$RUNDIR"/gt-be98-mesh-*.pid; do
+		[ -f "$f" ] || continue
+		i=${f#"$RUNDIR"/gt-be98-mesh-}; i=${i%.pid}
+		[ -n "${1:-}" ] && [ "$i" = "$1" ] && pid_alive "$f" && continue
+		start-stop-daemon --stop --pidfile "$f" --retry TERM/5/KILL/2 > /dev/null 2>&1
+		rm -f "$f"
+	done
+}
+
+# after an apply: the root's action daemon on its backhaul BSS (started when
+# not running), the links synced; a former leaf's uplink trunk forgotten
+mesh_apply() {
+	local i rc=0
+	[ -x "$WIFI_MESH" ] || return 0
+	i=$(awk '$1 == "backhaul" { print $4; exit }' "$STATE/gen/plan" 2>/dev/null)
+	mesh_hooks_stop "$i"
+	if [ -n "$i" ] && ! pid_alive "$RUNDIR/gt-be98-mesh-$i.pid"; then
+		# -r: it re-attaches by itself when hostapd restarts the BSS
+		if ! hostapd_cli -B -r -P "$RUNDIR/gt-be98-mesh-$i.pid" -p "${HOSTAPD_CTRL:-$RUNDIR/hostapd}" \
+			-i "$i" -a "$WIFI_MESH" > /dev/null 2>&1; then
+			eerror "mesh: hostapd_cli did not attach to the backhaul BSS $i: the leaves get no trunk until the next reload"
+			rc=1
+		fi
+	fi
+	"$WIFI_MESH" sync > /dev/null 2>&1 || rc=1
+	# no longer a leaf: the bridges left bhs above (their up on the wired trunk)
+	if [ -z "${LEAF_STA:-}" ] && "$WIFI_L2" trunks 2>/dev/null | grep -q '^bhs '; then
+		"$WIFI_L2" uplink - || rc=1
+	fi
+	return $rc
+}
+
+mesh_stop() {
+	[ -x "$WIFI_MESH" ] || return 0
+	mesh_hooks_stop ""
+	# the AP_VLANs went with hostapd: their trunks are let go
+	"$WIFI_MESH" sync > /dev/null 2>&1
+	"$WIFI_L2" uplink - > /dev/null 2>&1
+	return 0
 }
 
 # the radios whose netdev identity is kept: hostapd radios $1, stations,
@@ -1482,6 +1560,7 @@ svc_procs() {
 		*" $WIFI_STEER run ") echo "gt-be98-wifi-steer $p" ;;
 		*" $WIFI_STA monitor ") echo "gt-be98-wifi-sta $p" ;;
 		*hostapd" "*" -g $g "*) echo "hostapd $p" ;;
+		*hostapd_cli" "*" -a $WIFI_MESH "*|*hostapd_cli" "*" -a $WIFI_MESH") echo "hostapd_cli-mesh $p" ;;
 		esac
 	done
 }
@@ -1515,6 +1594,7 @@ stop_hostapd() {
 	local d
 	stop_legacy
 	hap_daemon_stop
+	mesh_stop
 	# the stations after the APs, then their routing and interfaces
 	# shellcheck disable=SC2013 # one validated name per line
 	for d in $(cat "$STATE/stations" 2>/dev/null); do "$WIFI_STA" down "$d"; done
