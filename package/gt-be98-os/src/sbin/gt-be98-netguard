@@ -60,7 +60,9 @@
 #      address on (its L2 lookup on each VLAN V a jack carries; none found:
 #      every jack of those VLANs), as the BPDU guard latches (the tripped
 #      file; rc-service gt-be98-lan restart clears it); a count elsewhere (a
-#      BSS port: a client bridging two networks) is dropped and logged.
+#      BSS port: a client bridging two networks) is dropped and logged. The
+#      leaf's management veth (gt-be98-mesh mgmt): bhm0p only in the bridge
+#      of the plan's bhmgmt line, bhm0 (the box's address) in no bridge.
 # One exception to 1., the wired LAN (gt-be98-lan, off by default): a bare
 # port listed in LAN_PORTS may be a port of the bridge LAN_BRIDGE (br-lan),
 # and of no other bridge, when it is rnr1, rnr2 or rnr3 and not the Wi-Fi
@@ -215,10 +217,12 @@ wifi_conf() {
 	case "$TRUNK" in rnr[0-3]|bhs) ;; *) TRUNK= ;; esac
 	# the root's backhaul BSS (plan line "backhaul <band> <dev> <ifname> ..."): BHIF
 	# and its one leaf (the generator's accept-<ifname>): BHLEAF
-	BHIF= BHLEAF=
+	BHIF= BHLEAF= BHMGMT=
 	if [ -r "$WIFI_PLAN" ]; then
 		local t a b c
-		while read -r t a b c _; do [ "$t" = backhaul ] && { BHIF=$c; break; }; done < "$WIFI_PLAN"
+		while read -r t a b c _; do
+			case "$t" in backhaul) BHIF=$c ;; bhmgmt) BHMGMT=$b ;; esac
+		done < "$WIFI_PLAN"
 		[ -n "$BHIF" ] && [ -r "${WIFI_PLAN%/plan}/accept-$BHIF" ] &&
 			{ read -r BHLEAF _ < "${WIFI_PLAN%/plan}/accept-$BHIF"; } 2>/dev/null
 	fi
@@ -380,6 +384,13 @@ verdict() {
 	if mesh_link "$1"; then
 		VERDICT="a mesh leaf's link (AP_VLAN of the backhaul BSS $BHIF): never bridged untagged (its VLANs bh<k>.<vid> are)"; return
 	fi
+	# the leaf's management port (gt-be98-mesh mgmt): bhm0p only in the
+	# plan's management bridge, bhm0 (the box's own address) never
+	case "$1" in
+	bhm0) VERDICT="the mesh leaf's management netdev: never a bridge port"; return ;;
+	bhm0p) [ -n "${BHMGMT:-}" ] && [ "$2" = "$BHMGMT" ] || VERDICT="the mesh leaf's management port: only in the management VLAN's bridge (${BHMGMT:-none planned})"
+		return ;;
+	esac
 	case "$1" in
 	bh[0-7].*|bhs.*)
 		bh_port_ok "$1" "$2" || VERDICT="a mesh backhaul VLAN: a port only of the network bridge gt-be98-l2 runs it for, on the link of the backhaul's leaf"
@@ -960,6 +971,18 @@ selftest() {
 	verdict rnr2 brwifi10; n=$((n + 1))
 	if [ "$VERDICT" = keep ]; then echo "ok   keep mesh: a leaf's bare jack rnr2 native 10 in brwifi10"; else echo "FAIL a leaf's bare jack rnr2 native 10: $VERDICT"; fail=$((fail + 1)); fi
 	BHIF=
+	# the leaf's management veth: <expect> <port> <bridge> <BHMGMT>
+	vmcheck() {
+		LPORTS=; LBRIDGE=br-lan; TRUNK=bhs; VLANS=; BHIF=; BHMGMT=$4
+		load_lists; verdict "$2" "$3"; c=$VERDICT; [ "$c" = keep ] || c=detach
+		n=$((n + 1))
+		if [ "$c" = "$1" ]; then echo "ok   $1 mesh mgmt: $2 in $3 (planned '$4')"; else echo "FAIL want $1, got $c: mesh mgmt $2 in $3 (planned '$4')"; fail=$((fail + 1)); fi
+	}
+	vmcheck keep   bhm0p brwifi10 brwifi10	# the management port in the planned bridge
+	vmcheck detach bhm0p brwifi20 brwifi10	# another bridge
+	vmcheck detach bhm0p brwifi10 ""		# no management planned
+	vmcheck detach bhm0  brwifi10 brwifi10	# the box's own address side: never a port
+	BHMGMT=
 	# the loop guard's counters: <expect> <nft listing>
 	bcheck() {
 		c=$(printf "$2" | bh_counts | tr '\n' '|')

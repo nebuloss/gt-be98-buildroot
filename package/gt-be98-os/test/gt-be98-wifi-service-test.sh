@@ -786,6 +786,7 @@ done
 l0=$(wc -l < "$T/l2log"); : > "$T/l2mesh"; : > "$T/meshlog"; apply
 check "leaf: rc 0, uplink bcawl0 (gt-be98-l2), the network bridged on bhs, l2.conf trunk bhs" "0 uplink bcawl0 yes yes" \
 	"$rc $(grep '^uplink' "$T/l2mesh") $(tail -n +$((l0 + 1)) "$T/l2log" | grep -q '^up brwifi1 bhs 1$' && echo yes || echo no) $(grep -q '^WIFI_TRUNK="bhs"$' "$T/run/gt-be98-wifi/l2.conf" && echo yes || echo no)"
+check "leaf: the management address on the management VLAN's bridge (gt-be98-mesh mgmt brwifi1)" yes "$(grep -qx 'mgmt brwifi1' "$T/meshlog" && echo yes || echo no)"
 check "leaf: the station is no repeater bridge port (repeaters empty), no mesh hook" "|0" "$(cat "$T/run/gt-be98-wifi/repeaters")|$(grep -c '^action' "$T/meshlog")"
 touch "$T/l2bhs"
 { printf 'radio=5gl\nchannel=36\nwidth=80\n'; net 1 a sae password1 "2g 5gl" 1; printf 'backhaul=5gl\nssid=mesh-bh\npassphrase=meshpass12\nleaf=02:00:00:00:00:0a\n'; } > "$T/nets"

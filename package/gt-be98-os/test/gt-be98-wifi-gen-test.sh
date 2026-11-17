@@ -1521,6 +1521,14 @@ sta_ok "leaf trunk" "ctrl=/run/wpa_supplicant networks=1 mesh-bh key_mgmt=0x400 
 gen "$T/lf3"; check "leaf with no network: bhtrunk <dev> -" "0 bhtrunk bcawl1 -" "$? $(grep '^bhtrunk ' "$T/o/plan")"
 sed 's/^trunk=1$/trunk=0/' "$T/lf1" > "$T/lf2"
 gen "$T/lf2"; check "control: trunk=0: no bhtrunk line, the repeater line stays" "0 0 1" "$? $(grep -c '^bhtrunk ' "$T/o/plan") $(grep -c '^repeater ' "$T/o/plan")"
+gen "$T/lf1"; check "leaf: bhmgmt line, the default management VLAN = the first vlan= network's" "bhmgmt 10 brwifi1" "$(grep '^bhmgmt ' "$T/o/plan")"
+{ stab 5gh ssid=mesh-bh security=sae passphrase=saepassword1 repeater=multiap trunk=1 mgmt_vid=20
+  net 1 a sae password1 "2g 5gh" 10; net 2 b sae password2 "2g" 20; } > "$T/lf4"
+gen "$T/lf4"; check "leaf: mgmt_vid=20: bhmgmt 20 brwifi2" "0 bhmgmt 20 brwifi2" "$? $(grep '^bhmgmt ' "$T/o/plan")"
+check "control: leaf with no network: no bhmgmt line" 0 "$(gen "$T/lf3"; grep -c '^bhmgmt ' "$T/o/plan")"
+stref "mgmt_vid not a network's VLAN" "mgmt_vid=30 is not the vlan= of a network of the list" station=5gh repeater=multiap trunk=1 mgmt_vid=30 $(nl "$N1")
+stref "mgmt_vid without trunk" "mgmt_vid= needs trunk=1" station=5gh repeater=multiap mgmt_vid=1 $(nl "$N1")
+stref "mgmt_vid bad value" "mgmt_vid=0 refused" station=5gh repeater=multiap trunk=1 mgmt_vid=0 $(nl "$N1")
 stref "trunk without multiap" "trunk=1 needs repeater=multiap" station=5gh repeater=4addr trunk=1 $(nl "$N1")
 stref "trunk on a disabled station" "trunk=1 needs enabled=1" station=5gh enabled=0 repeater=multiap trunk=1 $(nl "$N1")
 stref "trunk and a repeated network" "repeated=1 excludes the station trunk=1" station=2g repeater=multiap trunk=1 $(nl "$N6")

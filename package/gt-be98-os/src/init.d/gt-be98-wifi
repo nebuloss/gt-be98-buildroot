@@ -1424,6 +1424,13 @@ mesh_apply() {
 		fi
 	fi
 	"$WIFI_MESH" sync > /dev/null 2>&1 || rc=1
+	# the leaf's management address on its management VLAN (plan bhmgmt)
+	i=$(awk '$1 == "bhmgmt" { print $3; exit }' "$STATE/gen/plan" 2>/dev/null)
+	if [ -n "$i" ]; then
+		"$WIFI_MESH" mgmt "$i" || { eerror "mesh leaf: no management address on $i (gt-be98-mesh mgmt)"; rc=1; }
+	elif [ -e "$SYSNET/bhm0" ]; then
+		"$WIFI_MESH" mgmt - || rc=1
+	fi
 	# no longer a leaf: the bridges left bhs above (their up on the wired trunk)
 	if [ -z "${LEAF_STA:-}" ] && "$WIFI_L2" trunks 2>/dev/null | grep -q '^bhs '; then
 		"$WIFI_L2" uplink - || rc=1
@@ -1434,6 +1441,7 @@ mesh_apply() {
 mesh_stop() {
 	[ -x "$WIFI_MESH" ] || return 0
 	mesh_hooks_stop ""
+	[ -e "$SYSNET/bhm0" ] && "$WIFI_MESH" mgmt - > /dev/null 2>&1
 	# the AP_VLANs went with hostapd: their trunks are let go
 	"$WIFI_MESH" sync > /dev/null 2>&1
 	"$WIFI_L2" uplink - > /dev/null 2>&1

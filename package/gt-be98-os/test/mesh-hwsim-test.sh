@@ -27,6 +27,12 @@
 #   T5 the leaf's loop guard: no latch without a loop (control), then a veth "rnr2" from the leaf's brwifi10
 #      to the root's brwifi10 closes a loop through the backhaul: the guard's probe comes back on rnr2, rnr2
 #      is latched and detached
+#   T7 the leaf's management address (D-MESH-OS1): station mgmt_vid=10, `gt-be98-mesh mgmt brwifi10` (the plan's
+#      bhmgmt line) takes a DHCP lease on bhm0 from a DHCP server in VLAN 10 at the ROOT (netns g10, busybox
+#      udhcpd: across the backhaul); from g10, ssh (an sshd on every address, as the box's) and http (a listener
+#      on every address, as the web UI on MGMT_IF bhm0) answer on that address; control: a listener on 8080 is
+#      dropped by table inet gt_be98_mesh_mgmt. (The box's dhcpcd is not on a build host: a dhcpcd-shaped
+#      wrapper runs busybox udhcpc and calls gt-be98-mesh as dhcpcd would.)
 #   T6 the leaf leaves: WDS-STA-INTERFACE-REMOVED frees the trunk (no bh0.*, gt-be98-l2 trunks empty)
 # Exit 0 only when every cell is as expected.
 set -u
@@ -37,7 +43,7 @@ S=$here/../src/sbin
 [ -f "$hsrc/hostapd/main.c" ] && [ -f "$wsrc/wpa_supplicant/main.c" ] || { echo "no hostapd/wpa_supplicant tree at $hsrc / $wsrc"; exit 2; }
 modinfo mac80211_hwsim > /dev/null 2>&1 || /sbin/modinfo mac80211_hwsim > /dev/null 2>&1 || { echo "no mac80211_hwsim"; exit 2; }
 PATH=$PATH:/sbin:/usr/sbin
-for c in iw nft arping tcpdump bridge; do command -v $c > /dev/null || { echo "no $c on this host"; exit 2; }; done
+for c in iw nft arping tcpdump bridge busybox curl nc ssh-keygen start-stop-daemon unshare; do command -v $c > /dev/null || { echo "no $c on this host"; exit 2; }; done
 case "$w" in /*/*hwsim*) ;; *) echo "refusing WORKDIR '$w': an absolute scratch path whose last component contains 'hwsim'"; exit 2 ;; esac
 case "${w##*/}" in *hwsim*) ;; *) echo "refusing WORKDIR '$w': the last component must contain 'hwsim'"; exit 2 ;; esac
 lsmod | grep -q '^mac80211_hwsim ' && { echo "mac80211_hwsim is loaded already (another test?): refusing"; exit 2; }
@@ -46,7 +52,7 @@ for n in $NS; do ip netns list | grep -qw "$n" && { echo "netns $n exists alread
 rm -rf "$w"; mkdir -p "$w/lib" "$w/root/run/gt-be98-wifi/gen" "$w/leaf/run/gt-be98-wifi/gen" "$w/rogue"
 [ -e /usr/lib/x86_64-linux-gnu/libnl-genl-3.so ] || ln -sf /usr/lib/x86_64-linux-gnu/libnl-genl-3.so.200 "$w/lib/libnl-genl-3.so"
 cleanup() {
-	for p in $(cat "$w"/*.pid "$w"/*/*.pid "$w"/*/run/*.pid 2>/dev/null); do kill "$p" 2>/dev/null; done
+	for p in $(cat "$w"/*.pid "$w"/*/*.pid "$w"/*/run/*.pid "$w"/*/run/*/*.pid 2>/dev/null); do kill "$p" 2>/dev/null; done
 	sleep 1
 	for n in $NS; do ip netns del "$n" 2>/dev/null; done
 	modprobe -r mac80211_hwsim 2>/dev/null
@@ -117,10 +123,10 @@ R "$HAPD" -B -P "$w/root/hostapd.pid" -t -dd -f "$w/root/hostapd.log" "$w/root/r
 until_ 15 grep -q AP-ENABLED "$w/root/hostapd.log" || { tail -20 "$w/root/hostapd.log"; echo "backhaul BSS not ENABLED"; exit 1; }
 R "$HCLI" -B -r -P "$w/root/hook.pid" -p "$w/root/run/hostapd" -i bcawl3 -a "$S/gt-be98-mesh" || { echo "hostapd_cli hook failed"; exit 1; }
 # ---- the leaf: the generator's station trunk=1, the bridges on bhs ----
-printf 'station=2g\nssid=mesh-bh\nsecurity=sae\npassphrase=hwsim-mesh-1\nrepeater=multiap\ntrunk=1\n' > "$w/leaf/list"
+printf 'station=2g\nssid=mesh-bh\nsecurity=sae\npassphrase=hwsim-mesh-1\nrepeater=multiap\ntrunk=1\nmgmt_vid=10\nnetwork=10\nssid=ten\nsecurity=sae\npassphrase=hwsim-ten-1\nbands=2g\nvlan=10\n' > "$w/leaf/list"
 F sh "$S/gt-be98-wifi-gen" -n "$w/leaf/list" -o "$w/leaf/run/gt-be98-wifi/gen" -d "2g=bcawl1 5gl=bcawl90 5gh=bcawl91 6g=bcawl92" -m "2g=$LMAC" \
 	-X "$w/leaf/run/wpa_supplicant" 2> "$w/leaf/gen.err" || { cat "$w/leaf/gen.err"; echo "leaf list refused"; exit 1; }
-check "generator: the leaf's bhtrunk line (no Wi-Fi network in its list)" "bhtrunk bcawl1 -" "$(grep '^bhtrunk ' "$w/leaf/run/gt-be98-wifi/gen/plan")"
+check "generator: the leaf's bhtrunk and bhmgmt lines" "bhtrunk bcawl1 10|bhmgmt 10 brwifi10" "$(grep -E '^(bhtrunk|bhmgmt) ' "$w/leaf/run/gt-be98-wifi/gen/plan" | tr '\n' '|' | sed 's/|$//')"
 printf 'network=10 vlan=10\nnetwork=20 vlan=220\n' > "$w/leaf/networks.conf"
 F sh "$S/gt-be98-l2" uplink bcawl1 && F sh "$S/gt-be98-l2" up wifi brwifi10 bhs 10 && F sh "$S/gt-be98-l2" up wifi brwifi20 bhs 220 ||
 	{ echo "leaf bridges failed"; exit 1; }
@@ -188,6 +194,51 @@ NGL
 check "T5 the loop: the station's own probe came back on rnr2: latched and detached" "rnr2 -" \
 	"$(grep -x rnr2 "$w/leaf/run/gt-be98-lan.tripped" 2>/dev/null) $(mst mleaf rnr2)-"
 check "T5 control: the backhaul VLANs stay" "brwifi10 brwifi20" "$(mst mleaf bhs.10) $(mst mleaf bhs.220)"
+# ---- T7 the leaf's management address ----
+mkdir -p "$w/t7/www" "$w/t7/www8080"; echo mesh-mgmt-ok > "$w/t7/www/index.html"; echo must-not-answer > "$w/t7/www8080/index.html"
+printf 'start 10.10.0.100\nend 10.10.0.110\ninterface eth0\nlease_file %s/t7/udhcpd.leases\npidfile %s/t7/udhcpd.pid\noption subnet 255.255.255.0\noption router 10.10.0.1\noption dns 10.10.0.1\n' "$w" "$w" > "$w/t7/udhcpd.conf"
+: > "$w/t7/udhcpd.leases"
+ip netns exec g10 busybox udhcpd "$w/t7/udhcpd.conf"
+# dhcpcd -B -q -f CONF -c SCRIPT -4 IF, as the box runs it: busybox udhcpc, its events handed to SCRIPT in dhcpcd's environment
+cat > "$w/t7/dhcpcd" <<'X'
+#!/bin/sh
+sc= i=
+while [ $# -gt 0 ]; do case $1 in -c) sc=$2; shift 2 ;; -f) shift 2 ;; -*) shift ;; *) i=$1; shift ;; esac; done
+export DHCPCD_SCRIPT=$sc
+exec busybox udhcpc -f -i "$i" -s "$(dirname "$0")/udhcpc-adapter"
+X
+cat > "$w/t7/udhcpc-adapter" <<'X'
+#!/bin/sh
+case "$1" in
+deconfig) ip -4 addr flush dev "$interface"; reason=EXPIRE "$DHCPCD_SCRIPT" ;;
+bound|renew)
+	m=${mask:-24}
+	ip -4 addr flush dev "$interface"; ip addr add "$ip/$m" dev "$interface"
+	env reason=BOUND new_ip_address="$ip" new_subnet_cidr="$m" new_routers="${router:-}" new_domain_name_servers="${dns:-}" "$DHCPCD_SCRIPT" ;;
+esac
+exit 0
+X
+chmod +x "$w/t7/dhcpcd" "$w/t7/udhcpc-adapter"
+F env GT_BE98_DHCPCD="$w/t7/dhcpcd" sh "$S/gt-be98-mesh" mgmt brwifi10
+check "T7 bhm0p in the management VLAN's leaf bridge, bhm0 no port, the firewall loaded" "brwifi10 - yes" \
+	"$(mst mleaf bhm0p) $(mst mleaf bhm0)- $(ip netns exec mleaf nft list table inet gt_be98_mesh_mgmt > /dev/null 2>&1 && echo yes || echo no)"
+until_ 30 sh -c "ip netns exec mleaf ip -4 addr show dev bhm0 | grep -q 'inet 10.10.0.1[01][0-9]/24'"
+MA=$(ip netns exec mleaf ip -4 addr show dev bhm0 | sed -n 's/.*inet \(10\.10\.0\.[0-9]*\)\/24.*/\1/p' | head -n1)
+check "T7 bhm0 leased an address of VLAN 10 from the root's DHCP server, across the backhaul" yes "$(case "$MA" in 10.10.0.1[01][0-9]) echo yes ;; *) echo "no ($MA)" ;; esac)"
+check "T7 gt-be98-mesh status: the mgmt line with the lease" "mgmt bhm0 brwifi10 10 $MA/24" "$(F sh "$S/gt-be98-mesh" status | grep '^mgmt')"
+check "T7 the leaf's default route via VLAN 10's router, metric 2500" yes "$(ip netns exec mleaf ip route show default | grep -q 'via 10.10.0.1 dev bhm0 .*metric 2500' && echo yes || echo no)"
+ssh-keygen -q -t ed25519 -N '' -f "$w/t7/hostkey"
+ip netns exec mleaf "$(command -v sshd || echo /usr/sbin/sshd)" -f /dev/null -o "HostKey=$w/t7/hostkey" -o Port=22 -o "PidFile=$w/t7/sshd.pid" -o UsePAM=no
+ip netns exec mleaf busybox httpd -p 80 -h "$w/t7/www"; ip netns exec mleaf busybox httpd -p 8080 -h "$w/t7/www8080"
+sleep 1
+check "T7 ssh answers on the management address (from VLAN 10 at the root)" yes "$(ip netns exec g10 sh -c "echo | nc -w 3 $MA 22" 2>/dev/null | grep -q '^SSH-2.0' && echo yes || echo no)"
+check "T7 http answers on the management address" mesh-mgmt-ok "$(ip netns exec g10 curl -s -m 3 "http://$MA/" 2>/dev/null)"
+check "T7 control: port 8080 on the same address is dropped (table inet gt_be98_mesh_mgmt)" "" "$(ip netns exec g10 curl -s -m 3 "http://$MA:8080/" 2>/dev/null)"
+check "T7 control: the leaf's 8080 listener itself works (from the leaf's own loopback)" must-not-answer "$(ip netns exec mleaf curl -s -m 3 "http://127.0.0.1:8080/" 2>/dev/null)"
+F sh "$S/gt-be98-mesh" mgmt -
+check "T7 mgmt -: bhm0 and the firewall gone" "no no" "$(ip netns exec mleaf test -e /sys/class/net/bhm0 && echo yes || echo no) $(ip netns exec mleaf nft list table inet gt_be98_mesh_mgmt > /dev/null 2>&1 && echo yes || echo no)"
+for f in "$w/t7/sshd.pid" "$w/t7/udhcpd.pid"; do [ -f "$f" ] && kill "$(cat "$f")" 2>/dev/null; done
+pkill -f "busybox httpd -p 80 -h $w/t7" 2>/dev/null; pkill -f "busybox httpd -p 8080 -h $w/t7" 2>/dev/null
 # ---- T6 the leaf leaves ----
 kill "$(cat "$w/leaf/wpas.pid")" 2>/dev/null
 until_ 15 sh -c "! ip netns exec mroot test -e /sys/class/net/bh0.10"

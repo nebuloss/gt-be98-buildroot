@@ -167,6 +167,18 @@ check "... no secret in any message" no "$(grep -qE 'SECRETbh12|password3' "$T/e
 printf 'bhtrunk bcawl1\n' > "$PLAN"
 port bcawl1; L2 uplink bcawl1; L2 up wifi brwifi5 bhs 50; L2 up wifi brwifi6 bhs 20
 check "status (leaf): role leaf, uplink bhs with its VIDs" "role leaf|uplink bhs bcawl1 vids=20,50" "$(H status | tr '\n' '|' | sed 's/|$//')"
+# the leaf's management address (D-MESH-OS1): dhcpcd's script, the status line
+printf 'bhtrunk bcawl1 20,50\nbhmgmt 50 brwifi5\n' > "$PLAN"
+check "status (leaf): mgmt line before a lease" "mgmt bhm0 brwifi5 50 -" "$(H status | grep '^mgmt')"
+env reason=BOUND interface=bhm0 new_ip_address=10.50.0.7 new_subnet_cidr=24 new_routers=10.50.0.1 new_domain_name_servers=10.50.0.1 sh "$MESH" 2>> "$T/err"
+check "dhcpcd BOUND on bhm0: lease recorded, default via its router at metric 2500" "mgmt bhm0 brwifi5 50 10.50.0.7/24|yes" \
+	"$(H status | grep '^mgmt')|$(grep -q 'route replace default via 10.50.0.1 dev bhm0 metric 2500' "$T/iplog" && echo yes || echo no)"
+env reason=BOUND interface=bcawl1 new_ip_address=10.9.9.9 new_subnet_cidr=24 sh "$MESH" 2>> "$T/err"
+check "control: an event of another interface is ignored" "mgmt bhm0 brwifi5 50 10.50.0.7/24" "$(H status | grep '^mgmt')"
+env reason=EXPIRE interface=bhm0 sh "$MESH" 2>> "$T/err"
+check "dhcpcd EXPIRE: the lease gone" "mgmt bhm0 brwifi5 50 -" "$(H status | grep '^mgmt')"
+check "the management firewall: replies, ICMP, DHCP, ports 22 80 443 on bhm0, the rest dropped" "yes yes yes yes yes" \
+	"$(sed -n '/^mgmt_nft()/,/^}/p' "$MESH" | grep -q 'ct state established,related accept' && echo yes || echo no) $(grep -q 'iifname "bhm0" meta l4proto { icmp, ipv6-icmp } accept' "$MESH" && echo yes || echo no) $(grep -q 'iifname "bhm0" udp dport 68 accept' "$MESH" && echo yes || echo no) $(grep -q 'MGMT_PORTS="22, 80, 443"' "$MESH" && echo yes || echo no) $(grep -q 'iifname "bhm0" counter drop' "$MESH" && echo yes || echo no)"
 : > "$PLAN"; check "status: role off (no backhaul, no bhtrunk)" "role off" "$(H status)"
 echo "gt-be98-mesh-test: $pass ok, $fail failed"
 [ $fail -eq 0 ]
