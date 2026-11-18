@@ -34,15 +34,15 @@ fixes:
 
 ## Images
 
-Lab-mode candidate `imgint8` (the `RELEASE=1` release images are built from the same
-sources at tagging):
+Lab-mode candidate `imgint9` (the `RELEASE=1` release images are built from the same
+sources at tagging). `imgint9` = `imgint8` with only the web UI replaced (the perf fix below):
 
 | File | sha256 |
 |---|---|
-| `rootfs.squashfs` | `d992b0df66c32ee9a339097cd01a52cc6b32433d701d4f586a3571599aebd763` |
-| `ml-bootfs.itb` | `67b32e79c29e8726ce8fd887d010cc8726a15f66c0c8c1d580c20265aa577e9e` |
+| `rootfs.squashfs` | `ad727bdb6c19cc90ab1ee16d06ccff8e35f87c360b4db466a6520e6846942416` |
+| `ml-bootfs.itb` | `820ed180037e78b8bc04f5c0ca854c9088d4f2110eeea2a429a3203dd120a958` |
 
-Build id (DT): `20261117T224716Z-241fcf498cfa-rw-jffs`
+Build id (DT): `20261118T003027Z-4a6b4ec0da0f-rw-jffs`
 
 **Candidate source state:** imgint7 is the image every q302 arm ran on.
 imgint8 = imgint7 + the PPPoE uplink length-bound fix (q303) + the IPv6 state past DAD.
@@ -58,7 +58,7 @@ imgint8 = imgint7 + the PPPoE uplink length-bound fix (q303) + the IPv6 state pa
 | gt-be98-buildroot | `br-int8-2026-11-17` `17e7a23` (= `br-int7` `ef45815` + `br-gw6-v6state` `6ed78d1` + the open-ethernet pin) |
 | open-wifi (`bca_pcie_ipc.ko`) | `om-mesh-int-2026-11-17` `4040667a` |
 | open-ethernet (Runner, kernel series, `rtl8372.ko`) | `oe-int2-2026-11-17` `8a18fa5` (= `oe-int` `199918f` + the PPPoE uplink bound `12183e8`) |
-| web UI (gt-be98-webui-go) | `wu-mesh-int-2026-11-17` `1cebbe7` |
+| web UI (gt-be98-webui-go) | `wu-mesh-int-2026-11-17` `7c58a5f` |
 | hostapd | 2.12 with the local patches `0001`, `0002`, `0003` (new: the `no_pri_sec_switch` config item) |
 | Linux / Buildroot | 7.2.9 / 2026.08 (kernel configuration unchanged since RC7) |
 
@@ -286,6 +286,12 @@ The web UI follows the OS:
   a gateway backhaul VID is refused.
 
 Box: q296 webui-catchup ALL PASS.
+
+**Perf fix (RC11 re-check):** the admin-address watcher ran `rc-service gt-be98-gw features` and
+`gt-be98-gw status` every 15 s even with no gateway network. That cost +23–27 % cores/Gbit on
+5gl/6g in the RC11 perf smoke, with throughput unchanged. It now asks the OS only when the networks
+file has a gateway network with management on (`wu-gw-watch-cpu-2026-11-18` `59df720`). The box
+re-check on `imgint9` (perf smoke, UI degraded-apply) is to be filled in.
 
 ## Box evidence (integration images unless noted)
 
