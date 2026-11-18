@@ -1,13 +1,15 @@
-# GT-BE98 mainline OS 1.0-rc11 - release notes (DRAFT)
+# GT-BE98 mainline OS 1.0-rc11 - release notes
 
-Date: 2026-11-17 · Status: **draft for release candidate 11**, not tagged.
+Date: 2026-11-18 · Status: **release candidate 11**, tagged `gt-be98-rc11`.
 
 Evidence is named by the orchestrator's queue (`qNNN`). The run directories
 stay on the orchestrator's machine and are not in this repository. Every
 number comes with the run that measured it, and "not measured" never means
-0. Integration images: `imgint1` … `imgint7` are lab-mode builds of the
-integration branches. Each arm ran on the image named next to it. RC11 is
-built as `imgint8`.
+0. Integration images: `imgint1` … `imgint9` are lab-mode builds of the
+integration branches; each arm ran on the image named next to it. Lab
+image `imgint9` is the lab-mode build of the RC11 sources (same commits,
+lab keys). The release images below are the `RELEASE=1` build of those
+sources.
 
 RC11 is the first candidate since RC10 that adds whole features, not only
 fixes:
@@ -34,28 +36,37 @@ fixes:
 
 ## Images
 
-Lab-mode candidate `imgint9` (the `RELEASE=1` release images are built from the same
-sources at tagging). `imgint9` = `imgint8` with only the web UI replaced (the perf fix below):
-
 | File | sha256 |
 |---|---|
-| `rootfs.squashfs` | `ad727bdb6c19cc90ab1ee16d06ccff8e35f87c360b4db466a6520e6846942416` |
-| `ml-bootfs.itb` | `820ed180037e78b8bc04f5c0ca854c9088d4f2110eeea2a429a3203dd120a958` |
+| `rootfs.squashfs` | `@RC11_ROOTFS@` |
+| `ml-bootfs.itb` | `@RC11_ITB@` |
 
-Build id (DT): `20261118T003027Z-4a6b4ec0da0f-rw-jffs`
+Build id (DT): `@RC11_BID@`
 
-**Candidate source state:** imgint7 is the image every q302 arm ran on.
-imgint8 = imgint7 + the PPPoE uplink length-bound fix (q303) + the IPv6 state past DAD.
+Built with `RELEASE=1` (`ml-bootfs.info`: `release mode: yes`).
 
-- **imgint7 build id:** `20261117T212409Z-138353a2b783-rw-jffs`
-- **imgint7 rootfs:**
-  `3d978e0f7914ccc3cc20902433ff3744f6f0b2c99ef0d30915f3068fc7a0eb88`
+- **Release check:** `release-check.sh` @RC11_CHECK@ with RC7's lab-pattern list.
+- **Lab control:** the lab image imgint9 fails the same check with @RC11_CTL@ findings, as it should.
+- **Exact-pattern list:** @RC11_EXACT@
 
-**Built from** (candidate; tags `gt-be98-rc11` when released):
+**These images are a TEST build.** Their `SSH_AUTHORIZED_KEYS` is the
+lab's public key, so they are never handed over. A hand-over build is the
+same sources with the recipient's keys, checked again with
+`release-check.sh`. The images contain no SSH host keys, no web UI
+password and no rootfs URL. They contain proprietary vendor firmware, so
+they are handed over privately and never published (`docs/RELEASE-BUILD.md`).
+
+Lab image imgint9: `rootfs.squashfs`
+`ad727bdb6c19cc90ab1ee16d06ccff8e35f87c360b4db466a6520e6846942416`,
+build id `20261118T003027Z-4a6b4ec0da0f-rw-jffs`. It is imgint8 (the image
+of the regression set and the soak, q305) with only the web UI replaced
+(the watcher change below).
+
+Built from (`gt-be98-rc11` tags):
 
 | Component | Commit |
 |---|---|
-| gt-be98-buildroot | `br-int8-2026-11-17` `17e7a23` (= `br-int7` `ef45815` + `br-gw6-v6state` `6ed78d1` + the open-ethernet pin) |
+| gt-be98-buildroot | `br-rc11-r-2026-11-18` (= `br-int8-2026-11-17` `17e7a23` + these notes) |
 | open-wifi (`bca_pcie_ipc.ko`) | `om-mesh-int-2026-11-17` `4040667a` |
 | open-ethernet (Runner, kernel series, `rtl8372.ko`) | `oe-int2-2026-11-17` `8a18fa5` (= `oe-int` `199918f` + the PPPoE uplink bound `12183e8`) |
 | web UI (gt-be98-webui-go) | `wu-mesh-int-2026-11-17` `7c58a5f` |
@@ -137,9 +148,7 @@ networks cost no Runner router-MAC filter.
 | q300 | imgint6 | GW2 PASS (Wi-Fi gateway network, isolate cuts a running flow, management reachable before isolate; the listener fix) |
 | q302 | imgint7 | GW1 + GW2 PASS again (regression after the mesh changes) |
 | q301 | imgint6 | IPv6: S, GW5M (management over IPv6), GW5D (DHCPv6), GW5S (stop/start), GW5L (WAN revert) and the wire check (nothing sent to other hosts) all PASS |
-
-GW5 (SLAAC peer) passes its address/default/RDNSS checks. Its `in_drop`
-reading is open (see Known open).
+| q306 | imgint8 | IPv6 r10 FULL PASS: GW5 (SLAAC peer: address, default, RDNSS) GW5M GW5D GW5S GW5L WIRE |
 
 ### PPPoE WAN (OS `gt-be98-wan`, `gt-be98-gw`, web UI)
 
@@ -287,11 +296,14 @@ The web UI follows the OS:
 
 Box: q296 webui-catchup ALL PASS.
 
-**Perf fix (RC11 re-check):** the admin-address watcher ran `rc-service gt-be98-gw features` and
-`gt-be98-gw status` every 15 s even with no gateway network. That cost +23–27 % cores/Gbit on
-5gl/6g in the RC11 perf smoke, with throughput unchanged. It now asks the OS only when the networks
-file has a gateway network with management on (`wu-gw-watch-cpu-2026-11-18` `59df720`). The box
-re-check on `imgint9` (perf smoke, UI degraded-apply) is to be filled in.
+**Admin-address watcher (a cost reduction):** while armed, the watcher ran
+`rc-service gt-be98-gw features` and `gt-be98-gw status` every 15 s even with no
+gateway network (0.65 CPU-seconds and 333 forks per pass, measured in q307). It now
+asks the OS only when the networks file has a gateway network with management on
+(`wu-gw-watch-cpu-2026-11-18` `59df720`). This is NOT the root cause of the q305
+cores/Gbit dip: the watcher was never armed in q305 or q307, the dip was not
+reproduced on imgint8 (q307, fresh boot) nor on imgint9 (q309, a replay of the whole
+q305 sequence), and its cause is unidentified.
 
 ## Box evidence (integration images unless noted)
 
@@ -313,10 +325,16 @@ re-check on `imgint9` (perf smoke, UI degraded-apply) is to be filled in.
 | q301 | imgint6 | G6b T/WIRE PASS, GW4 REFUTED (D42); IPv6 S/GW5M/GW5D/GW5S/GW5L/WIRE PASS; PPPoE downlink offload |
 | q302 | imgint7 | mesh M6 + driver M6L PASS; GW1 + GW2 regression PASS; fixed-primary PASS |
 | q303 | imgint7 + bench ko | **PPPoE uplink offloaded:** O-up LON 0.09 cores/Gbit (CPU fraction 0.000) vs LOFF 1.13; the BD sweep gives the largest offloaded IP packet 1492 B exactly (max_pkt_len 1514), the fixed rule's prediction, refuting the old one. The remaining REFUTED cells (capture count, H1 719/1000, bd_fit) are capture artefacts of the arm |
+| q304 | imgint8 | fixed-primary PASS; GW1 + GW2 PASS |
+| q305 | imgint8 | **RC11 regression set:** UI degraded-apply PASS, L1 two cycles real 0/0, WIFISTOP PASS + RESTORE-OK, soak DRY-OK, baselines PASS; **30-minute release soak PASS** (identity: bca `ef62b85c`, runner `c88797dd`). Perf smoke: throughput OK on every row, but cores/Gbit +23-27 % on 5gl dn/up and 6g up vs RC10 (not reproduced since, see q307/q309) |
+| q306 | imgint8 | IPv6 r10 FULL PASS (GW5 GW5M GW5D GW5S GW5L WIRE); PPPoE offload r8: RL PKG S PU HC H1 BD WIRE PASS, uplink and downlink offloaded at 0.09 cores/Gbit |
+| q307 | imgint8 | CPU A/B: the web UI watcher never armed (0 bursts), every window cold, stopped-UI ratios 0.96-1.07: the q305 dip not reproduced |
+| q309 | imgint9 | perf-attrib: the full q305 sequence replayed (UI PASS, WIFISTOP RESTORE-OK, DRY-OK, baselines PASS); **NO DIP**: 5gl dn 0.993, 5gl up 1.004, 6g up 1.021 vs RC10, 0 hot windows of 18. Pre-registered outcome: RC11 accepted on perf |
+| q310 | imgint9 | WAN admin reach: @Q310@ |
 
-**Regression set and 30-minute release soak** (on imgint8):
-`logs/prereg/RC11-REGRESSION-QUEUE.sh` + `logs/prereg/rc11-soak.sh` in the
-lab tools, run once. Results to be filled in.
+The web UI-only delta between imgint8 (the regression set and the soak) and imgint9 was re-checked in q309.
+
+**Release-image box phases:** @RC11_PHASES@
 
 ## Known open
 
@@ -340,8 +358,11 @@ lab tools, run once. Results to be filled in.
   move.
 - 2.5 Gbit/s line rate and more than one cabled jack remain untested.
 
-**IPv6 on gateway networks:** GW5's `in_drop` reading is open. The IPv6
-lane decides whether it is a product fix for RC11.
+**Web UI listener on a plain boot:** when no admin address resolves at start, the web UI
+listens once on the wildcard address (port 80), so the per-address admin restriction is
+not enforced; the firewall chains still decide per ingress interface. The WAN side is
+checked in q310. The fix (loopback + the watcher always, a logged wildcard fallback after
+90 s, `wu-admin-listen-2026-11-18` `5bcfb7f`) goes into the image after RC11.
 
 **Carried over from RC10**
 - WPS overlap detection is unproven.
