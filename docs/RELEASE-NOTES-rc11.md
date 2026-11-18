@@ -38,16 +38,16 @@ fixes:
 
 | File | sha256 |
 |---|---|
-| `rootfs.squashfs` | `@RC11_ROOTFS@` |
-| `ml-bootfs.itb` | `@RC11_ITB@` |
+| `rootfs.squashfs` | `eced8caad4405399707af2cb04a2812600ba2ed1a9d50e718faf373b64c7f572` |
+| `ml-bootfs.itb` | `8c014162f8745909bf4448ed12c692a947047d14b896b3280c10695903aff965` |
 
-Build id (DT): `@RC11_BID@`
+Build id (DT): `20261118T021143Z-a115ae310a1a-rw-jffs`
 
 Built with `RELEASE=1` (`ml-bootfs.info`: `release mode: yes`).
 
-- **Release check:** `release-check.sh` @RC11_CHECK@ with RC7's lab-pattern list.
-- **Lab control:** the lab image imgint9 fails the same check with @RC11_CTL@ findings, as it should.
-- **Exact-pattern list:** @RC11_EXACT@
+- **Release check:** `release-check.sh` returned PASS (selftest 21/21) with RC7's lab-pattern list.
+- **Lab control:** the lab image imgint9 fails the same check with 15 findings, as it should.
+- **Exact-pattern list:** finds only the lab public key, as in RC7-RC10.
 
 **These images are a TEST build.** Their `SSH_AUTHORIZED_KEYS` is the
 lab's public key, so they are never handed over. A hand-over build is the
@@ -66,7 +66,7 @@ Built from (`gt-be98-rc11` tags):
 
 | Component | Commit |
 |---|---|
-| gt-be98-buildroot | `br-rc11-r-2026-11-18` (= `br-int8-2026-11-17` `17e7a23` + these notes) |
+| gt-be98-buildroot | `br-rc11-r-2026-11-18` (= `br-int8-2026-11-17` `17e7a23` + these notes + RC10's notes from `mainline-os`; the release images were built from `2357267`, which differs only in `docs/`) |
 | open-wifi (`bca_pcie_ipc.ko`) | `om-mesh-int-2026-11-17` `4040667a` |
 | open-ethernet (Runner, kernel series, `rtl8372.ko`) | `oe-int2-2026-11-17` `8a18fa5` (= `oe-int` `199918f` + the PPPoE uplink bound `12183e8`) |
 | web UI (gt-be98-webui-go) | `wu-mesh-int-2026-11-17` `7c58a5f` |
@@ -330,11 +330,11 @@ q305 sequence), and its cause is unidentified.
 | q306 | imgint8 | IPv6 r10 FULL PASS (GW5 GW5M GW5D GW5S GW5L WIRE); PPPoE offload r8: RL PKG S PU HC H1 BD WIRE PASS, uplink and downlink offloaded at 0.09 cores/Gbit |
 | q307 | imgint8 | CPU A/B: the web UI watcher never armed (0 bursts), every window cold, stopped-UI ratios 0.96-1.07: the q305 dip not reproduced |
 | q309 | imgint9 | perf-attrib: the full q305 sequence replayed (UI PASS, WIFISTOP RESTORE-OK, DRY-OK, baselines PASS); **NO DIP**: 5gl dn 0.993, 5gl up 1.004, 6g up 1.021 vs RC10, 0 hot windows of 18. Pre-registered outcome: RC11 accepted on perf |
-| q310 | imgint9 | WAN admin reach: @Q310@ |
+| q310 | imgint9 | **WAN admin reach PASS:** web UI :80 and SSH :22 from the WAN side dropped (the WAN path live, ping 5/5; the iifname drop rule present); the management path connects on both ports. That boot's web UI listened on the box's management address, not the wildcard |
 
 The web UI-only delta between imgint8 (the regression set and the soak) and imgint9 was re-checked in q309.
 
-**Release-image box phases:** @RC11_PHASES@
+**Release-image box phases:** queued after these notes (`RC11-RELEASE-PHASES-QUEUE.sh`: first and second phases on the release images, then the lab image restored); result to be added.
 
 ## Known open
 
@@ -361,7 +361,7 @@ The web UI-only delta between imgint8 (the regression set and the soak) and imgi
 **Web UI listener on a plain boot:** when no admin address resolves at start, the web UI
 listens once on the wildcard address (port 80), so the per-address admin restriction is
 not enforced; the firewall chains still decide per ingress interface. The WAN side is
-checked in q310. The fix (loopback + the watcher always, a logged wildcard fallback after
+checked in q310: PASS (WAN :80/:22 dropped), and on that boot the listener bound the management address, not the wildcard. The fix (loopback + the watcher always, a logged wildcard fallback after
 90 s, `wu-admin-listen-2026-11-18` `5bcfb7f`) goes into the image after RC11.
 
 **Carried over from RC10**
