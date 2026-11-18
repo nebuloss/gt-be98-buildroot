@@ -78,6 +78,9 @@ mutant "gw6: a box address overlap not refused" sbin/gt-be98-gw 's/v6calc ov "\$
 mutant "gw6: DNS [::] only (a ULA /64 gets no RDNSS, q298)" sbin/gt-be98-gw 's/option6:dns-server,\[::\],\[fd00::\]/option6:dns-server,[::]/g' gt-be98-gw-test.sh
 mutant "gw6: status says active from the plan (address not checked)" sbin/gt-be98-gw 's/^\t\tif \[ "\$v" = active \]; then$/\t\tif false; then/' gt-be98-gw-test.sh
 mutant "gw6: a DAD failure reported as starting" sbin/gt-be98-gw 's/^\t\*dadfailed\*) echo dadfailed ;;$/\t*dadfailed*) echo tentative ;;/' gt-be98-gw-test.sh
+mutant "gw: mgmt-addrs lists a tentative IPv6 address" sbin/gt-be98-gw 's/case "\$l" in \*tentative\*|\*dadfailed\*) ;; \*) echo "mgmt/case "$l" in *dadfailed*) ;; *) echo "mgmt/' gt-be98-gw-test.sh
+mutant "gw: mgmt-addrs ignores mgmt 0" sbin/gt-be98-gw 's/^\t\t\[ "\$M_MGMT" = 1 \] || continue$/\t\t:/' gt-be98-gw-test.sh
+mutant "gw: mgmt-addrs forks sed per network (the cost it exists to avoid)" sbin/gt-be98-gw 's/^\t\tmg_read "\$GW\/net\/\$id"$/\t\tmg_read "$GW\/net\/$id"; M_STATE=$(st_get "$id" state)/' gt-be98-gw-test.sh
 mutant "gw6: slaac rendered stateful" sbin/gt-be98-gw 's/constructor:\$b,ra-stateless,64/constructor:$b,64/' gt-be98-gw-test.sh
 mutant "gw6: IPv6 routes touched with no IPv6 ever applied" sbin/gt-be98-gw 's/^\telif grep -qs .\^\\(fwd6\\|pd6route \.\*\\)\$. "\$GW\/applied"; then$/\telse/' gt-be98-gw-test.sh
 mutant "l2: disable_ipv6 rewritten on a held bridge" sbin/gt-be98-l2 's/\[ -e "\$GW_HOLD\/\$b" \] || ipv6_off "\$b"/ipv6_off "$b"/' gt-be98-l2-test.sh

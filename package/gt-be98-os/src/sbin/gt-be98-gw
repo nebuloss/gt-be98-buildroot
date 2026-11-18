@@ -37,7 +37,10 @@
 #                         <network id|-> <mac> <ip> <expiry epoch|0> <name|*>
 #                         static=<0|1>" (static: the lease is a reservation of
 #                         the static leases file; the web UI's read-only list)
-#   gt-be98-gw features   "features gateway ipv6" (the web UI's handshake: it
+#   gt-be98-gw mgmt-addrs one line per admin listen address of the networks
+#                         with management on: "mgmt <id> inet|inet6 <address>
+#                         <bridge>" (cheap: own files only, at most one fork)
+#   gt-be98-gw features   "features gateway ipv6 mgmt-addrs" (the web UI's handshake: it
 #                         offers the gateway mode, and its IPv6 fields, only
 #                         when the OS says so)
 #   gt-be98-gw nft-text <wan>     the rule set of the current state (tests)
@@ -1408,13 +1411,80 @@ cmd_leases() {
 	done < "$GW/leases"
 }
 
+# ---- mgmt-addrs: the admin UI's listen set, cheap (the web UI asks every 15 s) ----------
+# Pure shell over gt-be98-gw's own files ($GW/net/<id>, $GW/applied): no WAN
+# context, no gt-be98-fwd, no sed/grep/awk; at most ONE fork, `ip -6 -o addr
+# show`, and only when a candidate network has its IPv6 applied (DAD check).
+# One line per address, network id order (numeric):
+#   mgmt <id> inet <ipv4 gateway address> <bridge>
+#   mgmt <id> inet6 <p64>::1 <bridge>
+# for every running (local|routed) network with mgmt 1; inet6 only while its
+# IPv6 is active AND its address is applied and past DAD (as status's
+# "active"). Nothing printed (rc 0) when there is none.
+mg_read() {	# <state file>: M_STATE M_BRIDGE M_CIDR M_MGMT M_V6 M_ADDR6 (pure shell)
+	local k v
+	M_STATE= M_BRIDGE= M_CIDR= M_MGMT= M_V6= M_ADDR6=
+	while read -r k v; do
+		case "$k" in
+		state) M_STATE=$v ;; bridge) M_BRIDGE=$v ;; cidr) M_CIDR=$v ;; mgmt) M_MGMT=$v ;;
+		v6) M_V6=$v ;; addr6) M_ADDR6=$v ;;
+		esac
+	done < "$1"
+}
+cmd_mgmt_addrs() {
+	local f id ids= sorted= x placed out k i b a ipout= need6= l
+	for f in "$GW/net"/*; do
+		[ -f "$f" ] || continue
+		id=${f##*/}
+		case "$id" in ''|*[!0-9]*) continue ;; esac
+		ids="$ids $id"
+	done
+	[ -n "$ids" ] || return 0
+	# numeric insertion sort (at most GW_MAX ids)
+	for id in $ids; do
+		out= placed=
+		for x in $sorted; do
+			if [ -z "$placed" ] && [ "$id" -lt "$x" ]; then out="$out $id"; placed=1; fi
+			out="$out $x"
+		done
+		[ -n "$placed" ] || out="$out $id"
+		sorted=$out
+	done
+	# which networks have an applied IPv6 address (from $GW/applied)
+	if [ -r "$GW/applied" ]; then
+		while read -r k i b a; do
+			[ "$k" = net6 ] && need6="$need6 $i:$b:$a"
+		done < "$GW/applied"
+	fi
+	for id in $sorted; do
+		mg_read "$GW/net/$id"
+		case "$M_STATE" in local|routed) ;; *) continue ;; esac
+		[ "$M_MGMT" = 1 ] || continue
+		case "$M_CIDR" in */*) echo "mgmt $id inet ${M_CIDR%/*} $M_BRIDGE" ;; esac
+		[ "$M_V6" = active ] && [ -n "$M_ADDR6" ] || continue
+		case " $need6 " in *" $id:$M_BRIDGE:$M_ADDR6 "*) ;; *) continue ;; esac
+		# one `ip` for all networks, on the first one that needs it
+		[ -n "$ipout" ] || ipout=$(ip -6 -o addr show scope global 2>/dev/null; echo .)
+		while IFS= read -r l; do
+			case "$l" in
+			*" $M_BRIDGE "*" inet6 $M_ADDR6 "*)
+				case "$l" in *tentative*|*dadfailed*) ;; *) echo "mgmt $id inet6 ${M_ADDR6%/*} $M_BRIDGE" ;; esac
+				break ;;
+			esac
+		done <<-EOF
+		$ipout
+		EOF
+	done
+}
+
 c=${1:-}; [ $# -gt 0 ] && shift
 case "$c" in
 apply|reroute) lock || exit 1; cmd_apply; r=$?; unlock; exit $r ;;
 stop)	lock || exit 1; cmd_stop; r=$?; unlock; exit $r ;;
 status)	cmd_status ;;
 leases)	cmd_leases ;;
-features) echo "features gateway ipv6" ;;
+features) echo "features gateway ipv6 mgmt-addrs" ;;
+mgmt-addrs) cmd_mgmt_addrs ;;
 nft-text) [ $# = 1 ] || exit 2; nft_text "$1" ;;
 dnsmasq-text) wan_ctx; dnsmasq_text ;;
 hosts-text) hosts_text ;;

@@ -39,7 +39,7 @@ case "$*" in
 "-4 route show default dev "*)	cat "$FAKE/route-$6" 2>/dev/null ;;
 "link set dev "*" address "*)	[ -f "$FAKE/refuse-mac" ] && exit 2; mkdir -p "$FAKE/sys/$4"; echo "$6" > "$FAKE/sys/$4/address" ;;
 "-6 -o addr show dev "*)	while read -r d c; do [ "$d" = "$6" ] || continue; fl=; [ -f "$FAKE/flags6-${c%/*}" ] && fl=" $(cat "$FAKE/flags6-${c%/*}")"; echo "1: $d    inet6 $c scope global$fl"; done < "$FAKE/addrs6" ;;
-"-6 -o addr show scope global")	n=1; while read -r d c; do echo "$n: $d    inet6 $c scope global"; n=$((n+1)); done < "$FAKE/addrs6" ;;
+"-6 -o addr show scope global")	n=1; while read -r d c; do fl=; [ -f "$FAKE/flags6-${c%/*}" ] && read -r fl < "$FAKE/flags6-${c%/*}" && fl=" $fl"; echo "$n: $d    inet6 $c scope global$fl"; n=$((n+1)); done < "$FAKE/addrs6" ;;
 "-6 addr replace "*)	[ -f "$FAKE/refuse-addr6" ] && exit 2; grep -vx "$6 $4" "$FAKE/addrs6" > "$FAKE/a6.new"; echo "$6 $4" >> "$FAKE/a6.new"; mv "$FAKE/a6.new" "$FAKE/addrs6" ;;
 "-6 addr del "*)	grep -vx "$6 $4" "$FAKE/addrs6" > "$FAKE/a6.new"; mv "$FAKE/a6.new" "$FAKE/addrs6" ;;
 "-6 route show default dev "*)	cat "$FAKE/route6-$6" 2>/dev/null ;;
@@ -105,7 +105,7 @@ run apply; check "no networks file: rc 0, nothing touched (no ip addr/rule, IPv6
 NETS "network=3 name=Up vlan=30 subnet=192.168.30.1/24" "network=5 name=V vlan=50 subnet=192.168.50.1/24 mode=vlan"
 run apply; check "subnets without mode=gateway (D-GW1): nothing touched" "0 " "$rc $(log '^(ip (addr|rule)|nft|dnsmasq)')"
 check "... ip_forward untouched" 0 "$(cat "$T/ip_forward")"
-check "features: gateway and ipv6 (the web UI's handshake)" "features gateway ipv6" "$(sh "$GWT" features)"
+check "features: gateway and ipv6 (the web UI's handshake)" "features gateway ipv6 mgmt-addrs" "$(sh "$GWT" features)"
 # 2. one gateway network on its bridge (gt-be98-l2 runs it with trunk -)
 NETS "network=3 name=Up vlan=30 subnet=192.168.30.1/24" "network=4 name=Lab vlan=40 subnet=192.168.40.1/24 mode=gateway isolate=0 mgmt=1"
 echo "brwifi100004 - 40 lan" > "$T/l2list"
@@ -484,6 +484,35 @@ cp "$G/applied" "$T/applied.keep"; sed -i '/^net6 4 /d' "$G/applied"
 check "status: planned but not applied yet -> 'starting'" starting "$(sh "$GWT" status | awk '$1 == "net6" && $2 == 4 { print $4 }')"
 cp "$T/applied.keep" "$G/applied"
 check "control: applied and past DAD -> active" active "$(sh "$GWT" status | awk '$1 == "net6" && $2 == 4 { print $4 }')"
+
+# mgmt-addrs: the admin listen set, from gt-be98-gw's own files, at most one fork (ip)
+mkdir -p "$T/only"; cp "$T/bin/ip" "$T/only/ip"; sed -i '2i echo "FORK ip $*" >> "$FAKE/forks"' "$T/only/ip"
+MA() { : > "$T/forks"; env PATH="$T/only" /bin/sh "$GWT" mgmt-addrs 2> "$T/ma.err"; }
+check "mgmt-addrs: both networks' IPv4 and their usable IPv6 ::1, network id order" \
+	"mgmt 4 inet 192.168.40.1 brwifi100004|mgmt 4 inet6 2001:db8:aa00:7::1 brwifi100004|mgmt 6 inet 10.41.0.1 brwifi7|mgmt 6 inet6 2001:db8:aa00:1::1 brwifi7" \
+	"$(MA | tr '\n' '|' | sed 's/|$//')"
+check "mgmt-addrs: with PATH holding only ip: no other command needed, ONE fork (ip), nothing on stderr" "1 " \
+	"$(grep -c . "$T/forks") $(cat "$T/ma.err")"
+check "mgmt-addrs: the same set as status says active (inet6 only for net6 ... active)" \
+	"$(sh "$GWT" status | awk '$1 == "net6" && $4 == "active" { print $2 }' | sort -n | tr '\n' ' ')" \
+	"$(MA | awk '$3 == "inet6" { print $2 }' | tr '\n' ' ')"
+echo tentative > "$T/flags6-2001:db8:aa00:7::1"
+check "mgmt-addrs: a tentative address is not listed (its IPv4 still is)" "mgmt 4 inet 192.168.40.1 brwifi100004|mgmt 6 inet 10.41.0.1 brwifi7|mgmt 6 inet6 2001:db8:aa00:1::1 brwifi7" \
+	"$(MA | tr '\n' '|' | sed 's/|$//')"
+rm -f "$T/flags6-2001:db8:aa00:7::1"
+cp "$G/net/6" "$T/net6.keep"; sed -i 's/^mgmt .*/mgmt 0/' "$G/net/6"
+check "mgmt-addrs: mgmt 0 -> that network not listed" "mgmt 4 inet 192.168.40.1 brwifi100004|mgmt 4 inet6 2001:db8:aa00:7::1 brwifi100004" "$(MA | tr '\n' '|' | sed 's/|$//')"
+sed -i 's/^mgmt .*/mgmt 1/; s/^state .*/state inactive/' "$G/net/6"
+check "mgmt-addrs: an inactive network not listed" "mgmt 4 inet 192.168.40.1 brwifi100004|mgmt 4 inet6 2001:db8:aa00:7::1 brwifi100004" "$(MA | tr '\n' '|' | sed 's/|$//')"
+cp "$T/net6.keep" "$G/net/6"
+cp "$G/applied" "$T/applied.keep2"; sed -i '/^net6 /d' "$G/applied"
+check "mgmt-addrs: IPv6 not applied -> IPv4 only, and NO fork at all" "mgmt 4 inet 192.168.40.1 brwifi100004|mgmt 6 inet 10.41.0.1 brwifi7|0" \
+	"$(MA | tr '\n' '|')$(grep -c . "$T/forks")"
+cp "$T/applied.keep2" "$G/applied"
+mkdir -p "$T/gw10/net"; printf 'state routed\nbridge brwifi10\ncidr 10.10.0.1/24\nmgmt 1\nv6 off\n' > "$T/gw10/net/10"; cp "$G/net/4" "$T/gw10/net/4"; : > "$T/gw10/applied"
+check "mgmt-addrs: numeric order (4 before 10, not the glob's lexical one)" "4 10" \
+	"$(GT_BE98_GW_STATE="$T/gw10" env PATH="$T/only" /bin/sh "$GWT" mgmt-addrs | awk '$3 == "inet" { printf "%s ", $2 }' | sed 's/ $//')"
+mkdir -p "$T/gw0"; check "mgmt-addrs: no network: nothing, rc 0" "0 " "$(GT_BE98_GW_STATE="$T/gw0" env PATH="$T/only" /bin/sh "$GWT" mgmt-addrs; echo "$? ")"
 check "status: the IPv4 line format unchanged (the web UI's parser)" "net 4 routed brwifi100004 192.168.40.1/24 isolate=0 mgmt=1" \
 	"$(sh "$GWT" status | grep '^net 4 ' | cut -d' ' -f1-7)"
 # c. a renew (same prefix, new lifetimes): the lifetimes follow, nothing else
@@ -602,7 +631,7 @@ rm -f "$T/run/gt-be98-wifi/gen/plan"; sh "$GWT" apply > /dev/null 2>&1
 check "control: no bhtrunk line: network 4 not refused for it" no "$(sh "$GWT" status | grep '^net 4 ' | grep -q 'mesh leaf' && echo yes || echo no)"
 check "gt-be98-os.mk: the tools, the service, the dhcpcd hook installed; gt-be98-gw in the default runlevel" "yes yes yes yes" \
 	"$(yn grep -qE 'gt-be98-l2 gt-be98-fwd gt-be98-gw[ ;]' "$S/gt-be98-os.mk") $(yn grep -q 'gt-be98-hostkeys gt-be98-wan gt-be98-gw' "$S/gt-be98-os.mk") $(yn grep -q 'dhcpcd-hooks/09-gt-be98-gw$' "$S/gt-be98-os.mk") $(yn grep -q 'gt-be98-lan gt-be98-gw; do' "$S/gt-be98-os.mk")"
-check "the service answers features (an extra command, so when stopped too)" "features|features gateway ipv6" \
+check "the service answers features (an extra command, so when stopped too)" "features|features gateway ipv6 mgmt-addrs" \
 	"$(GT_BE98_GW="$GWT"; extra_commands=; . "$S/src/init.d/gt-be98-gw"; echo "$extra_commands|$(features)")"
 check "no routed owner writes ip_forward itself any more (gt-be98-fwd only)" "" \
 	"$(grep -ln 'ip_forward=\|net.ipv4.ip_forward' "$S/src/init.d/"* "$S/src/sbin/"* | grep -v 'gt-be98-fwd$' | tr '\n' ' ')"
