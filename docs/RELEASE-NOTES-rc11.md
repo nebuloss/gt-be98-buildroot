@@ -364,6 +364,10 @@ not enforced; the firewall chains still decide per ingress interface. The WAN si
 checked in q310: PASS (WAN :80/:22 dropped), and on that boot the listener bound the management address, not the wildcard. The fix (loopback + the watcher always, a logged wildcard fallback after
 90 s, `wu-admin-listen-2026-11-18` `5bcfb7f`) goes into the image after RC11.
 
+**Repository hygiene:** the RC11 cleanup commits remove lab hostnames, a lab address and real device MACs from the
+tracked files; some older commit messages already on public branches still name lab hosts or devices, and stay
+in the history (removing them would need a force push, which is not done).
+
 **Carried over from RC10**
 - WPS overlap detection is unproven.
 - IO-coherent PCIe stays bench-only.

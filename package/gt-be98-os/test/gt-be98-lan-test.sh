@@ -170,8 +170,8 @@ IPOUT='7: pppoe-wan    inet 198.51.100.10 peer 198.51.100.1/32 scope global pppo
 [ -z "$(lan_ip nat_clash pppoe-wan)" ] && ok "nat_clash: a PPPoE address outside the LAN -> none" || ko "nat_clash: false PPPoE clash"
 IPOUT='7: pppoe-wan    inet 192.168.50.9 peer 198.51.100.1/32 scope global pppoe-wan'
 case "$(lan_ip nat_clash pppoe-wan)" in *"WAN address 192.168.50.9/32"*) ok "nat_clash: a PPPoE address inside the LAN -> refused (was never seen)";; *) ko "nat_clash: PPPoE clash not seen: [$(lan_ip nat_clash pppoe-wan)]";; esac
-IPOUT='2: rnr0    inet 10.0.0.95/24 brd 10.0.0.255 scope global rnr0'
-[ "$(lan_ip wan_addrs rnr0)" = 10.0.0.95/24 ] && ok "wan_addrs: control: a plain address keeps its prefix" || ko "wan_addrs plain: got [$(lan_ip wan_addrs rnr0)]"
+IPOUT='2: rnr0    inet 192.0.2.95/24 brd 192.0.2.255 scope global rnr0'
+[ "$(lan_ip wan_addrs rnr0)" = 192.0.2.95/24 ] && ok "wan_addrs: control: a plain address keeps its prefix" || ko "wan_addrs plain: got [$(lan_ip wan_addrs rnr0)]"
 ov 0 192.168.50.9 192.168.50.1/24
 ov 1 198.51.100.10 192.168.50.1/24
 
@@ -828,10 +828,10 @@ netl() {	# lan_net_list with Wi-Fi running ($1 = its WIFI_VLANS, "-" = Wi-Fi sto
 		shift; "$@"
 	)
 }
-printf '# /etc/gt-be98-networks.conf - written by the web UI\nnetwork=1 name=Default vlan=1 subnet=\nnetwork=3 name=Cameras%%20wired vlan=930 subnet=192.168.30.1/24\nnetwork=4 name=Office vlan=921 subnet=\nnetwork=5 name=x vlan=940 subnet= dhcp=1\nnetwork=06 name=lead vlan=950 subnet=\nnetwork=7 name=big vlan=4095 subnet=\nnetwork=123456 name=id vlan=960 subnet=\nvlan=970 network=8 name=order\n' > "$T/nets.conf"
+printf '# /etc/gt-be98-networks.conf - written by the web UI\nnetwork=1 name=Default vlan=1 subnet=\nnetwork=3 name=Cameras%%20wired vlan=930 subnet=192.168.30.1/24\nnetwork=4 name=Office vlan=921 subnet=\nnetwork=5 name=x vlan=940 subnet= dhcp=1\nnetwork=06 name=lead vlan=950 subnet=\nnetwork=7 name=big vlan=4095 subnet=\nnetwork=987654 name=id vlan=960 subnet=\nvlan=970 network=8 name=order\n' > "$T/nets.conf"
 r=$(netl "brwifi7:921" lan_net_list | tr '\n' ' ')
 [ "$r" = "brwifi7:921 brwifi100003:930 brwifi100004:921 brwifi100005:940 brwifi100008:970 " ] &&
-	ok "networks file: each network brwifi<100000+id>, after the Wi-Fi's; VLAN 1, VID 4095, id 06, id 123456 skipped; an unknown key and any key order taken" || ko "networks file list: [$r]"
+	ok "networks file: each network brwifi<100000+id>, after the Wi-Fi's; VLAN 1, VID 4095, id 06, id 987654 skipped; an unknown key and any key order taken" || ko "networks file list: [$r]"
 r=$(netl "brwifi7:921" lan_net_bridge 921); [ "$r" = brwifi7 ] && ok "VLAN 921 has an SSID: its bridge is the SSID's brwifi7 (one bridge per VLAN), not brwifi100004" || ko "921 -> $r"
 r=$(netl "brwifi7:921" lan_net_bridge 930); [ "$r" = brwifi100003 ] && ok "VLAN 930, a network without an SSID: brwifi100003" || ko "930 -> $r"
 r=$(netl "brwifi7:921" lan_net_bridge 1 || echo none); [ "$r" = none ] && ok "VLAN 1 (Default, the untagged trunk): no bridge" || ko "1 -> $r"
