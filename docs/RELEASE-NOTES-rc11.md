@@ -334,7 +334,7 @@ q305 sequence), and its cause is unidentified.
 
 The web UI-only delta between imgint8 (the regression set and the soak) and imgint9 was re-checked in q309.
 
-**Release-image box phases:** queued after these notes (`RC11-RELEASE-PHASES-QUEUE.sh`: first and second phases on the release images, then the lab image restored); result to be added.
+**Release-image box phases (q311):** first 15/15 ok, second 6/6 ok, 0 fail; the lab image imgint9 restored afterwards (build id `20261118T003027Z-4a6b4ec0da0f-rw-jffs`).
 
 ## Known open
 
