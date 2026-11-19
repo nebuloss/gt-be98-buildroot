@@ -799,15 +799,21 @@ check "-B: every beacon_prot BSS has PMF (ieee80211w 1 or 2)" "" \
 conf_ok "beacon protection"
 gen "$T/bp" -C 8 -B "6g"; check "-B 6g: the 6 GHz BSSes only" "0 1@bcawl2 2@bcawl2-1 4@bcawl2-2" "$? $(bpl)"
 gen "$T/bp" -C 8 -B "2g,5gl"; check "-B comma-separated: 2.4 and 5 GHz-low" "0 1@bcawl3 2@bcawl3-1 1@bcawl0 2@bcawl0-1 5@bcawl0-3" "$? $(bpl)"
-# hostapd 2.12's own rule (ap_config.c): on an EHT radio (be=1, the default)
-# every BSS with PMF gets beacon protection whatever beacon_prot says; on an
-# HE-only radio (be=0) only beacon_prot=1 asks for it. Both ways, no -B
+# hostapd 2.12's own rule (ap_config.c): on an EHT radio (be=1; the default
+# on 5gl/5gh/6g) every BSS with PMF gets beacon protection whatever
+# beacon_prot says; on an HE-only radio (be=0; the 2g default) only
+# beacon_prot=1 asks for it. Both ways, no -B
 if [ -n "$CONFCHECK" ]; then
-	{ printf 'radio=5gl\nbe=0\n'; net 1 s sae password1 "2g 5gl" 1; } > "$T/bpe"
+	{ printf 'radio=2g\nbe=1\nradio=5gl\nbe=0\n'; net 1 s sae password1 "2g 5gl" 1; } > "$T/bpe"
 	rm -f "$T/slots"; gen "$T/bpe"
 	"$CONFCHECK" "$T/o/hostapd-bcawl3.conf" > "$T/cce" 2>&1; "$CONFCHECK" "$T/o/hostapd-bcawl0.conf" > "$T/cch" 2>&1
-	check "hostapd itself: EHT 2g SAE BSS gets beacon protection without beacon_prot=1; HE-only 5gl does not" "1 0" \
+	check "hostapd itself: EHT 2g (be=1) SAE BSS gets beacon protection without beacon_prot=1; HE-only 5gl does not" "1 0" \
 		"$(grep -c 'Enabling beacon protection as IEEE 802.11be is enabled' "$T/cce") $(grep -c 'Enabling beacon protection' "$T/cch")"
+	{ net 1 s sae password1 "2g 5gl" 1; } > "$T/bpd"
+	rm -f "$T/slots"; gen "$T/bpd"
+	"$CONFCHECK" "$T/o/hostapd-bcawl3.conf" > "$T/cce" 2>&1; "$CONFCHECK" "$T/o/hostapd-bcawl0.conf" > "$T/cch" 2>&1
+	check "hostapd itself, default list: 2g (HE only) SAE BSS without -B gets no beacon protection; 5gl (EHT) does" "0 1" \
+		"$(grep -c 'Enabling beacon protection' "$T/cce") $(grep -c 'Enabling beacon protection as IEEE 802.11be is enabled' "$T/cch")"
 	gen "$T/bp" -C 8
 fi
 cp "$T/slots" "$T/slots.bp"; gen "$T/bp" -C 8 -B "2g 7g"
@@ -892,12 +898,27 @@ conf_ok "U-APSD"
 
 # ---- 10c. radio features: HE (ax=), TWT responder (twt=), zero-wait DFS
 # (zwdfs=), monitor (monitor=), LED (led=) ----
-# HE/EHT (ax=, be=): default both on, every radio; each off both ways
+# HE/EHT (ax=, be=): HE on by default on every radio; EHT on by default on
+# 5gl/5gh/6g, OFF on 2g (owner 2026-11-19, open-wifi DN24-1: the 2.4 GHz
+# firmware never sounds an EHT client); each both ways
 { printf 'radio=2g\nax=1\nradio=5gl\nchannel=36\nwidth=80\nradio=5gh\nchannel=100\nwidth=40\n'
   net 1 a sae password1 "2g 5gl 5gh" 1; } > "$T/x1"
 rm -f "$T/slots"; gen "$T/x1"; check "ax=1 on 2g, no ax key on 5gl/5gh: accepted" 0 $?
-check "default: ieee80211ax=1 and ieee80211be=1 on 2g, 5gl and 5gh, once each" "1 1 1 1 1 1" \
+check "default: ieee80211ax=1 on 2g, 5gl and 5gh; ieee80211be=1 on 5gl and 5gh only (2g: none), once each" "1 0 1 1 1 1" \
 	"$(for d in bcawl3 bcawl0 bcawl1; do grep -c '^ieee80211ax=1$' "$T/o/hdr-$d"; grep -c '^ieee80211be=1$' "$T/o/hdr-$d"; done | tr '\n' ' ' | sed 's/ $//')"
+check "default 2g: no eht_* line and no ieee80211be line at all (be=0 is not written either)" "" "$(grep -E '^(eht_|ieee80211be)' "$T/o/hdr-bcawl3")"
+# the 2g default with no radio=2g block at all (a list without radio blocks)
+{ net 1 a sae password1 "2g 5gl" 1; } > "$T/x1n"
+rm -f "$T/slots"; gen "$T/x1n"; check "no radio=2g block: accepted, 2g HE without EHT, 5gl EHT" "0 1 0 1" \
+	"$? $(grep -c '^ieee80211ax=1$' "$T/o/hdr-bcawl3") $(grep -c '^ieee80211be' "$T/o/hdr-bcawl3") $(grep -c '^ieee80211be=1$' "$T/o/hdr-bcawl0")"
+# an explicit be=1 brings 2g EHT back (and its SU beamformer); be=1 with ax=0 still refused below
+{ printf 'radio=2g\nbe=1\n'; net 1 a sae password1 "2g 5gl" 1; } > "$T/x1e"
+rm -f "$T/slots"; gen "$T/x1e"; check "2g be=1 (explicit): accepted, ieee80211be=1 and eht_su_beamformer=1 once, no eht_mu" "0 1 1 0" \
+	"$? $(grep -c '^ieee80211be=1$' "$T/o/hdr-bcawl3") $(grep -c '^eht_su_beamformer=1$' "$T/o/hdr-bcawl3") $(grep -c '^eht_mu_beamformer' "$T/o/hdr-bcawl3")"
+conf_ok "2g be=1"
+{ printf 'radio=2g\nax=0\nbe=1\n'; net 1 a sae password1 2g 1; } > "$T/x1f"
+rm -f "$T/slots"; gen "$T/x1f"; check "2g ax=0 be=1: refused (EHT needs HE)" "1" "$?"
+rm -f "$T/slots"; gen "$T/x1"	# back to the default list
 check "5gl EHT at 80 MHz: eht_oper width/centre = the VHT ones (1/42); 5gh at 40: eht_oper_chwidth=0, no centre" "yes yes yes no" \
 	"$(hdr_has bcawl0 eht_oper_chwidth=1) $(hdr_has bcawl0 eht_oper_centr_freq_seg0_idx=42) $(hdr_has bcawl1 eht_oper_chwidth=0) $(grep -q '^eht_oper_centr' "$T/o/hdr-bcawl1" && echo yes || echo no)"
 check "2g EHT at 20 MHz: no operation width lines" "" "$(grep -E '^(he|eht)_oper' "$T/o/hdr-bcawl3")"
@@ -927,9 +948,11 @@ conf_ok "ax"
 bf() { grep -E '^(vht_capab|(he|eht)_(su|mu)_beamformer)=' "$T/o/hdr-$1" | tr '\n' ' ' | sed 's/ $//'; }
 BF5='vht_capab=[SU-BEAMFORMER][SU-BEAMFORMEE][MU-BEAMFORMER] he_su_beamformer=1 he_mu_beamformer=1 eht_su_beamformer=1 eht_mu_beamformer=1'
 BF6='he_su_beamformer=1 he_mu_beamformer=1 eht_su_beamformer=1 eht_mu_beamformer=1'
-check "PHYF-5 2g ax=1 be=1: he_su_beamformer=1 eht_su_beamformer=1, no MU, no VHT" "he_su_beamformer=1 eht_su_beamformer=1" "$(bf bcawl3)"
+check "PHYF-5 2g default (ax=1, EHT off): he_su_beamformer=1 only, no eht_*, no MU, no VHT" "he_su_beamformer=1" "$(bf bcawl3)"
 check "PHYF-5 5gl 80 MHz: VHT SU/SU-bfee/MU, HE SU+MU, EHT SU+MU" "$BF5" "$(bf bcawl0)"
 check "PHYF-5 5gh 40 MHz: the same set" "$BF5" "$(bf bcawl1)"
+rm -f "$T/slots"; gen "$T/x1e"
+check "PHYF-5 2g be=1: he_su_beamformer=1 eht_su_beamformer=1, no MU, no VHT" "he_su_beamformer=1 eht_su_beamformer=1" "$(bf bcawl3)"
 rm -f "$T/slots"; gen "$T/xb"; check "PHYF-5 off-generations list: accepted" 0 $?
 check "PHYF-5 2g be=0: HE SU only (no eht_* line)" "he_su_beamformer=1" "$(bf bcawl3)"
 check "PHYF-5 5gl ax=0: vht_capab only (no he_*/eht_* line)" "vht_capab=[SU-BEAMFORMER][SU-BEAMFORMEE][MU-BEAMFORMER]" "$(bf bcawl0)"

@@ -81,10 +81,10 @@
 #       (a) clears beacon_prot when the driver lacks the feature
 #       (wpa_auth_glue.c) and advertises it (Extended Capabilities bit 84)
 #       only with it, and (b) turns it ON by itself on every BSS with PMF
-#       of an EHT radio (ieee80211be=1, the default: ap_config.c "Enabling
-#       beacon protection as IEEE 802.11be is enabled"), Enterprise with
-#       PMF included. So -B decides for HE-only radios (be=0) and states
-#       the intent; on EHT radios hostapd's own rule wins
+#       of an EHT radio (ieee80211be=1, the default on 5gl/5gh/6g: ap_config.c
+#       "Enabling beacon protection as IEEE 802.11be is enabled"), Enterprise
+#       with PMF included. So -B decides for HE-only radios (be=0, the 2g
+#       default) and states the intent; on EHT radios hostapd's own rule wins
 #   -F  print what this generator supports (one "<what> <values>" per
 #       line: feature <name> 0|1, width <band> <MHz...>, security <modes>,
 #       station_security <modes>, max_clients <min> <max>) and exit. The web
@@ -223,10 +223,16 @@
 #                                   sends no HE element: ax=0 = no HE on air.
 #                                   6g is HE only: ax=0 there is refused
 #     be=0|1                        EHT (802.11be, Wi-Fi 7): default 1 when
-#                                   ax=1 (EHT on every radio, like stock),
-#                                   writes ieee80211be=1 and the EHT operation
-#                                   width/centre = the HE ones (hostapd takes
-#                                   the channel width from them when be=1);
+#                                   ax=1 on 5gl/5gh/6g, 0 on 2g (owner
+#                                   2026-11-19: the 2.4 GHz firmware never
+#                                   sounds, so never beamforms, an EHT
+#                                   client, stock alike; HE there measured
+#                                   ~160 vs ~97 Mbit/s down, open-wifi
+#                                   ledger DN24-1); be=1 turns it on there.
+#                                   be=1 writes ieee80211be=1 and the EHT
+#                                   operation width/centre = the HE ones
+#                                   (hostapd takes the channel width from
+#                                   them when be=1);
 #                                   6g 320 MHz: eht_oper_chwidth=9. Needs HE:
 #                                   be=1 with ax=0 is refused (ax=0 alone
 #                                   means be=0); 320 MHz needs be=1. The
@@ -238,6 +244,7 @@
 #                                   he_su/he_mu_beamformer=1, with EHT
 #                                   eht_su/eht_mu_beamformer=1; 2g SU only:
 #                                   he_su_beamformer=1, eht_su_beamformer=1
+#                                   with be=1 only (never by default)
 #     twt=0|1                       hostapd he_twt_responder (radio-wide in
 #                                   hostapd): default 1, hostapd's own
 #                                   default; 0 writes he_twt_responder=0.
@@ -1357,11 +1364,12 @@ END {
 		}
 		if (!(b in rtwt)) rtwt[b] = 1
 		if (!(b in rled)) rled[b] = 1
-		# HE / EHT: rax/rbe hold numbers; defaults ax=1, be=ax
+		# HE / EHT: rax/rbe hold numbers; defaults ax=1, be=ax, but be=0 on
+		# 2g (owner 2026-11-19, open-wifi DN24-1: no EHT sounding there)
 		if (b == "6g" && (b in rax) && rax[b] == 0) err("radio 6g: ax=0 refused (6 GHz is HE/EHT only)")
 		if (!(b in rax)) rax[b] = 1
 		if ((b in rbe) && rbe[b] == 1 && rax[b] == 0) err("radio " b ": be=1 refused with ax=0 (EHT needs HE)")
-		if (!(b in rbe)) rbe[b] = rax[b]
+		if (!(b in rbe)) rbe[b] = (b == "2g") ? 0 : rax[b]
 		if (b in rch) {
 			if (!chans(b, rch[b])) { err("radio " b ": channel " rch[b] " is not a channel of this radio"); continue }
 		} else rch[b] = (b == "2g") ? 6 : (b == "5gl") ? 36 : (b == "5gh") ? 100 : 37
