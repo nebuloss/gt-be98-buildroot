@@ -49,7 +49,9 @@
 #  om-rebind-flip-r 67b5c4b6: radio_rebind DEFAULT 1 (INV-RECOVERY; q296 rebind-ch40-arm-r2 PASS both cells, 6/6))
 # om-mesh-int-2026-11-17 2026-11-17 4040667a (imgint7: 8137daeb (radio_rebind=1 kept) + om-mesh-bh a65722d4: the MESH-G1 ledger
 #  AND the bench knob band5_full (class B: bench build only, folded to 0 in the shipped ko) with its census / declared rows)
-GT_BE98_OPEN_WIFI_VERSION = 4040667a8ec9a0256d691766dd97bc8fb465a772
+# om-dfs5gh-bgcac-r2-2026-11-19 2026-11-19 0a7588d3 (imgint12b: main 38e7be78 + ZW-ETSI: background CAC in ETSI on the 5 GHz-high
+#  radio, the timer-wheel abort fix; gates GREEN 0a7588d3 vs 38e7be78, 36 shipped params unchanged; q336 BG PASS with its bench ko)
+GT_BE98_OPEN_WIFI_VERSION = 0a7588d3150c033b4daad39570fb0206ae1cbab8
 GT_BE98_OPEN_WIFI_SITE = git@github.com:nebuloss/gt-be98-open-wifi.git
 GT_BE98_OPEN_WIFI_SITE_METHOD = git
 GT_BE98_OPEN_WIFI_LICENSE = GPL-2.0-only
