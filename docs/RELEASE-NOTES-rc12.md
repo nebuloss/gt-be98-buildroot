@@ -1,10 +1,6 @@
 # GT-BE98 mainline OS 1.0-rc12 - release notes
 
-Date: 2026-11-19 · Status: **DRAFT**, release candidate 12, not tagged.
-
-> DRAFT until the release-image box phases have run: the phases row and
-> the tags are the last placeholders (`⟨…⟩`). The candidate's box evidence
-> (q325–q331), the release images and their checks are final.
+Date: 2026-11-19 · Status: **release candidate 12**, tagged `gt-be98-rc12`.
 
 Evidence is named by the orchestrator's queue (`qNNN`). The run directories
 stay on the orchestrator's machine and are not in this repository. Every
@@ -82,7 +78,7 @@ build time). Against RC11's lab image imgint9, imgint10 differs in
 the Runner module. The Wi-Fi and switch modules are byte-identical
 throughout.
 
-Built from (`gt-be98-rc12` tags, ⟨to be set⟩):
+Built from (`gt-be98-rc12` tags):
 
 | Component | Commit |
 |---|---|
@@ -323,7 +319,8 @@ stays unbound; fallback then left), six boot mutants.
 | q330 | imgint11 | **RA fix confirmed:** tagrw r5 GW4 0.042/0.037, GW6 0.025/0.026, GW4X M V6 WIRE R PASS, N `post_hw_old` (Q1), idle 0.02–0.07 (NO-HOT); gw5-ipv6 r11 FULL PASS; pppoe6 r3 (bench module, not in RC12) PV6 PASS |
 | q331 | imgint11 | **RC12 regression set PASS:** baselines PASS; UI degraded-apply PASS; L1 two cycles real 0/0, dsmb 0; WIFISTOP r2 PASS + RESTORE-OK; soak DRY-OK; perf smoke: every gated 5gl/6g row OK, only the 2.4 GHz RTL row flagged (noisy, never gated: 25–31 Mbit/s within q326 alone) |
 | q331 | imgint11 | **30-minute release soak PASS** (rc12-soak.sh; identity checked: bca `ef62b85c`, runner `7305bbc3`) |
-| ⟨qNNN⟩ | release | ⟨release-image box phases: first n/n, second n/n; lab image imgint11 restored⟩ |
+| q332 | release | First release-image phase: 14 ok, 1 FAIL (W2b: an action answered unconfigured). The arm started about 50 s after boot, just as DHCP gave the LAN interface its address and before the admin watcher's next 5 s tick, so it read the web UI before the new address was bound. An arm race; `release-build-arms-r2` waits for the bind (pre-registered before q333) |
+| q333 | release | **Release-image phases PASS:** first 16/16, second 6/6 (host keys kept across the reboot, setup token consumed, still configured). W2b-BIND: the LAN address was present at start and bound 2 s later; every gated action answers need_auth on loopback and the LAN. The lab image imgint11 restored afterwards |
 
 ## Known open
 
@@ -345,6 +342,11 @@ stays unbound; fallback then left), six boot mutants.
 
   It is not in RC12's Runner module (`7305bbc3`). RC12 routes IPv6 over
   PPPoE on the CPU. → RC13.
+
+**Web UI**
+- **Up to 5 s after DHCP gives an address, the admin UI does not yet
+  answer on it.** The watcher binds new addresses on its 5 s tick (q332).
+  A 1 s watcher until the first bind is planned for RC13.
 
 **Wi-Fi**
 - **D36–D40:** MLO on 5 GHz is pending.
