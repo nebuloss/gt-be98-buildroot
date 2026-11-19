@@ -2,9 +2,9 @@
 
 Date: 2026-11-19 · Status: **DRAFT**, release candidate 12, not tagged.
 
-> DRAFT. Every `⟨…⟩` is a placeholder. Fill it from the named run, or drop
-> the line. Do not tag until the regression set, the soak and the release-image
-> phases have their rows.
+> DRAFT until the release-image box phases have run: the release image's
+> sha256s, its release-check result and the phases row are the last
+> placeholders (`⟨…⟩`). The box evidence of the candidate (q325–q331) is final.
 
 Evidence is named by the orchestrator's queue (`qNNN`). The run directories
 stay on the orchestrator's machine and are not in this repository. Every
@@ -118,8 +118,14 @@ plus the refused-retag cases and mutants; `fc_bind_test` 30 590 checks.
   box background load fixed below.
 - q324 GW4X (stop with a live flow) REFUTED: a race in gt-be98-gw's stop.
   It is fixed in this candidate, see below.
-- ⟨q326: tagrw r5 on imgint10 — GW4X with the stop fix, GW4 up/dn, N/M, GW6⟩
-- ⟨qNNN: tagrw r5 on imgint11 — GW4 up/dn with the RA fix: NO-HOT predicted⟩
+- q326 (r5, imgint10, the RC12 module): GW6-up/dn PASS at 0.027 / 0.024
+  cores/Gbit. **GW4X PASS: the stop fix confirmed.** M PASS. WIRE and R PASS.
+  GW4-up/dn medians 0.070 / 0.087, but the maxima 0.115 / 0.149 broke the
+  bar: those spikes were the per-RA bursts, fixed below.
+- **q330 (r5, imgint11 = RC12): every cell PASS but N.** GW4-up/dn at
+  **0.042 / 0.037** cores/Gbit; GW6-up/dn at 0.025 / 0.026; GW4X, M, V6,
+  WIRE and R PASS. Idle windows read 0.02–0.07 cores: the bursts are gone.
+  N REFUTED `post_hw_old` as predicted (RUNNER-L3-FDB-Q1, known open).
 
 ### 2.4 GHz defaults to Wi-Fi 7 off (OS `gt-be98-wifi-gen`, web UI)
 
@@ -161,7 +167,17 @@ WPA2-Enterprise BSSes on 2.4 GHz no longer get beacon protection
 automatically** (stock's rule).
 
 **Box evidence**
-- ⟨q325: eht24-default on imgint10 — E-GEN / E-LIVE / E-HE / E-BE1 / E-SND, E-DN against the 150 Mbit/s bar⟩
+- q325 (eht24-default arm, imgint10, the RC12 generator and web UI):
+  - E-GEN and E-LIVE PASS: 2.4 GHz renders and runs without EHT, 5/6 GHz
+    with it.
+  - The client associates HE in 3/3 repetitions, and the AP sounds it:
+    NDPA 237/232/236 per repetition.
+  - The explicit `be=1` brings EHT back.
+  - Default vs `be=1` downlink: **1.47×**.
+  - The arm's VERDICT is **FAIL, on its absolute downlink bar alone**:
+    E-DN read 148.7 Mbit/s against the pre-registered 150 (q320 read
+    159–169 on the same bench). The relative gain, the HE association and
+    the sounding (the reasons for the decision) all hold.
 
 ### Gateway networks: stop cuts the path before deleting conntrack (OS `gt-be98-gw`)
 
@@ -179,7 +195,7 @@ changes (isolate, mgmt, NAT refused) already deleted after the rule set.
 Tests: `gt-be98-gw-test` checks the order against `ip_forward` at each
 delete; the full `gt-be98-gw-mutants` set (64) is killed.
 
-Box: ⟨q326 GW4X on imgint10⟩
+Box: q326 (imgint10) and q330 (imgint11) GW4X PASS. With a live offloaded flow, nothing is left in hardware after the stop.
 
 ### `gt-be98-gw mgmt-addrs` (OS `gt-be98-gw`, web UI)
 
@@ -199,7 +215,7 @@ gateway network has management on. It falls back to `status` otherwise,
 or when the query fails. This completes RC11's watcher cost reduction for
 boxes that do have a managed gateway network.
 
-Box: ⟨q326 gateway r17 GW1 GW2 on imgint10 (mg_pre through mgmt-addrs)⟩
+Box: q326 (imgint10) gateway r17 GW1 and GW2 PASS. GW2's management check runs through `mgmt-addrs`.
 
 ### Fix: an unchanged IPv6 RA re-applied every gateway network (OS `gt-be98-wan`)
 
@@ -212,7 +228,7 @@ That is about 1.8 CPU-seconds per RA, at the router's advertising interval
 (the lab's WAN server sends one every 20 s).
 
 **How it was found.** No new box run was needed. The per-process tables of
-the tagrw r4 run record (⟨its queue⟩) show the CPU of the hot windows in REAPED
+the tagrw r4 run record (q325) show the CPU of the hot windows in REAPED
 children: init's `cutime` grew by +177..179 jiffies per episode (the
 orphaned background reroute), and dhcpcd's by +24..25 (the hook runner).
 This holds in every hot window and in no cold one, 94 % of the excess. The
@@ -234,8 +250,15 @@ never recorded, stop or another reason keeping it, addresses or routers left
 out of it): all killed.
 
 **Box evidence**
-- ⟨qNNN: tagrw r5 on imgint11 — the idle windows NO-HOT (prediction), the per-process tables without the reaped-reroute signature⟩
-- ⟨qNNN: gw5-ipv6 r11 on imgint11 (SHA_WAN `b4db4370…`) — SLAAC, DHCPv6, renumbering paths still act⟩
+- **q330 (imgint11): NO-HOT, as predicted.** Every idle window read
+  0.02–0.07 cores (imgint10 in q326: spikes up to 0.149 cores/Gbit in IPv4
+  runs). The IPv4 D42 runs now cost 0.042 / 0.037 cores/Gbit.
+- q330: gw5-ipv6 r11 FULL PASS on imgint11, pinned to the new gt-be98-wan
+  `b4db4370…`: WS, S, GW5, GW5M, GW5D, GW5S, GW5L, WIRE, R. The paths that
+  must still act (a new router, SLAAC, DHCPv6, stop/start, WAN revert) do.
+- q330: the PPPoE IPv6 arm (bench module, see "Not in RC12") watched the
+  RAs separately. The box was quiet both ways; the only forks left are
+  dhcpcd's hook itself (230 vs 102).
 
 ### The web UI admin listener is managed from boot (web UI)
 
@@ -260,8 +283,11 @@ Tests: real sockets on loopback (no address then bound; a disabled portal
 stays unbound; fallback then left), six boot mutants.
 
 **Box evidence**
-- ⟨q325: listener reading on a normal boot — no FALLBACK line, loopback then the management address on :80, no wildcard⟩
-- ⟨q325: WAN admin reach PASS (WAN :80/:22 dropped; management path connects)⟩
+- q325 (imgint10), a normal boot: no FALLBACK line. Port 80 listens on
+  loopback, then on the management address once DHCP gives it, never on
+  the wildcard.
+- q325: WAN admin reach PASS. Web UI :80 and SSH :22 from the WAN side are
+  dropped; the management path connects on both.
 
 ## Box evidence (imgint10 / imgint11 as noted)
 
@@ -271,12 +297,12 @@ stays unbound; fallback then left), six boot mutants.
 | q322 | imgint9 + bench Runner ko | D42 tag rewrite on silicon, WIRE clean, R PASS |
 | q323 | lab | DN24 last lever: bit 0x80 masked by the firmware on 2.4 GHz |
 | q324 | imgint9 + bench Runner ko | D42 r3: GW6-up/dn PASS 0.093/0.094 cores/Gbit, M PASS; GW4X race found |
-| q325 | imgint10 | ⟨listener, fixed-primary, eht24, WAN reach, UI degraded-apply, perf smoke⟩ |
-| q326 | imgint10 (+ imgint9 for ABA) | ⟨tagrw r5, gateway r17 GW1 GW2, gw5-ipv6 r10, perf ABA imgint10/imgint9/imgint10⟩ |
-| q327 | imgint10 | ⟨gw5-ipv6 r11⟩ |
-| ⟨qNNN⟩ | imgint11 | ⟨RA fix box verification: tagrw r5 (NO-HOT predicted) + gw5-ipv6 r11⟩ |
-| ⟨qNNN⟩ | imgint11 | ⟨**RC12 regression set** (RC12-REGRESSION-QUEUE.sh): UI degraded-apply, L1 two cycles, WIFISTOP r2 + RESTORE-OK, soak DRY, perf smoke, baselines⟩ |
-| ⟨qNNN⟩ | imgint11 | ⟨**30-minute release soak** (rc12-soak.sh; identity bca `ef62b85c`, runner `7305bbc3`, webui `ebfb76e2`, gw `8e664b6a`, wifi-gen `d911ec41`, wan `b4db4370`)⟩ |
+| q325 | imgint10 | listener PASS (no fallback); fixed-primary PASS; eht24 FAIL on E-DN only (148.7 vs 150 Mbit/s; HE 3/3, sounded, `be=1` EHT back, 1.47×); WAN admin reach PASS; UI degraded-apply PASS; perf smoke 5gl/6g throughput −4..−13 % (re-measured in q326: drift). tagrw r4 / gateway r16 VOID at G (an arm bug, the new `mgmt-addrs` word); gw5 r10 WS REFUTED (an arm race, fixed in r11) |
+| q326 | imgint10 (+ imgint9 for ABA) | tagrw r5: GW6 PASS 0.027/0.024, GW4X PASS (stop fix), M WIRE R PASS, GW4 spikes = RA bursts; gateway r17 GW1 GW2 PASS; **perf ABA: imgint10 = imgint9 on every gated row** (5gl 883/826 vs 884/824, 6g 1363/1067 vs 1332/1063 Mbit/s): q325's smoke dip was drift |
+| q327 | imgint10 | gw5-ipv6 r11 FULL PASS (WS S GW5 GW5M GW5D GW5S GW5L WIRE R) |
+| q330 | imgint11 | **RA fix confirmed:** tagrw r5 GW4 0.042/0.037, GW6 0.025/0.026, GW4X M V6 WIRE R PASS, N `post_hw_old` (Q1), idle 0.02–0.07 (NO-HOT); gw5-ipv6 r11 FULL PASS; pppoe6 r3 (bench module, not in RC12) PV6 PASS |
+| q331 | imgint11 | **RC12 regression set PASS:** baselines PASS; UI degraded-apply PASS; L1 two cycles real 0/0, dsmb 0; WIFISTOP r2 PASS + RESTORE-OK; soak DRY-OK; perf smoke: every gated 5gl/6g row OK, only the 2.4 GHz RTL row flagged (noisy, never gated: 25–31 Mbit/s within q326 alone) |
+| q331 | imgint11 | **30-minute release soak PASS** (rc12-soak.sh; identity checked: bca `ef62b85c`, runner `7305bbc3`) |
 | ⟨qNNN⟩ | release | ⟨release-image box phases: first n/n, second n/n; lab image imgint11 restored⟩ |
 
 ## Known open
@@ -286,14 +312,19 @@ stays unbound; fallback then left), six boot mutants.
   another host (N), the old host's uplink entry stays on its bridge port
   until `fc_idle_s`. Q1 is whether L3-FDB should drop it at once
   (q322/q324 N REFUTED `post_hw_old`). The FDB move (M) passes.
-- **The intermittent box background CPU bursts are FIXED, pending box
-  verification.** The cause was the per-RA gateway re-apply above (q324
-  IPv4 LON runs 0.085–0.220 cores/Gbit overlapped it). It is fixed in
-  `f21929d`. ⟨qNNN tagrw r5 on imgint11: NO-HOT⟩ — until that row is
-  filled, this stays open.
 - **The RC11 q305 cores/Gbit dip** is still unexplained. It was not
-  reproduced on imgint8 (q307) or imgint9 (q309). ⟨q326 perf ABA
-  imgint10/imgint9/imgint10⟩.
+  reproduced on imgint8 (q307), imgint9 (q309) or in q326's ABA
+  (imgint10 = imgint9 on every gated row). q325's own smoke dip was drift
+  by the same ABA.
+
+**Not in RC12**
+- **PPPoE routed-IPv6 offload** (open-ethernet `oe-pppoe-v6-2026-11-19`
+  `c56b79b`) is proven on silicon, but only with a bench module:
+  - q329 (imgint10): the IPv6-over-PPPoE OS path and the uplink offload.
+  - q330 (imgint11): PV6-up/dn PASS at 0.039 / 0.045 cores/Gbit.
+
+  It is not in RC12's Runner module (`7305bbc3`). RC12 routes IPv6 over
+  PPPoE on the CPU. → RC13.
 
 **Wi-Fi**
 - **D36–D40:** MLO on 5 GHz is pending.
