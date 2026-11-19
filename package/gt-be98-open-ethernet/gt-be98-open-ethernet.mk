@@ -69,7 +69,9 @@
 #  bd_hw_max_ip 1492; driver/runner + tools only; no linux-dirclean)
 # oe-tagrw-2026-11-18 2026-11-19 b367e51 (imgint10: main a9c80d1 + TAGRW 72c62cf/b367e51: D42 two-tag VLAN rewrite
 #  + routed IPv6 offload (RT-IPV6 rebased), box-proven q322/q324; driver/runner + tools only; no linux-dirclean)
-GT_BE98_OPEN_ETHERNET_VERSION = b367e51c1c1035b937a0b15d7588cf8ac671c168
+# oe-tagrw-clean-2026-11-19 2026-11-19 effa5fa (RC12: b367e51, box-tested on imgint10, + one tools-only cleanup (a test
+#  fixture address to the documentation range); driver/ identical, the Runner ko byte-identical 7305bbc3)
+GT_BE98_OPEN_ETHERNET_VERSION = effa5facc60c3a042c5bc915ca4af8c566f9e680
 GT_BE98_OPEN_ETHERNET_SITE = git@github.com:nebuloss/gt-be98-open-ethernet.git
 GT_BE98_OPEN_ETHERNET_SITE_METHOD = git
 GT_BE98_OPEN_ETHERNET_LICENSE = GPL-2.0
