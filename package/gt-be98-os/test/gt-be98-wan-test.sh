@@ -31,7 +31,8 @@ for t in nft sysctl logger rc-service modprobe start-stop-daemon gt-be98-fwd; do
 	printf '#!/bin/sh\necho "%s $*" >> "$FAKE/log"\nexit 0\n' "$t" > "$T/bin/$t"
 done
 # ip: logs; "link add ... name X" creates $SYSNET/X; "link del X" removes it;
-# "-6 route show default dev X" answers $FAKE/route6-X
+# "-6 route show default dev X" answers $FAKE/route6-X, "-6 -o addr show dev X"
+# $FAKE/addr6-X
 cat > "$T/bin/ip" <<'X'
 #!/bin/sh
 echo "ip $*" >> "$FAKE/log"
@@ -41,6 +42,7 @@ case "$*" in
 "-6 route show default dev "*) cat "$FAKE/route6-$6" 2>/dev/null ;;
 "-4 route show default dev "*) cat "$FAKE/route4-$6" 2>/dev/null ;;
 "-4 -o addr show dev "*) cat "$FAKE/addr4-$6" 2>/dev/null ;;
+"-6 -o addr show dev "*) cat "$FAKE/addr6-$6" 2>/dev/null ;;
 esac
 exit 0
 X
@@ -264,6 +266,31 @@ check "hook: rule per LAN" yes "$(yes_no has "$FAKE/log" "ip -6 rule add iif brw
 : > "$FAKE/log"
 reason=ROUTERADVERT interface=eth0 wan hook dhcpcd
 check "  control: another interface's RA does nothing" "" "$(cat "$FAKE/log")"
+# dhcpcd runs ROUTERADVERT for every RA it receives: a refresh rebuilds nothing
+v6mut() { grep -E '^ip -6 (route (replace|flush|del)|rule (add|del))' "$FAKE/log"; }
+echo "default via fe80::1 dev rnr0 proto ra metric 1003 expires 1799sec pref medium" > "$FAKE/route6-rnr0"
+reason=ROUTERADVERT interface=rnr0 wan hook dhcpcd; : > "$FAKE/log"
+echo "default via fe80::1 dev rnr0 proto ra metric 1003 expires 1779sec pref medium" > "$FAKE/route6-rnr0"
+reason=ROUTERADVERT interface=rnr0 wan hook dhcpcd
+check "hook: the same RA again (a refresh, only the lifetime moved): table 182 and the rules untouched" "" "$(v6mut)"
+echo "default via fe80::2 dev rnr0 proto ra metric 1003 expires 1799sec pref medium" > "$FAKE/route6-rnr0"; : > "$FAKE/log"
+reason=ROUTERADVERT interface=rnr0 wan hook dhcpcd
+check "  control: an RA from another router: table 182 follows it" yes "$(yes_no has "$FAKE/log" "ip -6 route replace default via fe80::2 dev rnr0 table 182")"
+echo "rnr0 inet6 2001:db8:1::5/64 scope global dynamic" > "$FAKE/addr6-rnr0"; : > "$FAKE/log"
+reason=ROUTERADVERT interface=rnr0 wan hook dhcpcd
+check "  control: an RA that gave the WAN a new global address: rebuilt" yes "$(yes_no has "$FAKE/log" "ip -6 route replace default via fe80::2 dev rnr0 table 182")"
+rm -f "$FAKE/addr6-rnr0"
+reason=ROUTERADVERT interface=rnr0 wan hook dhcpcd
+reason=INFORM6 interface=rnr0 wan hook dhcpcd; : > "$FAKE/log"
+reason=ROUTERADVERT interface=rnr0 wan hook dhcpcd
+check "  control: the same RA after another event (INFORM6): acted on in full" yes "$(yes_no has "$FAKE/log" "ip -6 route replace default via fe80::2 dev rnr0 table 182")"
+reason=ROUTERADVERT interface=rnr0 wan hook dhcpcd
+wan stop 2>/dev/null; wan start 2>/dev/null; : > "$FAKE/log"
+reason=ROUTERADVERT interface=rnr0 wan hook dhcpcd
+check "  control: the same RA after a stop/start (table 182 flushed): rebuilt" yes "$(yes_no has "$FAKE/log" "ip -6 route replace default via fe80::2 dev rnr0 table 182")"
+rm -f "$FAKE/route6-rnr0"; : > "$FAKE/log"
+reason=ROUTERADVERT interface=rnr0 wan hook dhcpcd
+check "  control: the router gone (its route expired, dhcpcd's ROUTERADVERT on expiry): unreachable" yes "$(yes_no has "$FAKE/log" "ip -6 route replace unreachable default table 182")"
 rm -f "$FAKE/route6-rnr0"; : > "$FAKE/log"
 reason=EXPIRE6 interface=rnr0 wan hook dhcpcd
 check "hook: no v6 default = unreachable (never leaks)" yes "$(yes_no has "$FAKE/log" "ip -6 route replace unreachable default table 182")"
@@ -319,6 +346,26 @@ check "  control: another interface's lease changes nothing" "2001:db8:aa00::/56
 clearlog
 reason=EXPIRE6 interface=rnr0 wan hook dhcpcd
 check "EXPIRE6: the prefix gone, gt-be98-gw follows" "|yes" "$(wan pd6)|$(yes_no waitlog "gt-be98-gw reroute")"
+# an RA: gt-be98-gw follows a new router, never a refresh (dhcpcd runs
+# ROUTERADVERT for every RA; each reroute is a whole gt-be98-gw apply)
+rah() { reason=ROUTERADVERT interface=rnr0 wan hook dhcpcd 2>/dev/null; }
+echo "default via fe80::1 dev rnr0 proto ra metric 1003 expires 1800sec" > "$FAKE/route6-rnr0"; clearlog
+rah
+check "ROUTERADVERT (the first): gt-be98-gw follows" yes "$(yes_no waitlog "gt-be98-gw reroute")"
+echo "default via fe80::1 dev rnr0 proto ra metric 1003 expires 1780sec" > "$FAKE/route6-rnr0"; clearlog
+rah
+sleep 0.5; check "the same RA 20 s later (a refresh): no reroute" no "$(yes_no has "$FAKE/log" "gt-be98-gw reroute")"
+rah; rah
+sleep 0.5; check "  ... nor at the next ones" no "$(yes_no has "$FAKE/log" "gt-be98-gw reroute")"
+echo "default via fe80::9 dev rnr0 proto ra metric 1003 expires 1800sec" > "$FAKE/route6-rnr0"; clearlog
+rah
+check "  control: an RA from a new router: gt-be98-gw follows" yes "$(yes_no waitlog "gt-be98-gw reroute")"
+reason=RENEW6 interface=rnr0 wan hook dhcpcd 2>/dev/null; clearlog
+rah
+check "  control: the same RA after another event (RENEW6): acted on in full" yes "$(yes_no waitlog "gt-be98-gw reroute")"
+rm -f "$FAKE/route6-rnr0"; clearlog
+rah
+check "  control: the router gone (its route expired): gt-be98-gw follows" yes "$(yes_no waitlog "gt-be98-gw reroute")"
 : > "$T/gwapplied"
 pd6h BOUND6 2001:db8:aa00:: 56 1800 3600
 clearlog

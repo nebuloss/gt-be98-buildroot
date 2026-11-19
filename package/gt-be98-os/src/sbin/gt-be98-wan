@@ -87,6 +87,7 @@ LAN_CONF=${GT_BE98_LAN_CONF:-/etc/conf.d/gt-be98-lan}
 SELF=${GT_BE98_WAN_SELF:-/usr/sbin/gt-be98-wan}
 FWD=${GT_BE98_FWD:-/usr/sbin/gt-be98-fwd}
 PD6=$RUN/pd6
+RA6=$RUN/ra6
 IFACE_WAIT=${IFACE_WAIT:-20}
 WAN_TABLE6=${WAN_TABLE6:-182}
 PPP_IF=pppoe-wan
@@ -630,6 +631,7 @@ cmd_start() {
 
 cmd_stop() {
 	local p v m i
+	rm -f "$RA6"	# table 182 is flushed below: the next RA is acted on in full
 	# our pppd goes whatever APPLIED says (it may predate a lost record)
 	p=$(ppp_pids | tr '\n' ' ')
 	if [ -n "$p" ]; then
@@ -936,6 +938,16 @@ cmd_pd6() {
 	fi
 	echo "$p $pl $vl"
 }
+# what an RA can change for route6 and gt-be98-gw: the WAN's IPv6 default
+# route(s) (the router, or "dev" for a route without one) and its global
+# addresses (SLAAC), without lifetimes or flags: "<netdev> <routers> | <addrs>"
+ra6_state() {
+	printf '%s %s| %s\n' "$W_IF" \
+		"$(ip -6 route show default dev "$W_IF" 2>/dev/null |
+			awk '{ v = "dev"; for (i = 1; i < NF; i++) if ($i == "via") v = $(i + 1); print v }' | sort -u | tr '\n' ' ')" \
+		"$(ip -6 -o addr show dev "$W_IF" scope global 2>/dev/null |
+			awk '{ for (i = 1; i < NF; i++) if ($i == "inet6") print $(i + 1) }' | sort -u | tr '\n' ' ')"
+}
 cmd_hook() {
 	local ev=${1:-} f d l r s
 	shift 2>/dev/null
@@ -964,6 +976,23 @@ cmd_hook() {
 		[ "${interface:-}" = "$W_IF" ] || return 0
 		[ "$W_IPV6" = 1 ] || return 0
 		f=$(pd6_line)
+		# dhcpcd runs ROUTERADVERT for EVERY RA it receives, changed or not
+		# (dhcpcd 10.2.4 ipv6nd.c: ipv6nd_handlera -> ipv6nd_scriptrun ->
+		# script_runreason, no test of new_data), i.e. at the router's
+		# advertising interval for as long as it advertises. An RA that
+		# leaves ra6_state as the previous RA left it is a refresh: nothing
+		# follows it. It cost a whole gt-be98-gw reapply per RA (~1.8 CPU-s
+		# on the box: the idle-CPU bursts under the lab's 20 s RAs, runs
+		# 1119-1008-tagrw-offload-r3, 1119-1256-tagrw-offload-r4), and a
+		# flush + re-add of table 182. Any other reason, and a stop/start,
+		# forget the state: the next RA is acted on in full.
+		s=
+		if [ "${reason:-}" = ROUTERADVERT ]; then
+			s=$(ra6_state)
+			[ "$s" = "$(cat "$RA6" 2>/dev/null)" ] && return 0
+		else
+			rm -f "$RA6"
+		fi
 		case "${reason:-}" in
 		BOUND6|RENEW6|REBIND6|REBOOT6) pd6_record ;;
 		EXPIRE6|RELEASE6|STOP6|STOPPED|DEPARTED) pd6_clear ;;
@@ -978,7 +1007,8 @@ cmd_hook() {
 		case "${reason:-}" in
 		ROUTERADVERT|EXPIRE6|RELEASE6|STOP6|STOPPED|DEPARTED) gw_reroute ;;
 		*) [ "$f" = "$(pd6_line)" ] || gw_reroute ;;
-		esac ;;
+		esac
+		[ -z "$s" ] || { mkdir -p "$RUN" && printf '%s\n' "$s" > "$RA6"; } ;;
 	*) die "hook: ip-up | ip-down | dhcpcd" ;;
 	esac
 }
