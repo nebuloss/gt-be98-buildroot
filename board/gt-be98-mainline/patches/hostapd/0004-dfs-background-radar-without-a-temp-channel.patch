@@ -1,0 +1,130 @@
+From: gt-be98-buildroot <noreply@example.invalid>
+Subject: [PATCH] DFS: background radar on a band with no available channel —
+ a main-chain CAC first, then the background chain
+
+hostapd 2.12 (src/ap/dfs.c) with enable_background_radar=1:
+
+1. hostapd_handle_dfs() starts the background CAC on the configured channel
+   and serves meanwhile on an AVAILABLE channel (dfs_set_valid_channel(iface,
+   1)). With none (every channel of the band is DFS and none is cleared yet:
+   the 5 GHz-high radio in an ETSI country at boot) it returns -1 and the
+   interface setup fails ("could not get valid channel"). Fix: with no
+   available channel, run the CAC on the main chain (the plain path) and arm
+   the background chain once the AP is up (hostapd_dfs_complete_cac()).
+2. A start on an already-available channel never armed the background chain
+   (it was armed only on the temporary-channel path). Fix: arm it there too.
+3. radar_background.channel was zero-initialised, and 0 is not the "no chain"
+   value (-1): a radar with no chain ever armed took the background branch
+   towards channel 0 (its failed CSA then fell back to the normal switch).
+   Fix: -1 in hostapd_alloc_iface().
+
+Only an interface with enable_background_radar=1 on a driver declaring
+RADAR_BACKGROUND is affected. Applies after 0001-0003 (0003 = no_pri_sec_switch touches hostapd/config_file.c
+only). Compile-checked (test/build-hostapd-confcheck.sh on 2.12 + 0001-0003);
+NOT yet run on the device (open-wifi ledger ZW-HOSTAPD-COLD).
+---
+--- a/src/ap/dfs.c
++++ b/src/ap/dfs.c
+@@ -40,6 +40,8 @@
+ 		iface->conf->enable_background_radar;
+ }
+ 
++static void hostapd_dfs_update_background_chain(struct hostapd_iface *iface);
++
+ 
+ static int dfs_get_used_n_chans(struct hostapd_iface *iface, int *seg1)
+ {
+@@ -838,6 +840,7 @@
+ {
+ 	int res, n_chans, n_chans1, start_chan_idx, start_chan_idx1;
+ 	int skip_radar = 0;
++	bool background;
+ 
+ 	if (is_6ghz_freq(iface->freq))
+ 		return 1;
+@@ -881,8 +884,17 @@
+ 		wpa_printf(MSG_DEBUG,
+ 			   "DFS all channels available, (SKIP CAC): %s",
+ 			   res ? "yes" : "no");
+-		if (res)
++		if (res) {
++			/*
++			 * A start on an available channel arms the background
++			 * chain too (else it is armed only on the temporary
++			 * channel path and never on this one).
++			 */
++			if (dfs_use_radar_background(iface) &&
++			    iface->radar_background.channel == -1)
++				hostapd_dfs_update_background_chain(iface);
+ 			return 1;
++		}
+ 
+ 		/* Check if any of configured channels is unavailable */
+ 		res = dfs_check_chans_unavailable(iface, start_chan_idx,
+@@ -897,10 +909,25 @@
+ 		}
+ 	} while (res);
+ 
++	/*
++	 * A background CAC needs an available channel to serve on meanwhile
++	 * (dfs_set_valid_channel(iface, 1) below). Without one (e.g. every
++	 * channel of the band is DFS and none is cleared yet) run the CAC on
++	 * the main chain first; the background chain is armed once the AP is
++	 * up (hostapd_dfs_complete_cac()).
++	 */
++	background = dfs_use_radar_background(iface);
++	if (background && dfs_find_channel(iface, NULL, 0, DFS_AVAILABLE) == 0) {
++		wpa_printf(MSG_INFO,
++			   "DFS: no available channel to serve on during a background CAC on %d MHz: CAC on the main chain first",
++			   iface->freq);
++		background = false;
++	}
++
+ 	/* Finally start CAC */
+ 	hostapd_set_state(iface, HAPD_IFACE_DFS);
+ 	wpa_printf(MSG_DEBUG, "DFS start CAC on %d MHz%s", iface->freq,
+-		   dfs_use_radar_background(iface) ? " (background)" : "");
++		   background ? " (background)" : "");
+ 	wpa_msg(iface->bss[0]->msg_ctx, MSG_INFO, DFS_EVENT_CAC_START
+ 		"freq=%d chan=%d sec_chan=%d, width=%d, seg0=%d, seg1=%d, cac_time=%ds",
+ 		iface->freq,
+@@ -918,14 +945,14 @@
+ 		hostapd_get_oper_chwidth(iface->conf),
+ 		hostapd_get_oper_centr_freq_seg0_idx(iface->conf),
+ 		hostapd_get_oper_centr_freq_seg1_idx(iface->conf),
+-		dfs_use_radar_background(iface));
++		background);
+ 
+ 	if (res) {
+ 		wpa_printf(MSG_ERROR, "DFS start_dfs_cac() failed, %d", res);
+ 		return -1;
+ 	}
+ 
+-	if (dfs_use_radar_background(iface)) {
++	if (background) {
+ 		/* Cache background radar parameters. */
+ 		iface->radar_background.channel = iface->conf->channel;
+ 		iface->radar_background.secondary_channel =
+@@ -1249,6 +1276,11 @@
+ 			    hostapd_is_dfs_chan_available(iface)) {
+ 				hostapd_setup_interface_complete(iface, 0);
+ 				iface->cac_started = 0;
++				/* the main-chain CAC came first: arm the chain */
++				if (dfs_use_radar_background(iface) &&
++				    iface->radar_background.channel == -1)
++					hostapd_dfs_update_background_chain(
++						iface);
+ 			}
+ 		}
+ 	} else if (hostapd_dfs_is_background_event(iface, freq)) {
+--- a/src/ap/hostapd.c
++++ b/src/ap/hostapd.c
+@@ -3172,6 +3172,8 @@
+ 		return NULL;
+ 
+ 	dl_list_init(&hapd_iface->sta_seen);
++	/* no background radar chain yet (0 is a channel number) */
++	hapd_iface->radar_background.channel = -1;
+ 
+ 	return hapd_iface;
+ }
