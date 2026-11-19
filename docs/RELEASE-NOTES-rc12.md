@@ -61,7 +61,7 @@ Built from (`gt-be98-rc12` tags, ⟨to be set⟩):
 |---|---|
 | gt-be98-buildroot | `br-rc12-r-2026-11-19` (= `br-int10-2026-11-19` `9521749` + these notes; `mainline-os` `aed50af` is already its base) |
 | open-wifi (`bca_pcie_ipc.ko`) | unchanged since RC11: `4040667a` (module byte-identical, `ef62b85c`) |
-| open-ethernet (Runner, kernel series, `rtl8372.ko`) | `oe-tagrw-2026-11-18` `b367e51` (= RC11's `main` `a9c80d1` + TAGRW `72c62cf` + a checkpatch pass); Runner module `7305bbc3` |
+| open-ethernet (Runner, kernel series, `rtl8372.ko`) | `oe-tagrw-clean-2026-11-19` `effa5fa` (= RC11's `main` `a9c80d1` + TAGRW `72c62cf` + a checkpatch pass + one tools-only cleanup); Runner module `7305bbc3`. The box-tested commit is `b367e51` (q322–q327, imgint10); `b367e51..effa5fa` touches only `tools/xpe/` and the module built from `effa5fa` is byte-identical |
 | web UI (gt-be98-webui-go) | `wu-int10-2026-11-19` `e338c18` (= RC11's `main` `45d466a` + `wu-24g-eht-off` `0fa2463` + `wu-gw-mgmtaddrs` `5d910cc` + `wu-admin-listen` `5bcfb7f`) |
 | hostapd | 2.12 with the local patches `0001`, `0002`, `0003` (unchanged) |
 | Linux / Buildroot | 7.2.9 / 2026.08 (kernel configuration unchanged since RC7) |
@@ -262,10 +262,10 @@ stays unbound; fallback then left), six boot mutants.
   this OS. Their arms need a cable move.
 - 2.5 Gbit/s line rate and more than one cabled jack remain untested.
 
-**Repository hygiene:** the open-ethernet branch carries one cleanup commit
-(`oe-tagrw-clean-2026-11-19` `effa5fa`, tools only). It moves a test
-fixture's source address to the documentation range, and the Runner module
-built from it is byte-identical to `7305bbc3`. Older commit messages
+**Repository hygiene:** RC12's open-ethernet commit `effa5fa` is the
+box-tested `b367e51` plus one tools-only cleanup: a test fixture's source
+address moved to the documentation range. The Runner module built from it is
+byte-identical to `7305bbc3`. Older commit messages
 already on public branches stay in the history: removing them would need a
 force push, which is not done.
 
