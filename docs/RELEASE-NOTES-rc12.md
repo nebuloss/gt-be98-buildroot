@@ -9,8 +9,9 @@ Date: 2026-11-19 · Status: **DRAFT**, release candidate 12, not tagged.
 Evidence is named by the orchestrator's queue (`qNNN`). The run directories
 stay on the orchestrator's machine and are not in this repository. Every
 number comes with the run that measured it, and "not measured" never means
-0. Lab image `imgint10` is the lab-mode build of the RC12 sources (same
-commits, lab keys). The release images below are the `RELEASE=1` build of
+0. Lab image `imgint11` is the lab-mode build of the RC12 sources (same
+commits, lab keys). The integration image `imgint10` is imgint11 without
+the RA fix and with the box-tested open-ethernet commit (see below). The release images below are the `RELEASE=1` build of
 those sources.
 
 RC12 is a small candidate on top of RC11:
@@ -25,6 +26,9 @@ RC12 is a small candidate on top of RC11:
 - **The web UI admin listener** is managed from boot: loopback plus the
   watcher, and a logged wildcard fallback only after 90 s without an
   address.
+- **Fix: an unchanged IPv6 Router Advertisement no longer re-applies the
+  gateway networks.** Every RA cost about 1.8 CPU-seconds; this was the
+  intermittent idle-CPU bursts.
 
 ## Images
 
@@ -38,7 +42,7 @@ Build id (DT): `⟨release build id⟩`
 Built with `RELEASE=1` (`ml-bootfs.info`: `release mode: yes`).
 
 - **Release check:** `⟨release-check.sh result, selftest n/n⟩` with RC7's lab-pattern list.
-- **Lab control:** `⟨the lab image imgint10 fails the same check with N findings⟩`.
+- **Lab control:** `⟨the lab image imgint11 fails the same check with N findings⟩`.
 - **Exact-pattern list:** `⟨expected: finds only the lab public key, as in RC7-RC11⟩`.
 
 **These images are a TEST build.** Their `SSH_AUTHORIZED_KEYS` is the
@@ -48,18 +52,23 @@ same sources with the recipient's keys, checked again with
 password and no rootfs URL. They contain proprietary vendor firmware, so
 they are handed over privately and never published (`docs/RELEASE-BUILD.md`).
 
-Lab image imgint10: `rootfs.squashfs`
-`9bd89d854407f10385e01699ad619ffb300f9061f22893924df8dce9dffbcfea`,
-build id `20261119T122314Z-f8d100655f55-rw-jffs`. Against RC11's lab image
-imgint9 exactly three files of the OS differ (`/usr/sbin/webui`,
-`/usr/sbin/gt-be98-gw`, `/usr/sbin/gt-be98-wifi-gen`) plus the Runner module;
-the Wi-Fi and switch modules are byte-identical.
+Lab image imgint11: `rootfs.squashfs`
+`792c7a3e81bf2669b662c00dbf34ff96f30eb30c9041ae0b56f669e603b2c2c6`,
+build id `20261119T133846Z-f5a0e85515e6-rw-jffs`. Its rootfs differs from
+imgint10's (`9bd89d85…`, build id `20261119T122314Z-f8d100655f55-rw-jffs`,
+the image of q325–q327) in exactly two files, by a file-by-file comparison
+of both trees: `/usr/sbin/gt-be98-wan` (the RA fix) and
+`/etc/gt-be98-release` (open-ethernet `effa5fa` instead of `b367e51`, and the
+build time). Against RC11's lab image imgint9, imgint10 differs in
+`/usr/sbin/webui`, `/usr/sbin/gt-be98-gw`, `/usr/sbin/gt-be98-wifi-gen` and
+the Runner module. The Wi-Fi and switch modules are byte-identical
+throughout.
 
 Built from (`gt-be98-rc12` tags, ⟨to be set⟩):
 
 | Component | Commit |
 |---|---|
-| gt-be98-buildroot | `br-rc12-r-2026-11-19` (= `br-int10-2026-11-19` `9521749` + these notes; `mainline-os` `aed50af` is already its base) |
+| gt-be98-buildroot | `br-rc12-r-2026-11-19` (= `br-int10-2026-11-19` `9521749` + these notes + the open-ethernet pin `effa5fa` + `br-ra6-reroute-2026-11-19` `f21929d` + its mutants; `mainline-os` `aed50af` is already its base). imgint11 was built from `f21929d`; later commits change only `docs/` and `test/` |
 | open-wifi (`bca_pcie_ipc.ko`) | unchanged since RC11: `4040667a` (module byte-identical, `ef62b85c`) |
 | open-ethernet (Runner, kernel series, `rtl8372.ko`) | `oe-tagrw-clean-2026-11-19` `effa5fa` (= RC11's `main` `a9c80d1` + TAGRW `72c62cf` + a checkpatch pass + one tools-only cleanup); Runner module `7305bbc3`. The box-tested commit is `b367e51` (q322–q327, imgint10); `b367e51..effa5fa` touches only `tools/xpe/` and the module built from `effa5fa` is byte-identical |
 | web UI (gt-be98-webui-go) | `wu-int10-2026-11-19` `e338c18` (= RC11's `main` `45d466a` + `wu-24g-eht-off` `0fa2463` + `wu-gw-mgmtaddrs` `5d910cc` + `wu-admin-listen` `5bcfb7f`) |
@@ -106,10 +115,11 @@ plus the refused-retag cases and mutants; `fc_bind_test` 30 590 checks.
 - q324 (r3): routed IPv6 **GW6-up / GW6-dn PASS at 0.093 / 0.094
   cores/Gbit**. The L3-FDB FDB move (M) PASS. IPv4 GW4-up/dn offloaded
   (CPU fraction 0.000 / 0.002) but REFUTED on CPU cost alone; see the
-  known-open box background load below.
+  box background load fixed below.
 - q324 GW4X (stop with a live flow) REFUTED: a race in gt-be98-gw's stop.
   It is fixed in this candidate, see below.
 - ⟨q326: tagrw r5 on imgint10 — GW4X with the stop fix, GW4 up/dn, N/M, GW6⟩
+- ⟨qNNN: tagrw r5 on imgint11 — GW4 up/dn with the RA fix: NO-HOT predicted⟩
 
 ### 2.4 GHz defaults to Wi-Fi 7 off (OS `gt-be98-wifi-gen`, web UI)
 
@@ -191,6 +201,42 @@ boxes that do have a managed gateway network.
 
 Box: ⟨q326 gateway r17 GW1 GW2 on imgint10 (mg_pre through mgmt-addrs)⟩
 
+### Fix: an unchanged IPv6 RA re-applied every gateway network (OS `gt-be98-wan`)
+
+**The defect.** dhcpcd 10.2.4 runs its ROUTERADVERT hook for every Router
+Advertisement it receives, changed or not (`ipv6nd_handlera` →
+`ipv6nd_scriptrun`, no test of new data). gt-be98-wan's hook answered every
+one with a full `gt-be98-gw reroute` in the background: the rule set, the
+tables, dnsmasq, and with `WAN_PD_LANS` a flush and rebuild of table 182.
+That is about 1.8 CPU-seconds per RA, at the router's advertising interval
+(the lab's WAN server sends one every 20 s).
+
+**How it was found.** No new box run was needed. The per-process tables of
+the tagrw r4 run record (⟨its queue⟩) show the CPU of the hot windows in REAPED
+children: init's `cutime` grew by +177..179 jiffies per episode (the
+orphaned background reroute), and dhcpcd's by +24..25 (the hook runner).
+This holds in every hot window and in no cold one, 94 % of the excess. The
+windows were 0.11–0.41 cores, user:sys about 1:2.6 on all four CPUs, never
+softirq.
+
+**The fix (`br-ra6-reroute-2026-11-19` `f21929d`).** The hook keeps the
+WAN's IPv6 state from the last RA it acted on: `<netdev> <default routers>
+| <global addresses>`, without lifetimes or flags. An RA that leaves it
+unchanged returns at once. Any other hook reason, and a stop, forget it,
+so the next RA is acted on in full. A new router, a router gone (dhcpcd's
+ROUTERADVERT on expiry) or a new SLAAC address still reroute.
+
+Tests: `gt-be98-wan-test` 261/261 (dash and bash). The 3 new checks fail on
+the old script. Their controls still act: another router, a new global
+address, INFORM6/RENEW6, a stop/start, an expired route. `gt-be98-gw-test`
+213/213. `gt-be98-gw-mutants` gains six mutants (no early return, state
+never recorded, stop or another reason keeping it, addresses or routers left
+out of it): all killed.
+
+**Box evidence**
+- ⟨qNNN: tagrw r5 on imgint11 — the idle windows NO-HOT (prediction), the per-process tables without the reaped-reroute signature⟩
+- ⟨qNNN: gw5-ipv6 r11 on imgint11 (SHA_WAN `b4db4370…`) — SLAAC, DHCPv6, renumbering paths still act⟩
+
 ### The web UI admin listener is managed from boot (web UI)
 
 **RC11's known-open item.** The web UI starts before DHCP gives the
@@ -217,7 +263,7 @@ stays unbound; fallback then left), six boot mutants.
 - ⟨q325: listener reading on a normal boot — no FALLBACK line, loopback then the management address on :80, no wildcard⟩
 - ⟨q325: WAN admin reach PASS (WAN :80/:22 dropped; management path connects)⟩
 
-## Box evidence (imgint10 unless noted)
+## Box evidence (imgint10 / imgint11 as noted)
 
 | Queue | Image | Result |
 |---|---|---|
@@ -228,9 +274,10 @@ stays unbound; fallback then left), six boot mutants.
 | q325 | imgint10 | ⟨listener, fixed-primary, eht24, WAN reach, UI degraded-apply, perf smoke⟩ |
 | q326 | imgint10 (+ imgint9 for ABA) | ⟨tagrw r5, gateway r17 GW1 GW2, gw5-ipv6 r10, perf ABA imgint10/imgint9/imgint10⟩ |
 | q327 | imgint10 | ⟨gw5-ipv6 r11⟩ |
-| ⟨qNNN⟩ | imgint10 | ⟨**RC12 regression set** (RC12-REGRESSION-QUEUE.sh): UI degraded-apply, L1 two cycles, WIFISTOP r2 + RESTORE-OK, soak DRY, perf smoke, baselines⟩ |
-| ⟨qNNN⟩ | imgint10 | ⟨**30-minute release soak** (rc12-soak.sh; identity bca `ef62b85c`, runner `7305bbc3`, webui `ebfb76e2`, gw `8e664b6a`, wifi-gen `d911ec41`)⟩ |
-| ⟨qNNN⟩ | release | ⟨release-image box phases: first n/n, second n/n; lab image imgint10 restored⟩ |
+| ⟨qNNN⟩ | imgint11 | ⟨RA fix box verification: tagrw r5 (NO-HOT predicted) + gw5-ipv6 r11⟩ |
+| ⟨qNNN⟩ | imgint11 | ⟨**RC12 regression set** (RC12-REGRESSION-QUEUE.sh): UI degraded-apply, L1 two cycles, WIFISTOP r2 + RESTORE-OK, soak DRY, perf smoke, baselines⟩ |
+| ⟨qNNN⟩ | imgint11 | ⟨**30-minute release soak** (rc12-soak.sh; identity bca `ef62b85c`, runner `7305bbc3`, webui `ebfb76e2`, gw `8e664b6a`, wifi-gen `d911ec41`, wan `b4db4370`)⟩ |
+| ⟨qNNN⟩ | release | ⟨release-image box phases: first n/n, second n/n; lab image imgint11 restored⟩ |
 
 ## Known open
 
@@ -239,12 +286,11 @@ stays unbound; fallback then left), six boot mutants.
   another host (N), the old host's uplink entry stays on its bridge port
   until `fc_idle_s`. Q1 is whether L3-FDB should drop it at once
   (q322/q324 N REFUTED `post_hw_old`). The FDB move (M) passes.
-- **Intermittent box background CPU bursts.** Some 5 s idle windows (no
-  traffic) show 0.16–0.64 busy cores. The time is system time, spread
-  evenly over the four CPUs, never softirq. Runs that overlap a burst read
-  as extra cores/Gbit (q324 IPv4 LON runs 0.085–0.220). The cause is not
-  identified yet: tagrw r4/r5 name the top CPU consumers per window,
-  ⟨q326 attribution⟩.
+- **The intermittent box background CPU bursts are FIXED, pending box
+  verification.** The cause was the per-RA gateway re-apply above (q324
+  IPv4 LON runs 0.085–0.220 cores/Gbit overlapped it). It is fixed in
+  `f21929d`. ⟨qNNN tagrw r5 on imgint11: NO-HOT⟩ — until that row is
+  filled, this stays open.
 - **The RC11 q305 cores/Gbit dip** is still unexplained. It was not
   reproduced on imgint8 (q307) or imgint9 (q309). ⟨q326 perf ABA
   imgint10/imgint9/imgint10⟩.
