@@ -26,10 +26,13 @@
 # airtime=2|3 share the radio between networks by airtime_weight (3 caps the
 # networks with airtime_limit=1). Off (airtime=0) by default.
 # Radio options: ax=1 turns HE (802.11ax) on for 2g/5gl/5gh (6g is always
-# HE); twt=0 turns hostapd's TWT responder off (on by default, HE radios
-# only); zwdfs=1 (5gl/5gh, a DFS channel, country set) is zero-wait DFS: the
-# radio starts at once on a non-DFS channel, the DFS channel's CAC runs in
-# the background, then hostapd moves there; monitor=1 makes the radio a
+# HE); be=0|1 is EHT (802.11be, Wi-Fi 7): on by default on 5gl/5gh/6g, off
+# on 2g, where the firmware never beamforms a Wi-Fi 7 client and Wi-Fi 6 is
+# faster (be=1 turns it on there); twt=0 turns hostapd's TWT responder off
+# (on by default, HE radios only); zwdfs=1 (5gl/5gh, a DFS channel,
+# country set) is zero-wait DFS: the radio starts at once on a non-DFS
+# channel, the DFS channel's CAC runs in the background, then hostapd moves
+# there; monitor=1 makes the radio a
 # monitor (<dev>mon on its channel/width, no BSS); led=0 turns its LED off.
 # zwdfs=1 acts in US and JP only: in any other country (an ETSI DFS region)
 # it is ignored with a warning (the driver refuses a background CAC there).
@@ -51,6 +54,8 @@ channel=6
 # channel=auto: automatic channel selection (hostapd ACS) on 2g, 5gl, 5gh
 #channel=auto
 width=20
+# Wi-Fi 7 on 2.4 GHz (off by default)
+#be=1
 radio=5gl
 channel=36
 # no width=: 160 MHz (36-64, DFS on 52-64: 60 s CAC) once the country is
