@@ -2,9 +2,9 @@
 
 Date: 2026-11-19 · Status: **DRAFT**, release candidate 12, not tagged.
 
-> DRAFT until the release-image box phases have run: the release image's
-> sha256s, its release-check result and the phases row are the last
-> placeholders (`⟨…⟩`). The box evidence of the candidate (q325–q331) is final.
+> DRAFT until the release-image box phases have run: the phases row and
+> the tags are the last placeholders (`⟨…⟩`). The candidate's box evidence
+> (q325–q331), the release images and their checks are final.
 
 Evidence is named by the orchestrator's queue (`qNNN`). The run directories
 stay on the orchestrator's machine and are not in this repository. Every
@@ -34,16 +34,34 @@ RC12 is a small candidate on top of RC11:
 
 | File | sha256 |
 |---|---|
-| `rootfs.squashfs` | `⟨release rootfs sha256⟩` |
-| `ml-bootfs.itb` | `⟨release itb sha256⟩` |
+| `rootfs.squashfs` | `b839b94994ba09de2489cac300bb953aced7194509c70dc469f65dcfd69bfc1a` |
+| `ml-bootfs.itb` | `76d2c7daa96327d52233aaade3470f3ae120104598cc0d0e0536ee79b9734f72` |
 
-Build id (DT): `⟨release build id⟩`
+Build id (DT): `20261119T163327Z-5c1dcbea3182-rw-jffs`
 
-Built with `RELEASE=1` (`ml-bootfs.info`: `release mode: yes`).
+Built with `RELEASE=1` (`ml-bootfs.info`: `release mode: yes`) from
+`br-rc12-r-2026-11-19` `fae42b0`. Later commits of that branch change only
+`docs/`.
 
-- **Release check:** `⟨release-check.sh result, selftest n/n⟩` with RC7's lab-pattern list.
-- **Lab control:** `⟨the lab image imgint11 fails the same check with N findings⟩`.
-- **Exact-pattern list:** `⟨expected: finds only the lab public key, as in RC7-RC11⟩`.
+- **Release check:** `release-check.sh` returned PASS (selftest 21/21) with RC7's lab-pattern list.
+- **Lab control:** the lab image imgint11 fails the same check with 15 findings, as it should.
+- **Exact-pattern list:** finds only the lab public key, as in RC7–RC11.
+- **Modules against the tested lab image (imgint11):**
+  - **`rtl8372.ko` is byte-identical** (`39323095`).
+  - **`bca_pcie_ipc.ko` and `bcm4916-runner.ko`** are the same build at a
+    different path. The kernel-module builds embed their build directory
+    (in `__FILE__` strings), and the release build has its own output
+    directory, so the files differ (release `a749242f` / `8f5ff8e0` vs
+    lab `ef62b85c` / `7305bbc3`). RC11's release modules differed from
+    its lab image's the same way.
+  - **Compared section by section, every code and relocation section is
+    identical:** 34 of 37 sections in `bca_pcie_ipc.ko`, 38 of 41 in
+    `bcm4916-runner.ko`.
+  - **`.rodata`** is identical once the build-path prefix is swapped (21
+    and 8 occurrences).
+  - **`.symtab`** differs only in symbol values: 26 and 14 `.rodata`
+    symbols, shifted by the two paths' length difference.
+  - **`.note.gnu.build-id`** is a hash over the contents, so it follows.
 
 **These images are a TEST build.** Their `SSH_AUTHORIZED_KEYS` is the
 lab's public key, so they are never handed over. A hand-over build is the
@@ -300,6 +318,8 @@ stays unbound; fallback then left), six boot mutants.
 | q325 | imgint10 | listener PASS (no fallback); fixed-primary PASS; eht24 FAIL on E-DN only (148.7 vs 150 Mbit/s; HE 3/3, sounded, `be=1` EHT back, 1.47×); WAN admin reach PASS; UI degraded-apply PASS; perf smoke 5gl/6g throughput −4..−13 % (re-measured in q326: drift). tagrw r4 / gateway r16 VOID at G (an arm bug, the new `mgmt-addrs` word); gw5 r10 WS REFUTED (an arm race, fixed in r11) |
 | q326 | imgint10 (+ imgint9 for ABA) | tagrw r5: GW6 PASS 0.027/0.024, GW4X PASS (stop fix), M WIRE R PASS, GW4 spikes = RA bursts; gateway r17 GW1 GW2 PASS; **perf ABA: imgint10 = imgint9 on every gated row** (5gl 883/826 vs 884/824, 6g 1363/1067 vs 1332/1063 Mbit/s): q325's smoke dip was drift |
 | q327 | imgint10 | gw5-ipv6 r11 FULL PASS (WS S GW5 GW5M GW5D GW5S GW5L WIRE R) |
+| q328 | imgint10 + bench Runner module | PPPoE IPv6 offload arm r1: G VOID (the jack-6 peer was not in its PVE netns: the queue did not place it and the arm assumed it). R `pve_clean` flagged by the arm's own process match. Nothing was changed on the box or PVE |
+| q329 | imgint10 + bench Runner module | The same arm with the peer placed: IPv6 over PPPoE works and is offloaded on silicon. PV6-up PASS 0.090 cores/Gbit; PV6-dn REFUTED on CPU cost alone (0.163; idle windows of that run were busy too. On imgint11, without the RA bursts, q330 PV6-dn PASS 0.045); RL PKG S PU V6 WIRE PURGE PASS. Not in RC12 |
 | q330 | imgint11 | **RA fix confirmed:** tagrw r5 GW4 0.042/0.037, GW6 0.025/0.026, GW4X M V6 WIRE R PASS, N `post_hw_old` (Q1), idle 0.02–0.07 (NO-HOT); gw5-ipv6 r11 FULL PASS; pppoe6 r3 (bench module, not in RC12) PV6 PASS |
 | q331 | imgint11 | **RC12 regression set PASS:** baselines PASS; UI degraded-apply PASS; L1 two cycles real 0/0, dsmb 0; WIFISTOP r2 PASS + RESTORE-OK; soak DRY-OK; perf smoke: every gated 5gl/6g row OK, only the 2.4 GHz RTL row flagged (noisy, never gated: 25–31 Mbit/s within q326 alone) |
 | q331 | imgint11 | **30-minute release soak PASS** (rc12-soak.sh; identity checked: bca `ef62b85c`, runner `7305bbc3`) |
