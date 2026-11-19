@@ -37,6 +37,7 @@ mutant "netguard: rule 6 off" sbin/gt-be98-netguard 's/if protected "\${1%%.\*}"
 mutant "netguard: a gateway bridge's jacks refused (trunk - not accepted)" sbin/gt-be98-netguard 's/\[ "\$L2T" = - \] && \[ "\${L2U:-\$TRUNK}" = "\$TRUNK" \]/false/' gt-be98-netguard-test.sh
 mutant "gw: a public subnet accepted" sbin/gt-be98-gw 's/{ echo "subnet .\$1.: not a private (RFC 1918) range (D-GW9)"; return; }/:/' gt-be98-gw-test.sh
 mutant "gw: /8 accepted" sbin/gt-be98-gw 's/\[ "\$l" -ge 16 \] && \[ "\$l" -le 30 \]/[ "$l" -ge 8 ] \&\& [ "$l" -le 30 ]/' gt-be98-gw-test.sh
+mutant "gw (q324): a stopped network's flows deleted at once, before the path is cut" sbin/gt-be98-gw 's/^\tcase "\$s" in local|routed) ct_defer "\$(subnet_of "\$c")" ;; esac$/\tcase "$s" in local|routed) ct_del "$(subnet_of "$c")" ;; esac/' gt-be98-gw-test.sh
 mutant "gw: no isolate drop" sbin/gt-be98-gw 's/^\t\t\tiifname @iso counter drop$//' gt-be98-gw-test.sh
 mutant "gw: no suppress_prefixlength rule" sbin/gt-be98-gw 's/lookup main suppress_prefixlength 0/lookup main/' gt-be98-gw-test.sh
 mutant "gw: no hold for gt-be98-l2" sbin/gt-be98-gw 's/^\t\t\t\t\t: > "\$GW\/hold\/\$b"$/\t\t\t\t\t:/' gt-be98-gw-test.sh
@@ -70,7 +71,7 @@ mutant "gw6: the WAN_PD_LANS ids not reserved" sbin/gt-be98-gw 's/for x in \$WAN
 mutant "gw6: the id size not checked against the delegated length" sbin/gt-be98-gw 's/(l + 0 > 48 \&\& y + 0 >= 2 ^ (64 - l))/(0)/' gt-be98-gw-test.sh
 mutant "gw6: no suppress_prefixlength rule (IPv6)" sbin/gt-be98-gw 's/ip -6 rule add iif "\$b" lookup main suppress_prefixlength 0/ip -6 rule add iif "$b" lookup main/' gt-be98-gw-test.sh
 mutant "gw6: IPv6 left on after the network's IPv6 stops" sbin/gt-be98-gw 's/^\t\tv6_sysctl "\$b" disable_ipv6 1$/\t\t:/' gt-be98-gw-test.sh
-mutant "gw6: renumbering deletes no flow" sbin/gt-be98-gw 's/^\t\tct_del "\${a%::1\/64}::\/64"$/\t\t:/' gt-be98-gw-test.sh
+mutant "gw6: renumbering deletes no flow" sbin/gt-be98-gw 's/^\t\tct_defer "\${a%::1\/64}::\/64"$/\t\t:/' gt-be98-gw-test.sh
 mutant "gw6: no unreachable route for the delegated prefix" sbin/gt-be98-gw 's/ip -6 route replace unreachable "\$PD6" metric "\$PD_METRIC"/:/' gt-be98-gw-test.sh
 mutant "gw6: IPv6 forwarding not held" sbin/gt-be98-gw 's/"\$FWD" -6 hold gw || rc=1/:/' gt-be98-gw-test.sh
 mutant "gw6: the address lifetimes not the delegation's" sbin/gt-be98-gw 's/valid_lft "\$vl" preferred_lft "\$pl"/valid_lft forever preferred_lft forever/' gt-be98-gw-test.sh
