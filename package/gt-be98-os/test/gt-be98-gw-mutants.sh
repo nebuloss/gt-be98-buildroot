@@ -90,5 +90,12 @@ mutant "wan: the delegated prefix not recorded" sbin/gt-be98-wan 's/BOUND6|RENEW
 mutant "wan: an expired prefix still reported" sbin/gt-be98-wan 's/\[ "\$vl" -gt "\$e" \] || return 1/:/' gt-be98-wan-test.sh
 mutant "wan: a stale prefix read after WAN_IPV6=0" sbin/gt-be98-wan 's/^\t\[ "\$W_IPV6" = 1 \] || return 1$/\t:/' gt-be98-wan-test.sh
 mutant "wan: IPv6 forwarding written directly again" sbin/gt-be98-wan 's/"\$FWD" -6 hold wan \&\& put fwd6 1/sysctl -q -w net.ipv6.conf.all.forwarding=1; put fwd6 1/' gt-be98-wan-test.sh
+# the RA refresh (br-ra6-reroute f21929d): an unchanged RA is a refresh, nothing follows it
+mutant "wan (ra6): an unchanged RA rerouted again (no early return)" sbin/gt-be98-wan 's/^\t\t\t\[ "\$s" = "\$(cat "\$RA6" 2>\/dev\/null)" \] \&\& return 0$/\t\t\t:/' gt-be98-wan-test.sh
+mutant "wan (ra6): the RA state never recorded" sbin/gt-be98-wan 's/^\t\t\[ -z "\$s" \] || { mkdir -p "\$RUN" \&\& printf .%s.n. "\$s" > "\$RA6"; } ;;$/\t\t: ;;/' gt-be98-wan-test.sh
+mutant "wan (ra6): stop keeps the RA state (table 182 flushed, next RA skipped)" sbin/gt-be98-wan 's/^\trm -f "\$RA6"\t# table 182.*/\t:/' gt-be98-wan-test.sh
+mutant "wan (ra6): another hook reason keeps the RA state" sbin/gt-be98-wan 's/^\t\t\trm -f "\$RA6"$/\t\t\t:/' gt-be98-wan-test.sh
+mutant "wan (ra6): the WAN's global addresses not in the RA state" sbin/gt-be98-wan 's/if (\$i == "inet6") print \$(i + 1) }/if ($i == "inet9") print $(i + 1) }/' gt-be98-wan-test.sh
+mutant "wan (ra6): the default routers not in the RA state" sbin/gt-be98-wan 's/if (\$i == "via") v = \$(i + 1); print v }/if ($i == "vix") v = $(i + 1); print v }/' gt-be98-wan-test.sh
 echo "gt-be98-gw-mutants: $pass ok, $fail failed"
 [ $fail -eq 0 ]
