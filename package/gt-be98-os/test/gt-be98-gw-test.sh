@@ -54,7 +54,7 @@ echo "nft $*" >> "$FAKE/log"
 if [ "$1" = -c ]; then cp "$3" "$FAKE/last.nft"; grep -q REFUSE "$3" && exit 1; fi
 exit 0
 X
-printf '#!/bin/sh\necho "conntrack $*" >> "$FAKE/log"\nexit 1\n' > "$T/bin/conntrack"
+printf '#!/bin/sh\necho "conntrack $*" >> "$FAKE/log"\necho "$(cat "$FAKE/ip_forward") $*" >> "$FAKE/ctfwd"\nexit 1\n' > "$T/bin/conntrack"
 cat > "$T/bin/dnsmasq" <<'X'
 #!/bin/sh
 echo "dnsmasq $*" >> "$FAKE/log"
@@ -77,7 +77,7 @@ pass=0 fail=0
 check() { if [ "$2" = "$3" ]; then pass=$((pass + 1)); echo "ok   $1"; else fail=$((fail + 1)); echo "FAIL $1: want [$2] got [$3]"; fi; }
 yn() { if "$@"; then echo yes; else echo no; fi; }
 has() { grep -qF -- "$2" "$1" 2>/dev/null; }
-run() { : > "$T/log"; ${SH:-sh} "$GWT" "$@" > "$T/out" 2> "$T/err"; rc=$?; }
+run() { : > "$T/log"; : > "$T/ctfwd"; ${SH:-sh} "$GWT" "$@" > "$T/out" 2> "$T/err"; rc=$?; }
 log() { grep -E -- "$1" "$T/log" | tr '\n' '|' | sed 's/|$//'; }
 st() { sed -n "s/^$2 //p" "$G/net/$1" 2>/dev/null; }
 NETS() { printf '# web UI\n' > "$GT_BE98_NETWORKS"; for l; do echo "$l" >> "$GT_BE98_NETWORKS"; done; }
@@ -244,9 +244,14 @@ run apply; check "the bridge moved: address off brwifi100004, on brwifi8, hold m
 	"$(st 4 bridge) $(yn grep -qx 'brwifi100004 192.168.40.1/24' "$T/addrs") $(yn grep -qx 'brwifi8 192.168.40.1/24' "$T/addrs") $(ex "$G/hold/brwifi100004") $(ex "$G/hold/brwifi8")"
 # 10. the network becomes VLAN only: stopped BEFORE gt-be98-l2 sync carries its VLAN again
 NETS "network=4 name=Lab vlan=40 subnet=192.168.40.1/24 mode=vlan"
-run apply; check "mode=vlan again: address, rules, hold removed, flows deleted, then sync" \
-	"ip rule del iif brwifi8 priority 184|ip rule del iif brwifi8 priority 185|ip addr del 192.168.40.1/24 dev brwifi8|conntrack -D -s 192.168.40.0/24|conntrack -D -d 192.168.40.0/24|l2 sync" \
+run apply; check "mode=vlan again: address, rules, hold removed, then sync, the flows deleted LAST" \
+	"ip rule del iif brwifi8 priority 184|ip rule del iif brwifi8 priority 185|ip addr del 192.168.40.1/24 dev brwifi8|l2 sync|conntrack -D -s 192.168.40.0/24|conntrack -D -d 192.168.40.0/24" \
 	"$(log '^(ip rule del|ip addr del|conntrack|l2 sync)')"
+# q324 (lab, tagrw-offload-arm-r3 GW4X): deleted while the NAT table and forwarding still ran, a live TCP stream re-created
+# its conntrack entry (mid-stream pickup), was NATed out and offloaded again. The last network leaving: its flows go only
+# once the rule set no longer carries it and forwarding is released
+check "... the flows deleted after the rule set's delete and with forwarding released (ip_forward 0 at each conntrack -D)" "yes 0 0" \
+	"$(awk '/^nft -f / { n = NR } /^conntrack -D/ && !c { c = NR } END { print (n && c && n < c) ? "yes" : "no" }' "$T/log") $(cut -d' ' -f1 "$T/ctfwd" | sort -u | tr '\n' ' ' | sed 's/ $//') $(cut -d' ' -f1 "$T/ctfwd" | sort -u | wc -l | sed 's/^1$/0/')"
 check "... no gateway network left: tables deleted, dnsmasq stopped, forwarding back to 0, no hold" "yes yes 0 no no" \
 	"$(yn grep -q 'delete table inet gt_be98_gw' "$T/last.nft") $(yn grep -q 'start-stop-daemon --stop' "$T/log") $(cat "$T/ip_forward") $(ex "$G/hold/brwifi8") $(ex "$G/net/4")"
 check "... and the tables are not re-created (only the deletes)" no "$(yn grep -q '^table inet gt_be98_gw {$' "$T/last.nft")"
@@ -263,6 +268,8 @@ run apply; check "address refused: rc 1, inactive, the rule set re-applied (no e
 rm -f "$T/refuse-addr"
 # 13. stop: everything undone, the image's forwarding
 run apply; run stop
+check "stop (q324): the flows deleted LAST - after both tables are deleted and forwarding released (ip_forward 0)" "yes yes 0" \
+	"$(awk '/^nft delete table ip gt_be98_gw_nat/ { n = NR } /^conntrack -D -s 192.168.40.0\/24$/ { c = NR } END { print (n && c && n < c) ? "yes" : "no" }' "$T/log") $(yn grep -qx '0 -D -d 192.168.40.0/24' "$T/ctfwd") $(grep -vc '^0 ' "$T/ctfwd")"
 check "stop: address, rules, tables, dnsmasq, hold, forwarding" "no yes yes yes no 0" \
 	"$(yn grep -qx 'brwifi100004 192.168.40.1/24' "$T/addrs") $(yn grep -q 'ip rule del iif brwifi100004 priority 185' "$T/log") $(yn grep -q 'nft delete table inet gt_be98_gw' "$T/log") $(yn grep -q 'nft delete table ip gt_be98_gw_nat' "$T/log") $(ex "$G/hold/brwifi100004") $(cat "$T/ip_forward")"
 # 14. forwarding held by another owner too: gw's release keeps it on

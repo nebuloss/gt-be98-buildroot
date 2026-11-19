@@ -127,7 +127,14 @@
 # that NARROWS access (a network isolated, its management turned off, its
 # NAT refused, the network stopped) deletes the affected conntrack entries:
 # a flow the Runner offloaded before the change would otherwise keep running
-# in hardware (the flow cache drops an entry whose conntrack dies).
+# in hardware (the flow cache drops an entry whose conntrack dies). They are
+# deleted AFTER the path is cut (the rule set, and on stop the tables and
+# forwarding), never before: deleted first, the next packet of a live TCP
+# stream re-creates its entry (nf_conntrack_tcp_loose picks it up mid-stream)
+# while the NAT table and forwarding still run - routed by the main table once
+# the network's policy rule is gone - and the Runner offloads that new entry,
+# which then outlives the cut (lab q324: gt-be98-gw stop with an offloaded
+# flow, the same 5-tuple back in hardware and NATed segments after the stop).
 # FORWARDING: held as "gw" (gt-be98-fwd) while any network is local/routed.
 # ROUTER MAC (G6b, design section 4 risks): every gateway bridge gets ONE
 # MAC, the jacks' port's (GW_MAC_PORT, rnr1), set before its address. The
@@ -554,7 +561,7 @@ net_stop() {
 		[ -n "$c" ] && [ "$c" != - ] && ip addr del "$c" dev "$b" 2>/dev/null
 		rm -f "$GW/hold/$b"
 	fi
-	case "$s" in local|routed) ct_del "$(subnet_of "$c")" ;; esac
+	case "$s" in local|routed) ct_defer "$(subnet_of "$c")" ;; esac
 	sed -i "/^net $id /d" "$GW/applied" 2>/dev/null
 }
 net_destroy() { rm -f "$GW/net/$1"; }
@@ -572,6 +579,14 @@ gw_mac() {
 	return 0
 }
 
+# a stopped network's subnet (IPv4, or its IPv6 /64): its conntrack entries
+# are deleted once the path is cut (ct_flush_stopped: the end of apply / stop)
+ct_defer() { STOP_CT="${STOP_CT:-} $1"; }
+ct_flush_stopped() {
+	local x
+	for x in ${STOP_CT:-}; do ct_del "$x"; done
+	STOP_CT=
+}
 # conntrack entries from or to subnet $1 (and, given $2, only between $1 and
 # $2); an IPv6 subnet is named with its family (-f ipv6)
 ct_del() {
@@ -601,7 +616,7 @@ v6_stop() {
 		ip -6 rule del iif "$b" priority $((GW_PRIO + 1)) 2>/dev/null
 		ip -6 addr del "$a" dev "$b" 2>/dev/null
 		v6_sysctl "$b" disable_ipv6 1
-		ct_del "${a%::1/64}::/64"
+		ct_defer "${a%::1/64}::/64"
 		log "network $id: IPv6 ${a%::1/64}::/64 off $b"
 	done < "$GW/applied"
 	sed -i "/^net6 $id /d" "$GW/applied" 2>/dev/null
@@ -1273,6 +1288,9 @@ cmd_apply() {
 		if grep -qx fwd "$GW/applied" 2>/dev/null; then "$FWD" release gw; sed -i '/^fwd$/d' "$GW/applied"; fi
 		rm -f "$GW/gw.nft"
 	fi
+	# the stopped networks' flows, now that the rule set and forwarding no
+	# longer carry them (POLICY header)
+	ct_flush_stopped
 	return $rc
 }
 # the rule set could not be loaded: no network runs (inactive, held nothing)
@@ -1331,6 +1349,8 @@ cmd_stop() {
 	route6_clear
 	dnsmasq_stop
 	if grep -qx fwd "$GW/applied" 2>/dev/null; then "$FWD" release gw; fi
+	# the networks' flows last: the tables and forwarding are gone (POLICY)
+	ct_flush_stopped
 	# the lease table stays (D-GW7: the next start reads it back)
 	rm -f "$GW/applied" "$GW/wanted" "$GW/dnsmasq.conf" "$GW/dhcp-hosts" "$GW/gw.nft" "$GW"/plan.* "$GW/hold"/* 2>/dev/null
 	return 0
