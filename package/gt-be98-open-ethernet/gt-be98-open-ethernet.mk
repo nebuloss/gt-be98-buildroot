@@ -71,7 +71,9 @@
 #  + routed IPv6 offload (RT-IPV6 rebased), box-proven q322/q324; driver/runner + tools only; no linux-dirclean)
 # oe-tagrw-clean-2026-11-19 2026-11-19 effa5fa (RC12: b367e51, box-tested on imgint10, + one tools-only cleanup (a test
 #  fixture address to the documentation range); driver/ identical, the Runner ko byte-identical 7305bbc3)
-GT_BE98_OPEN_ETHERNET_VERSION = effa5facc60c3a042c5bc915ca4af8c566f9e680
+# oe-pppoe-v6-2026-11-19 2026-11-19 c56b79b (imgint12 / RC13 candidate: effa5fa + RUNNER-PPPOE-V6 afe01f7..c56b79b: routed IPv6 over
+#  the PPPoE WAN built (push + pull) instead of refused; box-proven with its bench ko q329/q330; driver/runner + tools only; no linux-dirclean)
+GT_BE98_OPEN_ETHERNET_VERSION = c56b79b69c9ef74c03d624de9c4e1e144386538c
 GT_BE98_OPEN_ETHERNET_SITE = git@github.com:nebuloss/gt-be98-open-ethernet.git
 GT_BE98_OPEN_ETHERNET_SITE_METHOD = git
 GT_BE98_OPEN_ETHERNET_LICENSE = GPL-2.0
