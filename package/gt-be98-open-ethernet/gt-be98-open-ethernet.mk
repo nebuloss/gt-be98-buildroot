@@ -67,7 +67,9 @@
 # oe-int2-2026-11-17 2026-11-17 8a18fa5 (imgint8 / RC11: oe-int 199918f + oe-pppoe-push-bound 12183e8: the PPPoE push
 #  max_pkt_len bound is MTU+L2+1+4 (stock's formula), so the uplink is offloaded; q303: LON 0.09 cores/Gbit vs LOFF 1.13,
 #  bd_hw_max_ip 1492; driver/runner + tools only; no linux-dirclean)
-GT_BE98_OPEN_ETHERNET_VERSION = 8a18fa525d50decc77a019ef791504fbf9c7bbdf
+# oe-tagrw-2026-11-18 2026-11-19 b367e51 (imgint10: main a9c80d1 + TAGRW 72c62cf/b367e51: D42 two-tag VLAN rewrite
+#  + routed IPv6 offload (RT-IPV6 rebased), box-proven q322/q324; driver/runner + tools only; no linux-dirclean)
+GT_BE98_OPEN_ETHERNET_VERSION = b367e51c1c1035b937a0b15d7588cf8ac671c168
 GT_BE98_OPEN_ETHERNET_SITE = git@github.com:nebuloss/gt-be98-open-ethernet.git
 GT_BE98_OPEN_ETHERNET_SITE_METHOD = git
 GT_BE98_OPEN_ETHERNET_LICENSE = GPL-2.0
