@@ -2,9 +2,9 @@
 
 Date: 2026-11-20 · Status: **DRAFT**, release candidate 13, not tagged.
 
-> DRAFT. Every `⟨…⟩` is a placeholder: fill it from the named run, or drop
-> the line. Do not tag until the regression set, the soak and the
-> release-image phases have their rows.
+> DRAFT until the release-image box phases have run: the release images,
+> their checks, the phases row and the tags are the last placeholders
+> (`⟨…⟩`). The candidate's box evidence (q320–q349b) is final.
 
 Evidence is named by the orchestrator's queue (`qNNN`). The run directories
 stay on the orchestrator's machine and are not in this repository. Every
@@ -114,10 +114,12 @@ byte-identical.
 - q330 (imgint11, bench module): PV6-up/dn PASS at 0.039 / 0.045
   cores/Gbit.
 - **q338 (imgint12b, the shipped module in the image, no reload): PASS**
-  ⟨PV6-up/dn cores/Gbit⟩.
-- q341 (imgint12b): PASS again ⟨numbers⟩.
+  PV6-up/dn 0.032 / 0.044 cores/Gbit (the CPU path 0.89 / 0.34).
+- q341 (imgint12b): PASS again, 0.035 / 0.043 cores/Gbit.
+- q345 (imgint12d) and q349 (imgint12e): PASS, 0.035 / 0.039 and 0.039 / 0.032 cores/Gbit.
 - **No D42 regression from the change:** q338 tagrw r5 on the shipped
-  module PASS ⟨GW4 / GW6 cores/Gbit⟩.
+  module PASS: GW4-up/dn 0.039 / 0.032, GW6-up/dn 0.024 / 0.031 cores/Gbit,
+  every block offloaded (CPU fraction <= 0.001).
 
 ### Zero-wait DFS on the 5 GHz-high radio in ETSI, as an opt-in (open-wifi, OS `gt-be98-wifi-gen`, hostapd)
 
@@ -170,8 +172,9 @@ so for up to 5 s after DHCP the admin UI did not answer on the new address
   wildcard fallback fires as in RC12.
 - Cost: four `ip` runs per second until the lease, only once per boot.
 
-**Box evidence:** q338 W2b on a normal boot PASS ⟨the logged delay between
-rnr0's lease and the listener, in s⟩.
+**Box evidence:** q338 W2b on a normal boot PASS. The listener on the
+management address was in the syslog the same second as rnr0's lease
+(logged delay 0 s), and it was already bound when the arm looked..
 
 ### Fix: a WAN change drops dhcpcd's stored leases (OS `gt-be98-wan`)
 
@@ -218,12 +221,29 @@ Tests:
 - q345 (imgint12d, the first fix): wan-leasedrop r1 LDF PASS. Its LDR
   REFUTED `b_pd_ok` was the stale prefix above: the second defect, found
   there.
-- ⟨q349 (imgint12e): wan-leasedrop r2 LDF + LDR PASS (`SHA_WAN eec0bf2e…`); gw5-ipv6 r13; pppoe6 r3 (the PPPoE WAN path); WAN admin reach⟩
+- **q349 (imgint12e, both fixes): wan-leasedrop r2 LDF and LDR PASS.** The
+  next WAN starts with SOLICIT, and its prefix is the new upstream's, never
+  the old one's. Also PASS: gw5-ipv6 r13 (full), pppoe6 r3 (the PPPoE WAN
+  path), WAN admin reach, and the clean check.
 
-**The soak and the gt-be98-wan delta.** RC13's 30-minute soak ran on
-imgint12d (q347). imgint12e differs from it only in gt-be98-wan, which runs
-on WAN events only. A soak makes none, so that soak stands for imgint12e, as
-RC12's regression set stood for its web UI-only delta.
+**The soak.** RC13's soak is **q349b**: a 60-minute instrumented soak on
+imgint12e, the release identity. It ran after a clean and a 10-minute
+settle, with a per-minute memory sidecar, and gave **VERDICT PASS**:
+- M1 +2.04 MB/h; SUnreclaim +0.91 MB/h.
+- The pre-registered shape reading: FLAT. MemAvailable 1370.7 → 1371.9 MB;
+  no decline to attribute.
+- Stations 2 → 2; after teardown +1.5 MB.
+
+The two 30-minute soaks on imgint12d were INCONCLUSIVE on M1:
+- q345: −104.7 MB/h.
+- q347: −95.1 MB/h. Most of the loss came back at the soak's teardown;
+  SUnreclaim was flat.
+
+imgint12d differs from imgint12e only in gt-be98-wan. q342's own 30-minute
+soak on imgint12b PASSED (−3.2 MB/h). Half-run slopes of ±85–101 MB/h also
+appear in 30-minute soaks that passed in RC11 and RC12. A 30-minute window
+does not separate such a swing from a leak; the 60-minute soak on the
+release identity read FLAT.
 
 ## Box evidence (imgint12b unless noted)
 
@@ -232,13 +252,13 @@ RC12's regression set stood for its web UI-only delta.
 | q329 | imgint10 + bench Runner module | PPPoE IPv6 OS path works; PV6-up offloaded 0.090 cores/Gbit |
 | q330 | imgint11 + bench Runner module | PV6-up/dn PASS 0.039 / 0.045 cores/Gbit |
 | q336 | imgint11 + bench Wi-Fi module | zero-wait DFS BG PASS: background CAC cleared, AP moved, radar → CSA, never stopped (772 samples) |
-| q338 | imgint12b | **Feature session PASS:** W2b, fixed primary, PPPoE IPv6 (shipped module), tagrw r5 (shipped module, D42), zero-wait C0H/BR/BG, perf smoke ⟨numbers⟩. gw5-ipv6 r12: `na_ok` missed, traced to a dhcpcd lease left by tagrw's WAN trial on the same lab VLAN (see Known open) |
+| q338 | imgint12b | **Feature session PASS:** W2b, fixed primary, PPPoE IPv6 (shipped module), tagrw r5 (shipped module, D42), zero-wait C0H/BR/BG, perf smoke (gated 5gl/6g rows ratio 0.965–1.03 against the harness baseline). gw5-ipv6 r12: `na_ok` missed, traced to a dhcpcd lease left by tagrw's WAN trial on the same lab VLAN (see Known open) |
 | q341 | imgint12b | PPPoE IPv6 PASS again; gw5-ipv6 r13 FULL PASS |
-| ⟨qNNN⟩ | imgint12b | ⟨**RC13 regression set** (RC13-REGRESSION-QUEUE.sh): baselines, UI degraded-apply, L1 two cycles, WIFISTOP r2 + RESTORE-OK, soak DRY, perf smoke⟩ |
 | q342 | imgint12b | **RC13 regression set PASS:** baselines; UI degraded-apply; L1 real 0/0; WIFISTOP r2 + RESTORE-OK; soak DRY-OK; perf smoke: gated 5gl/6g rows OK, only the 2.4 GHz RTL up row flagged (ungated noise). Its 30-minute soak PASS (M1 −3.2 MB/h); the soak wrapper failed after the run, a harness edit made while it ran |
 | q345 | imgint12d | wan-leasedrop r1 LDF PASS, LDR REFUTED (the stale prefix: the second defect); gw5-ipv6 r13 FULL PASS; pppoe6 r3 ship mode PV6-up/dn PASS (0.035 / 0.039 cores/Gbit, CPU path 0.92 / 0.38); WAN admin reach PASS (WAN :80/:22 dropped, path live 5/5, management connected). Its soak: INCONCLUSIVE on M1 (−104.7 MB/h; flat for 15 min, then −97 MB/h; SUnreclaim flat), re-run in q347 |
-| ⟨q347⟩ | imgint12d | ⟨**RC13 30-minute soak** after a clean and a 10 min settle, with memory readings⟩ |
-| ⟨q349⟩ | imgint12e | ⟨**the second fix, targeted:** wan-leasedrop r2 LDF + LDR, gw5-ipv6 r13, pppoe6 r3, WAN admin reach⟩ |
+| q347 | imgint12d | 30-minute soak after a clean and a 10 min settle: INCONCLUSIVE on M1 (−95.1 MB/h); MemAvailable 1412.7 MB before, 1402.1 MB after the soak's teardown (most of the loss came back); AnonPages 19.8 → 23.4 MB, Slab 47.3 → 49.7, Cached/Shmem flat |
+| q349 | imgint12e | **both lease-drop fixes:** wan-leasedrop r2 LDF + LDR PASS; gw5-ipv6 r13 FULL PASS; pppoe6 r3 ship PV6-up/dn 0.039 / 0.032 cores/Gbit; WAN admin reach PASS; clean |
+| q349b | imgint12e | **RC13 soak: 60 min, instrumented, VERDICT PASS**, M1 +2.04 MB/h, SUnreclaim +0.91; READING-SHAPE FLAT (decline −1.2 MB, attribution n/a); stations 2 → 2; post-teardown +1.5 MB; CHECK clean |
 | ⟨qNNN⟩ | release | ⟨release-image box phases: first n/n, second n/n; lab image imgint12e restored⟩ |
 
 ## Known open
