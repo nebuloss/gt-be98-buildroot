@@ -9,9 +9,10 @@ Date: 2026-11-20 · Status: **DRAFT**, release candidate 13, not tagged.
 Evidence is named by the orchestrator's queue (`qNNN`). The run directories
 stay on the orchestrator's machine and are not in this repository. Every
 number comes with the run that measured it, and "not measured" never means
-0. Lab image `imgint12d` is the lab-mode build of the RC13 sources (same
+0. Lab image `imgint12e` is the lab-mode build of the RC13 sources (same
 commits, lab keys). It is `imgint12b` (the image of the feature session and
-the regression set) plus one gt-be98-wan fix; see Evidence. The release images below are the `RELEASE=1` build of
+the regression set) plus two gt-be98-wan fixes (`imgint12d` carried the
+first); see Evidence. The release images below are the `RELEASE=1` build of
 those sources.
 
 RC13 is a small candidate on top of RC12:
@@ -24,7 +25,8 @@ RC13 is a small candidate on top of RC12:
 - **The web UI binds a new DHCP address within about 1 s** (RC12: up to
   5 s).
 - **Fix: a WAN change drops dhcpcd's stored leases** of the WAN devices the
-  OS re-creates, so a new WAN no longer starts from the old network's lease.
+  OS re-creates, **and the old upstream's delegated prefix**, so a new WAN no
+  longer starts from the old network's lease or numbers from its prefix.
 
 ## Images
 
@@ -38,7 +40,7 @@ Build id (DT): `⟨release build id⟩`
 Built with `RELEASE=1` (`ml-bootfs.info`: `release mode: yes`).
 
 - **Release check:** `⟨release-check.sh result, selftest n/n⟩` with RC7's lab-pattern list.
-- **Lab control:** `⟨the lab image imgint12d fails the same check with N findings⟩`.
+- **Lab control:** `⟨the lab image imgint12e fails the same check with N findings⟩`.
 - **Exact-pattern list:** `⟨expected: finds only the lab public key, as in RC7–RC12⟩`.
 - **Modules against the tested lab image:** `⟨rtl8372 byte-identical; bca and runner: code and relocations identical, .rodata modulo the build path (as RC12)⟩`.
 
@@ -49,12 +51,15 @@ same sources with the recipient's keys, checked again with
 password and no rootfs URL. They contain proprietary vendor firmware, so
 they are handed over privately and never published (`docs/RELEASE-BUILD.md`).
 
-Lab image imgint12d: `rootfs.squashfs`
-`ccd9f3960af58918facc6a3e5a8577eb8b8f2d40198e991aea96757be30d6ed3`, build id
-`20261120T112825Z-6665c561333a-rw-jffs`. Its rootfs differs from imgint12b's
-(`c23168cc…`, build id `20261119T214556Z-1dc6a6bdb0de-rw-jffs`) only in
-`/usr/sbin/gt-be98-wan` (the lease-drop fix, `27ea112c`) and
-`/etc/gt-be98-release`. Against RC12's lab image imgint11, imgint12b's
+Lab image imgint12e: `rootfs.squashfs`
+`e00ace9d88806a3a7c3b12dcc8091463194ec45506e78696814b287e48a40657`, build id
+`20261120T143058Z-bcc596edaa05-rw-jffs`. By a file-by-file comparison:
+- **imgint12e vs imgint12d** (`ccd9f396…`, `20261120T112825Z-6665c561333a`,
+  the image of q345 and the soak q347) differ only in `/usr/sbin/gt-be98-wan`
+  (`27ea112c` → `eec0bf2e`, the second fix) and `/etc/gt-be98-release`.
+- **imgint12d vs imgint12b** (`c23168cc…`, `20261119T214556Z-1dc6a6bdb0de`)
+  differ only in `/usr/sbin/gt-be98-wan` (`b4db4370` → `27ea112c`, the first
+  fix) and `/etc/gt-be98-release`. Against RC12's lab image imgint11, imgint12b's
 rootfs differs in:
 - `/usr/sbin/webui`;
 - `/usr/sbin/hostapd` (patch 0004);
@@ -69,7 +74,7 @@ Built from (`gt-be98-rc13` tags, ⟨to be set⟩):
 
 | Component | Commit |
 |---|---|
-| gt-be98-buildroot | `br-rc13-r-2026-11-20` (= `br-int12b-2026-11-19` `e82b979` + `br-wan-leasedrop-2026-11-20` `48abfc6` + these notes; imgint12d is built from `48abfc6`). `br-int12b` = `mainline-os` `d4cf0a4` (`gt-be98-rc12`) + the open-ethernet pin `c56b79b` + `br-bgcac-hostapd-r2-2026-11-19` `a547ba7` (with `br-bgcac-r2-2026-11-19` `457af66`) + the open-wifi pin `0a7588d3` |
+| gt-be98-buildroot | `br-rc13-r-2026-11-20` (= `br-int12b-2026-11-19` `e82b979` + `br-wan-leasedrop-2026-11-20` `48abfc6` and `614cef0` + these notes; imgint12e is built from `614cef0`). `br-int12b` = `mainline-os` `d4cf0a4` (`gt-be98-rc12`) + the open-ethernet pin `c56b79b` + `br-bgcac-hostapd-r2-2026-11-19` `a547ba7` (with `br-bgcac-r2-2026-11-19` `457af66`) + the open-wifi pin `0a7588d3` |
 | open-wifi (`bca_pcie_ipc.ko`) | `om-dfs5gh-bgcac-r2-2026-11-19` `0a7588d3` (= RC12's `main` `38e7be78` + ZW-ETSI); module `c4f7adf3` |
 | open-ethernet (Runner, kernel series, `rtl8372.ko`) | `oe-pppoe-v6-2026-11-19` `c56b79b` (= RC12's `effa5fa` + RUNNER-PPPOE-V6); Runner module `c000a45b` |
 | web UI (gt-be98-webui-go) | `wu-admin-fastwatch-2026-11-19` `8dacddf` (= RC12's `e338c18` + the 1 s boot watcher) |
@@ -193,9 +198,32 @@ Tests:
 - `gt-be98-wan-test`: 267/267 (sh, bash, dash).
 - `gt-be98-gw-mutants`: 73/73, including three new lease-drop mutants.
 
-**Box evidence (imgint12d)**
-- ⟨qNNN wan-leasedrop arm: LDF PASS (no `rnr0.<VID>` lease after the revert, the next WAN starts with SOLICIT), LDR PASS⟩
-- ⟨qNNN gw5-ipv6 r13 (SHA_WAN `27ea112c…`), pppoe6 r3 (the PPPoE WAN path), WAN admin reach⟩
+**The second defect (q345, found by the arm's first revision).** gt-be98-wan
+also records the delegated prefix per WAN device (`$RUN/pd6`). It cleared
+that record only on dhcpcd's expire, release or stop events, and a revert
+raises none of them for the VLAN device. So a WAN change that came back to
+the same device (`rnr0.30`) still reported the old upstream's prefix.
+gt-be98-gw numbered its /64s and RAs from it until the new lease bound, or
+up to the prefix's valid lifetime if the new upstream delegates nothing.
+
+**The second fix (`614cef0`).** The recorded prefix is removed together with
+the stored leases when the WAN settings change. The same settings applied
+again keep it.
+
+Tests:
+- `gt-be98-wan-test`: 270/270.
+- `gt-be98-gw-mutants`: 74/74, one more mutant.
+
+**Box evidence**
+- q345 (imgint12d, the first fix): wan-leasedrop r1 LDF PASS. Its LDR
+  REFUTED `b_pd_ok` was the stale prefix above: the second defect, found
+  there.
+- ⟨q349 (imgint12e): wan-leasedrop r2 LDF + LDR PASS (`SHA_WAN eec0bf2e…`); gw5-ipv6 r13; pppoe6 r3 (the PPPoE WAN path); WAN admin reach⟩
+
+**The soak and the gt-be98-wan delta.** RC13's 30-minute soak ran on
+imgint12d (q347). imgint12e differs from it only in gt-be98-wan, which runs
+on WAN events only. A soak makes none, so that soak stands for imgint12e, as
+RC12's regression set stood for its web UI-only delta.
 
 ## Box evidence (imgint12b unless noted)
 
@@ -207,10 +235,11 @@ Tests:
 | q338 | imgint12b | **Feature session PASS:** W2b, fixed primary, PPPoE IPv6 (shipped module), tagrw r5 (shipped module, D42), zero-wait C0H/BR/BG, perf smoke ⟨numbers⟩. gw5-ipv6 r12: `na_ok` missed, traced to a dhcpcd lease left by tagrw's WAN trial on the same lab VLAN (see Known open) |
 | q341 | imgint12b | PPPoE IPv6 PASS again; gw5-ipv6 r13 FULL PASS |
 | ⟨qNNN⟩ | imgint12b | ⟨**RC13 regression set** (RC13-REGRESSION-QUEUE.sh): baselines, UI degraded-apply, L1 two cycles, WIFISTOP r2 + RESTORE-OK, soak DRY, perf smoke⟩ |
-| ⟨qNNN⟩ | imgint12b | ⟨30-minute soak in the regression queue⟩ |
-| ⟨qNNN⟩ | imgint12d | ⟨**gt-be98-wan delta, targeted:** wan-leasedrop LDF + LDR, gw5-ipv6 r13, pppoe6 r3, WAN admin reach⟩ |
-| ⟨qNNN⟩ | imgint12d | ⟨**30-minute release soak re-run on the release identity** (rc13-soak.sh row imgint12d; bca `c4f7adf3`, runner `c000a45b`, webui `c614b060`, hostapd `9b7d4d53`, wifi-gen `f15a7010`, wan `27ea112c`, gw `8e664b6a`)⟩ |
-| ⟨qNNN⟩ | release | ⟨release-image box phases: first n/n, second n/n; lab image imgint12d restored⟩ |
+| q342 | imgint12b | **RC13 regression set PASS:** baselines; UI degraded-apply; L1 real 0/0; WIFISTOP r2 + RESTORE-OK; soak DRY-OK; perf smoke: gated 5gl/6g rows OK, only the 2.4 GHz RTL up row flagged (ungated noise). Its 30-minute soak PASS (M1 −3.2 MB/h); the soak wrapper failed after the run, a harness edit made while it ran |
+| q345 | imgint12d | wan-leasedrop r1 LDF PASS, LDR REFUTED (the stale prefix: the second defect); gw5-ipv6 r13 FULL PASS; pppoe6 r3 ship mode PV6-up/dn PASS (0.035 / 0.039 cores/Gbit, CPU path 0.92 / 0.38); WAN admin reach PASS (WAN :80/:22 dropped, path live 5/5, management connected). Its soak: INCONCLUSIVE on M1 (−104.7 MB/h; flat for 15 min, then −97 MB/h; SUnreclaim flat), re-run in q347 |
+| ⟨q347⟩ | imgint12d | ⟨**RC13 30-minute soak** after a clean and a 10 min settle, with memory readings⟩ |
+| ⟨q349⟩ | imgint12e | ⟨**the second fix, targeted:** wan-leasedrop r2 LDF + LDR, gw5-ipv6 r13, pppoe6 r3, WAN admin reach⟩ |
+| ⟨qNNN⟩ | release | ⟨release-image box phases: first n/n, second n/n; lab image imgint12e restored⟩ |
 
 ## Known open
 
