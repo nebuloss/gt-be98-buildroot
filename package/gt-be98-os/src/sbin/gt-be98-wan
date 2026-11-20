@@ -732,6 +732,14 @@ cmd_apply() {
 	if [ -n "$chg" ]; then
 		load_active
 		lease_drop "$old" "$(dhcpcd_if)" "$W_IF"
+		# the delegated prefix recorded for the OLD settings is not this
+		# WAN's: pd6 must say nothing until the new lease delegates one (q345:
+		# trial B on the same rnr0.30 read trial A's prefix for 5 s, and
+		# gt-be98-gw would number its networks from it, RAs included)
+		if [ -f "$PD6" ]; then
+			log "WAN settings changed: the delegated prefix $(awk '{print $1}' "$PD6") of the old settings forgotten"
+			rm -f "$PD6"
+		fi
 	fi
 	cmd_start; r=$?
 	load_active
