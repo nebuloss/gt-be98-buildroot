@@ -62,7 +62,7 @@ export GT_BE98_WAN_CONF="$T/etc/wan.conf" GT_BE98_WAN_RUN="$T/run" GT_BE98_SYSNE
 	DHCPCD_BASE="$SRC/etc/dhcpcd.conf" DHCPCD_PID="$T/dhcpcd.pid" DHCPCD_RESOLV_DIR="$T/resolv" \
 	RESOLV_CONF="$T/resolv.conf" GT_BE98_WIFI_L2="$T/l2.conf" GT_BE98_WIFI_AP="$T/none" \
 	GT_BE98_LAN_CONF="$T/none" GT_BE98_WAN_SELF="$SH $W" PPP_RUNDIR="$T/run" IFACE_WAIT=1 \
-	ROUTER_APPLIED="$T/none" GT_BE98_FWD="$T/bin/gt-be98-fwd" GT_BE98_UPTIME="$T/uptime" GW_APPLIED="$T/gwapplied"
+	ROUTER_APPLIED="$T/none" DHCPCD_DB="$T/db" GT_BE98_FWD="$T/bin/gt-be98-fwd" GT_BE98_UPTIME="$T/uptime" GW_APPLIED="$T/gwapplied"
 echo "1000.00 2000.00" > "$T/uptime"
 sleep 1000 & echo $! > "$T/dhcpcd.pid"
 wan() { $SH "$W" "$@"; }
@@ -421,6 +421,36 @@ wan try 60 "$T/new2.conf" 2>/dev/null
 kill "$(cat "$T/run/trial.pid")" 2>/dev/null; wan stop 2>/dev/null
 rm -rf "$T/run"; mkdir -p "$T/run"
 check "reboot mid-trial: saved config" "ifname=rnr0.835 config=saved" "$(wan status | grep -E '^(config|ifname)=' | tr '\n' ' ' | sed 's/ $//')"
+
+# ---- 5a. a WAN settings change drops the stored leases of the netdevs it re-creates ------
+reset; rm -rf "$T/db"; mkdir -p "$T/db"
+lease() { for f; do echo stored > "$T/db/$f"; done; }
+held() { for f; do [ -e "$T/db/$f" ] && printf '%s ' "$f"; done; }
+printf 'WAN_PROTO=static\nWAN_VLAN=30\nWAN_ADDR=192.0.2.10/24\nWAN_GW=192.0.2.1\nWAN_IPV6=1\nWAN_PD_LEN=56\n' > "$T/trA.conf"
+printf 'WAN_PROTO=dhcp\nWAN_VLAN=30\nWAN_IPV6=1\nWAN_PD_LEN=56\n' > "$T/trB.conf"
+wan try 60 "$T/trA.conf" 2>/dev/null
+lease rnr0.30.lease6 rnr0.30.lease rnr0.lease6 rnr0.lease	# dhcpcd's leases during trial A (+ the management port's)
+wan revert 2> "$T/err.lease"
+check "trial A (rnr0.30) reverted: its stored leases dropped; rnr0's (the bare management port) kept" "rnr0.lease6 rnr0.lease " \
+	"$(held rnr0.30.lease6 rnr0.30.lease rnr0.lease6 rnr0.lease)"
+check "  ... and logged" yes "$(yes_no grep -q "stored leases of rnr0.30 dropped" "$T/err.lease")"
+lease rnr0.30.lease6
+wan try 60 "$T/trB.conf" 2>/dev/null
+check "trial B on the same rnr0.30 with other settings: a lease left there (any origin) dropped before the device is made" "" "$(held rnr0.30.lease6)"
+lease rnr0.30.lease6
+: > "$FAKE/log"; wan apply 2>/dev/null
+check "control: the SAME settings applied again: the lease kept (dhcpcd rebinds it, as after a reboot)" "rnr0.30.lease6 " "$(held rnr0.30.lease6)"
+wan revert 2>/dev/null
+printf 'WAN_PROTO=pppoe\nPPPOE_USER=u\nWAN_IPV6=1\n' > "$T/trC.conf"
+wan try 60 "$T/trC.conf" 2>/dev/null
+lease pppoe-wan.lease6
+wan revert 2>/dev/null
+check "a PPPoE trial reverted: pppoe-wan's lease dropped" "" "$(held pppoe-wan.lease6)"
+lease rnr2.lease6
+printf 'WAN_PROTO=dhcp\nWAN_PORT=rnr2\nWAN_IPV6=1\n' > "$T/trD.conf"
+wan try 60 "$T/trD.conf" 2>/dev/null; wan revert 2>/dev/null
+check "a bare WAN port (rnr2) is never touched (not re-created by this tool)" "rnr2.lease6 " "$(held rnr2.lease6)"
+reset
 
 # ---- 5b. which interfaces dhcpcd rebinds (only a changed block) --------------
 reset
