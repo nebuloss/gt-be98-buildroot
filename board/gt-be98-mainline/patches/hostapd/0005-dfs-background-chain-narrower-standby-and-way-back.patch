@@ -28,7 +28,8 @@ hostapd 2.12 (src/ap/dfs.c), enable_background_radar=1, on top of 0004:
    narrower than configured, the chain clears the configured-width block
    when it is usable again (after its non-occupancy period, re-armed by
    hostapd_dfs_nop_finished()) and hostapd_dfs_complete_cac() switches back
-   to it when that CAC completes.
+   to it when that CAC completes. Meanwhile a narrower standby stays out
+   of that block (it would hold the background chain when the period ends).
 
 Only an interface with enable_background_radar=1 on a driver declaring
 RADAR_BACKGROUND is affected. Applies after 0001-0004. Compile-checked
@@ -38,15 +39,19 @@ RADAR_BACKGROUND is affected. Applies after 0001-0004. Compile-checked
 ---
 --- a/src/ap/hostapd.h
 +++ b/src/ap/hostapd.h
-@@ -662,6 +662,15 @@
+@@ -662,6 +662,19 @@
  		unsigned int temp_ch:1;
  		/* CAC started on radar offchain */
  		unsigned int cac_started:1;
 +		/* gt-be98 0005: the chain's width (CONF_OPER_CHWIDTH_*): it may
 +		 * be narrower than the main chain's */
 +		u8 oper_chwidth;
-+		/* the configured width, before any post-radar downgrade */
++		/* the configured width and block, before any post-radar
++		 * downgrade (the block to go back to) */
 +		u8 cfg_chwidth;
++		u8 cfg_seg0;
++		int cfg_freq;
++		int cfg_sec;
 +		unsigned int cfg_chwidth_set:1;
 +		/* the chain clears the configured-width block while the main
 +		 * chain runs narrower: switch back when its CAC completes */
@@ -74,7 +79,7 @@ RADAR_BACKGROUND is affected. Applies after 0001-0004. Compile-checked
  
  		/*
  		 * Let's select a random channel according to the
-@@ -1105,41 +1109,252 @@
+@@ -1105,41 +1109,270 @@
  }
  
  
@@ -183,6 +188,10 @@ RADAR_BACKGROUND is affected. Applies after 0001-0004. Compile-checked
 +	if (!iface->radar_background.cfg_chwidth_set) {
 +		iface->radar_background.cfg_chwidth =
 +			hostapd_get_oper_chwidth(iface->conf);
++		iface->radar_background.cfg_seg0 =
++			hostapd_get_oper_centr_freq_seg0_idx(iface->conf);
++		iface->radar_background.cfg_freq = iface->freq;
++		iface->radar_background.cfg_sec = iface->conf->secondary_channel;
 +		iface->radar_background.cfg_chwidth_set = 1;
 +	}
 +}
@@ -202,12 +211,24 @@ RADAR_BACKGROUND is affected. Applies after 0001-0004. Compile-checked
 +{
 +	struct hostapd_channel_data *chan = NULL, *c;
 +	u8 saved_w = hostapd_get_oper_chwidth(iface->conf);
-+	int hlo, hhi, lo, hi, n, i;
++	u8 cfg_w = iface->radar_background.cfg_chwidth;
++	int hlo, hhi, lo, hi, clo = 0, chi = 0, n, i;
 +	u32 r = 0;
 +
 +	dfs_block_range(iface->freq, iface->conf->secondary_channel, saved_w,
 +			hostapd_get_oper_centr_freq_seg0_idx(iface->conf),
 +			&hlo, &hhi);
++	/*
++	 * While the main chain runs narrower than configured, a narrower
++	 * standby stays out of the configured block it came from: that block
++	 * is the way back, and a standby inside it would hold the background
++	 * chain when its non-occupancy period ends.
++	 */
++	if (iface->radar_background.cfg_chwidth_set && w != cfg_w &&
++	    dfs_chwidth_mhz(saved_w, 1) < dfs_chwidth_mhz(cfg_w, 1))
++		dfs_block_range(iface->radar_background.cfg_freq,
++				iface->radar_background.cfg_sec, cfg_w,
++				iface->radar_background.cfg_seg0, &clo, &chi);
 +	hostapd_set_oper_chwidth(iface->conf, w);
 +	n = dfs_find_channel(iface, NULL, 0, type);
 +	if (n > 0 && os_get_random((u8 *) &r, sizeof(r)) < 0)
@@ -224,6 +245,8 @@ RADAR_BACKGROUND is affected. Applies after 0001-0004. Compile-checked
 +		dfs_block_range(c->freq, *sec, w, *seg0, &lo, &hi);
 +		if (lo < hhi && hlo < hi)
 +			continue; /* overlaps the main chain's block */
++		if (lo < chi && clo < hi)
++			continue; /* inside the block to go back to */
 +		if (!dfs_block_enabled(iface, lo, hi))
 +			continue; /* holds a disabled channel */
 +		chan = c;
@@ -353,7 +376,7 @@ RADAR_BACKGROUND is affected. Applies after 0001-0004. Compile-checked
  		wpa_printf(MSG_ERROR, "DFS failed to start CAC offchannel");
  		iface->radar_background.channel = -1;
  		return;
-@@ -1150,10 +1365,19 @@
+@@ -1150,10 +1383,19 @@
  	iface->radar_background.secondary_channel = sec;
  	iface->radar_background.centr_freq_seg0_idx = oper_centr_freq_seg0_idx;
  	iface->radar_background.centr_freq_seg1_idx = oper_centr_freq_seg1_idx;
@@ -373,7 +396,7 @@ RADAR_BACKGROUND is affected. Applies after 0001-0004. Compile-checked
  }
  
  
-@@ -1198,6 +1422,14 @@
+@@ -1198,6 +1440,14 @@
  		iface->conf, iface->radar_background.centr_freq_seg0_idx);
  	hostapd_set_oper_centr_freq_seg1_idx(
  		iface->conf, iface->radar_background.centr_freq_seg1_idx);
@@ -388,7 +411,7 @@ RADAR_BACKGROUND is affected. Applies after 0001-0004. Compile-checked
  
  	hostapd_dfs_update_background_chain(iface);
  
-@@ -1255,10 +1487,12 @@
+@@ -1255,10 +1505,12 @@
  			 */
  			if (hostapd_dfs_is_background_event(iface, freq)) {
  				iface->radar_background.cac_started = 0;
