@@ -440,6 +440,16 @@ check "trial B on the same rnr0.30 with other settings: a lease left there (any 
 lease rnr0.30.lease6
 : > "$FAKE/log"; wan apply 2>/dev/null
 check "control: the SAME settings applied again: the lease kept (dhcpcd rebinds it, as after a reboot)" "rnr0.30.lease6 " "$(held rnr0.30.lease6)"
+# the delegated prefix of the old settings: forgotten on a change, kept on the same settings
+reason=BOUND6 interface=rnr0.30 new_dhcp6_ia_pd1_prefix1=fd99:17a:1ff:: new_dhcp6_ia_pd1_prefix1_length=56 \
+	new_dhcp6_ia_pd1_prefix1_pltime=1800 new_dhcp6_ia_pd1_prefix1_vltime=3600 wan hook dhcpcd 2>/dev/null
+check "pd6 while trial B runs: the recorded prefix" "fd99:17a:1ff::/56" "$(wan pd6 | awk '{print $1}')"
+wan apply 2>/dev/null
+check "control: the same settings applied again keep the recorded prefix" "fd99:17a:1ff::/56" "$(wan pd6 | awk '{print $1}')"
+wan revert 2> "$T/err.pd6"
+wan try 60 "$T/trB.conf" 2>/dev/null
+check "a revert then a new trial on the same rnr0.30: the old settings' prefix forgotten (q345: B read A's prefix), logged" "|yes" \
+	"$(wan pd6)|$(yes_no grep -q 'delegated prefix fd99:17a:1ff::/56 of the old settings forgotten' "$T/err.pd6")"
 wan revert 2>/dev/null
 printf 'WAN_PROTO=pppoe\nPPPOE_USER=u\nWAN_IPV6=1\n' > "$T/trC.conf"
 wan try 60 "$T/trC.conf" 2>/dev/null

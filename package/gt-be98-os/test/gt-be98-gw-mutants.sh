@@ -92,6 +92,7 @@ mutant "wan: ia_pd without an interface (dhcpcd assigns every other one)" sbin/g
 mutant "wan: the delegated prefix not recorded" sbin/gt-be98-wan 's/BOUND6|RENEW6|REBIND6|REBOOT6) pd6_record ;;/NONE) pd6_record ;;/' gt-be98-wan-test.sh
 mutant "wan: an expired prefix still reported" sbin/gt-be98-wan 's/\[ "\$vl" -gt "\$e" \] || return 1/:/' gt-be98-wan-test.sh
 mutant "wan: a stale prefix read after WAN_IPV6=0" sbin/gt-be98-wan 's/^\t\[ "\$W_IPV6" = 1 \] || return 1$/\t:/' gt-be98-wan-test.sh
+mutant "wan: a settings change keeps the old settings' delegated prefix (q345)" sbin/gt-be98-wan 's/^\t\t\trm -f "\$PD6"$/\t\t\t:/' gt-be98-wan-test.sh
 mutant "wan: IPv6 forwarding written directly again" sbin/gt-be98-wan 's/"\$FWD" -6 hold wan \&\& put fwd6 1/sysctl -q -w net.ipv6.conf.all.forwarding=1; put fwd6 1/' gt-be98-wan-test.sh
 # the RA refresh (br-ra6-reroute f21929d): an unchanged RA is a refresh, nothing follows it
 mutant "wan (ra6): an unchanged RA rerouted again (no early return)" sbin/gt-be98-wan 's/^\t\t\t\[ "\$s" = "\$(cat "\$RA6" 2>\/dev\/null)" \] \&\& return 0$/\t\t\t:/' gt-be98-wan-test.sh
