@@ -49,8 +49,9 @@ same sources with the recipient's keys, checked again with
 password and no rootfs URL. They contain proprietary vendor firmware, so
 they are handed over privately and never published (`docs/RELEASE-BUILD.md`).
 
-Lab image imgint12d: `rootfs.squashfs` `⟨imgint12d rootfs sha256⟩`, build id
-`⟨imgint12d build id⟩`. Its rootfs differs from imgint12b's
+Lab image imgint12d: `rootfs.squashfs`
+`ccd9f3960af58918facc6a3e5a8577eb8b8f2d40198e991aea96757be30d6ed3`, build id
+`20261120T112825Z-6665c561333a-rw-jffs`. Its rootfs differs from imgint12b's
 (`c23168cc…`, build id `20261119T214556Z-1dc6a6bdb0de-rw-jffs`) only in
 `/usr/sbin/gt-be98-wan` (the lease-drop fix, `27ea112c`) and
 `/etc/gt-be98-release`. Against RC12's lab image imgint11, imgint12b's
