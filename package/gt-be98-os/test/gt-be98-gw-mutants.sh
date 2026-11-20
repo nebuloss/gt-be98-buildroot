@@ -85,6 +85,9 @@ mutant "gw: mgmt-addrs forks sed per network (the cost it exists to avoid)" sbin
 mutant "gw6: slaac rendered stateful" sbin/gt-be98-gw 's/constructor:\$b,ra-stateless,64/constructor:$b,64/' gt-be98-gw-test.sh
 mutant "gw6: IPv6 routes touched with no IPv6 ever applied" sbin/gt-be98-gw 's/^\telif grep -qs .\^\\(fwd6\\|pd6route \.\*\\)\$. "\$GW\/applied"; then$/\telse/' gt-be98-gw-test.sh
 mutant "l2: disable_ipv6 rewritten on a held bridge" sbin/gt-be98-l2 's/\[ -e "\$GW_HOLD\/\$b" \] || ipv6_off "\$b"/ipv6_off "$b"/' gt-be98-l2-test.sh
+mutant "wan: a settings change keeps the old network's leases" sbin/gt-be98-wan 's/^\t\tlease_drop "\$old" "\$(dhcpcd_if)" "\$W_IF"$/\t\t:/' gt-be98-wan-test.sh
+mutant "wan: leases dropped on every apply (same settings too)" sbin/gt-be98-wan 's/\] || chg=1$/] \&\& chg=1 || chg=1/' gt-be98-wan-test.sh
+mutant "wan: a bare WAN port's lease dropped" sbin/gt-be98-wan 's/^\t\trnr\[0-3\]\.\[0-9\]\*|"\$PPP_IF") ;;$/\t\trnr[0-3]*|"$PPP_IF") ;;/' gt-be98-wan-test.sh
 mutant "wan: ia_pd without an interface (dhcpcd assigns every other one)" sbin/gt-be98-wan 's/\[ -n "\$lans" \] || pd="\$pd -"/:/' gt-be98-wan-test.sh
 mutant "wan: the delegated prefix not recorded" sbin/gt-be98-wan 's/BOUND6|RENEW6|REBIND6|REBOOT6) pd6_record ;;/NONE) pd6_record ;;/' gt-be98-wan-test.sh
 mutant "wan: an expired prefix still reported" sbin/gt-be98-wan 's/\[ "\$vl" -gt "\$e" \] || return 1/:/' gt-be98-wan-test.sh

@@ -86,6 +86,9 @@ WIFI_AP=${GT_BE98_WIFI_AP:-/etc/conf.d/gt-be98-wifi-ap}
 LAN_CONF=${GT_BE98_LAN_CONF:-/etc/conf.d/gt-be98-lan}
 SELF=${GT_BE98_WAN_SELF:-/usr/sbin/gt-be98-wan}
 FWD=${GT_BE98_FWD:-/usr/sbin/gt-be98-fwd}
+# dhcpcd's lease files (dhcpcd 10.2.4 config.h DBDIR; LEASEFILE "%s%s.lease",
+# LEASEFILE6 that + "6")
+DHCPCD_DB=${DHCPCD_DB:-/var/db/dhcpcd}
 PD6=$RUN/pd6
 RA6=$RUN/ra6
 IFACE_WAIT=${IFACE_WAIT:-20}
@@ -568,6 +571,7 @@ cmd_start() {
 	put conf "$(active_conf)"; put ifname "$W_IF"; put proto "$W_PROTO"
 	if is_default; then
 		log "WAN: DHCP on $W_PORT (dhcpcd), nothing else to do"
+		wan_check_text > "$RUN/conf.check" 2>/dev/null
 		return 0
 	fi
 	while [ ! -e "$SYSNET/$W_PORT" ] && [ $n -lt "$IFACE_WAIT" ]; do sleep 1; n=$((n + 1)); done
@@ -626,6 +630,7 @@ cmd_start() {
 		pppd file "$RUN/pppd.conf" </dev/null >/dev/null 2>&1 9>&- && put pppd 1 || { log "pppd did not start"; return 1; }
 	fi
 	log "WAN: $W_PROTO on $W_LOWER (netdev $W_IF)${W_PD_LANS:+, IPv6 prefix delegation to $W_PD_LANS}"
+	wan_check_text > "$RUN/conf.check" 2>/dev/null
 	return 0
 }
 
@@ -687,12 +692,47 @@ router_reroute() {
 # block. `-n IF` reloads the whole config, so the new allow list comes with it;
 # when nothing changed that exists (a VLAN/PPPoE WAN removed), nothing is
 # rebound: the stale allow entry names an interface this tool just deleted.
+# A WAN CONFIG CHANGE DROPS THE LEASES OF THE WAN NETDEVS THIS TOOL CREATES
+# (rnr0.<vid>, pppoe-wan). dhcpcd keeps a lease file per interface name and
+# never deletes it when the interface goes away (dhcp6_freedrop unlinks it
+# only with `release`): the next device of the same name, after a change of
+# WAN settings (another ISP, another server on the same VLAN), starts from
+# the OLD network's lease, and a DHCPv6 client then REBINDs it instead of
+# soliciting. A server that answers that with lifetimes 0 / NoBinding lets
+# dhcpcd recover; one that stays silent (allowed for an unknown binding)
+# leaves the WAN without IPv6 until the old lease's valid lifetime ends (q338:
+# a Rebind with another arm's rnr0.30 lease; no IA_NA on the box). Same
+# settings applied again (the config check text unchanged): leases kept. A
+# bare WAN port (rnr0..rnr3) is never touched: it is not re-created, and its
+# lease is the management port's. $RUN/conf.check: the check text applied.
+wan_check_text() { cmd_check "$(active_conf)" 2>/dev/null; }
+lease_drop() {
+	local i
+	for i; do
+		case "$i" in
+		rnr[0-3].[0-9]*|"$PPP_IF") ;;
+		*) continue ;;
+		esac
+		if [ -e "$DHCPCD_DB/$i.lease" ] || [ -e "$DHCPCD_DB/$i.lease6" ]; then
+			rm -f "$DHCPCD_DB/$i.lease" "$DHCPCD_DB/$i.lease6"
+			log "WAN settings changed: dhcpcd's stored leases of $i dropped (a fresh DHCP/DHCPv6 exchange)"
+		fi
+	done
+}
+
 cmd_apply() {
-	local old new i l= o=$RUN/dhcpcd.conf.prev
+	local old new i l= o=$RUN/dhcpcd.conf.prev chg=
 	old=$(got ifname)
+	[ "$(wan_check_text)" = "$(cat "$RUN/conf.check" 2>/dev/null)" ] || chg=1
 	[ -f "$RUN/dhcpcd.conf" ] && cp -f "$RUN/dhcpcd.conf" "$o" 2>/dev/null
 	cmd_dhcpcd_conf >/dev/null
 	cmd_stop
+	# the old netdev is gone, the new one not created yet: dhcpcd cannot
+	# rewrite either lease in between
+	if [ -n "$chg" ]; then
+		load_active
+		lease_drop "$old" "$(dhcpcd_if)" "$W_IF"
+	fi
 	cmd_start; r=$?
 	load_active
 	new=$(dhcpcd_if)
