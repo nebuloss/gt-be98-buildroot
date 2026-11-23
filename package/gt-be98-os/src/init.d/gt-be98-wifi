@@ -60,6 +60,12 @@
 # database of its sibling BSSes (same network, other radios) and, for the
 # steer=1 networks, sends 802.11v BSS transition requests (its header).
 #
+# RF environment: the daemon gt-be98-rfscan (pid /run/gt-be98-rfscan.pid)
+# runs while this service does: every 30 s, on each radio serving an AP, a
+# survey refresh (no excursion) and one single-channel AP-safe scan step,
+# skipped while the radio carries traffic (its header). The web UI reads its
+# cache and runs `gt-be98-rfscan scan <band>` for "Scan now".
+#
 # Monitor radios (monitor=1 of a radio in the list): the radio carries no
 # BSS; once hostapd released it the radio netdev is set down (the driver
 # refuses a monitor while it is up) and <dev>mon is created on its wiphy
@@ -204,6 +210,7 @@ WIFI_SCHED=${GT_BE98_WIFI_SCHED:-/usr/sbin/gt-be98-wifi-sched}
 WIFI_STA=${GT_BE98_WIFI_STA:-/usr/sbin/gt-be98-wifi-sta}
 WIFI_REPROBE=${GT_BE98_WIFI_REPROBE:-/usr/sbin/gt-be98-wifi-reprobe}
 WIFI_STEER=${GT_BE98_WIFI_STEER:-/usr/sbin/gt-be98-wifi-steer}
+WIFI_RFSCAN=${GT_BE98_WIFI_RFSCAN:-/usr/sbin/gt-be98-rfscan}
 WIFI_L2=${GT_BE98_L2:-/usr/sbin/gt-be98-l2}
 WIFI_MESH=${GT_BE98_WIFI_MESH:-/usr/sbin/gt-be98-mesh}
 # after a reload the wired LAN's VLAN jacks re-resolve their networks (a
@@ -213,6 +220,7 @@ LAN_FOLLOW=${GT_BE98_LAN_FOLLOW-rc-service --ifstarted gt-be98-lan reload}
 # or went, and a gateway network's address follows its bridge
 GW_FOLLOW=${GT_BE98_GW_FOLLOW-rc-service --ifstarted gt-be98-gw reload}
 STEER_PID=$RUNDIR/gt-be98-wifi-steer.pid
+RFSCAN_PID=$RUNDIR/gt-be98-rfscan.pid
 REPROBE_PID=$RUNDIR/gt-be98-wifi-reprobe.pid
 STA_MON_PID=$RUNDIR/gt-be98-wifi-sta.pid
 SCHED_PID=$RUNDIR/gt-be98-wifi-sched.pid
@@ -1496,6 +1504,28 @@ reprobe_stop() {
 	rm -f "$REPROBE_PID"
 }
 
+# the RF-environment daemon (gt-be98-rfscan run), started when not running
+# (never stopped by reload: a radio that is not serving is skipped by it)
+rfscan_running() {
+	local p
+	p=$(cat "$RFSCAN_PID" 2>/dev/null) || return 1
+	[ -n "$p" ] && kill -0 "$p" 2>/dev/null
+}
+
+rfscan_start() {
+	[ -x "$WIFI_RFSCAN" ] || return 0
+	rfscan_running && return 0
+	start-stop-daemon --start --background --make-pidfile --pidfile "$RFSCAN_PID" \
+		--exec "$WIFI_RFSCAN" -- run
+}
+
+rfscan_stop() {
+	[ -f "$RFSCAN_PID" ] || return 0
+	start-stop-daemon --stop --pidfile "$RFSCAN_PID" --retry TERM/5/KILL/2 > /dev/null 2>&1
+	rm -f "$RFSCAN_PID"
+	rm -rf "$RUNDIR"/gt-be98-rfscan	# its cache: the radios it described are gone
+}
+
 # the 802.11k/v daemon (gt-be98-wifi-steer run: neighbour lists of the kv=1
 # networks, steering of the steer=1 ones): runs while the applied plan has a
 # kv line, stopped otherwise (no kv network: nothing for it to do)
@@ -1571,6 +1601,7 @@ svc_procs() {
 		*" $WIFI_REPROBE run ") echo "gt-be98-wifi-reprobe $p" ;;
 		*" $WIFI_SCHED run ") echo "gt-be98-wifi-sched $p" ;;
 		*" $WIFI_STEER run ") echo "gt-be98-wifi-steer $p" ;;
+		*" $WIFI_RFSCAN run ") echo "gt-be98-rfscan $p" ;;
 		*" $WIFI_STA monitor ") echo "gt-be98-wifi-sta $p" ;;
 		*hostapd" "*" -g $g "*) echo "hostapd $p" ;;
 		*hostapd_cli" "*" -a $WIFI_MESH "*|*hostapd_cli" "*" -a $WIFI_MESH") echo "hostapd_cli-mesh $p" ;;
@@ -1655,6 +1686,7 @@ start() {
 		sched_stop
 		reprobe_stop
 		steer_stop
+		rfscan_stop
 		orphans_stop
 		svc_unlock
 		return 1
@@ -1665,6 +1697,8 @@ start() {
 	reprobe_start
 	steer_stop
 	steer_apply
+	rfscan_stop
+	rfscan_start
 	# the radios' LEDs come with the driver (gt-be98-leds)
 	leds_apply
 	if [ $rc != 0 ]; then
@@ -1697,6 +1731,7 @@ reload() {
 	sched_start
 	reprobe_start
 	steer_apply	# a kv network added or gone
+	rfscan_start
 	# shellcheck disable=SC2086 # a command line
 	[ -n "$LAN_FOLLOW" ] && $LAN_FOLLOW > /dev/null 2>&1
 	# shellcheck disable=SC2086 # a command line
@@ -1711,6 +1746,7 @@ stop() {
 	svc_lock
 	sched_stop
 	steer_stop
+	rfscan_stop
 	# first: an unload must not look like a re-probe
 	reprobe_stop
 	stop_hostapd

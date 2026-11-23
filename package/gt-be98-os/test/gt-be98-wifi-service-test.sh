@@ -675,6 +675,7 @@ rc() {	# rc start|stop|reload|status: openrc-run's gate; RC = rc + the state aft
 }
 wifi_loaded() { return 0; }; WIFI_UNLOAD_ON_STOP=no; leds_apply() { :; }
 WIFI_SCHED="$here/../src/sbin/gt-be98-wifi-sched"; WIFI_REPROBE="$here/../src/sbin/gt-be98-wifi-reprobe"
+WIFI_RFSCAN=/nonexistent	# hermetic: these checks count the daemons without it (its own come below)
 kill $(fakes pids) 2>/dev/null; rm -f "$T"/run/*.pid "$T/fail" "$T"/state-*; rm -rf "$T/run/gt-be98-wifi" "$T/slots"
 { net 1 a sae password1 "2g 5gl" 1; } > "$T/nets"; : > "$T/out"
 rc start; check "lifecycle control: a clean start: started, hostapd + both daemons" "0 started|gt-be98-wifi-reprobe gt-be98-wifi-sched hostapd" "$RC|$(fakes)"
@@ -722,6 +723,15 @@ rc reload; sleep 1; check "steer daemon: kv=1 gone: reload stops it" "0 started|
 rc reload; rc stop; sleep 1
 check "steer daemon: stop leaves nothing" "0 stopped|" "$RC|$(fakes)"
 unset GT_BE98_KV; WIFI_STEER=/nonexistent
+# the RF-environment daemon (gt-be98-rfscan): runs while the service does;
+# a reload keeps exactly one; stop leaves nothing, its cache removed.
+# Control: the start before it (WIFI_RFSCAN unset = not installed) ran none
+WIFI_RFSCAN="$here/../src/sbin/gt-be98-rfscan"; : > "$T/out"
+rc start; check "rfscan daemon: a start runs it" "0 started|gt-be98-rfscan gt-be98-wifi-reprobe gt-be98-wifi-sched hostapd" "$RC|$(fakes)"
+rc reload; check "rfscan daemon: a reload with it running: still exactly one" "gt-be98-rfscan gt-be98-wifi-reprobe gt-be98-wifi-sched hostapd" "$(fakes)"
+mkdir -p "$T/run/gt-be98-rfscan/5gl"; rc stop; sleep 1
+check "rfscan daemon: stop leaves nothing, its cache removed" "0 stopped||no" "$RC|$(fakes)|$([ -d "$T/run/gt-be98-rfscan" ] && echo yes || echo no)"
+WIFI_RFSCAN=/nonexistent
 { net 1 a sae password1 "2g 5gl" 1; } > "$T/nets"
 # the lock: a live holder makes the next one wait (taken over after
 # SVC_LOCK_WAIT s, said); a dead holder's is taken at once

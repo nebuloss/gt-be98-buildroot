@@ -1,0 +1,619 @@
+#!/bin/sh
+# shellcheck shell=busybox
+# SPDX-License-Identifier: GPL-2.0
+# gt-be98-rfscan: the RF environment of each Wi-Fi radio (the web UI's
+# Frequencies page): per-channel busy time, our own channel's busy split,
+# the nearby Wi-Fi networks, and a channel recommendation. It never moves a
+# channel itself.
+#
+#   gt-be98-rfscan show <band>      the cached view of <band>, JSON (no radio I/O)
+#   gt-be98-rfscan survey <band>    refresh the channel times (no excursion), then show
+#   gt-be98-rfscan scan <band>      scan now: one AP-safe train over the band's
+#                                   scan list, then a survey refresh, then show
+#   gt-be98-rfscan step <band>      one channel of the round-robin (the
+#                                   background refresh's unit), then show
+#   gt-be98-rfscan run              the daemon: every TICK s, each serving
+#                                   radio: one step, then a survey refresh
+#                                   (gt-be98-wifi starts and stops it)
+# <band> is 2g, 5gl, 5gh or 6g. Exit 0 with a JSON object on stdout; 2 on a
+# usage error (a JSON {"error":...} on stdout too).
+#
+# WHERE EVERY NUMBER COMES FROM (the Wi-Fi driver, open-wifi; nothing here is
+# estimated):
+#  - `iw dev <dev> survey dump`: per channel the firmware's cumulative active /
+#    busy / receive / transmit times (ms) and the noise floor. The dump makes
+#    the driver read them (three chanim_stats GETs, on-channel: no excursion).
+#    A channel has times only once the radio has dwelt on it (a scan step).
+#  - /sys/kernel/debug/bca/domN/fscan, `surv` lines (driver ledger RFSCAN):
+#    the same cumulative times with the receive split nl80211 has no
+#    attribute for: bss_rx (our BSSes' frames), obss (another BSS's frames),
+#    nonwifi (carrier sensed, no 802.11 frame decoded: non-Wi-Fi energy, or
+#    Wi-Fi too weak or damaged to decode; the firmware does not separate the
+#    two). Absent (an older driver): the split is null, never 0.
+#  - `iw dev <dev> scan ap-force freq <list>`: on a beaconing radio the driver
+#    runs it as a TRAIN of single-channel scans (F-SCAN): 40 ms active (110 ms
+#    passive on radar / 6 GHz channels) away, at least 200 ms home between
+#    two, refused (-EBUSY) during a CSA, a CAC or a background CAC. The BSS
+#    records (SSID, BSSID, frequency, signal, the HT/VHT/HE/EHT operation
+#    elements that give the width) are cfg80211's.
+#
+# BUSY PERCENTAGES are deltas between two of this program's own refreshes
+# (basis "delta"); a channel seen once only has its cumulative ratio (basis
+# "cumulative"). ours = (tx + bss_rx) / active, other_wifi = obss / active,
+# nonwifi = nonwifi / active, busy = busy / active (busy also counts the
+# firmware's doze/other states, so the three parts can sum to less).
+#
+# THE SCAN LIST: every enabled channel of the radio; on 6 GHz the PSCs only
+# (channel 5 + 16k) plus our own channel (6 GHz discovery uses PSCs; a
+# 59-channel passive sweep would keep the radio away ~18 s in all).
+#
+# THE BACKGROUND REFRESH (run): stock acsd2's shape (one CI step every 10 s)
+# made slower: one channel every TICK=30 s per serving radio, so a 5 GHz
+# radio's 12 channels refresh in 6 min and the radio is away at most one
+# dwell (40/110 ms) per 30 s. A step is skipped while the radio's BSSes moved
+# more than BG_MAX_KBPS kbit/s since the previous tick, at most BG_MAX_SKIP
+# ticks in a row (then one step goes anyway: a radio always busy still gets a
+# refresh every ~5 min).
+#
+# THE RECOMMENDATION: each candidate block of our width (2.4 GHz: primaries 1,
+# 6, 11 and 13 when enabled; 5/6 GHz: the aligned 40/80/160/320 MHz blocks
+# whose every 20 MHz piece is enabled and not in a radar NOP) scores, lower is
+# better, every term in [0,1]:
+#   0.5 busy (the most-busy MEASURED piece; on our own block the primary
+#            only, with our own tx and bss_rx taken out: our clients are not
+#            interference, and a dwell on our own secondary sees our own
+#            wider frames)
+#   0.2 noise (primary noise floor, (dBm + 100) / 30, clamped)
+#   0.3 nbr  (1 - prod(1 - w_i p_i) over neighbours overlapping the block:
+#            w_i the fraction of the neighbour's width inside the block,
+#            p_i = (signal + 90) / 40 clamped)
+# Weights: tools/fscan-policy.py's (open-wifi F-SCAN.4). A block whose
+# primary is unmeasured is never recommended. A move is recommended when the
+# best block beats ours by >= MARGIN_PCT % (relative) and >= 0.05 (absolute):
+# stock acsd2's hysteresis shape. A radar block is flagged (a move there
+# costs a CAC: cac_s), as a channel switch is one CSA for every BSS of the
+# radio (open-wifi F-CSA-MBSS). The page asks; this program never switches.
+#
+# STATE: $RUNDIR/gt-be98-rfscan/<band>/ (tmpfs). One lock per band: a scan
+# and the daemon's step never overlap.
+set -u
+
+TICK=30
+BG_MAX_KBPS=10000
+BG_MAX_SKIP=10
+NBR_TTL=3600
+MARGIN_PCT=20
+SCAN_TIMEOUT=90
+# (the offline test only: run exits after this many ticks; 0 = forever)
+TICKS=${GT_BE98_TICKS:-0}
+
+# (GT_BE98_*: the offline test harness only)
+RUNDIR=${GT_BE98_RUN:-/run}
+IW=${GT_BE98_IW:-iw}
+SLEEP=${GT_BE98_SLEEP:-sleep}
+LOGGER=${GT_BE98_LOGGER:-logger}
+UPTIME=${GT_BE98_UPTIME:-/proc/uptime}
+SYSNET=${GT_BE98_SYSNET:-/sys/class/net}
+DEBUGFS=${GT_BE98_DEBUGFS:-/sys/kernel/debug}
+TIMEOUT=${GT_BE98_TIMEOUT:-timeout}
+PLAN=$RUNDIR/gt-be98-wifi/gen/plan
+ST=$RUNDIR/gt-be98-rfscan
+
+log() { $LOGGER -t gt-be98-rfscan -- "$*" 2>/dev/null || echo "gt-be98-rfscan: $*" >&2; }
+
+# seconds since boot (monotonic: no RTC, NTP may step the wall clock)
+now() { local u; read -r u _ < "$UPTIME" 2>/dev/null || u=0; echo "${u%%.*}"; }
+
+valid_band() { case "$1" in 2g | 5gl | 5gh | 6g) return 0 ;; *) return 1 ;; esac; }
+
+# the radio netdev of band $1: the plan's radio line, else the driver's fixed
+# name (ifname_fixed=1, the OS default WIFI_RADIO_DEVS)
+band_dev() {
+	local d
+	d=$(awk -v b="$1" '$1 == "radio" && $2 == b && $3 ~ /^[A-Za-z0-9_.-]+$/ { print $3; exit }' "$PLAN" 2>/dev/null)
+	if [ -z "$d" ]; then
+		case "$1" in 2g) d=bcawl3 ;; 5gl) d=bcawl0 ;; 5gh) d=bcawl1 ;; 6g) d=bcawl2 ;; esac
+	fi
+	echo "$d"
+}
+
+# the plan's BSS lines of radio $1: "<ifname> <bssid>" (all radios with -)
+plan_bss() {
+	awk -v d="$1" '$1 == "bss" && (d == "-" || $2 == d) && $3 ~ /^[A-Za-z0-9_.-]+$/ { print $3, tolower($7) }' "$PLAN" 2>/dev/null
+}
+
+# the PCIe domain of netdev $1 (the driver's bca/domN directory)
+dev_dom() {
+	local p
+	p=$(readlink -f "$SYSNET/$1/device" 2>/dev/null) || return 1
+	p=${p##*/}
+	case "$p" in [0-9a-f][0-9a-f][0-9a-f][0-9a-f]:*) printf '%d\n' "0x${p%%:*}" ;; *) return 1 ;; esac
+}
+
+# our own operating channel on $1: "<freq> <width> <center1>", empty when the
+# netdev is not an AP on a channel
+op_read() {
+	$IW dev "$1" info 2>/dev/null | awk '
+		/^[[:space:]]*type / { t = $2 }
+		/^[[:space:]]*channel [0-9]+ \(/ {
+			f = $3; sub(/^\(/, "", f)
+			for (i = 1; i <= NF; i++) {
+				if ($i == "width:") w = $(i + 1)
+				if ($i == "center1:") c = $(i + 1)
+			}
+		}
+		END { if (t == "AP" && f > 0) print f, (w > 0 ? w : 20), (c > 0 ? c : f) }'
+}
+
+# the radio's channel table: "<freq> <ch> <disabled> <radar> <dfs state> <cac ms>"
+phy_channels() {
+	local p
+	p=$(cat "$SYSNET/$1/phy80211/name" 2>/dev/null) || return 0
+	$IW phy "$p" channels 2>/dev/null | awk '
+		function flush() { if (f) print f, c, dis, rad, (ds == "" ? "-" : ds), cac + 0 }
+		/^[[:space:]]*\* [0-9]+ MHz \[[0-9]+\]/ {
+			flush(); f = $2; c = $4; gsub(/[^0-9]/, "", c)
+			dis = ($0 ~ /\(disabled\)/) ? 1 : 0; rad = 0; ds = ""; cac = 0; next }
+		/Radar detection/ { rad = 1 }
+		/DFS state:/ { ds = $3 }
+		/DFS CAC time:/ { cac = $4 }
+		END { flush() }'
+}
+
+lock_band() {
+	local L=$ST/$1/lock p
+	mkdir -p "$ST/$1"
+	if ! mkdir "$L" 2>/dev/null; then
+		p=$(cat "$L/pid" 2>/dev/null)
+		if [ -n "$p" ] && kill -0 "$p" 2>/dev/null; then return 1; fi
+		rm -rf "$L"
+		mkdir "$L" 2>/dev/null || return 1
+	fi
+	echo $$ > "$L/pid"
+	return 0
+}
+unlock_band() { rm -rf "$ST/$1/lock"; }
+
+meta_get() { sed -n "s/^$2=//p" "$ST/$1/meta" 2>/dev/null | tail -n1; }
+meta_set() {	# meta_set <band> <key> <value>
+	local m=$ST/$1/meta
+	{ grep -v "^$2=" "$m" 2>/dev/null; echo "$2=$3"; } > "$m.n"
+	mv "$m.n" "$m"
+}
+
+# ---- the survey refresh ----
+# One `survey dump` (the driver's refresh) + the node's split, folded into
+# cum (last cumulative per channel) and win (the last window per channel).
+survey_refresh() {	# <band> <dev>
+	local b=$1 d=$2 sd=$ST/$1 t dom node
+	t=$(now)
+	$IW dev "$d" survey dump > "$sd/survey.raw" 2>/dev/null
+	: > "$sd/node.raw"
+	dom=$(dev_dom "$d") && node=$DEBUGFS/bca/dom$dom/fscan && [ -r "$node" ] &&
+		grep '^surv freq=' "$node" > "$sd/node.raw" 2>/dev/null
+	touch "$sd/cum" "$sd/win"
+	awk -v now="$t" -v sd="$sd" '
+		FILENAME ~ /survey\.raw$/ {
+			if ($1 == "frequency:") { f = $2 + 0; seen[f] = 1; next }
+			if (!f) next
+			if ($1 == "noise:") noise[f] = $2
+			else if ($0 ~ /channel active time:/) at[f] = $(NF - 1)
+			else if ($0 ~ /channel busy time:/) bt[f] = $(NF - 1)
+			else if ($0 ~ /channel receive time:/) rt[f] = $(NF - 1)
+			else if ($0 ~ /channel transmit time:/) tt[f] = $(NF - 1)
+			next
+		}
+		FILENAME ~ /node\.raw$/ {
+			delete kv
+			for (i = 2; i <= NF; i++) { split($i, p, "="); kv[p[1]] = p[2] }
+			g = kv["freq"] + 0
+			if (!g) next
+			nd[g] = 1; nt[g] = kv["time_ms"]; nb[g] = kv["busy_ms"]; nr[g] = kv["rx_ms"]; nx[g] = kv["tx_ms"]
+			ns[g] = kv["bss_rx_ms"]; no[g] = kv["obss_ms"]; nw[g] = kv["nonwifi_ms"]
+			if (kv["noise"] !~ /^\?/ && !(g in noise)) noise[g] = kv["noise"]
+			next
+		}
+		FILENAME ~ /\/cum$/ { pc[$1] = $0; next }
+		FILENAME ~ /\/win$/ { pw[$1] = $0; next }
+		END {
+			out = sd "/cum.n"; wout = sd "/win.n"
+			printf "" > out; printf "" > wout
+			# a channel this dump does not list keeps its last record and window
+			for (g in pw) if (!(g in seen) && !(g in nd)) print pw[g] > wout
+			for (g in pc) if (!(g in seen) && !(g in nd)) print pc[g] > out
+			for (f in seen) {
+				# the node is preferred: the same refresh, with the split
+				if (f in nd) { T = nt[f]; B = nb[f]; R = nr[f]; X = nx[f]; S = ns[f]; O = no[f]; W = nw[f] }
+				else if (f in at) { T = at[f]; B = (f in bt) ? bt[f] : "-"; R = (f in rt) ? rt[f] : "-"; X = (f in tt) ? tt[f] : "-"; S = "-"; O = "-"; W = "-" }
+				else {
+					# no time record (yet): the noise floor alone; a previous record is kept
+					if (f in pc) { split(pc[f], q, " "); if (f in noise) q[3] = noise[f]; print q[1], q[2], q[3], q[4], q[5], q[6], q[7], q[8], q[9], q[10] > out }
+					else if (f in noise) print f, now, noise[f], "-", "-", "-", "-", "-", "-", "-" > out
+					if (f in pw) print pw[f] > wout
+					continue
+				}
+				N = (f in noise) ? noise[f] : "?"
+				print f, now, N, T, B, R, X, S, O, W > out
+				# the window: a delta when the active time grew since our previous
+				# refresh, else the previous window (nothing new measured); the first
+				# sample, or a firmware reset (time went back), is cumulative
+				if ((f in pc) && split(pc[f], q, " ") && q[4] != "-") {
+					if (T + 0 > q[4] + 0) {
+						dt = T - q[4]
+						printf "%s %s %d %s %s %s %s %s %s\n", f, now, dt, dd(B, q[5]), dd(X, q[7]), dd(S, q[8]), dd(O, q[9]), dd(W, q[10]), "delta" > wout
+						continue
+					}
+					if (T + 0 == q[4] + 0 && (f in pw)) {
+						# nothing new: keep the window, refresh its noise only through cum
+						print pw[f] > wout; continue
+					}
+				}
+				printf "%s %s %d %s %s %s %s %s cumulative\n", f, now, T, B, X, S, O, W > wout
+			}
+		}
+		function dd(c, p) { if (c == "-" || p == "-" || c + 0 < p + 0) return "-"; return c - p }
+	' "$sd/survey.raw" "$sd/node.raw" "$sd/cum" "$sd/win"
+	mv "$sd/cum.n" "$sd/cum"
+	mv "$sd/win.n" "$sd/win"
+	meta_set "$b" survey_at "$t"
+	meta_set "$b" split "$([ -s "$sd/node.raw" ] && echo 1 || echo 0)"
+}
+
+# ---- neighbours ----
+# `iw scan` output (stdin) -> "<bssid> <freq> <ch> <width> <center> <signal>
+# <seen> <hidden> <ssid hex>" lines; <seen> = now - last seen. iw escapes
+# every byte that is not printable ASCII (and the backslash, and a space at
+# either end) as \xNN, so the hex is the SSID's exact bytes
+parse_scan() {	# <now>
+	awk -v now="$1" '
+		BEGIN { for (i = 32; i < 127; i++) ord[sprintf("%c", i)] = i }
+		function flush() {
+			if (bssid == "" || !freq) return
+			w = 20; c = freq
+			if (sec == "above") { w = 40; c = freq + 10 } else if (sec == "below") { w = 40; c = freq - 10 }
+			if (vw == 1) {
+				if (vs2 > 0 && (vs2 - vs1 == 8 || vs1 - vs2 == 8)) { w = 160; c = cf(vs2) } else if (vs2 > 0) { w = 160; c = cf(vs1) } else { w = 80; c = cf(vs1) }
+			} else if (vw == 2) { w = 160; c = cf(vs1) }
+			if (hw > 0) { w = hw; c = (hw >= 160 && hs1 > 0) ? cf(hs1) : cf(hs0) }
+			if (ew > 0) { w = ew; c = (ew >= 160 && es1 > 0) ? cf(es1) : cf(es0) }
+			hid = (ssidhex == "" || ssidhex ~ /^(00)+$/) ? 1 : 0
+			print bssid, freq, chan(freq), w, c, (sig == "" ? "?" : sig), now - int(age / 1000), hid, (ssidhex == "" ? "-" : ssidhex)
+		}
+		function chan(f) { if (f == 2484) return 14; if (f < 3000) return (f - 2407) / 5; if (f < 5950) return (f - 5000) / 5; return (f - 5950) / 5 }
+		function cf(n) { if (freq < 3000) return 2407 + 5 * n; if (freq < 5950) return 5000 + 5 * n; return 5950 + 5 * n }
+		function hexof(s,   i, h, ch) {
+			h = ""
+			for (i = 1; i <= length(s); i++) {
+				ch = substr(s, i, 1)
+				if (ch == "\\" && substr(s, i + 1, 1) == "x") { h = h tolower(substr(s, i + 2, 2)); i += 3; continue }
+				if (ch in ord) h = h sprintf("%02x", ord[ch])
+			}
+			return h
+		}
+		/^BSS [0-9a-fA-F][0-9a-fA-F]:/ {
+			flush(); bssid = tolower(substr($2, 1, 17)); freq = 0; sig = ""; age = 0; ssidhex = ""
+			sec = ""; vw = -1; vs1 = 0; vs2 = 0; hw = 0; hs0 = 0; hs1 = 0; ew = 0; es0 = 0; es1 = 0; el = ""; next }
+		bssid == "" { next }
+		/^\t[^\t]/ { el = $0; sub(/^\t/, "", el); sub(/:.*/, "", el) }
+		/^\tfreq: / { freq = int($2 + 0); next }
+		/^\tsignal: / { sig = sprintf("%d", $2); next }
+		/^\tlast seen: [0-9]+ ms ago/ { age = $3 + 0; next }
+		/^\tSSID:/ { s = $0; sub(/^\tSSID: ?/, "", s); ssidhex = hexof(s); next }
+		el == "HT operation" && /secondary channel offset:/ { sec = $NF; if (sec == "secondary") sec = "" }
+		el == "VHT operation" && /\* channel width:/ { vw = $4 + 0 }
+		el == "VHT operation" && /center freq segment 1:/ { vs1 = $NF + 0 }
+		el == "VHT operation" && /center freq segment 2:/ { vs2 = $NF + 0 }
+		el == "HE Operation" && /Channel Width:/ { hw = ($3 == "80+80") ? 160 : $3 + 0 }
+		el == "HE Operation" && /Center Frequency Segment 0:/ { hs0 = $NF + 0 }
+		el == "HE Operation" && /Center Frequency Segment 1:/ { hs1 = $NF + 0 }
+		el == "EHT Operation" && /Channel Width:/ { ew = $3 + 0 }
+		el == "EHT Operation" && /Center Frequency Segment 0:/ { es0 = $NF + 0 }
+		el == "EHT Operation" && /Center Frequency Segment 1:/ { es1 = $NF + 0 }
+		END { flush() }'
+}
+
+# merge freshly parsed records (file $2) into band $1's cache: a BSSID seen
+# again replaces its record; records older than NBR_TTL and our own BSSIDs go
+nbr_merge() {	# <band> <new records> <now>
+	local sd=$ST/$1
+	touch "$sd/nbr"
+	plan_bss - | awk '{ print $2 }' > "$sd/own"
+	awk -v now="$3" -v ttl="$NBR_TTL" '
+		FILENAME ~ /\/own$/ { own[$1] = 1; next }
+		FILENAME ~ /\/nbr$/ { if (!($1 in own) && now - $7 <= ttl) r[$1] = $0; next }
+		{ if (!($1 in own)) r[$1] = $0 }
+		END { for (b in r) print r[b] }' "$sd/own" "$sd/nbr" "$2" > "$sd/nbr.n"
+	mv "$sd/nbr.n" "$sd/nbr"
+}
+
+# the scan list of band $1 on dev $2: enabled channels (6 GHz: PSCs + ours)
+scan_list() {
+	local op
+	op=$(op_read "$2")
+	phy_channels "$2" | awk -v b="$1" -v of="${op%% *}" '
+		$3 == 1 { next }
+		b == "6g" && ($2 - 5) % 16 != 0 && $1 != of { next }
+		$5 == "unavailable" { next }
+		{ printf "%s%s", (n++ ? " " : ""), $1 }
+		END { if (n) print "" }'
+}
+
+do_scan() {	# <band> <dev> <freq list> <kind: scan|step>
+	local b=$1 d=$2 sd=$ST/$1 t rc
+	t=$(now)
+	meta_set "$b" scan_state running
+	# shellcheck disable=SC2086 # the frequency list
+	$TIMEOUT "$SCAN_TIMEOUT" $IW dev "$d" scan ap-force freq $3 > "$sd/scan.raw" 2> "$sd/scan.err"
+	rc=$?
+	if [ $rc != 0 ]; then
+		meta_set "$b" scan_state "refused:$(tr -c 'A-Za-z0-9 ()-' '_' < "$sd/scan.err" | cut -c1-80)"
+		meta_set "$b" refused "$(($(meta_get "$b" refused) + 1))"
+		log "SCAN $4 band=$b dev=$d n=$(echo "$3" | wc -w) rc=$rc $(head -n1 "$sd/scan.err")"
+		return 1
+	fi
+	parse_scan "$(now)" < "$sd/scan.raw" > "$sd/scan.rec"
+	nbr_merge "$b" "$sd/scan.rec" "$(now)"
+	meta_set "$b" scan_state idle
+	meta_set "$b" scan_at "$t"
+	[ "$4" = scan ] && meta_set "$b" full_at "$t"
+	meta_set "$b" scans "$(($(meta_get "$b" scans) + 1))"
+	log "SCAN $4 band=$b dev=$d n=$(echo "$3" | wc -w) rc=0 bss=$(wc -l < "$sd/scan.rec") in $(($(now) - t)) s"
+	return 0
+}
+
+# ---- the view ----
+render() {	# <band> <dev>
+	local b=$1 d=$2 sd=$ST/$1 op serving=0
+	op=$(op_read "$d")
+	[ -n "$op" ] && serving=1
+	phy_channels "$d" > "$sd/phych"
+	touch "$sd/cum" "$sd/win" "$sd/nbr" "$sd/meta"
+	awk -v band="$b" -v dev="$d" -v now="$(now)" -v op="$op" -v serving="$serving" -v margin="$MARGIN_PCT" '
+		function clamp(v) { return v < 0 ? 0 : (v > 1 ? 1 : v) }
+		function js(s) { gsub(/\\/, "\\\\", s); gsub(/"/, "\\\"", s); return "\"" s "\"" }
+		function num(v) { return (v == "-" || v == "?" || v == "") ? "null" : v }
+		function pct(p, w) { return (p == "-" || w + 0 <= 0) ? "null" : sprintf("%.1f", 100 * p / w) }
+		function lo(c, w) { return c - w / 2 }
+		function hi(c, w) { return c + w / 2 }
+		function ovl(a1, a2, b1, b2,   x, y) { x = a1 > b1 ? a1 : b1; y = a2 < b2 ? a2 : b2; return y > x ? y - x : 0 }
+		FILENAME ~ /\/phych$/ { n++; F[n] = $1; C[n] = $2; DIS[$1] = $3; RAD[$1] = $4; DS[$1] = $5; CAC[$1] = $6; IDX[$2] = $1; next }
+		FILENAME ~ /\/cum$/ { NOI[$1] = $3; next }
+		FILENAME ~ /\/win$/ { WT[$1] = $3; WB[$1] = $4; WX[$1] = $5; WS[$1] = $6; WO[$1] = $7; WN[$1] = $8; WBASIS[$1] = $9; WAT[$1] = $2; next }
+		FILENAME ~ /\/nbr$/ { m++; NB[m] = $1; NF_[m] = $2; NC[m] = $3; NW[m] = $4; NCT[m] = $5; NS[m] = $6; NSEEN[m] = $7; NH[m] = $8; NX[m] = ($9 == "-") ? "" : $9; next }
+		FILENAME ~ /\/meta$/ { k = $0; sub(/=.*/, "", k); v = $0; sub(/^[^=]*=/, "", v); META[k] = v; next }
+		END {
+			split(op, o, " "); of = o[1] + 0; ow = o[2] + 0; oc = o[3] + 0
+			# per-neighbour overlap with our channel
+			for (i = 1; i <= m; i++) {
+				if (!serving) { NOV[i] = "unknown"; continue }
+				x = ovl(lo(NCT[i], NW[i]), hi(NCT[i], NW[i]), lo(oc, ow), hi(oc, ow))
+				NOV[i] = (NF_[i] == of) ? "co-channel" : (x > 0 ? "overlapping" : "none")
+			}
+			printf "{\"band\":%s,\"dev\":%s,\"serving\":%s", js(band), js(dev), serving ? "true" : "false"
+			if (serving) printf ",\"ours\":{\"freq\":%d,\"ch\":%d,\"width\":%d,\"center_freq\":%d}", of, chn(of), ow, oc
+			else printf ",\"ours\":null"
+			printf ",\"survey_age_s\":%s", ("survey_at" in META) ? now - META["survey_at"] : "null"
+			printf ",\"scan_age_s\":%s", ("scan_at" in META) ? now - META["scan_at"] : "null"
+			printf ",\"full_scan_age_s\":%s", ("full_at" in META) ? now - META["full_at"] : "null"
+			printf ",\"scan_state\":%s", js(("scan_state" in META) ? META["scan_state"] : "never")
+			printf ",\"split\":%s", (META["split"] == "1") ? "true" : "false"
+			# channels
+			printf ",\"channels\":["
+			for (i = 1; i <= n; i++) {
+				f = F[i]; nn = 0
+				for (j = 1; j <= m; j++) if (NF_[j] == f) nn++
+				printf "%s{\"ch\":%d,\"freq\":%d,\"disabled\":%s,\"dfs\":%s,\"dfs_state\":%s,\"in_use\":%s", (i > 1 ? "," : ""), C[i], f, DIS[f] ? "true" : "false", RAD[f] ? "true" : "false", (DS[f] == "-" ? "null" : js(DS[f])), (serving && in_block(f, oc, ow)) ? "true" : "false"
+				if (f in WT && WT[f] > 0) {
+					printf ",\"measured\":true,\"basis\":%s,\"sample_ms\":%d,\"age_s\":%d,\"busy_pct\":%s", js(WBASIS[f]), WT[f], now - WAT[f], pct(WB[f], WT[f])
+					us = (WX[f] == "-" || WS[f] == "-") ? "-" : WX[f] + WS[f]
+					printf ",\"ours_pct\":%s,\"other_wifi_pct\":%s,\"nonwifi_pct\":%s", pct(us, WT[f]), pct(WO[f], WT[f]), pct(WN[f], WT[f])
+				} else printf ",\"measured\":false,\"busy_pct\":null,\"ours_pct\":null,\"other_wifi_pct\":null,\"nonwifi_pct\":null"
+				printf ",\"noise_dbm\":%s,\"neighbours\":%d}", (f in NOI) ? num(NOI[f]) : "null", nn
+			}
+			printf "]"
+			# neighbours, strongest first
+			for (i = 1; i <= m; i++) ord[i] = i
+			for (i = 2; i <= m; i++) { v = ord[i]; for (j = i - 1; j >= 1 && sg(ord[j]) < sg(v); j--) ord[j + 1] = ord[j]; ord[j + 1] = v }
+			printf ",\"neighbours\":["
+			for (k = 1; k <= m; k++) {
+				i = ord[k]
+				printf "%s{\"bssid\":%s,\"ssid\":%s,\"ssid_hex\":%s,\"hidden\":%s,\"freq\":%d,\"ch\":%d,\"width\":%d,\"center_freq\":%d,\"signal_dbm\":%s,\"overlap\":%s,\"last_seen_s\":%d}", (k > 1 ? "," : ""), js(NB[i]), NH[i] ? "null" : js(txt(NX[i])), js(NX[i]), NH[i] ? "true" : "false", NF_[i], NC[i], NW[i], NCT[i], num(NS[i]), js(NOV[i]), now - NSEEN[i]
+			}
+			printf "]"
+			recommend()
+			printf "}\n"
+		}
+		function sg(i) { return (NS[i] == "?") ? -999 : NS[i] + 0 }
+		# the bytes of the SSID as text: printable ASCII as is, any other byte "?" (the
+		# exact bytes are ssid_hex: a UTF-8 SSID is decoded by the reader)
+		function txt(h,   i, v, s) {
+			s = ""
+			for (i = 1; i + 1 <= length(h); i += 2) {
+				v = index("0123456789abcdef", substr(h, i, 1)) * 16 + index("0123456789abcdef", substr(h, i + 1, 1)) - 17
+				s = s ((v >= 32 && v < 127) ? sprintf("%c", v) : "?")
+			}
+			return s
+		}
+		function chn(f) { if (f == 2484) return 14; if (f < 3000) return (f - 2407) / 5; if (f < 5950) return (f - 5000) / 5; return (f - 5950) / 5 }
+		function in_block(f, c, w) { return f > c - w / 2 && f < c + w / 2 }
+		# the score of block [c - w/2, c + w/2] with primary p; "" when the primary is unmeasured
+		# ⚠on OUR block only the primary counts: its record is the live one of the channel we
+		# serve on, while a dwell on one of our own secondaries is a 20 MHz look at our own
+		# wider frames (not interference)
+		function score(p, c, w, mine,   f, busy, b, nt, keep, i, x, pw, ok) {
+			if (!(p in WT) || WT[p] <= 0) return ""
+			busy = 0
+			for (f = c - w / 2 + 10; f < c + w / 2; f += 20) {
+				if (mine && f != p) continue
+				if (!(f in WT) || WT[f] <= 0 || WB[f] == "-") continue
+				b = WB[f]
+				if (mine && WX[f] != "-" && WS[f] != "-") b = b - WX[f] - WS[f]
+				else if (mine && WX[f] != "-") b = b - WX[f]
+				b = clamp(b / WT[f]); if (b > busy) busy = b
+			}
+			nt = clamp(((((p in NOI) && NOI[p] != "?") ? NOI[p] + 0 : -95) + 100) / 30)
+			keep = 1
+			for (i = 1; i <= m; i++) {
+				x = ovl(lo(NCT[i], NW[i]), hi(NCT[i], NW[i]), c - w / 2, c + w / 2)
+				pw = x / (NW[i] > 0 ? NW[i] : 20)
+				# 2.4 GHz: 20 MHz channels 5 MHz apart; each mask is ~22 MHz wide
+				if (band == "2g") { x = ovl(lo(NCT[i], NW[i]) - 1, hi(NCT[i], NW[i]) + 1, c - w / 2 - 1, c + w / 2 + 1); pw = x / (NW[i] + 2) }
+				if (x <= 0) continue
+				if (pw > 1) pw = 1
+				keep = keep * (1 - pw * clamp((sg(i) + 90) / 40))
+			}
+			SB = busy; SN = nt; SNB = 1 - keep
+			return 0.5 * busy + 0.2 * nt + 0.3 * (1 - keep)
+		}
+		# the candidate blocks of width w: K = count, KP primary, KC centre, KD radar pieces, KCAC
+		function candidates(w,   i, f, base, k, j, ok, g, ch, per, step) {
+			K = 0
+			if (band == "2g") {
+				for (i = 1; i <= n; i++) {
+					ch = C[i]; f = F[i]
+					if (!(ch == 1 || ch == 6 || ch == 11 || ch == 13) || DIS[f]) continue
+					if (w >= 40) { g = (ch + 4 <= 13 && (ch + 4) in IDX && !DIS[IDX[ch + 4]]) ? f + 20 : f - 20; if (!(chn(g) in IDX) || DIS[g]) continue; c = (f + g) / 2 } else c = f
+					K++; KP[K] = f; KC[K] = c; KW[K] = (w >= 40) ? 40 : 20; KD[K] = 0; KCAC[K] = 0
+				}
+				return
+			}
+			per = w / 20
+			for (i = 1; i <= n; i++) {
+				ch = C[i]; f = F[i]
+				if (band == "6g") base = 1; else base = (ch >= 149) ? 149 : 36
+				if ((ch - base) % (4 * per) != 0) continue
+				ok = 1; rd = 0; cac = 0; pp = ""
+				for (j = 0; j < per; j++) {
+					g = f + 20 * j
+					if (!(chn(g) in IDX) || IDX[chn(g)] != g || DIS[g] || DS[g] == "unavailable") { ok = 0; break }
+					if (RAD[g]) { rd++; if (CAC[g] > cac) cac = CAC[g] }
+					if (pp == "" && band == "6g" && (chn(g) - 5) % 16 == 0) pp = g
+				}
+				if (!ok) continue
+				K++; KP[K] = (pp != "") ? pp : f; KC[K] = f + 10 * (per - 1); KW[K] = w; KD[K] = rd; KCAC[K] = cac
+			}
+		}
+		function recommend(   k, s, best, bs, cur, cs, cb, cn, cnb, gain) {
+			if (!serving) { printf ",\"recommendation\":{\"action\":\"none\",\"reason\":\"the radio is not serving\"}"; return }
+			cs = score(of, oc, ow, 1); cb = SB; cn = SN; cnb = SNB
+			if (cs == "") { printf ",\"recommendation\":{\"action\":\"none\",\"reason\":\"our channel has no measurement yet\"}"; return }
+			candidates(ow); best = 0; bs = 0
+			printf ",\"candidates\":["
+			for (k = 1; k <= K; k++) {
+				mine = in_block(of, KC[k], KW[k])
+				s = mine ? cs : score(KP[k], KC[k], KW[k], 0)
+				printf "%s{\"ch\":%d,\"freq\":%d,\"width\":%d,\"center_freq\":%d,\"dfs\":%s,\"cac_s\":%d,\"ours\":%s,\"score\":%s", (k > 1 ? "," : ""), chn(KP[k]), KP[k], KW[k], KC[k], KD[k] ? "true" : "false", KCAC[k] / 1000, mine ? "true" : "false", (s == "" ? "null" : sprintf("%.3f", s))
+				if (s != "") printf ",\"busy\":%.3f,\"noise\":%.3f,\"nbr\":%.3f}", mine ? cb : SB, mine ? cn : SN, mine ? cnb : SNB; else printf "}"
+				if (s == "" || mine) continue
+				if (!best || s < bs) { best = k; bs = s }
+			}
+			printf "]"
+			if (!best) { printf ",\"recommendation\":{\"action\":\"stay\",\"reason\":\"no other channel is measured yet: scan first\"}"; return }
+			gain = (cs > 0) ? (cs - bs) / cs : 0
+			if (bs >= cs || gain * 100 < margin || cs - bs < 0.05) {
+				printf ",\"recommendation\":{\"action\":\"stay\",\"reason\":%s,\"best_ch\":%d,\"score_ours\":%.3f,\"score_best\":%.3f}", js(sprintf("channel %d is the quietest measured channel or within %d%% of it", chn(of), margin)), chn(KP[best]), cs, bs
+				return
+			}
+			printf ",\"recommendation\":{\"action\":\"move\",\"ch\":%d,\"freq\":%d,\"width\":%d,\"center_freq\":%d,\"dfs\":%s,\"cac_s\":%d,\"score_ours\":%.3f,\"score_best\":%.3f,\"gain_pct\":%d", chn(KP[best]), KP[best], KW[best], KC[best], KD[best] ? "true" : "false", KCAC[best] / 1000, cs, bs, int(100 * gain + 0.5)
+			printf ",\"reason\":%s", js(sprintf("channel %d is quieter than channel %d (score %.2f vs %.2f)%s: move?", chn(KP[best]), chn(of), bs, cs, KD[best] ? sprintf("; a radar channel: %d s of radar check (CAC) before it serves", KCAC[best] / 1000) : ""))
+			printf ",\"chan_switch\":%s}", js(sprintf("5 %d center_freq1=%d bandwidth=%d", KP[best], KC[best], KW[best]))
+		}
+	' "$sd/phych" "$sd/cum" "$sd/win" "$sd/nbr" "$sd/meta" > "$sd/json.n"
+	mv "$sd/json.n" "$sd/json"
+	cat "$sd/json"
+}
+
+# ---- the daemon's traffic gate ----
+radio_bytes() {	# <dev>: rx + tx bytes of every BSS netdev of the radio
+	local s=0 i v
+	for i in $(plan_bss "$1" | awk '{ print $1 }'); do
+		for v in rx_bytes tx_bytes; do
+			read -r x < "$SYSNET/$i/statistics/$v" 2>/dev/null && s=$((s + x))
+		done
+	done
+	echo "$s"
+}
+
+step_one() {	# <band> <dev>: the next channel of the round-robin
+	local b=$1 d=$2 list n i f
+	list=$(scan_list "$b" "$d")
+	n=$(echo "$list" | wc -w)
+	[ "$n" -gt 0 ] || return 1
+	i=$(meta_get "$b" step_idx); i=${i:-0}
+	f=$(echo "$list" | awk -v k=$((i % n + 1)) '{ print $k }')
+	meta_set "$b" step_idx $((i + 1))
+	do_scan "$b" "$d" "$f" step
+}
+
+tick() {	# one daemon pass over every serving radio
+	local b d t by pb pt kbps sk
+	for b in 2g 5gl 5gh 6g; do
+		d=$(band_dev "$b")
+		[ -e "$SYSNET/$d" ] || continue
+		[ -n "$(op_read "$d")" ] || continue
+		lock_band "$b" || continue
+		t=$(now); by=$(radio_bytes "$d")
+		pb=$(meta_get "$b" bg_bytes); pt=$(meta_get "$b" bg_at)
+		meta_set "$b" bg_bytes "$by"; meta_set "$b" bg_at "$t"
+		kbps=0
+		[ -n "$pb" ] && [ -n "$pt" ] && [ "$t" -gt "$pt" ] && [ "$by" -ge "$pb" ] && kbps=$(( (by - pb) * 8 / 1000 / (t - pt) ))
+		sk=$(meta_get "$b" bg_skips); sk=${sk:-0}
+		if [ "$kbps" -gt "$BG_MAX_KBPS" ] && [ "$sk" -lt "$BG_MAX_SKIP" ]; then
+			meta_set "$b" bg_skips $((sk + 1))
+		else
+			meta_set "$b" bg_skips 0
+			step_one "$b" "$d"
+		fi
+		# one survey dump per tick, after the step: the home channel's live record
+		# and the stepped channel's fresh one in the same refresh
+		survey_refresh "$b" "$d"
+		render "$b" "$d" > /dev/null
+		unlock_band "$b"
+	done
+}
+
+usage_err() { printf '{"error":"%s"}\n' "$1"; exit 2; }
+
+cmd=${1:-}
+case "$cmd" in
+show | survey | scan | step)
+	b=${2:-}
+	valid_band "$b" || usage_err "usage: gt-be98-rfscan show|survey|scan|step 2g|5gl|5gh|6g"
+	d=$(band_dev "$b")
+	mkdir -p "$ST/$b"
+	[ -e "$SYSNET/$d" ] || { printf '{"band":"%s","dev":"%s","serving":false,"error":"no such radio"}\n' "$b" "$d"; exit 0; }
+	if [ "$cmd" = show ]; then
+		render "$b" "$d"
+		exit 0
+	fi
+	lock_band "$b" || { meta_set "$b" scan_state busy; render "$b" "$d"; exit 0; }
+	trap 'unlock_band "$b"' EXIT
+	case "$cmd" in
+	survey) survey_refresh "$b" "$d" ;;
+	scan)
+		if [ -z "$(op_read "$d")" ]; then
+			meta_set "$b" scan_state "refused:the radio is not serving (no AP on a channel)"
+		else
+			list=$(scan_list "$b" "$d")
+			[ -n "$list" ] && do_scan "$b" "$d" "$list" scan
+			survey_refresh "$b" "$d"
+		fi ;;
+	step)
+		[ -n "$(op_read "$d")" ] && step_one "$b" "$d"
+		survey_refresh "$b" "$d" ;;
+	esac
+	render "$b" "$d"
+	;;
+run)
+	mkdir -p "$ST"
+	log "started: tick ${TICK}s, background step skipped above ${BG_MAX_KBPS} kbit/s (at most ${BG_MAX_SKIP} in a row)"
+	k=0
+	while :; do
+		tick
+		k=$((k + 1))
+		[ "$TICKS" -gt 0 ] && [ "$k" -ge "$TICKS" ] && break
+		$SLEEP "$TICK"
+	done
+	;;
+*) usage_err "usage: gt-be98-rfscan show|survey|scan|step <band> | run" ;;
+esac
