@@ -249,8 +249,8 @@ gen "$T/r" -N -S -L "$T/objs"; check "-S with -L: the second runs in the network
 # 4-address (WDS) clients (owner 11-23): wds=1 -> wds_sta=1 + wds_bridge=<the network bridge>
 { net 1 a sae password1 "2g 5gl" 5; echo wds=1; net 2 b sae password2 2g 5; } > "$T/r"
 gen "$T/r" -N -L "$T/objs"; check "wds=1: accepted" 0 $?
-check "... wds_sta=1 + wds_bridge=brwifi100007 on a's BSSes, none on b's" "yes yes yes yes no no" \
-	"$(has bcawl3 wds_sta=1) $(has bcawl3 wds_bridge=brwifi100007) $(has bcawl0 wds_sta=1) $(has bcawl0 wds_bridge=brwifi100007) $(has bcawl3-1 wds_sta=1) $(has bcawl3-1 wds_bridge=brwifi100007)"
+check "... multi_ap=3 + wds_sta=1 + wds_bridge=brwifi100007 on a's BSSes, none on b's" "yes yes yes yes yes no no no" \
+	"$(has bcawl3 multi_ap=3) $(has bcawl3 wds_sta=1) $(has bcawl3 wds_bridge=brwifi100007) $(has bcawl0 multi_ap=3) $(has bcawl0 wds_bridge=brwifi100007) $(has bcawl3-1 multi_ap=3) $(has bcawl3-1 wds_sta=1) $(has bcawl3-1 wds_bridge=brwifi100007)"
 conf_ok "wds=1"
 { net 1 a sae password1 2g 5; echo wds=2; } > "$T/r"; gen "$T/r" -N; check "wds=2 refused" 1 $?
 { printf 'station=5gl\nssid=up\nsecurity=sae\npassphrase=password9\nnetwork=1\nssid=a\nsecurity=sae\npassphrase=password1\nbands=2g\nrouted=192.168.50.1/24\nwds=1\n'; } > "$T/r"

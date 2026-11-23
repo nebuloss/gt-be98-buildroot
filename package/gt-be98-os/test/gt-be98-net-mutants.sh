@@ -83,7 +83,8 @@ mutant "svc: the DHCP clients get no router (the AP's upstream)" sbin/gt-be98-ad
 mutant "svc: dnsmasq restarted on every apply" sbin/gt-be98-addr 's/if dnsmasq_running \&\& \[ "\$t" = "\$(cat "\$AD\/dnsmasq.conf" 2>\/dev\/null)" \]; then return 0; fi/:/' gt-be98-addr-test.sh
 mutant "svc: dnsmasq left running with no DHCP service" sbin/gt-be98-addr 's/^\t\tdnsmasq_stop; return 0$/\t\treturn 0/' gt-be98-addr-test.sh
 # 4-address (WDS) clients and the client Wi-Fi's bridging witness
-mutant "wds: wds=1 renders no wds_sta" sbin/gt-be98-wifi-gen 's/print "wds_sta=1" > f; print "wds_bridge=" br > f/print "wds_bridge=" br > f/' gt-be98-wifi-gen-test.sh
+mutant "wds: wds=1 renders no wds_sta" sbin/gt-be98-wifi-gen 's/print "multi_ap=3" > f; print "wds_sta=1" > f; print "wds_bridge=" br > f/print "multi_ap=3" > f; print "wds_bridge=" br > f/' gt-be98-wifi-gen-test.sh
+mutant "wds: no Multi-AP (plain wds_sta: no trigger on this driver, q360)" sbin/gt-be98-wifi-gen 's/print "multi_ap=3" > f; print "wds_sta=1" > f;/print "wds_sta=1" > f;/' gt-be98-wifi-gen-test.sh
 mutant "wds: the AP_VLAN into the SSID's own bridge, not the network's" sbin/gt-be98-wifi-gen 's/print "wds_bridge=" br > f }/print "wds_bridge=brwifi" net[i] > f }/' gt-be98-wifi-gen-test.sh
 mutant "wds: on a routed network accepted" sbin/gt-be98-wifi-gen 's/if (wds\[i\] \&\& (rep\[i\] || rtd\[i\] != "" || bh\[i\]))/if (0)/' gt-be98-wifi-gen-test.sh
 mutant "sta: bridged yes on own-address frames only" sbin/gt-be98-wifi-sta 's/elif \[ "\$foreign" != - \] \&\& \[ "\$foreign" -gt 0 \]; then v=yes/elif [ "$own" != - ] \&\& [ "$own" -gt 0 ]; then v=yes/' gt-be98-wifi-sta-test.sh

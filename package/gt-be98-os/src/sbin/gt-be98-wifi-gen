@@ -414,14 +414,23 @@
 #                                   twt 0). TWT is radio-wide in hostapd
 #                                   (radio twt=, feature twt_responder)
 #     wds=0|1                       1: 4-ADDRESS (WDS) CLIENTS (owner 11-23,
-#                                   -F feature wds 1): hostapd wds_sta=1 on
-#                                   the network's BSSes, each 4-address
-#                                   station an AP_VLAN (<bss>.sta<aid>) that
-#                                   hostapd puts into the network's bridge
-#                                   (wds_bridge=): the devices behind that
-#                                   client are on the network, like a port.
-#                                   vlan= networks only (not routed=,
-#                                   repeated=1, backhaul=). Default 0
+#                                   -F feature wds 1), as MULTI-AP BACKHAUL
+#                                   STAs: hostapd multi_ap=3 (fronthaul +
+#                                   backhaul: ordinary clients join as before)
+#                                   and wds_sta=1 on the network's BSSes; a
+#                                   client joining with the Multi-AP backhaul
+#                                   STA element (wpa_supplicant
+#                                   multi_ap_backhaul_sta=1) gets an AP_VLAN
+#                                   (<bss>.sta<aid>) that hostapd puts into
+#                                   the network's bridge (wds_bridge=): the
+#                                   devices behind it are on the network,
+#                                   like a port. A PLAIN 4-address client
+#                                   (no Multi-AP element) gets none: on this
+#                                   FullMAC driver hostapd learns of it only
+#                                   from the "unexpected 4-address frame"
+#                                   event, which open-wifi never raises (q360
+#                                   W: associated, no AP_VLAN). vlan=
+#                                   networks only. Default 0
 #     slot.<band>=K  mac.<band>=S   optional explicit sticky slot / BSSID
 #                                   index S = 1..7 (0: the anchor's)
 #     bssid.<band>=MAC              optional: this BSS's own address (default
@@ -1898,7 +1907,7 @@ END {
 			if (hid[i]) print "ignore_broadcast_ssid=1" > f
 			if (iso[i]) print "ap_isolate=1" > f
 			# 4-address clients: their AP_VLAN into the network bridge
-			if (wds[i] && !bh[i]) { print "wds_sta=1" > f; print "wds_bridge=" br > f }
+			if (wds[i] && !bh[i]) { print "multi_ap=3" > f; print "wds_sta=1" > f; print "wds_bridge=" br > f }
 			if (maxc[i] != "") print "max_num_sta=" maxc[i] > f
 			# the mesh root backhaul BSS (header: backhaul=): Multi-AP
 			# backhaul BSS, one 4-address AP_VLAN per leaf, 8 leaves
