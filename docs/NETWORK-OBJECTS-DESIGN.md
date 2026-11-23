@@ -88,7 +88,9 @@ As built: `/etc/gt-be98-services.conf`, `service=<id> type=dhcp|admin|ssh|radius
 enabled rows (rebuilt at every DHCP lease change); no enabled admin row = the admin page on every address (the OS's
 belt; the web UI refuses it first); no list = admin and SSH on every address. DHCP: one dnsmasq (`port=0`,
 `bind-interfaces`) for every DHCP row, the clients' router and DNS = the static address's `gateway=` (an AP's upstream
-router), else none. radius / portal rows are stored and reported `ui` (the web UI's servers bind them; not wired yet).
+router), else none. radius rows: the web UI's builtin RADIUS servers also listen on the row's address in force (besides
+127.0.0.1 for the box's hostapd). portal rows: stored and reported `ui`; the captive portal itself is not ported to
+this OS yet (web UI `linux_actions.go`: "captive portals are not ported yet"), so a portal row runs nothing.
 Web UI: `svc_list`, `svc_set{id?, type, address, enabled, start, end, lease}`, `svc_delete{id}` under the trial; an
 address with a service on it cannot be deleted; an address change that would break its DHCP service is refused; the
 listener binds `gt-be98-addr addrs admin`. NOTE: with a list, SSH answers on its rows only: zero SSH rows = SSH only by
@@ -121,7 +123,14 @@ Proposed API: `port_detect_vlans{port, seconds}` -> `{port, seconds, frames, unt
   only address the station itself), `unproven` before; 3-address = no. HYPOTHESIS to measure: the driver delivers such
   frames to the host as received (arm r2 W measures the same witness on the mac80211 side). The open-wifi driver has no
   RX 4-address counter of its own (`bca_bss_link` holds our side only: use_4addr, dwds_have, map_have).
-- **"Not bridged: only this box's own addresses on <network> can use it"**: does NOT hold as is. A 4addr station
+- **The fallback (approved 11-23, implemented):** a station bound to a network object (station `vlan=<vid>`, the
+  generator's repeater line names that network's bridge; gt-be98-l2 runs it without the wired trunk VLAN while the
+  client feeds it, `uplink-wifi` hold) that stays `unproven` (4addr) or does not complete its Multi-AP join for
+  STA_BRIDGE_WAIT s (60) falls back: out of the bridge, 4addr off, a 3-address join (the Multi-AP element dropped),
+  and gt-be98-addr puts that network's Addresses rows on the station (`/run/gt-be98-wifi/sta-unbridged`). STA_REBRIDGE
+  s (600) later bridging is tried again (reversible); a `yes` keeps it. No NAT, no routing. UI: "Not bridged: the other
+  access point does not allow it. Only this box's own addresses on <network> use this link."
+- **"Not bridged: only this box's own addresses on <network> can use it"** (before the fallback): did NOT hold as is. A 4addr station
   transmits 4-address frames (a non-WDS AP drops them), and a 3-address station can never be a bridge port
   (IFF_DONT_BRIDGE), so with the station in the bridge nothing passes either way; bridge MAC = station MAC changes
   neither. What is needed (proposal, not implemented): on `bridged no` the OS takes the station out of the bridge,

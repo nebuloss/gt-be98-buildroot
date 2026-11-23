@@ -68,6 +68,11 @@
 # a private mount namespace as gt-be98-wifi-sta's, the lease's router at
 # ADDR_METRIC), stop (only what start set), destroy. States: up, waiting (no
 # bridge yet, no lease yet), refused (why=). Counters: starts, refusals.
+# A CLIENT Wi-Fi NOT BRIDGED (gt-be98-wifi-sta's fallback, owner 11-23: the
+# remote AP refused 4-address / Multi-AP): its network's addresses go onto
+# the STATION netdev instead of the network's bridge ($UNBRIDGED "<station>
+# <bridge>"), so the box's own addresses use the link (no NAT, no routing
+# for anything behind it); back on the bridge once it bridges again.
 # REFUSED (that address only): a network not in the networks file, a
 # gateway network (mode=gateway: the box's address there is gt-be98-gw's,
 # its management is the network's mgmt=), an address id listed twice, a
@@ -88,6 +93,7 @@ RUNDIR=${GT_BE98_RUN:-/run}
 AD=${GT_BE98_ADDR_STATE:-$RUNDIR/gt-be98-addr}
 ADDRS=${GT_BE98_ADDRESSES:-/etc/gt-be98-addresses.conf}
 SVCS=${GT_BE98_SERVICES:-/etc/gt-be98-services.conf}
+UNBRIDGED=${GT_BE98_STA_UNBRIDGED:-$RUNDIR/gt-be98-wifi/sta-unbridged}
 NETWORKS=${GT_BE98_NETWORKS:-/etc/gt-be98-networks.conf}
 NETT=${GT_BE98_NET:-/usr/sbin/gt-be98-net}
 GWT=${GT_BE98_GW:-/usr/sbin/gt-be98-gw}
@@ -196,6 +202,9 @@ addr_init() {
 		A_DEV=$MGMT_DEV
 	else
 		A_DEV=$("$NETT" bridge "$NV" 2>/dev/null) || { A_WHY="network $A_NET (VLAN $NV) has no bridge in the network list"; return 0; }
+		# its client Wi-Fi fell back (header): the station carries the address
+		w=$(awk -v b="$A_DEV" '$2 == b { print $1; exit }' "$UNBRIDGED" 2>/dev/null)
+		[ -z "$w" ] || A_DEV=$w
 	fi
 	case "$A_MODE" in
 	dhcp)	[ -z "$A_CIDR" ] || { A_WHY="mode=dhcp takes no cidr="; return 0; }
@@ -261,7 +270,7 @@ dhcp_stop() {	# dev
 }
 dhcp_event() {
 	local d=${interface:-} gw
-	case "$d" in brwifi[0-9]*) ;; *) exit 0 ;; esac
+	case "$d" in brwifi[0-9]*|bcawl[0-9]*) ;; *) exit 0 ;; esac
 	[ -f "$AD/$d.dhcpcd.conf" ] || exit 0
 	case "${reason:-}" in
 	BOUND|RENEW|REBIND|REBOOT)

@@ -214,6 +214,13 @@ p=$(cat "$D/dnsmasq.pid"); A apply
 check "no DHCP service left: dnsmasq stopped" "no no" "$(kill -0 "$p" 2>/dev/null && echo yes || echo no) $([ -f "$D/dnsmasq.pid" ] && echo yes || echo no)"
 rm -f "$T/services.conf"; A apply
 check "no service list: admin and SSH on every address's device (the addresses' filter)" yes "$(grep -q 'iifname { "brwifi100003", "brwifi100005", "rnr0" } tcp dport { 22, 80, 443 } accept' "$f" && echo yes || echo no)"
+# 9. a CLIENT Wi-Fi fallen back (gt-be98-wifi-sta's sta-unbridged): its network's addresses on the station
+A stop
+mkdir -p "$T/sys/bcawl0" "$T/run/gt-be98-wifi"; printf 'address=1 network=3 mode=static cidr=10.43.0.2/24\n' > "$T/addresses.conf"
+printf 'bcawl0 brwifi100003\n' > "$T/run/gt-be98-wifi/sta-unbridged"; A apply
+check "fallen back: the static address on the station bcawl0, not on the bridge" "bcawl0 10.43.0.2/24|" "$(grep 10.43.0.2 "$T/addrs" | tr '\n' '|')"
+rm -f "$T/run/gt-be98-wifi/sta-unbridged"; A apply
+check "bridged again: the address back on brwifi100003, off the station" "brwifi100003 10.43.0.2/24|" "$(grep 10.43.0.2 "$T/addrs" | tr '\n' '|')"
 A stop
 echo "gt-be98-addr-test: $pass ok, $fail failed"
 [ $fail -eq 0 ]

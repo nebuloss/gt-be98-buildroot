@@ -40,6 +40,21 @@
 #                                   box's own addresses on the network can
 #                                   use the link (and only once they ride
 #                                   the station itself: DESIGN section 9)
+#   gt-be98-wifi-sta fbcheck DEV CONF SUM  one step of the FALLBACK (owner
+#                                   11-23, the monitor runs it every STA_POLL
+#                                   s for a repeater): a 4addr link still
+#                                   unproven, or a Multi-AP join not
+#                                   completed, STA_BRIDGE_WAIT s (60) after the
+#                                   bridging began: the station leaves the
+#                                   bridge, 4addr off, rejoins 3-address (a
+#                                   Multi-AP join without the backhaul STA
+#                                   element), and the network's Addresses rows
+#                                   move onto it ($STATE/sta-unbridged
+#                                   "<dev> <bridge>": gt-be98-addr reload): only
+#                                   the box's own addresses use the link, no
+#                                   NAT, no routing. STA_REBRIDGE s (600) later
+#                                   bridging is tried again (the remote may
+#                                   accept it now): back on a yes
 #   gt-be98-wifi-sta repeater DEV   the station's repeater mode and bridge
 #                                   ("4addr|multiap <bridge or ->", from the
 #                                   plan; nothing, exit 1: not a repeater)
@@ -121,6 +136,13 @@ STA_TABLE=$(num "$(setting STA_TABLE 181)" 181)
 STA_FOLLOW_MIN=$(num "$(setting STA_FOLLOW_MIN 120)" 120)
 STA_DEFAULT_ROUTE=$(setting STA_DEFAULT_ROUTE 1)
 STA_DHCP=$(setting STA_DHCP 1)
+STA_BRIDGE_WAIT=$(num "$(setting STA_BRIDGE_WAIT 60)" 60)
+STA_REBRIDGE=$(num "$(setting STA_REBRIDGE 600)" 600)
+# the fallback (header fbcheck): the stations fallen back, for gt-be98-addr
+UNBRIDGED=$STATE/sta-unbridged
+L2DIR=${GT_BE98_L2_STATE:-$RUNDIR/gt-be98-l2}
+L2TOOL=${GT_BE98_L2:-/usr/sbin/gt-be98-l2}
+ADDR_FOLLOW=${GT_BE98_STA_ADDR_FOLLOW-rc-service --ifstarted gt-be98-addr reload}
 NFT_TABLE=gt_be98_sta
 
 valid_dev() { case "$1" in bcawl[0-9]|bcawl[0-9][0-9]) return 0 ;; esac; return 1; }
@@ -150,7 +172,33 @@ repeater() {
 	case "$r" in 4addr\ *|multiap\ *) echo "$r" ;; *) return 1 ;; esac
 }
 # 4-address mode wanted (the plan) / in force (nl80211): on|off
-rep_want() { repeater "$1" > /dev/null && echo on || echo off; }
+rep_want() { repeater "$1" > /dev/null && ! fallen "$1" && echo on || echo off; }
+# ---- the fallback state of station $1: $S/<dev>.fb ("state bridging|bridged|
+# fallen", "trial <epoch>", "since <epoch>", "why <text>") ----
+now() { echo "${GT_BE98_NOW:-$(date +%s)}"; }
+fb_get() { sed -n "s/^$2 //p" "$S/$1.fb" 2>/dev/null | head -n1; }
+fb_set() {
+	local f="$S/$1.fb" kv k
+	shift
+	state_dir; [ -f "$f" ] || : > "$f"
+	for kv in "$@"; do
+		k=${kv%% *}
+		{ grep -v "^$k " "$f"; echo "$kv"; } > "$f.new" && mv -f "$f.new" "$f"
+	done
+}
+fallen() { [ "$(fb_get "$1" state)" = fallen ]; }
+# the uplink hold of the network bridge (gt-be98-l2: no wired trunk VLAN in a
+# bridge a client Wi-Fi feeds)
+hold_set() { mkdir -p "$L2DIR/uplink-wifi" && : > "$L2DIR/uplink-wifi/$1"; "$L2TOOL" sync > /dev/null 2>&1; return 0; }
+hold_clear() { [ -e "$L2DIR/uplink-wifi/$1" ] || return 0; rm -f "$L2DIR/uplink-wifi/$1"; "$L2TOOL" sync > /dev/null 2>&1; return 0; }
+unbridged_set() {
+	{ grep -v "^$1 " "$UNBRIDGED" 2>/dev/null; [ -z "${2:-}" ] || echo "$1 $2"; } > "$UNBRIDGED.new"
+	chmod 644 "$UNBRIDGED.new"; mv -f "$UNBRIDGED.new" "$UNBRIDGED"
+	[ -s "$UNBRIDGED" ] || rm -f "$UNBRIDGED"
+	# shellcheck disable=SC2086 # a command line
+	[ -z "$ADDR_FOLLOW" ] || $ADDR_FOLLOW > /dev/null 2>&1
+	return 0
+}
 rep_have() { iw dev "$1" info 2>/dev/null | grep -q '4addr: on' && echo on || echo off; }
 # the bridge station $1 is a port of (nothing: none)
 master_of() { local m; m=$(readlink "$SYSNET/$1/master" 2>/dev/null) && echo "${m##*/}"; }
@@ -162,7 +210,7 @@ master_of() { local m; m=$(readlink "$SYSNET/$1/master" 2>/dev/null) && echo "${
 rep_apply() {
 	local d=$1 r br m
 	m=$(master_of "$d")
-	if r=$(repeater "$d"); then
+	if r=$(repeater "$d") && ! fallen "$d"; then
 		br=${r#* }
 		[ "$(rep_have "$d")" = on ] || iw dev "$d" set 4addr on ||
 			{ log "$d: 4-address mode refused"; return 1; }
@@ -172,11 +220,16 @@ rep_apply() {
 		[ -d "$SYSNET/$br/bridge" ] || { log "$d: repeater bridge $br missing"; return 1; }
 		ip link set dev "$d" master "$br" || { log "$d: not bridged into $br"; return 1; }
 		witness_on "$d"
+		# a network object's bridge: its wired trunk VLAN leaves it
+		case "$br" in brwifi1[0-9][0-9][0-9][0-9][0-9]) hold_set "$br" ;; esac
+		# the bridging begins: its trial (fbcheck)
+		[ -n "$(fb_get "$d" trial)" ] || fb_set "$d" "state bridging" "trial $(now)"
 		log "$d: repeater (${r%% *}): 4-address mode, port of $br"
 	else
 		[ -n "$m" ] && ip link set dev "$d" nomaster
 		[ "$(rep_have "$d")" = off ] || iw dev "$d" set 4addr off
 		witness_off "$d"
+		[ -n "$m" ] && hold_clear "$m"
 	fi
 	return 0
 }
@@ -207,7 +260,9 @@ bridged() {
 	if r=$(repeater "$d"); then mode=${r%% *}; br=${r#* }; fi
 	st=$(wcli "$d" status | sed -n 's/^wpa_state=//p')
 	w=$(witness_read "$d"); own=${w% *}; foreign=${w#* }
-	if [ "$st" != COMPLETED ]; then v=no why="not associated (${st:-no supplicant})"
+	if [ "$mode" != 3addr ] && fallen "$d"; then
+		v=no why="fallen back: $(fb_get "$d" why); bridging tried again $(( STA_REBRIDGE - ($(now) - $(fb_get "$d" since)) ))s from now"
+	elif [ "$st" != COMPLETED ]; then v=no why="not associated (${st:-no supplicant})"
 	elif [ "$mode" = 3addr ]; then v=no why="a 3-address station is never a bridge port"
 	elif [ "$mode" = multiap ]; then v=yes why="Multi-AP backhaul association completed"
 	elif [ "$foreign" != - ] && [ "$foreign" -gt 0 ]; then v=yes why="4-address frames for other addresses received"
@@ -296,7 +351,7 @@ dhcp_event() {
 # ---- the station ----
 
 up() {
-	local d=$1 c=$2 sum=$3 how=${4:-} started=0 i st br
+	local d=$1 c=$2 sum=$3 how=${4:-} started=0 i st br cc
 	need_dev "$d"
 	[ -f "$c" ] || die "$d: $c: no such file"
 	[ -e "$SYSNET/$d" ] || die "$d: no such interface"
@@ -324,7 +379,13 @@ up() {
 		# wpa_supplicant also listens on the bridge (-b), or the 4-way
 		# handshake and every later rekey is lost
 		br=$(master_of "$d")
-		wpa_supplicant -B -i "$d" ${br:+-b "$br"} -c "$c" -P "$S/$d.wpa.pid" -f "$LOGDIR/wpa_supplicant-$d.log" ||
+		# fallen back (fbcheck): a plain 3-address join, without the Multi-AP
+		# backhaul STA element
+		cc=$c
+		if fallen "$d"; then
+			sed '/multi_ap_backhaul_sta=1/d' "$c" > "$S/$d.3addr.conf" && chmod 600 "$S/$d.3addr.conf" && cc=$S/$d.3addr.conf
+		fi
+		wpa_supplicant -B -i "$d" ${br:+-b "$br"} -c "$cc" -P "$S/$d.wpa.pid" -f "$LOGDIR/wpa_supplicant-$d.log" ||
 			die "$d: wpa_supplicant did not start"
 		started=1
 		log "$d: wpa_supplicant started"
@@ -349,7 +410,7 @@ up() {
 }
 
 down() {
-	local d=$1
+	local d=$1 r
 	need_dev "$d"
 	dhcp_stop "$d"
 	stop_pid "$S/$d.wpa.pid"
@@ -357,7 +418,10 @@ down() {
 	iw dev "$d" set 4addr off 2>/dev/null
 	ip route del default dev "$d" metric "$STA_METRIC" 2>/dev/null
 	ip -4 addr flush dev "$d" scope global 2>/dev/null
-	rm -f "$S/$d.sum" "$S/$d.lease" "$S/$d.follow" "$S/$d.dhcpcd.conf"
+	witness_off "$d"
+	r=$(repeater "$d") && hold_clear "${r#* }"
+	grep -q "^$d " "$UNBRIDGED" 2>/dev/null && unbridged_set "$d"
+	rm -f "$S/$d.sum" "$S/$d.lease" "$S/$d.follow" "$S/$d.dhcpcd.conf" "$S/$d.fb" "$S/$d.3addr.conf"
 	log "$d: station stopped"
 	return 0
 }
@@ -520,6 +584,39 @@ route() {
 
 # ---- the monitor daemon ----
 
+# one step of the fallback (header fbcheck) for repeater station $1 (its
+# plan's conf $2 and checksum $3)
+fbcheck() {
+	local d=$1 c=$2 sum=$3 r br t tr b v why
+	r=$(repeater "$d") || return 0
+	br=${r#* }; t=$(now)
+	if fallen "$d"; then
+		[ $(( t - $(fb_get "$d" since) )) -ge "$STA_REBRIDGE" ] || return 0
+		log "$d: fallen back $STA_REBRIDGE s ago: bridging into $br tried again"
+		rm -f "$S/$d.fb" "$S/$d.3addr.conf"
+		unbridged_set "$d"
+		stop_pid "$S/$d.wpa.pid"; up "$d" "$c" "$sum" > /dev/null 2>&1
+		return 0
+	fi
+	b=$(bridged "$d"); v=$(echo "$b" | cut -d' ' -f2)
+	if [ "$v" = yes ]; then
+		[ "$(fb_get "$d" state)" = bridged ] || { fb_set "$d" "state bridged"; log "$d: bridged into $br ($(echo "$b" | sed 's/.*why=//'))"; }
+		return 0
+	fi
+	tr=$(fb_get "$d" trial)
+	[ -n "$tr" ] || { fb_set "$d" "state bridging" "trial $t"; return 0; }
+	[ $(( t - tr )) -ge "$STA_BRIDGE_WAIT" ] || return 0
+	case "$v" in
+	unproven) why="the other access point does not allow bridging (no 4-address frame for another address in ${STA_BRIDGE_WAIT}s)" ;;
+	*) why="the bridged join did not complete in ${STA_BRIDGE_WAIT}s ($(echo "$b" | sed 's/.*why=//'))" ;;
+	esac
+	log "$d: not bridged: $why: out of $br, 3-address; only the box's own addresses on that network use the link"
+	fb_set "$d" "state fallen" "since $t" "why $why"
+	stop_pid "$S/$d.wpa.pid"
+	up "$d" "$c" "$sum" > /dev/null 2>&1
+	unbridged_set "$d" "$br"
+}
+
 monitor() {
 	local b d c s f fr af now last
 	trap 'exit 0' TERM INT
@@ -534,9 +631,11 @@ monitor() {
 				up "$d" "$c" "$s" > /dev/null 2>&1
 				continue
 			fi
-			# a repeater stays a port of its bridge (a bridge re-created by a reload)
+			# a repeater stays a port of its bridge (a bridge re-created by a
+			# reload), and falls back when the remote does not bridge
 			if repeater "$d" > /dev/null; then
 				rep_apply "$d"
+				fbcheck "$d" "$c" "$s"
 			elif [ "$STA_DHCP" = 1 ] && ! dhcp_running "$d"; then
 				log "$d: DHCP client is not running: restarted"
 				dhcp_start "$d"
@@ -573,6 +672,7 @@ unroute) unroute ;;
 status)	status ;;
 repeater) [ $# = 1 ] || die "repeater DEV"; need_dev "$1"; repeater "$1" ;;
 bridged) [ $# = 1 ] || die "bridged DEV"; need_dev "$1"; bridged "$1" ;;
+fbcheck) [ $# = 3 ] || die "fbcheck DEV CONF SUM"; need_dev "$1"; fbcheck "$@" ;;
 monitor) monitor ;;
 *)	sed -n '/^#   gt-be98-wifi-sta up/,/^#   (no argument/p' "$0" | sed 's/^# \{0,1\}//' >&2; exit 2 ;;
 esac

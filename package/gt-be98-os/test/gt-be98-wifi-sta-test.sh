@@ -294,5 +294,49 @@ check "3-address: no, never a bridge port" "bridged no mode=3addr bridge=-" "$(c
 run up bcawl0 "$T/sta.conf" rs8
 check "leaving repeater mode drops the witness table" no "$([ -f "$T/wtable" ] && echo yes || echo no)"
 
+# ---- the FALLBACK (owner 11-23): unproven / not joined STA_BRIDGE_WAIT s -> 3-address, the
+# network's addresses onto the station; STA_REBRIDGE s later bridging again ----
+printf '#!/bin/sh\necho "l2 $*" >> "$FAKE/log"\n' > "$T/bin/l2"; printf '#!/bin/sh\necho "addrfollow" >> "$FAKE/log"\n' > "$T/bin/af"; chmod +x "$T/bin/l2" "$T/bin/af"
+export GT_BE98_L2="$T/bin/l2" GT_BE98_STA_ADDR_FOLLOW="$T/bin/af"
+U="$T/run/gt-be98-wifi/sta-unbridged"; HOLD="$T/run/gt-be98-l2/uplink-wifi/brwifi100007"
+mkdir -p "$T/net/brwifi100007/bridge"; printf 'STA_WAIT=1\nSTA_BRIDGE_WAIT=60\nSTA_REBRIDGE=600\n' > "$T/confd"
+printf 'ctrl_interface=/run/wpa_supplicant\nnetwork={\n\tssid=7570\n\tmulti_ap_backhaul_sta=1\n}\n' > "$T/sta.conf"
+echo 'repeater bcawl0 4addr brwifi100007' > "$P"; rm -f "$S/bcawl0.fb" "$T/net/bcawl0/master" "$U" "$HOLD"; run down bcawl0
+assoc 5180 > "$T/assoc"; export GT_BE98_NOW=1000
+run up bcawl0 "$T/sta.conf" fb1
+check "bridging begins: a port of the network bridge, its uplink hold (no wired trunk VLAN), the trial at t=1000" "brwifi100007 yes yes trial 1000" \
+	"$(basename "$(readlink "$T/net/bcawl0/master")") $([ -e "$HOLD" ] && echo yes || echo no) $(grep -q '^l2 sync' "$T/log" && echo yes || echo no) $(grep '^trial' "$S/bcawl0.fb")"
+echo "9 0" > "$T/wcount"; GT_BE98_NOW=1030 run fbcheck bcawl0 "$T/sta.conf" fb1
+check "t+30, unproven: still bridging" "bridging brwifi100007" "$(sed -n 's/^state //p' "$S/bcawl0.fb") $(basename "$(readlink "$T/net/bcawl0/master")")"
+GT_BE98_NOW=1061 run fbcheck bcawl0 "$T/sta.conf" fb1
+check "t+61, still unproven: FALLEN BACK: out of the bridge, 4addr off, the hold gone, the addresses follow (sta-unbridged), wpa restarted" \
+	"fallen - off no bcawl0 brwifi100007 yes yes" \
+	"$(sed -n 's/^state //p' "$S/bcawl0.fb") $(readlink "$T/net/bcawl0/master" || echo -) $(cat "$T/4addr-bcawl0") $([ -e "$HOLD" ] && echo yes || echo no) $(cat "$U") $(grep -q addrfollow "$T/log" && echo yes || echo no) $(grep -q 'ssd --stop --pidfile .*bcawl0.wpa.pid' "$T/log" && echo yes || echo no)"
+check "... the rejoin uses a conf without the Multi-AP backhaul element" "yes 0" \
+	"$(grep -q -- "-c $S/bcawl0.3addr.conf" "$T/log" && echo yes || echo no) $(grep -c multi_ap_backhaul_sta "$S/bcawl0.3addr.conf")"
+GT_BE98_NOW=1100 run bridged bcawl0
+check "bridged: no, says why and when it tries again" "bridged no yes 561s" \
+	"$(cut -d' ' -f1-2 "$T/out") $(grep -q 'the other access point does not allow bridging' "$T/out" && echo yes || echo no) $(grep -o '[0-9]*s from now' "$T/out" | cut -d' ' -f1)"
+run fbcheck bcawl0 "$T/sta.conf" fb1
+GT_BE98_NOW=1400 run fbcheck bcawl0 "$T/sta.conf" fb1
+check "fallen, before STA_REBRIDGE: nothing changes" "fallen -" "$(sed -n 's/^state //p' "$S/bcawl0.fb") $(readlink "$T/net/bcawl0/master" || echo -)"
+GT_BE98_NOW=1661 run fbcheck bcawl0 "$T/sta.conf" fb1
+check "t+600 fallen: bridging tried again (4addr on, port of the bridge, the addresses back, a new trial)" "brwifi100007 on no trial 1661" \
+	"$(basename "$(readlink "$T/net/bcawl0/master")") $(cat "$T/4addr-bcawl0") $([ -e "$U" ] && echo yes || echo no) $(grep '^trial' "$S/bcawl0.fb")"
+echo "9 4" > "$T/wcount"; GT_BE98_NOW=1700 run fbcheck bcawl0 "$T/sta.conf" fb1
+GT_BE98_NOW=1900 run fbcheck bcawl0 "$T/sta.conf" fb1
+check "control: frames for another address seen: bridged, and it stays (no fallback after the wait)" "bridged brwifi100007" \
+	"$(sed -n 's/^state //p' "$S/bcawl0.fb") $(basename "$(readlink "$T/net/bcawl0/master")")"
+# Multi-AP: the join not completed in the wait -> fallen back too
+echo 'repeater bcawl0 multiap brwifi100007' > "$P"; run down bcawl0; rm -f "$T/net/bcawl0/master"
+GT_BE98_NOW=2000 run up bcawl0 "$T/sta.conf" fb2; printf 'wpa_state=SCANNING\n' > "$T/wpa-state-bcawl0"
+GT_BE98_NOW=2061 run fbcheck bcawl0 "$T/sta.conf" fb2
+check "multiap not joined in 60 s: fallen back (the bridged join did not complete)" "fallen yes" \
+	"$(sed -n 's/^state //p' "$S/bcawl0.fb") $(grep -q 'did not complete' "$S/bcawl0.fb" && echo yes || echo no)"
+run down bcawl0
+check "down: the fallback state, the unbridged line and the hold cleared" "no no no" \
+	"$([ -f "$S/bcawl0.fb" ] && echo yes || echo no) $([ -e "$U" ] && echo yes || echo no) $([ -e "$HOLD" ] && echo yes || echo no)"
+unset GT_BE98_NOW
+
 if [ $fail = 0 ]; then echo "ALL OK ($n checks)"; else echo "FAILED"; fi
 exit $fail

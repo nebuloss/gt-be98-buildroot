@@ -255,6 +255,14 @@ conf_ok "wds=1"
 { net 1 a sae password1 2g 5; echo wds=2; } > "$T/r"; gen "$T/r" -N; check "wds=2 refused" 1 $?
 { printf 'station=5gl\nssid=up\nsecurity=sae\npassphrase=password9\nnetwork=1\nssid=a\nsecurity=sae\npassphrase=password1\nbands=2g\nrouted=192.168.50.1/24\nwds=1\n'; } > "$T/r"
 gen "$T/r" -N; check "wds=1 on a routed network refused" "1 yes" "$? $(grep -q 'wds=1 only on a vlan= network' "$T/err" && echo yes || echo no)"
+# the CLIENT Wi-Fi bound to a network object (station vlan=, owner 11-23)
+STA='station=5gl\nssid=up\nsecurity=sae\npassphrase=password9\nrepeater=4addr\n'
+{ printf "${STA}vlan=5\n"; net 1 a sae password1 2g 5; } > "$T/r"
+gen "$T/r" -N -L "$T/objs"; check "station vlan=5: accepted, its repeater line names the network bridge" "0 repeater bcawl0 4addr brwifi100007" "$? $(grep '^repeater ' "$T/o/plan")"
+{ printf "${STA}vlan=6\n"; net 1 a sae password1 2g 5; } > "$T/r"
+gen "$T/r" -N -L "$T/objs"; check "station vlan=6 (no network object): refused" "1 yes" "$? $(grep -q 'vlan=6 is no network' "$T/err" && echo yes || echo no)"
+{ printf 'station=5gl\nssid=up\nsecurity=sae\npassphrase=password9\nvlan=5\n'; net 1 a sae password1 2g 5; } > "$T/r"
+gen "$T/r" -N -L "$T/objs"; check "station vlan= without repeater= (3-address): refused" "1 yes" "$? $(grep -q 'vlan= needs repeater' "$T/err" && echo yes || echo no)"
 check "-F says shared_vlan 1" 1 "$($SH "$G" -F | awk '$1 == "feature" && $2 == "shared_vlan" { print $3 }')"
 { net 1 a sae password1 2g 5; net 2 a sae password2 2g 6; } > "$T/r"; refuse "one SSID twice" "$T/r"
 net 1 a sae short 2g 5 > "$T/r"; refuse "passphrase < 8" "$T/r"

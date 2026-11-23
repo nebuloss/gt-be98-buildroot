@@ -471,6 +471,15 @@
 #                                   Either one is bridged into the repeated=
 #                                   network's bridge; routed= networks need
 #                                   repeater=0 (a bridge port routes nothing)
+#     vlan=2..4094                  the CLIENT Wi-Fi's network (owner 11-23):
+#                                   repeater=4addr|multiap only, the station
+#                                   a port of that network object's bridge
+#                                   (-L; refused without one), no repeated=1
+#                                   network, no trunk=1. Bind-only: no address
+#                                   of its own (the box's addresses are the
+#                                   network's Addresses rows). gt-be98-wifi-sta
+#                                   falls back to 3-address when the remote
+#                                   does not bridge (its header)
 #     trunk=0|1                     1: the MESH LEAF (buildroot docs/MESH-
 #                                   BACKHAUL-DESIGN.md §1.1, §3): the station
 #                                   is the leaf's TRUNK to a root's backhaul
@@ -1156,7 +1165,7 @@ k == "station" {
 	if (!validband(v)) { err("line " FNR ": station 2g|5gl|5gh|6g"); cur = "x"; next }
 	if (nsta) { err("station " v ": one station= block only (station " stab " is listed)"); cur = "x"; next }
 	nsta = 1; stab = v; cur = "s"; stenab = 1; stssid = ""; stsec = ""; stpass = ""; stbssid = ""
-	strep = "0"; sttrunk = 0; stmgmt = ""
+	strep = "0"; sttrunk = 0; stmgmt = ""; stvlan = ""
 	next
 }
 cur == "" {
@@ -1178,6 +1187,8 @@ cur == "s" {
 	else if (k == "trunk" && (v == "0" || v == "1")) sttrunk = v + 0
 	else if (k == "mgmt_vid" && isnum(v) && v + 0 >= 1 && v + 0 <= 4094) stmgmt = v + 0
 	else if (k == "mgmt_vid") err("station " stab ": mgmt_vid=" v " refused (a VLAN id 1..4094)")
+	else if (k == "vlan" && isnum(v) && v + 0 >= 2 && v + 0 <= 4094) stvlan = v + 0
+	else if (k == "vlan") err("station " stab ": vlan=" v " refused (2..4094)")
 	else err("station " stab ": unknown key " k)	# never echo a value that may be a secret
 	next
 }
@@ -1407,6 +1418,14 @@ END {
 		if (stbssid != "") {
 			if (!parsemac(stbssid, o) || o[0] % 2) err(tag ": bssid " stbssid ": a unicast MAC address")
 			else stbssid = tolower(stbssid)
+		}
+		# the CLIENT Wi-Fi bound to a network object (header vlan=): bridged
+		# into that network bridge (repeater=4addr|multiap), never a repeated=1
+		if (stvlan != "") {
+			if (strep == "0") err(tag ": vlan= needs repeater=4addr or multiap (a 3-address station cannot be bridged)")
+			else if (sttrunk) err(tag ": vlan= and trunk=1 exclude each other (the mesh leaf carries every network)")
+			else if (!((stvlan + 0) in objbr)) err(tag ": vlan=" stvlan " is no network of the network list (-L)")
+			for (j = 1; j <= nnet; j++) if (rep[j]) err(tag ": vlan= and a repeated=1 network (network " net[j] ") exclude each other")
 		}
 		# the mesh leaf (header: trunk=1): a Multi-AP backhaul STA
 		if (sttrunk && strep != "multiap") err(tag ": trunk=1 needs repeater=multiap (the mesh leaf is a Multi-AP backhaul STA of the root backhaul BSS)")
@@ -2029,7 +2048,7 @@ END {
 		close(f)
 		for (k = 1; k < cap; k++) if (used[b, k] != "") break
 		print "station " b " " d " " f " " ((k < cap && live[b]) ? d "-" k : "-") > plan
-		if (strep != "0") print "repeater " d " " strep " " ((nrep && (repid in onradio)) ? "brwifi" repid : "-") > plan
+		if (strep != "0") print "repeater " d " " strep " " ((stvlan != "") ? objbr[stvlan + 0] : (nrep && (repid in onradio)) ? "brwifi" repid : "-") > plan
 		if (sttrunk) {
 			tv = ""
 			# each VID once (several SSIDs may share one: shared_vlan)

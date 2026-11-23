@@ -254,12 +254,16 @@ sub_drop() {
 
 # the mode of VLAN $1 (bridge $2, optional) into MODE: gateway when the
 # network list has a line with vlan=$1 and mode=gateway (vlan 2..4094), or
-# while gt-be98-gw holds bridge $2 (header); else vlan. Keys in any order,
+# while gt-be98-gw holds bridge $2 (header), or while a CLIENT Wi-Fi is the
+# bridge's uplink ($L2/uplink-wifi/<bridge>, gt-be98-wifi-sta: the network
+# reaches its LAN through the station, so the wired trunk VLAN would close a
+# loop through that LAN, netguard rule 4); else vlan. Keys in any order,
 # unknown keys ignored; read with `read` (no fork).
 vid_mode() {
 	local l w v m
 	MODE=vlan
 	[ -n "${2:-}" ] && [ -e "$GW_HOLD/$2" ] && { MODE=gateway; return 0; }
+	[ -n "${2:-}" ] && [ -e "$L2/uplink-wifi/$2" ] && { MODE=gateway; return 0; }
 	case "$1" in 1) return 0 ;; esac
 	[ -r "$NETWORKS" ] || return 0
 	set -f

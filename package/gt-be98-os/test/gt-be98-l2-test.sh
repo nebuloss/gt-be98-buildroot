@@ -290,5 +290,11 @@ for k in 3 4 5 6 7 8 9; do L trunk-del bcawl0-1.sta1$k > /dev/null; done
 L down wifi brwifi71; check "last down of brwifi71: bh0.70 and bh1.70 deleted, bridge gone" "no no no" "$(ex bh0.70) $(ex bh1.70) $(ex brwifi71)"
 # the VLAN of a root bridge changes: the downlinks follow
 L up wifi brwifi31 rnr0 32; check "brwifi31 VLAN 33 -> 32: bh0.32 and bh1.32 in it, bh0.33 gone" "0 brwifi31 brwifi31 no" "$? $(master bh0.32) $(master bh1.32) $(ex bh0.33)"
+# a CLIENT Wi-Fi feeds the bridge (gt-be98-wifi-sta's uplink hold): no wired trunk VLAN; control: the hold gone
+L up net brwifi100070 rnr0 970; mkdir -p "$T/run/gt-be98-l2/uplink-wifi"; : > "$T/run/gt-be98-l2/uplink-wifi/brwifi100070"
+L sync; check "uplink-wifi hold: rnr0.970 removed (the network reaches its LAN through the station)" "no" "$([ -e "$N/rnr0.970" ] && echo yes || echo no)"
+rm -f "$T/run/gt-be98-l2/uplink-wifi/brwifi100070"; L sync
+check "control: the hold gone: rnr0.970 carried again" "brwifi100070" "$(master rnr0.970)"
+L down net brwifi100070
 echo "gt-be98-l2-test: $pass ok, $fail failed"
 [ $fail -eq 0 ]

@@ -89,5 +89,16 @@ mutant "wds: on a routed network accepted" sbin/gt-be98-wifi-gen 's/if (wds\[i\]
 mutant "sta: bridged yes on own-address frames only" sbin/gt-be98-wifi-sta 's/elif \[ "\$foreign" != - \] \&\& \[ "\$foreign" -gt 0 \]; then v=yes/elif [ "$own" != - ] \&\& [ "$own" -gt 0 ]; then v=yes/' gt-be98-wifi-sta-test.sh
 mutant "sta: a 3-address station reported bridged" sbin/gt-be98-wifi-sta 's/elif \[ "\$mode" = 3addr \]; then v=no/elif [ "$mode" = 3addr ]; then v=yes/' gt-be98-wifi-sta-test.sh
 mutant "sta: the witness never loaded" sbin/gt-be98-wifi-sta 's/^\t\twitness_on "\$d"$/\t\t:/' gt-be98-wifi-sta-test.sh
+# the client Wi-Fi's fallback (owner 11-23 item 6)
+mutant "fb: never falls back" sbin/gt-be98-wifi-sta 's/\[ \$(( t - tr )) -ge "\$STA_BRIDGE_WAIT" \] || return 0/return 0/' gt-be98-wifi-sta-test.sh
+mutant "fb: falls back at once (no wait)" sbin/gt-be98-wifi-sta 's/\[ \$(( t - tr )) -ge "\$STA_BRIDGE_WAIT" \] || return 0/:/' gt-be98-wifi-sta-test.sh
+mutant "fb: never bridges again (not reversible)" sbin/gt-be98-wifi-sta 's/\[ \$(( t - \$(fb_get "\$d" since) )) -ge "\$STA_REBRIDGE" \] || return 0/return 0/' gt-be98-wifi-sta-test.sh
+mutant "fb: stays in the bridge when fallen" sbin/gt-be98-wifi-sta 's/if r=\$(repeater "\$d") \&\& ! fallen "\$d"; then/if r=$(repeater "$d"); then/' gt-be98-wifi-sta-test.sh
+mutant "fb: the addresses do not follow" sbin/gt-be98-wifi-sta 's/^\tunbridged_set "\$d" "\$br"$/\t:/' gt-be98-wifi-sta-test.sh
+mutant "fb: rejoins with the Multi-AP element" sbin/gt-be98-wifi-sta "s/sed '\/multi_ap_backhaul_sta=1\/d' \"\$c\"/cat \"\$c\"/" gt-be98-wifi-sta-test.sh
+mutant "fb: no uplink hold (the wired trunk stays in a client-fed bridge)" sbin/gt-be98-wifi-sta 's/brwifi1\[0-9\]\[0-9\]\[0-9\]\[0-9\]\[0-9\]) hold_set "\$br" ;;/nothing) hold_set "$br" ;;/' gt-be98-wifi-sta-test.sh
+mutant "addr: the fallen station ignored" sbin/gt-be98-addr 's/^\t\t\[ -z "\$w" \] || A_DEV=\$w$/\t\t:/' gt-be98-addr-test.sh
+mutant "l2: the uplink hold ignored" sbin/gt-be98-l2 's/\[ -e "\$L2\/uplink-wifi\/\$2" \] \&\& { MODE=gateway; return 0; }/:/' gt-be98-l2-test.sh
+mutant "gen: station vlan= without a network object accepted" sbin/gt-be98-wifi-gen 's/else if (!((stvlan + 0) in objbr)) err(/else if (0) err(/' gt-be98-wifi-gen-test.sh
 echo "gt-be98-net-mutants: $pass ok, $fail failed"
 [ $fail -eq 0 ]
