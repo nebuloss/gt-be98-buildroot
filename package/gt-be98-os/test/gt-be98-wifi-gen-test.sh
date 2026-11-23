@@ -1001,6 +1001,19 @@ for cc in FR DE GB CA -; do
 		"$(hdr_has bcawl0 channel=52) $(hdr_has bcawl0 ieee80211h=1)"
 done
 conf_ok "zwdfs dropped (ETSI)"
+# [ZW80] chl_has <ifname> <channel>: the 5 GHz chanlist= of its header lists
+# that channel (ranges a-b expanded); weather <ifname>: how many of 116-128
+chl_has() { awk -F= -v c="$2" '$1 == "chanlist" { n = split($2, t, " "); for (i = 1; i <= n; i++) { split(t[i], r, "-"); hi = (r[2] == "") ? r[1] : r[2]; if (c + 0 >= r[1] + 0 && c + 0 <= hi + 0) f = 1 } } END { print f ? "yes" : "no" }' "$T/o/hdr-$1"; }
+weather() { k=0; for c in 116 120 124 128; do [ "$(chl_has "$1" $c)" = yes ] && k=$((k + 1)); done; echo $k; }
+zw80() {	# zw80 <label> <expected enable_background_radar>
+	{ printf 'country=DE\nradio=5gh\nzwdfs=1\nchannel=100\nwidth=80\n'; net 1 a sae password1 5gh 1; } > "$T/x4w"
+	rm -f "$T/slots"; gen "$T/x4w" -c
+	check "ZW80 $1, country=DE, 5gh 100/80 zwdfs=1: accepted, enable_background_radar=$2, vht_oper_chwidth=1" "0 $2 yes" \
+		"$? $(hdr_has bcawl1 enable_background_radar=1) $(hdr_has bcawl1 vht_oper_chwidth=1)"
+	check "ZW80 $1: chanlist has 100 104 108 112 132 136, no weather-radar channel (116-128)" "yes yes yes yes yes yes 0" \
+		"$(for c in 100 104 108 112 132 136; do chl_has bcawl1 $c; done | tr '\n' ' ')$(weather bcawl1)"
+	conf_ok "zw80 $1"
+}
 # [open-wifi ZW-ETSI] the one switch (zwetsi5gh): 0 drops zwdfs=1 on 5gh in an
 # ETSI region like 5gl; flipped to 1 (a copy of the generator) 5gh writes it,
 # 5gl is still dropped, and an FCC country is unchanged
@@ -1018,8 +1031,14 @@ if cmp -s "$G" "$T/gen-zw1"; then check "ZW-ETSI: the switch flip changed the ge
 	sed 's/^country=DE$/country=US/' "$T/x4z" > "$T/x4zu"
 	rm -f "$T/slots"; gen "$T/x4zu" -c; check "ZW-ETSI switch 1, country=US: both radios write it, no warning" "0 yes yes no" \
 		"$? $(hdr_has bcawl1 enable_background_radar=1) $(hdr_has bcawl0 enable_background_radar=1) $(grep -q 'zwdfs' "$T/err" && echo yes || echo no)"
+	# [ZW80] 5gh at 80 MHz with zero-wait (buildroot hostapd 0005: an 80 MHz
+	# AP keeps a 40 MHz standby): enable_background_radar=1, 80 MHz, and a
+	# chanlist with 100-112 and 132-136 and no weather-radar channel
+	# (120-128, nor 116: the primary of the 116/40 and 116/80 blocks)
+	zw80 "switch 1" "yes"
 	G=$G0
 fi
+zw80 "switch 0" "no"
 # monitor: the radio carries no BSS, its networks keep their slots
 { net 1 a sae password1 "2g 5gh" 1; net 2 b sae password2 5gh 2; } > "$T/x5"
 rm -f "$T/slots"; gen "$T/x5"; check "monitor control: 5gh carries two BSSes" "bcawl1 bcawl1-1" \
