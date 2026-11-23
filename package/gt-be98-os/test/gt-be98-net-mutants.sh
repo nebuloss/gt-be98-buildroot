@@ -67,7 +67,7 @@ mutant "addr: secondaries of one network refused as overlaps" sbin/gt-be98-addr 
 mutant "addr: a static on Default accepted" sbin/gt-be98-addr 's/static)\t\[ "\$NV" != 1 \] ||/static)\t[ 1 ] ||/' gt-be98-addr-test.sh
 mutant "addr: the broadcast address accepted" sbin/gt-be98-addr 's/\&\& \[ \$(( (n | ~m) \& 0xffffffff )) != "\$n" \]//' gt-be98-addr-test.sh
 mutant "addr: a removed DHCP address keeps its client" sbin/gt-be98-addr 's/\tdhcp)\t\[ "\$d" = "\$MGMT_DEV" \] || dhcp_stop "\$d" ;;/\tdhcp) : ;;/' gt-be98-addr-test.sh
-mutant "addr: a filter without a list (the image default broken)" sbin/gt-be98-addr 's/^\tif \[ -s "\$AD\/listed" \]; then$/\tif true; then/' gt-be98-addr-test.sh
+mutant "addr: a filter without a list (the image default broken)" sbin/gt-be98-addr 's/^\tif \[ -s "\$AD\/listed" \] || svc_listed; then$/\tif true; then/' gt-be98-addr-test.sh
 mutant "addr: the lease's router not routed" sbin/gt-be98-addr 's/\[ -z "\$gw" \] || ip route replace default via "\$gw" dev "\$d" metric "\$ADDR_METRIC"/:/' gt-be98-addr-test.sh
 mutant "addr: the gateway mgmt bridges left out of the filter" sbin/gt-be98-addr "s/\[ -x \"\\\$GWT\" \] \&\& /false \&\& /" gt-be98-addr-test.sh
 # services (gt-be98-addr): the rows, the DHCP rules, the filter, the at-least-one rule
