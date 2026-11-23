@@ -100,5 +100,7 @@ mutant "fb: no uplink hold (the wired trunk stays in a client-fed bridge)" sbin/
 mutant "addr: the fallen station ignored" sbin/gt-be98-addr 's/^\t\t\[ -z "\$w" \] || A_DEV=\$w$/\t\t:/' gt-be98-addr-test.sh
 mutant "l2: the uplink hold ignored" sbin/gt-be98-l2 's/\[ -e "\$L2\/uplink-wifi\/\$2" \] \&\& { MODE=gateway; return 0; }/:/' gt-be98-l2-test.sh
 mutant "gen: station vlan= without a network object accepted" sbin/gt-be98-wifi-gen 's/else if (!((stvlan + 0) in objbr)) err(/else if (0) err(/' gt-be98-wifi-gen-test.sh
+mutant "svc: no SSH row closes SSH (the q357 lock-out)" sbin/gt-be98-addr 's/^\t\tsvc_has ssh || { \[ -z "\$l" \]/\t\ttrue || { [ -z "$l" ]/' gt-be98-addr-test.sh
+mutant "svc: addrs ssh empty with no SSH row" sbin/gt-be98-addr 's/if \[ -n "\${1:-}" \] \&\& svc_listed \&\& svc_has "\$1"; then/if [ -n "${1:-}" ] \&\& svc_listed \&\& { [ "$1" = ssh ] || svc_has "$1"; }; then/' gt-be98-addr-test.sh
 echo "gt-be98-net-mutants: $pass ok, $fail failed"
 [ $fail -eq 0 ]
