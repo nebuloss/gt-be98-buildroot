@@ -370,7 +370,18 @@ render() {	# <band> <dev>
 	touch "$sd/cum" "$sd/win" "$sd/nbr" "$sd/meta"
 	awk -v band="$b" -v dev="$d" -v now="$(now)" -v op="$op" -v serving="$serving" -v margin="$MARGIN_PCT" '
 		function clamp(v) { return v < 0 ? 0 : (v > 1 ? 1 : v) }
-		function js(s) { gsub(/\\/, "\\\\", s); gsub(/"/, "\\\"", s); return "\"" s "\"" }
+		# a JSON string, escaped one character at a time (gsub replacement backslashes are not
+		# portable: busybox awk and gawk/mawk disagree); control characters are dropped
+		function js(s,   i, c, o) {
+			o = ""
+			for (i = 1; i <= length(s); i++) {
+				c = substr(s, i, 1)
+				if (c == "\\") o = o "\\\\"
+				else if (c == "\"") o = o "\\\""
+				else if (c >= " ") o = o c
+			}
+			return "\"" o "\""
+		}
 		function num(v) { return (v == "-" || v == "?" || v == "") ? "null" : v }
 		function pct(p, w) { return (p == "-" || w + 0 <= 0) ? "null" : sprintf("%.1f", 100 * p / w) }
 		function lo(c, w) { return c - w / 2 }
