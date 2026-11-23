@@ -71,7 +71,7 @@ Today rnr0 is special three times: the Wi-Fi trunk (`WIFI_TRUNK=rnr0`), the mana
 - **Offload** (open-ethernet main c56b79b `flowcache.c`): bridged shapes offloaded today: Wi-Fi <-> Runner port or its 802.1Q device (W1/W2), Ethernet 802.1Q <-> 802.1Q of two Runner ports with one VID (E2E), bare port <-> 802.1Q (B2). An uplink on a 2.5G jack (rnr1.V) is W1/W2: covered. Not covered: two bare Runner ports in one bridge (both untagged: `is_vlan_dev(in) || is_vlan_dev(out)` false -> CPU), same-port hairpins. Jacks of one VLAN switch inside the RTL8372 (wire speed, never the SoC).
 - **Gateway / NAT / PPPoE / IPv6 PD**: stay in the OS, file / CLI only; the AP model needs none of them (no file = VLAN-only networks, no WAN config = DHCP on rnr0).
 
-## 7. Services (model only, not implemented)
+## 7. Services (approved 11-23, implemented)
 
 A service = type + one address id + enabled + options. Mapping onto today's daemons:
 
@@ -83,7 +83,16 @@ A service = type + one address id + enabled + options. Mapping onto today's daem
 | RADIUS server | the built-in RADIUS (`internal/radsrv`) | binds its row's address |
 | Captive portal | the web UI's portal engine | on its address's network |
 
-OS file proposal: `service=<id> type=dhcp|admin|ssh|radius|portal address=<id> enabled=0|1 [opts...]` in `/etc/gt-be98-services.conf`; gt-be98-addr's filter opens 22/80/443 per enabled admin/ssh row instead of per address. API: `svc_list`, `svc_set{type, address, enabled, opts}`, `svc_delete`, under the trial. Until then every address carries admin + SSH (what is implemented).
+As built: `/etc/gt-be98-services.conf`, `service=<id> type=dhcp|admin|ssh|radius|portal address=<id> enabled=0|1
+[start= end= lease=]`, applied by gt-be98-addr: admin (80, 443) and SSH (22) accepted by DESTINATION address of their
+enabled rows (rebuilt at every DHCP lease change); no enabled admin row = the admin page on every address (the OS's
+belt; the web UI refuses it first); no list = admin and SSH on every address. DHCP: one dnsmasq (`port=0`,
+`bind-interfaces`) for every DHCP row, the clients' router and DNS = the static address's `gateway=` (an AP's upstream
+router), else none. radius / portal rows are stored and reported `ui` (the web UI's servers bind them; not wired yet).
+Web UI: `svc_list`, `svc_set{id?, type, address, enabled, start, end, lease}`, `svc_delete{id}` under the trial; an
+address with a service on it cannot be deleted; an address change that would break its DHCP service is refused; the
+listener binds `gt-be98-addr addrs admin`. NOTE: with a list, SSH answers on its rows only: zero SSH rows = SSH only by
+the USB lifeline. UNVERIFIED on silicon: this dnsmasq and gt-be98-gw's coexisting on UDP 67 (arm r2 cell D reads it).
 
 ## 8. VLAN detection per port (analysis + API proposal, not implemented)
 
@@ -96,7 +105,39 @@ Per port:
 
 Proposed API: `port_detect_vlans{port, seconds}` -> `{port, seconds, frames, untagged, vlans: [{vid, seen_frames, subnet?, source: dhcp|arp|ipv4, guess, router?, network?: <existing id>, configured: bool}]}`; one detection at a time (the existing `detectMu`); on a jack without the probe mode: only configured VIDs, `configured: true`, and the answer says so.
 
-## 9. Owner decisions
+## 9. Client Wi-Fi (mode=client) and 4-address clients (owner 11-23)
+
+- **4-address (WDS) clients of an AP SSID** (implemented): `wds=1` on a Wi-Fi network (`feature wds 1`) renders
+  hostapd `wds_sta=1` + `wds_bridge=<the network's bridge>`: each 4-address station gets an AP_VLAN
+  (`<bss>.sta<aid>`, driver: open-wifi `bca_cfg80211_iface.c` REPEATER) that is a port of the network's bridge, so the
+  devices behind it are on the network. vlan= networks only. Arm r2 cell W measures it with the MT7925 in 4addr.
+- **A client Wi-Fi** is today's station block: at most one per box (`gt-be98-wifi-gen` "At most one station= block"),
+  slot 0 of its radio (its APs run on virtual interfaces, one fewer), the radio's APs on the client's channel (the
+  driver refuses an AP elsewhere: -EBUSY). Bind-only: a member of its network's bridge (repeater=4addr or multiap),
+  never an address of its own; routed/NAT stays OS-only.
+- **`bridged` reading** (implemented, `gt-be98-wifi-sta bridged <dev>`, web UI `wifi_sta_get.bridged`): multiap =
+  yes once associated (wpa_supplicant completes a Multi-AP backhaul STA join only with a backhaul BSS); 4addr = yes once
+  a unicast frame for ANOTHER address than the station's own came in (table `bridge gt_be98_sta_w`; a 3-address AP can
+  only address the station itself), `unproven` before; 3-address = no. HYPOTHESIS to measure: the driver delivers such
+  frames to the host as received (arm r2 W measures the same witness on the mac80211 side). The open-wifi driver has no
+  RX 4-address counter of its own (`bca_bss_link` holds our side only: use_4addr, dwds_have, map_have).
+- **"Not bridged: only this box's own addresses on <network> can use it"**: does NOT hold as is. A 4addr station
+  transmits 4-address frames (a non-WDS AP drops them), and a 3-address station can never be a bridge port
+  (IFF_DONT_BRIDGE), so with the station in the bridge nothing passes either way; bridge MAC = station MAC changes
+  neither. What is needed (proposal, not implemented): on `bridged no` the OS takes the station out of the bridge,
+  turns 4addr off, and puts that network's Addresses rows on the STATION netdev (the DHCP client / static address
+  there): the box's own addresses then use the link, the bridge's other members do not.
+
+## 10. RTL8372 jack VLAN probe (analysis, bench arm pre-registered)
+
+Read-only today: the shipped debugfs `peek` reads any switch register. The bench knob: the LAB build's `poke` whitelist
+grows by 0x4e18, 0x4e14, 0x4eb8, 0x6728 (open-ethernet `oe-vlanprobe-2026-11-23` f7b755e; compiled out of the shipped
+build, which stays byte-identical to main). The arm (`rtl8372-vlanprobe-arm.sh`): baseline readings, controls (an
+unknown VID unseen, the native VID seen on rnr1), then one register step at a time (ingress filter off + accept all;
++ egress transparent on port 3; + the global egress filter off), counting a peer's frames tagged 3999 on rnr1, and a
+leak check; restore by rmmod (RESET#) + `gt-be98-lan restart`. No shipped change until it is measured.
+
+## 11. Owner decisions
 
 | # | Question | Recommendation |
 |---|---|---|
