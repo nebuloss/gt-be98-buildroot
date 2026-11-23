@@ -46,7 +46,7 @@ case "$op" in
 esac
 exit 0
 X
-printf '#!/bin/sh\n[ "$1" = bridge ] || exit 2\ncase "$2" in 930) echo brwifi100003 ;; 950) echo brwifi100005 ;; 960) echo brwifi100006 ;; *) exit 1 ;; esac\n' > "$T/bin/net"
+printf '#!/bin/sh\n[ "$1" = bridge ] || exit 2\ncase "$2" in 930) echo brwifi100003 ;; 940) echo brwifi100004 ;; 950) echo brwifi100005 ;; 960) echo brwifi100006 ;; *) exit 1 ;; esac\n' > "$T/bin/net"
 printf '#!/bin/sh\n[ "$1" = mgmt-addrs ] && cat "$FAKE/gwmgmt" 2>/dev/null\nexit 0\n' > "$T/bin/gw"
 printf '#!/bin/sh\nexit 0\n' > "$T/bin/logger"
 chmod +x "$T/bin/"*
@@ -88,6 +88,7 @@ check "DHCP on brwifi100005: its own dhcpcd (private namespace, our script)" yes
 	"$(grep -q 'ssd --start --background --make-pidfile --pidfile .*brwifi100005.dhcp.pid --exec /usr/bin/unshare' "$T/log" && grep -qx 'allowinterfaces brwifi100005' "$T/run/gt-be98-addr/brwifi100005.dhcpcd.conf" && echo yes || echo no)"
 check "Default (VLAN 1) by DHCP: up on rnr0, no second client" "up 0" "$(st 11) $(grep -c 'pidfile .*rnr0.dhcp.pid' "$T/log")"
 check "refused: a gateway network (14), a network not listed (19), a 2nd DHCP on one network (25)" "refused refused refused" "$(st 14) $(st 19) $(st 25)"
+check "... the gateway network's refusal says why (its bridge exists: not a missing-bridge refusal)" yes "$(sh "$AT" status | awk '$2 == 14' | grep -q 'gateway network' && echo yes || echo no)"
 check "an address id listed twice: the first line wins (13 stays static)" "static" "$(sh "$AT" status | awk '$2 == 13 { print $3 }')"
 check "a network without its bridge yet (16): waiting; status names the network" "waiting network=6" "$(st 16) $(sh "$AT" status | awk '$2 == 16 { print $7 }')"
 f=$T/last.nft
