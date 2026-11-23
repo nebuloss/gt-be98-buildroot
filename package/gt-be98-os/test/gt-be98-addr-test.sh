@@ -207,6 +207,13 @@ check "... and addrs admin lists every address in force (3: address 4 has no lea
 # a DHCP lease change rebuilds the filter (an ssh row on a DHCP address of a bridge)
 printf 'service=1 type=admin address=4 enabled=1\n' > "$T/services.conf"; A apply
 check "admin on a DHCP address with no lease yet: no daddr rule for it (closed), the drop stays" "0" "$(grep -c 'daddr' "$f")"
+check "an admin row and NO SSH row: SSH answers on every address's device (never USB-only, the q357 lock-out)" yes \
+	"$(grep -q 'iifname { "brwifi100003", "brwifi100005", "rnr0" } tcp dport 22 accept' "$f" && echo yes || echo no)"
+check "... and addrs ssh lists every address in force" 3 "$(sh "$AT" addrs ssh | wc -l)"
+printf 'service=1 type=admin address=4 enabled=1\nservice=2 type=ssh address=1 enabled=1\n' > "$T/services.conf"; A apply
+check "control: an SSH row: SSH on its address only (no device-wide 22)" "no yes" \
+	"$(grep -q 'tcp dport 22 accept' "$f" && grep -q 'iifname {.*} tcp dport 22 accept' "$f" && echo yes || echo no) $(grep -q 'ip daddr { 10.43.0.2 } tcp dport 22 accept' "$f" && echo yes || echo no)"
+printf 'service=1 type=admin address=4 enabled=1\n' > "$T/services.conf"; A apply
 interface=brwifi100005 reason=BOUND new_ip_address=10.55.0.9 new_subnet_cidr=24 sh "$AT" 2>/dev/null
 check "its lease: the filter rebuilt with it" yes "$(grep -q 'ip daddr { 10.55.0.9 } tcp dport { 80, 443 } accept' "$f" && echo yes || echo no)"
 # no DHCP service left: dnsmasq stopped; no service list: the addresses' filter as before

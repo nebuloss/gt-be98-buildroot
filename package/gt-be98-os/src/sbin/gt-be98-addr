@@ -37,8 +37,10 @@
 # NO SERVICE LIST: admin and SSH on every address (as before). A LIST: the
 # admin page (80, 443) and SSH (22) answer on the addresses of their enabled
 # rows only (by destination address), and when no admin row is enabled the
-# admin page answers on every address all the same (logged: the box is never
-# left without one; the web UI refuses it first). DHCP SERVER: hands out the
+# admin page answers on every address all the same, and so does SSH when no
+# SSH row is enabled (owner 11-23, the q357 lock-out: a list naming only the
+# admin page cut SSH everywhere but the USB lifeline). Logged; the web UI
+# refuses such a list first. DHCP SERVER: hands out the
 # range of its row on the address's network: the address must be STATIC
 # (its subnet holds the range, which excludes the address, the network and
 # the broadcast), one DHCP server per network; the clients' router and DNS
@@ -502,8 +504,9 @@ nft_text() {
 		ad=$(svc_ips admin | sort -u | tr '\n' ' '); sd=$(svc_ips ssh | sort -u | tr '\n' ' ')
 		[ -n "$ad" ] && echo "		ip daddr { $(echo $ad | sed 's/ /, /g') } tcp dport { 80, 443 } accept"
 		[ -n "$sd" ] && echo "		ip daddr { $(echo $sd | sed 's/ /, /g') } tcp dport 22 accept"
-		# no enabled admin row: the admin page on every address all the same
+		# no enabled admin / SSH row: that one on every address all the same
 		svc_has admin || { [ -z "$l" ] || echo "		iifname { $l } tcp dport { 80, 443 } accept"; }
+		svc_has ssh || { [ -z "$l" ] || echo "		iifname { $l } tcp dport 22 accept"; }
 		# the gateway networks' management (mgmt=1) is theirs, not a row's
 		g=$([ -x "$GWT" ] && "$GWT" mgmt-addrs 2>/dev/null | awk '$1 == "mgmt" && $5 != "" { print "\"" $5 "\"" }' | sort -u | tr '\n' ',' | sed 's/,$//; s/,/, /g')
 		[ -z "$g" ] || echo "		iifname { $g } tcp dport { $MGMT_PORTS } accept"
@@ -564,6 +567,7 @@ cmd_apply() {
 	done
 	svc_apply || rc=1
 	svc_has admin || ! svc_listed || log "no enabled admin service: the admin page answers on every address"
+	svc_has ssh || ! svc_listed || log "no enabled SSH service: SSH answers on every address"
 	nft_apply || rc=1
 	return $rc
 }
@@ -591,7 +595,7 @@ cmd_addrs() {
 	local f id d c ips
 	# addrs admin|ssh: the addresses of that service (header); every address
 	# while no service list (or no enabled admin row: admin everywhere)
-	if [ -n "${1:-}" ] && svc_listed && { [ "$1" = ssh ] || svc_has admin; }; then
+	if [ -n "${1:-}" ] && svc_listed && svc_has "$1"; then
 		ips=" $(svc_ips "$1" | tr '\n' ' ') "
 	fi
 	for f in "$AD"/addr/*; do
