@@ -1,0 +1,42 @@
+#!/sbin/openrc-run
+# SPDX-License-Identifier: GPL-2.0
+# The box's own addresses (owner 11-23, the AP model's management access):
+# per network of /etc/gt-be98-addresses.conf a static address or a DHCP
+# client on the network's bridge, and the admin UI / SSH reachable on those
+# only (plus the loopback and the USB lifeline). All the work is
+# /usr/sbin/gt-be98-addr's (its header). In the default runlevel and a clean
+# no-op without the file (the image's management: DHCP on the untagged
+# trunk, no filter).
+#   reload    the list changed (the web UI; gt-be98-net runs it after its own)
+#   features  "features addresses" (the web UI's handshake)
+description="The box's own addresses: static or DHCP per network, the management reachable on them only"
+extra_commands="features"
+extra_started_commands="reload"
+
+ADDRTOOL=${GT_BE98_ADDR:-/usr/sbin/gt-be98-addr}
+
+depend() {
+	need gt-be98-netguard
+	after gt-be98-drivers gt-be98-wifi gt-be98-net gt-be98-lan gt-be98-gw dhcpcd
+	use logger
+}
+
+features() { "$ADDRTOOL" features; }
+
+start() {
+	ebegin "The box's addresses"
+	"$ADDRTOOL" apply
+	eend 0
+}
+
+reload() {
+	ebegin "The box's addresses: re-applying the list"
+	"$ADDRTOOL" apply
+	eend $?
+}
+
+stop() {
+	ebegin "Stopping the box's addresses"
+	"$ADDRTOOL" stop
+	eend $?
+}

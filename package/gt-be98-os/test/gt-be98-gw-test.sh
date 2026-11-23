@@ -212,6 +212,18 @@ printf 'brwifi100004 - 40 lan\nbrwifi9 rnr0 49 wifi\n' > "$T/l2list"
 run apply; check "refused: the bridge still carries rnr0.49 (two gateways)" "inactive yes" "$(st 9 state) $(yn grep -q 'still carries the trunk VLAN rnr0.49' "$G/net/9")"
 printf 'brwifi100004 - 40 lan\n' > "$T/l2list"
 run apply; check "no bridge for VLAN 49 yet: inactive, logged why" "inactive yes" "$(st 9 state) $(yn grep -q 'no bridge for VLAN 49' "$G/net/9")"
+# owner 11-23: a network has its own bridge with neither an SSID nor a port:
+# apply runs gt-be98-net apply -n FIRST (a fake that makes brwifi100009 on
+# VLAN 49, user net, as the real one does), then the gateway network has
+# its bridge and runs; reroute (the WAN changed) never runs it; control: the
+# same apply without the tool (no bridge, inactive, above)
+printf '#!/bin/sh\necho "net $*" >> "$FAKE/log"\ngrep -q "^brwifi100009 " "$FAKE/l2list" || echo "brwifi100009 - 49 net" >> "$FAKE/l2list"\n' > "$T/bin/net"; chmod +x "$T/bin/net"
+GT_BE98_NET="$T/bin/net" run apply
+check "a network with neither SSID nor port: gt-be98-net apply -n first, then its bridge brwifi100009 routed" "net apply -n|routed brwifi100009" \
+	"$(grep '^net ' "$T/log" | tr '\n' '|')$(st 9 state) $(st 9 bridge)"
+GT_BE98_NET="$T/bin/net" run reroute
+check "reroute (the WAN changed): gt-be98-net not run" "" "$(grep '^net ' "$T/log")"
+printf 'brwifi100004 - 40 lan\n' > "$T/l2list"; run apply
 # the cap: 16 gateway networks
 l=; i=10; printf '# cap\n' > "$GT_BE98_NETWORKS"; : > "$T/l2list"
 while [ $i -le 26 ]; do echo "network=$i vlan=$((100 + i)) subnet=10.$i.0.1/24 mode=gateway" >> "$GT_BE98_NETWORKS"; echo "brwifi$i - $((100 + i)) wifi" >> "$T/l2list"; i=$((i + 1)); done
@@ -637,7 +649,7 @@ check "mesh leaf: every gateway network refused (why= says so)" yes "$(sh "$GWT"
 rm -f "$T/run/gt-be98-wifi/gen/plan"; sh "$GWT" apply > /dev/null 2>&1
 check "control: no bhtrunk line: network 4 not refused for it" no "$(sh "$GWT" status | grep '^net 4 ' | grep -q 'mesh leaf' && echo yes || echo no)"
 check "gt-be98-os.mk: the tools, the service, the dhcpcd hook installed; gt-be98-gw in the default runlevel" "yes yes yes yes" \
-	"$(yn grep -qE 'gt-be98-l2 gt-be98-fwd gt-be98-gw[ ;]' "$S/gt-be98-os.mk") $(yn grep -q 'gt-be98-hostkeys gt-be98-wan gt-be98-gw' "$S/gt-be98-os.mk") $(yn grep -q 'dhcpcd-hooks/09-gt-be98-gw$' "$S/gt-be98-os.mk") $(yn grep -q 'gt-be98-lan gt-be98-gw; do' "$S/gt-be98-os.mk")"
+	"$(yn grep -qE 'gt-be98-l2 gt-be98-fwd gt-be98-gw[ ;]' "$S/gt-be98-os.mk") $(yn grep -q 'gt-be98-hostkeys gt-be98-wan gt-be98-gw' "$S/gt-be98-os.mk") $(yn grep -q 'dhcpcd-hooks/09-gt-be98-gw$' "$S/gt-be98-os.mk") $(yn grep -qE 'gt-be98-lan gt-be98-gw( gt-be98-net)?( gt-be98-addr)?; do' "$S/gt-be98-os.mk")"
 check "the service answers features (an extra command, so when stopped too)" "features|features gateway ipv6 mgmt-addrs" \
 	"$(GT_BE98_GW="$GWT"; extra_commands=; . "$S/src/init.d/gt-be98-gw"; echo "$extra_commands|$(features)")"
 check "no routed owner writes ip_forward itself any more (gt-be98-fwd only)" "" \

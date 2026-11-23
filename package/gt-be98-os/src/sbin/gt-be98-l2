@@ -2,8 +2,11 @@
 # SPDX-License-Identifier: GPL-2.0
 # gt-be98-l2: the one owner of the VLAN networks' bridges (brwifiN + the
 # trunk's 802.1Q sub-interface <trunk>.<vid>). A network bridge has USERS:
-# gt-be98-wifi (its BSSes) and gt-be98-lan (the LAN jacks whose native VLAN is
-# the network's). The bridge and its trunk VLAN exist while at least one user
+# gt-be98-net (the network object itself: every network of the web UI's list
+# holds its bridge brwifi<100000 + id> whether or not an SSID or a port uses
+# it, owner 11-23), gt-be98-wifi (the BSSes of every SSID bound to the
+# network: several SSIDs, one bridge) and gt-be98-lan (the LAN jacks whose
+# native or tagged VLAN is the network's). The bridge and its trunk VLAN exist while at least one user
 # holds them, whichever started first, and are deleted (only what this tool
 # created) when the last user lets go: a Wi-Fi restart never drops the wired
 # members, and a VLAN with jacks and no running SSID still has its bridge.
@@ -88,10 +91,12 @@
 # segment never has two gateways, not even briefly. Switching a bridge
 # between the two modes adds or removes ONLY the trunk sub-interface: its
 # wired members, bare jacks and users stay (same VLAN).
-# A NETWORK WITHOUT AN SSID (the web UI's /etc/gt-be98-networks.conf, a
-# wired-only network as in UniFi) has no Wi-Fi bridge: gt-be98-lan names its
-# bridge brwifi<100000 + network id> (never a Wi-Fi network's: those are
-# brwifi1..brwifi99999) and is its only user. When the Wi-Fi then bridges
+# A NETWORK OF THE WEB UI'S LIST (/etc/gt-be98-networks.conf) has the bridge
+# brwifi<100000 + network id> (never an SSID's own name: those are
+# brwifi1..brwifi99999): gt-be98-net holds it, and the SSIDs bound to it
+# (gt-be98-wifi-gen -L) and its jacks (gt-be98-lan) join that same bridge.
+# On an OS list without that network object (a hand-written Wi-Fi list) an
+# SSID's bridge is still brwifi<its id>; for that case only: when the Wi-Fi then bridges
 # that VLAN itself (an SSID bound to the network: `up wifi brwifiN` on a
 # VLAN such a lan-only bridge holds), the Wi-Fi's bridge takes the VLAN
 # over: the lan-only bridge is let go (its bare rnr* ports evicted, its
@@ -522,6 +527,7 @@ cmd_up() {
 		[ "$o" = "$b" ] && continue
 		st_read "$o"
 		[ "$S_UPLINK.$S_VID" = "$s" ] || continue
+		# (never a bridge the network object holds: user net)
 		if [ "$u" = wifi ] && wired_only_net "$o" && [ "$S_USERS" = " lan" ]; then
 			yield_bridge "$o" || { err "$s: $o could not be let go: $b refused"; return 1; }
 			err "$s moves from $o (a network without an SSID, lan only) to $b (its SSID's bridge): gt-be98-lan's reload re-attaches the jacks"

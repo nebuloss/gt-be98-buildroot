@@ -21,8 +21,13 @@
 #       /usr/sbin/gt-be98-wifi-gen): one BSS per (network, radio of its band
 #       set) at a sticky slot (WIFI_SLOTS, default /etc/hostapd/wifi-slots;
 #       slot 0 = the radio netdev bcawlN, slot k = bcawlN-k), with an
-#       explicit BSSID (the firmware's mbss8 rule) and bridge=brwifi<network
-#       id>. Their bridges, VLANs and isolation come from the list. At most
+#       explicit BSSID (the firmware's mbss8 rule) and the bridge of its
+#       NETWORK (owner 11-23: a network = VLAN + bridge + ports + gateway, an
+#       SSID is bound to one, several SSIDs may share one): the network
+#       objects' list (NETWORKS_FILE, /etc/gt-be98-networks.conf, the web
+#       UI's; gt-be98-net owns those bridges, brwifi<100000 + id>, passed to
+#       the generator as -L), else brwifi<id of the first SSID on the VLAN>.
+#       Their bridges, VLANs and isolation come from the list. At most
 #       WIFI_MAX_BSS BSSes per radio (1..8); unset, the count the driver
 #       advertises (`iw phy`: #{ AP } <= N, the firmware's own; the smallest
 #       of the radios), 4 when no radio states one.
@@ -163,6 +168,13 @@
 #   WIFI_TRUNK=rnr0                       trunk port, rnr0..rnr3 (default rnr0)
 #   WIFI_ISOLATE="brwifi1"                bridges whose Wi-Fi ports are
 #                                         isolated (reach the trunk only)
+# An SSID's isolate=1 isolates ITS BSS ports: the bridge goes into the
+# effective WIFI_ISOLATE when every SSID on it is isolated (one SSID per
+# network: as before), else its isolated SSIDs' BSS netdevs go into
+# WIFI_ISOLATE_BSS (l2.conf; gt-be98-netguard keeps both). A Linux bridge
+# isolates PORT FROM PORT: an isolated BSS reaches the non-isolated members
+# of its network (the trunk VLAN, the jacks, the gateway address, a
+# non-isolated SSID's clients), never another isolated port.
 # Before any BSS starts, for each bridge with a VLAN: the bridge (no STP,
 # forward_delay 0, up, IPv6 off: no address of the box on it), the trunk
 # brought up if it is down (never down, never re-addressed: it keeps its
@@ -206,6 +218,8 @@ WIFI_REPROBE=${GT_BE98_WIFI_REPROBE:-/usr/sbin/gt-be98-wifi-reprobe}
 WIFI_STEER=${GT_BE98_WIFI_STEER:-/usr/sbin/gt-be98-wifi-steer}
 WIFI_L2=${GT_BE98_L2:-/usr/sbin/gt-be98-l2}
 WIFI_MESH=${GT_BE98_WIFI_MESH:-/usr/sbin/gt-be98-mesh}
+# the network objects (the web UI's list): the bridges of the SSIDs' networks
+NETWORKS_FILE=${GT_BE98_NETWORKS:-/etc/gt-be98-networks.conf}
 # after a reload the wired LAN's VLAN jacks re-resolve their networks (a
 # network's VLAN changed or went away: gt-be98-l2 evicted the jacks)
 LAN_FOLLOW=${GT_BE98_LAN_FOLLOW-rc-service --ifstarted gt-be98-lan reload}
@@ -338,15 +352,19 @@ vlan_prune() {
 	done
 }
 
-# isolate the Wi-Fi ports of the WIFI_ISOLATE bridges (not the trunk VLAN)
+# isolate the Wi-Fi ports of the WIFI_ISOLATE bridges and the
+# WIFI_ISOLATE_BSS netdevs (an isolated SSID on a shared network; header),
+# never the trunk VLAN
 isolate_ports() {
 	local b p f
 	for b in $1; do
-		case " ${WIFI_ISOLATE:-} " in *" $b "*) f=on ;; *) f=off ;; esac
 		for p in "/sys/class/net/$b/brif"/*; do
 			[ -e "$p" ] || continue
 			p=${p##*/}
-			case "$p" in bcawl*) bridge link set dev "$p" isolated $f ;; esac
+			case "$p" in bcawl*) ;; *) continue ;; esac
+			f=off
+			case " ${WIFI_ISOLATE:-} ${WIFI_ISOLATE_BSS:-} " in *" $b "*|*" $p "*) f=on ;; esac
+			bridge link set dev "$p" isolated $f
 		done
 	done
 }
@@ -942,7 +960,8 @@ six_top() {
 # $1 = "again": the same list rendered once more with the stations'
 # frequencies (-U) that changed since; the bridges/VLANs are not re-read
 gen_networks() {
-	local n=$WIFI_NETWORKS t a b c d cc='' net_br='' net_vl='' net_iso='' macs now='' up bp st
+	local n=$WIFI_NETWORKS t a b c d e cc='' net_br='' net_vl='' net_iso='' net_isb='' net_opn='' mixed='' iso_ids='' iso_bss='' macs now='' up bp st
+	WIFI_ISOLATE_BSS=
 	rm -rf "$STATE/gen.new"
 	[ -n "$n" ] || { rm -rf "$STATE/gen"; return 0; }
 	[ -f "$n" ] || { eerror "WIFI_NETWORKS $n: missing"; return 1; }
@@ -961,7 +980,8 @@ gen_networks() {
 	"$WIFI_GEN" -n "$n" -o "$STATE/gen.new" -s "${WIFI_SLOTS:-/etc/hostapd/wifi-slots}" -m "$macs" \
 		-C "$MAX_BSS" -x "${HOSTAPD_CTRL:-$RUNDIR/hostapd}" -R "${WIFI_RNR:-1}" \
 		-K "${WIFI_ANCHOR_KEEP_BSSID:-1}" ${WIFI_RADIO_DEVS:+-d "$WIFI_RADIO_DEVS"} \
-		-X "${WPA_CTRL:-$RUNDIR/wpa_supplicant}" ${up:+-U "$up"} ${bp:+-B "$bp"} ${st:+-6 "$st"} ${now:+-T "$now"} $cc -S ||
+		-X "${WPA_CTRL:-$RUNDIR/wpa_supplicant}" ${up:+-U "$up"} ${bp:+-B "$bp"} ${st:+-6 "$st"} ${now:+-T "$now"} \
+		-L "$NETWORKS_FILE" $cc -S ||
 		{ eerror "$n refused: nothing changed"; rm -rf "$STATE/gen.new"; return 1; }
 	# -S: a network that fails its own checks is left out (the generator's
 	# warning says why); the other networks and the radios run
@@ -979,7 +999,12 @@ gen_networks() {
 	[ "${1:-}" = again ] && return 0
 	while read -r t a b c d; do
 		case $t in
-		net)	net_br="$net_br $b"; net_vl="$net_vl $b:$c" ;;
+		# net <id> <bridge> <vlan> <isolate>: one line per SSID, several
+		# SSIDs of one network on the same bridge (listed once)
+		net)	case " $net_br " in *" $b "*) ;; *) net_br="$net_br $b"; net_vl="$net_vl $b:$c" ;; esac
+			if [ "$d" = 1 ]; then iso_ids="$iso_ids $a"; case " $net_isb " in *" $b "*) ;; *) net_isb="$net_isb $b" ;; esac
+			else case " $net_opn " in *" $b "*) ;; *) net_opn="$net_opn $b" ;; esac; fi
+			continue ;;
 		routed) WIFI_ROUTED="${WIFI_ROUTED:-} $b=$c" ;;
 		# repeated <id> <bridge> <isolate>: the isolate flag is the 4th field
 		repeated) WIFI_REPEATED="${WIFI_REPEATED:-} $b"; [ "$c" = 1 ] && net_iso="$net_iso $b"; continue ;;
@@ -987,9 +1012,22 @@ gen_networks() {
 		esac
 		[ "$d" = 1 ] && net_iso="$net_iso $b"
 	done < "$STATE/gen/plan"
+	# isolation per SSID (header): a bridge whose SSIDs are all isolated is
+	# isolated whole; on a mixed one only the isolated SSIDs' BSS netdevs
+	for b in $net_isb; do
+		case " $net_opn " in *" $b "*) mixed="$mixed $b" ;; *) net_iso="$net_iso $b" ;; esac
+	done
+	if [ -n "$mixed" ]; then
+		while read -r t a b c d _ _ e _; do
+			[ "$t" = bss ] || continue
+			case " $mixed " in *" $e "*) ;; *) continue ;; esac
+			case " $iso_ids " in *" $d "*) iso_bss="$iso_bss $b" ;; esac
+		done < "$STATE/gen/plan"
+	fi
 	WIFI_BRIDGES="${WIFI_BRIDGES:-}$net_br"
 	WIFI_VLANS="${WIFI_VLANS:-}$net_vl"
 	WIFI_ISOLATE="${WIFI_ISOLATE:-}$net_iso"
+	WIFI_ISOLATE_BSS=$iso_bss
 }
 
 # the arguments, one space apart
@@ -1073,17 +1111,20 @@ leds_apply() { [ -x /usr/sbin/gt-be98-leds ] && /usr/sbin/gt-be98-leds apply > /
 
 # the effective L2 settings, for gt-be98-netguard
 write_l2() {
-	local vl is
+	local vl is ib
 	# shellcheck disable=SC2086 # word lists, normalised by words
 	vl=$(words ${WIFI_VLANS:-})
 	# shellcheck disable=SC2086 # word lists, normalised by words
 	is=$(words ${WIFI_ISOLATE:-})
+	# shellcheck disable=SC2086 # word lists, normalised by words
+	ib=$(words ${WIFI_ISOLATE_BSS:-})
 	mkdir -p "$STATE"
 	{
 		echo "# written by gt-be98-wifi: the effective Wi-Fi network settings"
 		echo "WIFI_TRUNK=\"${WIFI_TRUNK:-rnr0}\""
 		echo "WIFI_VLANS=\"$vl\""
 		echo "WIFI_ISOLATE=\"$is\""
+		echo "WIFI_ISOLATE_BSS=\"$ib\""
 		echo "WIFI_MCAST_TO_UNICAST=\"$(mcast_m2u)\""
 	} > "$STATE/l2.conf.new" && mv -f "$STATE/l2.conf.new" "$STATE/l2.conf"
 }
@@ -1726,18 +1767,22 @@ stop() {
 }
 
 status() {
-	local rc i d p live ports iso
+	local rc i d p live ports iso isb
 	default_status
 	rc=$?
 	if wifi_loaded; then einfo "driver: bca_pcie_ipc loaded"; else einfo "driver: not loaded"; fi
 	# the effective isolation (incl. the network list's) while running
 	iso=$(sed -n 's/^WIFI_ISOLATE="\(.*\)"$/\1/p' "$STATE/l2.conf" 2>/dev/null)
 	[ -f "$STATE/l2.conf" ] || iso=${WIFI_ISOLATE:-}
+	isb=$(sed -n 's/^WIFI_ISOLATE_BSS="\(.*\)"$/\1/p' "$STATE/l2.conf" 2>/dev/null)
 	# shellcheck disable=SC2013 # one validated name per line
 	for i in $(cat "$STATE/bridges" "$STATE/l2nets" 2>/dev/null); do
 		if [ -d "/sys/class/net/$i/bridge" ]; then
 			ports=
-			for p in "/sys/class/net/$i/brif"/*; do [ -e "$p" ] && ports="$ports${p##*/} "; done
+			for p in "/sys/class/net/$i/brif"/*; do
+				[ -e "$p" ] || continue
+				case " $isb " in *" ${p##*/} "*) ports="$ports${p##*/}(isolated) " ;; *) ports="$ports${p##*/} " ;; esac
+			done
 			einfo "bridge $i: ports $ports$(case " $iso " in *" $i "*) echo "(Wi-Fi ports isolated)" ;; esac)"
 		else
 			eerror "bridge $i: missing"

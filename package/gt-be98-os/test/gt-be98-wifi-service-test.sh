@@ -35,7 +35,7 @@ fakes() {
 }
 export GT_BE98_RUN="$T/run" GT_BE98_SYSNET="$T/net" GT_BE98_HAP_LOG="$T/hostapd.log" \
 	GT_BE98_WIFI_GEN="$here/../src/sbin/gt-be98-wifi-gen" FAKE="$T" \
-	GT_BE98_WIFI_STA="$T/bin/gt-be98-wifi-sta"
+	GT_BE98_WIFI_STA="$T/bin/gt-be98-wifi-sta" GT_BE98_NETWORKS="$T/objs"
 mkdir -p "$T/bin" "$T/run"
 for p in 0:a4 1:a8 2:ac 3:a0; do	# bcawl<i>: phy<i>, address
 	mkdir -p "$T/net/bcawl${p%%:*}/phy80211"
@@ -204,7 +204,7 @@ check "start: hostapd runs" "phy3 bcawl3 bcawl3-1 bcawl3-2
 phy0 bcawl0 bcawl0-1
 phy1 bcawl1 bcawl1-1
 phy2 bcawl2" "$(hapd)"
-check "start: netguard file" 'WIFI_TRUNK="rnr0" WIFI_VLANS="brwifi30:30 brwifi10:10 brwifi20:20" WIFI_ISOLATE="brwifi30" WIFI_MCAST_TO_UNICAST="1"' \
+check "start: netguard file" 'WIFI_TRUNK="rnr0" WIFI_VLANS="brwifi30:30 brwifi10:10 brwifi20:20" WIFI_ISOLATE="brwifi30" WIFI_ISOLATE_BSS="" WIFI_MCAST_TO_UNICAST="1"' \
 	"$(grep -v '^#' "$T/run/gt-be98-wifi/l2.conf" | tr '\n' ' ' | sed 's/ $//')"
 
 # 2. nothing changed: nothing sent
@@ -819,6 +819,35 @@ WIFI_L2=/usr/sbin/gt-be98-l2 WIFI_MESH=/nonexistent
 check "net_up/net_prune: users recorded once, a refused bridge never, the unlisted let go" \
 	"list brwifi1 brwifi2 |after brwifi2 |up wifi brwifi1 rnr0 921|up wifi brwifi2 rnr0 30|up wifi brwifi1 rnr0 921|up wifi brwifi99 rnr0 99|down wifi brwifi1|" \
 	"$(grep -v '^$' "$T/l2real.out" | tr '\n' '|')$(tr '\n' '|' < "$T/l2real")"
+
+# N. one network, several SSIDs (owner 11-23): the SSIDs of a VLAN share the
+# network object's bridge (GT_BE98_NETWORKS, passed as -L), listed ONCE in
+# WIFI_BRIDGES / WIFI_VLANS (check_vlans refuses a bridge twice) and brought
+# up once; isolation per SSID (a mixed bridge: the isolated SSID's BSS
+# netdevs in WIFI_ISOLATE_BSS, the bridge NOT in WIFI_ISOLATE); a bridge
+# whose SSIDs are all isolated is isolated whole (the one-SSID behaviour)
+(
+	rm -rf "$T/run/gt-be98-wifi"; : > "$T/l2log"
+	printf 'network=1 name=Default vlan=1\nnetwork=7 name=lan vlan=10 subnet= mode=vlan isolate=0 mgmt=1\nnetwork=8 name=g vlan=30\n' > "$T/objs"
+	{ net 10 home psk2sae "correct horse battery" "2g 5gl" 10; net 11 kids psk2 kidspass123 2g 10; echo isolate=1
+	  net 30 guest psk2 guestpass12 2g 30; echo isolate=1; net 31 guest2 psk2 guestpass13 5gl 30; echo isolate=1; } > "$T/nets"
+	apply
+	echo "rc $rc"
+	grep -v '^#' "$T/run/gt-be98-wifi/l2.conf" | grep -v MCAST
+	echo "ups $(grep -c '^up ' "$T/l2log") $(sed -n 's/^up //p' "$T/l2log" | tr '\n' ',')"
+	grep '^bss ' "$G/plan" | awk '{ print $3, $5, $8 }'
+	# control: no network objects -> the first SSID's bridges (brwifi10, brwifi30)
+	rm -f "$T/objs"; : > "$T/l2log"; apply
+	echo "ctl $(sed -n 's/^WIFI_VLANS=//p' "$T/run/gt-be98-wifi/l2.conf") $(sed -n 's/^up //p' "$T/l2log" | tr '\n' ',')"
+) > "$T/shared.out" 2>&1
+check "shared network: rc 0" "rc 0" "$(sed -n 1p "$T/shared.out")"
+check "shared network: each network bridge once, isolation per SSID" \
+	'WIFI_TRUNK="rnr0"|WIFI_VLANS="brwifi100007:10 brwifi100008:30"|WIFI_ISOLATE="brwifi100008"|WIFI_ISOLATE_BSS="bcawl3-1"|' \
+	"$(sed -n '2,5p' "$T/shared.out" | tr '\n' '|')"
+check "shared network: one gt-be98-l2 up per network bridge" "ups 2 brwifi100007 rnr0 10,brwifi100008 rnr0 30," "$(grep '^ups ' "$T/shared.out")"
+check "shared network: the BSSes (ifname ssid bridge)" "bcawl3 10 brwifi100007|bcawl3-1 11 brwifi100007|bcawl3-2 30 brwifi100008|bcawl0 10 brwifi100007|bcawl0-1 31 brwifi100008|" \
+	"$(grep '^bcawl' "$T/shared.out" | tr '\n' '|')"
+check "control (no network objects): the first SSID's bridges, still once each" 'ctl "brwifi10:10 brwifi30:30" brwifi10 rnr0 10,brwifi30 rnr0 30,' "$(grep '^ctl ' "$T/shared.out")"
 
 if [ $fail = 0 ]; then echo "ALL OK ($n checks)"; else echo "FAILED"; cat "$T/out"; fi
 exit $fail

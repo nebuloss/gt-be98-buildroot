@@ -210,7 +210,43 @@ refuse() {	# name list-file
 net() { printf 'network=%s\nssid=%s\nsecurity=%s\npassphrase=%s\nbands=%s\nvlan=%s\n' "$@"; }
 net 1 a psk2 password1 "2g 6g" 5 > "$T/r"; refuse "WPA2 on 6 GHz" "$T/r"
 printf 'network=1\nssid=a\nsecurity=open\nbands=6g\nvlan=5\n' > "$T/r"; refuse "open on 6 GHz" "$T/r"
-{ net 1 a sae password1 2g 5; net 2 b sae password2 2g 5; } > "$T/r"; refuse "one VLAN twice" "$T/r"
+# ---- 5a. one network, several SSIDs (owner 11-23, feature shared_vlan): every
+# SSID on VLAN V joins ONE bridge, the network object's (-L) or, without one,
+# the first SSID's; dry runs (-N): the slot file of the refusals stays as kept
+sh_br() { awk '$1 == "bss" { printf "%s %s %s|", $3, $5, $8 }' "$T/o/plan"; }
+sh_net() { awk '$1 == "net" { printf "%s|", $0 }' "$T/o/plan"; }
+{ net 1 a sae password1 2g 5; net 2 b sae password2 "2g 5gl" 5; } > "$T/r"
+gen "$T/r" -N; check "shared VLAN: two SSIDs on VLAN 5 accepted (no -L)" 0 $?
+check "... every BSS of both in ONE bridge, the first SSID's (brwifi1)" "bcawl3 1 brwifi1|bcawl3-1 2 brwifi1|bcawl0 2 brwifi1|" "$(sh_br)"
+check "... one net line per SSID, the same bridge" "net 1 brwifi1 5 0|net 2 brwifi1 5 0|" "$(sh_net)"
+check "... the hostapd sections name that bridge" "bridge=brwifi1 bridge=brwifi1 bridge=brwifi1" "$(cat "$T/o/sec-bcawl3" "$T/o/sec-bcawl3-1" "$T/o/sec-bcawl0" | grep '^bridge=' | tr '\n' ' ' | sed 's/ $//')"
+check "... slot file untouched (-N)" same "$(cmp -s "$T/slots" "$T/slots.keep" && echo same || echo changed)"
+conf_ok "shared VLAN"
+# the network objects (-L): the bridge is the network's, brwifi<100000 + id>,
+# whatever SSID comes first; keys in any order, comments and VLAN 1 ignored
+printf '# networks\nnetwork=1 name=Default vlan=1\nmode=vlan vlan=5 name=lan network=7 subnet=\nnetwork=8 name=x vlan=9\n' > "$T/objs"
+gen "$T/r" -N -L "$T/objs"; check "-L: accepted" 0 $?
+check "-L: both SSIDs in the network bridge brwifi100007" "bcawl3 1 brwifi100007|bcawl3-1 2 brwifi100007|bcawl0 2 brwifi100007|" "$(sh_br)"
+check "-L: net lines" "net 1 brwifi100007 5 0|net 2 brwifi100007 5 0|" "$(sh_net)"
+# controls: no object on VLAN 5 (only 9), a missing file, the first line of a VLAN wins
+printf 'network=8 name=x vlan=9\n' > "$T/objs2"
+gen "$T/r" -N -L "$T/objs2"; check "control -L without VLAN 5: the first SSID's bridge" "net 1 brwifi1 5 0|net 2 brwifi1 5 0|" "$(sh_net)"
+gen "$T/r" -N -L "$T/nonexistent"; check "control -L missing: the first SSID's bridge" "0 net 1 brwifi1 5 0|net 2 brwifi1 5 0|" "$? $(sh_net)"
+printf 'network=3 vlan=5\nnetwork=4 vlan=5\nnetwork=0 vlan=9\nnetwork=123456 vlan=9\n' > "$T/objs3"
+gen "$T/r" -N -L "$T/objs3"; check "-L: the first line of VLAN 5 wins (network 3)" "net 1 brwifi100003 5 0|net 2 brwifi100003 5 0|" "$(sh_net)"
+# an SSID on another VLAN keeps its own bridge (no object): two bridges
+{ net 1 a sae password1 2g 5; net 2 b sae password2 2g 5; net 3 c sae password3 2g 6; } > "$T/r"
+gen "$T/r" -N -L "$T/objs"; check "-L: VLAN 6 (no object) keeps brwifi3" "net 1 brwifi100007 5 0|net 2 brwifi100007 5 0|net 3 brwifi3 6 0|" "$(sh_net)"
+# isolation stays per SSID: isolate=1 on b only (ap_isolate on its BSS only, its net line 1)
+{ net 1 a sae password1 2g 5; net 2 b sae password2 2g 5; echo isolate=1; } > "$T/r"
+gen "$T/r" -N -L "$T/objs"; check "per-SSID isolate on a shared network: net lines" "net 1 brwifi100007 5 0|net 2 brwifi100007 5 1|" "$(sh_net)"
+check "... ap_isolate on b's BSS only" "no yes" "$(grep -qx ap_isolate=1 "$T/o/sec-bcawl3" && echo yes || echo no) $(grep -qx ap_isolate=1 "$T/o/sec-bcawl3-1" && echo yes || echo no)"
+# -S: the first SSID skipped (a bad passphrase): the next one of the VLAN
+# takes the bridge (no object), or the object keeps it (-L)
+{ net 1 a sae short 2g 5; net 2 b sae password2 2g 5; } > "$T/r"
+gen "$T/r" -N -S; check "-S first SSID of the VLAN skipped: the second runs in its own brwifi2" "0 net 2 brwifi2 5 0|" "$? $(sh_net)"
+gen "$T/r" -N -S -L "$T/objs"; check "-S with -L: the second runs in the network bridge" "0 net 2 brwifi100007 5 0|" "$? $(sh_net)"
+check "-F says shared_vlan 1" 1 "$($SH "$G" -F | awk '$1 == "feature" && $2 == "shared_vlan" { print $3 }')"
 { net 1 a sae password1 2g 5; net 2 a sae password2 2g 6; } > "$T/r"; refuse "one SSID twice" "$T/r"
 net 1 a sae short 2g 5 > "$T/r"; refuse "passphrase < 8" "$T/r"
 net 1 a sae "$(printf '%064d' 0)" 2g 5 > "$T/r"; refuse "SAE with a raw 64-hex PSK" "$T/r"

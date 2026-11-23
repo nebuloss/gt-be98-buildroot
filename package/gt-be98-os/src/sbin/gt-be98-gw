@@ -105,12 +105,14 @@
 # that network's DHCP off (logged), the rest of it runs.
 #
 # THE BRIDGE is gt-be98-l2's, never created here: resolved by VID from
-# `gt-be98-l2 list` (an SSID's brwifi<id>, or gt-be98-lan's brwifi<100000+id>
-# for a network without an SSID). It must run with "trunk -" (no
+# `gt-be98-l2 list`: the network's own brwifi<100000+id>, which gt-be98-net
+# holds whether or not an SSID or a port uses it (apply runs `gt-be98-net
+# apply -n` first), or an SSID's brwifi<id> on an OS list without that
+# network object (a hand-written Wi-Fi list). It must run with "trunk -" (no
 # <trunk>.<vid>: the two-gateway rule): this tool holds it ($GW/hold/<br>)
 # while its address is set, so gt-be98-l2 never carries the VLAN upstream
 # under it, and lets go only after the address is gone. A network with no
-# bridge yet (no SSID, no jack on it) is inactive until one appears:
+# bridge yet (gt-be98-net refused it, e.g. on a mesh leaf) is inactive until one appears:
 # gt-be98-lan and gt-be98-wifi run `rc-service gt-be98-gw reload` after
 # their own changes (a lan-only bridge yields its VLAN to an SSID's bridge:
 # the address follows).
@@ -196,6 +198,7 @@ HOSTS=${GT_BE98_DHCP_HOSTS:-/etc/gt-be98-dhcp-hosts.conf}
 SYSNET=${GT_BE98_SYSNET:-/sys/class/net}
 PROCNET=${GT_BE98_PROCNET:-/proc/sys/net}
 L2=${GT_BE98_L2:-/usr/sbin/gt-be98-l2}
+NET=${GT_BE98_NET:-/usr/sbin/gt-be98-net}
 WANT=${GT_BE98_WAN:-/usr/sbin/gt-be98-wan}
 FWD=${GT_BE98_FWD:-/usr/sbin/gt-be98-fwd}
 LAN_CONF=${GT_BE98_LAN_CONF:-/etc/conf.d/gt-be98-lan}
@@ -1192,7 +1195,7 @@ cmd_apply() {
 		if [ -z "$why" ]; then
 			vid=$(sed -n 's/^vid //p' "$f"); c=$(sed -n 's/^cidr //p' "$f")
 			if ! l2_bridge "$vid"; then
-				why="no bridge for VLAN $vid yet (no SSID and no LAN port on the network)"
+				why="no bridge for VLAN $vid yet (gt-be98-net has not made it: see gt-be98-net status)"
 			elif [ "$BRT" != - ]; then
 				why="$BR still carries the trunk VLAN $BRT.$vid (gt-be98-l2 sync failed): not a gateway while bridged upstream"
 			else
@@ -1499,7 +1502,13 @@ cmd_mgmt_addrs() {
 
 c=${1:-}; [ $# -gt 0 ] && shift
 case "$c" in
-apply|reroute) lock || exit 1; cmd_apply; r=$?; unlock; exit $r ;;
+# apply: the networks' own bridges first (gt-be98-net, owner 11-23: every
+# network has one, SSID or not, port or not), so a gateway network's address
+# has its bridge; -n: the caller (the web UI, gt-be98-lan, gt-be98-wifi)
+# reloads the LAN itself. reroute (the WAN changed) touches no bridge.
+apply)	[ -x "$NET" ] && "$NET" apply -n > /dev/null
+	lock || exit 1; cmd_apply; r=$?; unlock; exit $r ;;
+reroute) lock || exit 1; cmd_apply; r=$?; unlock; exit $r ;;
 stop)	lock || exit 1; cmd_stop; r=$?; unlock; exit $r ;;
 status)	cmd_status ;;
 leases)	cmd_leases ;;

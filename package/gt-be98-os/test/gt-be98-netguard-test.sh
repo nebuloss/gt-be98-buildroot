@@ -68,6 +68,25 @@ check "isolation: bcawl1 -> 1, rnr0.31 -> 0, bcawl6 (repeater) -> 0" \
 	"bcawl1/brport/isolated 1|bcawl6/brport/isolated 0|rnr0.31/brport/isolated 0" \
 	"$(grep -E '^(bcawl1|bcawl6|rnr0.31)/brport/isolated' "$T/new.txt" | tr '\n' '|' | sed 's/|$//')"
 check "every action logged (5 detached, 1 hairpin, 3 isolation)" "9" "$(grep -c '^log ' "$T/acts")"
+# 1a. per-SSID isolation on a shared network bridge (WIFI_ISOLATE_BSS, owner
+# 11-23): the listed BSS netdev isolated, the bridge's other BSS not, the
+# trunk VLAN never; control: the same tree without the list (both 0)
+itree() {
+	rm -rf "$S"; mkdir -p "$S/lo"
+	port brwifi100007 bcawl3 0 1		# a non-isolated SSID: -> 0
+	port brwifi100007 bcawl3-1 0 0		# the isolated SSID: -> 1
+	port brwifi100007 rnr0.10 0 0		# the trunk VLAN: stays 0
+}
+cp "$T/l2.conf" "$T/l2.keep"
+printf 'WIFI_TRUNK="rnr0"\nWIFI_VLANS="brwifi100007:10"\nWIFI_ISOLATE=""\nWIFI_ISOLATE_BSS="bcawl3-1"\n' > "$T/l2.conf"
+itree; : > "$T/acts"; PATH="$T/bin:$PATH" $SH "$G" --sweep
+check "shared bridge: only the isolated SSID's BSS isolated (bcawl3 0, bcawl3-1 1, rnr0.10 0), nothing detached" "0 1 0 0" \
+	"$(cat "$S/bcawl3/brport/isolated") $(cat "$S/bcawl3-1/brport/isolated") $(cat "$S/rnr0.10/brport/isolated") $(grep -c nomaster "$T/acts")"
+printf 'WIFI_TRUNK="rnr0"\nWIFI_VLANS="brwifi100007:10"\nWIFI_ISOLATE=""\n' > "$T/l2.conf"
+itree; : > "$T/acts"; PATH="$T/bin:$PATH" $SH "$G" --sweep
+check "control (no WIFI_ISOLATE_BSS): no port isolated" "0 0 0" \
+	"$(cat "$S/bcawl3/brport/isolated") $(cat "$S/bcawl3-1/brport/isolated") $(cat "$S/rnr0.10/brport/isolated")"
+mv "$T/l2.keep" "$T/l2.conf"
 # 1b. multicast-to-unicast (rule 5): BSS ports follow WIFI_MCAST_TO_UNICAST
 # (default 1), the repeater's uplink is 0, a trunk VLAN is never touched, a
 # port without the attribute is left alone (none created)

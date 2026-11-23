@@ -1,0 +1,391 @@
+#!/bin/sh
+# SPDX-License-Identifier: GPL-2.0
+# gt-be98-addr: THE BOX'S OWN ADDRESSES (owner 11-23, the AP model's
+# management access). An address is an object of its own (an id) bound to
+# ONE network: static (A.B.C.D/P on the network's bridge) or DHCP (the box is
+# a DHCP client on that bridge). Zero or more per box and per network: at
+# most ONE DHCP address per network (one dhcpcd per interface), any number of
+# static ones (secondary addresses, in the same subnet or not). The admin UI
+# (80, 443) and SSH (22) are reachable on them, and only on them, once the
+# list holds one (plus the loopback and the USB lifeline, always: the way
+# back in that no setting can cut).
+#
+#   gt-be98-addr apply    (re)apply the list: each address up on its network's
+#                         bridge, the ones no longer listed removed (only what
+#                         this tool set), then the management filter
+#   gt-be98-addr stop     every address removed, the filter gone
+#   gt-be98-addr status   "addr <id> <mode> <bridge|-> <cidr|-> <up|waiting|
+#                         refused> network=<id> starts=<n> refusals=<n>
+#                         why=<text>"
+#   gt-be98-addr addrs    "addr <id> inet <ip> <dev>" per address in
+#                         force (the web UI's listener binds exactly these;
+#                         cheap: own files only)
+#   gt-be98-addr nft-text the filter of the current state (tests)
+#   gt-be98-addr features "features addresses"
+#   (no argument, dhcpcd's environment: the DHCP client's script)
+#
+# The list (/etc/gt-be98-addresses.conf, written by the web UI next to the
+# networks file; parsed, never sourced; keys in any order):
+#   address=<id> network=<id> mode=dhcp
+#   address=<id> network=<id> mode=static cidr=<A.B.C.D/P> [gateway=<A.B.C.D>]
+# (address id 1..9999, unique; the services of the web UI name it)
+# NO LIST (a fresh box, an older web UI): nothing here acts, the box keeps
+# the image's management (DHCP on the untagged trunk port, MGMT_IF of the
+# web UI, the USB lifeline) and no filter: the AP default nobody can be
+# locked out of. A LIST: the management is exactly its addresses. The
+# untagged trunk (Default, VLAN 1: never bridged) is an address like the
+# others: "address=<n> network=<Default's id> mode=dhcp" keeps the image's DHCP client on
+# it (dhcpcd's manager, untouched here) and lets the management in there;
+# without that line the untagged trunk no longer reaches the admin ports.
+# PER ADDRESS, one object (state $AD/addr/<address id>): init (the line parsed and
+# checked), start (static: `ip addr replace` on the bridge, the gateway as a
+# default route at metric ADDR_METRIC; DHCP: its own dhcpcd on the bridge, in
+# a private mount namespace as gt-be98-wifi-sta's, the lease's router at
+# ADDR_METRIC), stop (only what start set), destroy. States: up, waiting (no
+# bridge yet, no lease yet), refused (why=). Counters: starts, refusals.
+# REFUSED (that address only): a network not in the networks file, a
+# gateway network (mode=gateway: the box's address there is gt-be98-gw's,
+# its management is the network's mgmt=), an address id listed twice, a
+# second DHCP address on one network, a bad mode or CIDR (a host address of
+# an IPv4 subnet /8../30), a static address on Default (the untagged trunk's
+# address is the DHCP client's), an IP the list holds already, a subnet
+# overlapping another NETWORK's static address (the same network's are its
+# secondaries).
+# THE FILTER (table inet gt_be98_addr, only while the list holds an
+# address): TCP 22, 80, 443 to the box accepted from the loopback, the USB
+# lifeline (usb*, enx*), the mesh leaf's management (bhm0), the networks of
+# the list (by input interface: the bridge, or rnr0 for Default), and the
+# gateway networks with mgmt=1 (gt-be98-gw mgmt-addrs' bridges); dropped and
+# counted from anywhere else. A drop in any table is final: no other table
+# can re-open it, and this one never opens what another closes.
+set -u
+RUNDIR=${GT_BE98_RUN:-/run}
+AD=${GT_BE98_ADDR_STATE:-$RUNDIR/gt-be98-addr}
+ADDRS=${GT_BE98_ADDRESSES:-/etc/gt-be98-addresses.conf}
+NETWORKS=${GT_BE98_NETWORKS:-/etc/gt-be98-networks.conf}
+NETT=${GT_BE98_NET:-/usr/sbin/gt-be98-net}
+GWT=${GT_BE98_GW:-/usr/sbin/gt-be98-gw}
+SYSNET=${GT_BE98_SYSNET:-/sys/class/net}
+DHCPCD=${GT_BE98_DHCPCD:-/sbin/dhcpcd}
+SELF=${GT_BE98_ADDR_SELF:-/usr/sbin/gt-be98-addr}
+MGMT_DEV=${GT_BE98_ADDR_MGMT_DEV:-rnr0}	# the untagged trunk (Default)
+ADDR_METRIC=2600	# behind the untagged management's default (dhcpcd's), before nothing else
+NFT_TABLE=gt_be98_addr
+MGMT_PORTS="22, 80, 443"
+
+log() { logger -t gt-be98-addr -- "$*" 2>/dev/null; echo "gt-be98-addr: $*" >&2; }
+
+lock() {
+	local n=0 o
+	mkdir -p "$AD/addr" || return 1
+	while ! mkdir "$AD/.lock" 2>/dev/null; do
+		o=$(cat "$AD/.lock/pid" 2>/dev/null)
+		if [ -n "$o" ] && ! kill -0 "$o" 2>/dev/null; then rm -rf "$AD/.lock"; continue; fi
+		n=$((n + 1)); [ $n -ge 60 ] && { rm -rf "$AD/.lock"; n=0; continue; }
+		sleep 1
+	done
+	echo $$ > "$AD/.lock/pid"
+}
+unlock() { rm -rf "$AD/.lock"; }
+
+st_get() { sed -n "s/^$2 //p" "$AD/addr/$1" 2>/dev/null | head -n1; }
+st_set() {
+	local f="$AD/addr/$1" kv k
+	shift
+	[ -f "$f" ] || : > "$f"
+	for kv in "$@"; do
+		k=${kv%% *}
+		{ grep -v "^$k " "$f"; echo "$kv"; } > "$f.new" && mv -f "$f.new" "$f"
+	done
+}
+st_bump() { local v; v=$(st_get "$1" "$2"); st_set "$1" "$2 $(( ${v:-0} + 1 ))"; }
+
+# ---- IPv4 arithmetic ----
+ip2n() {	# A.B.C.D -> number (rc 1: not one)
+	local IFS=. a b c d
+	# shellcheck disable=SC2086 # split on dots
+	set -- $1
+	[ $# = 4 ] || return 1
+	for a in "$@"; do case "$a" in ''|*[!0-9]*) return 1 ;; esac; [ ${#a} -le 3 ] && [ "$a" -le 255 ] || return 1; done
+	echo $(( ($1 << 24) + ($2 << 16) + ($3 << 8) + $4 ))
+}
+# a host address of an IPv4 subnet /8../30 (not the network, not broadcast,
+# not 0/8, 127/8, multicast or above); rc 1 + why in CWHY
+cidr_ok() {
+	local a=${1%/*} p=${1#*/} n m
+	CWHY="address '$1' refused (A.B.C.D/P, a host address, /8../30)"
+	case "$1" in */*) ;; *) return 1 ;; esac
+	case "$p" in ''|*[!0-9]*) return 1 ;; esac
+	[ "$p" -ge 8 ] && [ "$p" -le 30 ] || return 1
+	n=$(ip2n "$a") || return 1
+	m=$(( (0xffffffff << (32 - p)) & 0xffffffff ))
+	# neither the network address nor the broadcast
+	[ $(( n & ~m & 0xffffffff )) != 0 ] && [ $(( (n | ~m) & 0xffffffff )) != "$n" ] || return 1
+	case $(( n >> 24 )) in 0|127) return 1 ;; esac
+	[ $(( n >> 24 )) -lt 224 ] || return 1
+	CNET=$(( n & m )) CSZ=$(( 1 << (32 - p) ))
+	return 0
+}
+
+# the networks file's line of network $1 into NV (vid) NMODE ("" none: rc 1)
+net_of() {
+	local l w id v m
+	NV= NMODE=
+	[ -r "$NETWORKS" ] || return 1
+	set -f
+	while IFS= read -r l || [ -n "$l" ]; do
+		case "$l" in ''|'#'*) continue ;; esac
+		id= v= m=
+		# shellcheck disable=SC2086 # word split, no glob
+		for w in $l; do
+			case "$w" in network=*) id=${w#network=} ;; vlan=*) v=${w#vlan=} ;; mode=*) m=${w#mode=} ;; esac
+		done
+		[ "$id" = "$1" ] || continue
+		NV=$v NMODE=${m:-vlan}
+		break
+	done < "$NETWORKS"
+	set +f
+	[ -n "$NV" ]
+}
+
+# init: line $1 into A_ID (the address id) A_NET A_MODE A_CIDR A_GW A_DEV
+# A_WHY ("" ok); rc 1 = no object (no usable id, or an id listed before)
+addr_init() {
+	local w
+	A_ID= A_NET= A_MODE= A_CIDR= A_GW= A_DEV= A_WHY=
+	set -f
+	# shellcheck disable=SC2086 # word split, no glob
+	for w in $1; do
+		case "$w" in address=*) A_ID=${w#address=} ;; network=*) A_NET=${w#network=} ;; mode=*) A_MODE=${w#mode=} ;; cidr=*) A_CIDR=${w#cidr=} ;; gateway=*) A_GW=${w#gateway=} ;; esac
+	done
+	set +f
+	case "$A_ID" in ''|0*|*[!0-9]*) A_WHY="address id '$A_ID' refused (1..9999)"; return 1 ;; esac
+	[ ${#A_ID} -le 4 ] || { A_WHY="address id $A_ID refused (1..9999)"; return 1; }
+	case " $SEEN " in *" $A_ID "*) A_WHY="address $A_ID listed twice (the first line wins)"; return 1 ;; esac
+	SEEN="$SEEN $A_ID"
+	case "$A_NET" in ''|0*|*[!0-9]*) A_WHY="network id '$A_NET' refused"; return 0 ;; esac
+	net_of "$A_NET" || { A_WHY="network $A_NET is not in the network list"; return 0; }
+	[ "$NMODE" != gateway ] || { A_WHY="network $A_NET is a gateway network: its address is gt-be98-gw's (management: its mgmt=)"; return 0; }
+	if [ "$NV" = 1 ]; then
+		A_DEV=$MGMT_DEV
+	else
+		A_DEV=$("$NETT" bridge "$NV" 2>/dev/null) || { A_WHY="network $A_NET (VLAN $NV) has no bridge in the network list"; return 0; }
+	fi
+	case "$A_MODE" in
+	dhcp)	[ -z "$A_CIDR" ] || { A_WHY="mode=dhcp takes no cidr="; return 0; }
+		case " $DHCPNETS " in *" $A_NET "*) A_WHY="network $A_NET has a DHCP address already (one DHCP client per bridge)"; return 0 ;; esac
+		DHCPNETS="$DHCPNETS $A_NET" ;;
+	static)	[ "$NV" != 1 ] || { A_WHY="the untagged trunk (Default) takes its address by DHCP (the image's client): mode=dhcp only"; return 0; }
+		cidr_ok "$A_CIDR" || { A_WHY=$CWHY; return 0; }
+		if [ -n "$A_GW" ]; then
+			ip2n "$A_GW" > /dev/null && [ "$A_GW" != "${A_CIDR%/*}" ] || { A_WHY="gateway '$A_GW' refused"; return 0; }
+		fi
+		case " $IPS " in *" ${A_CIDR%/*} "*) A_WHY="${A_CIDR%/*} is another address of the list"; return 0 ;; esac
+		for w in $CIDRS; do
+			# <net>:<size>:<network id>; the same network's subnets are its own
+			# shellcheck disable=SC2086
+			set -- $(echo "$w" | tr ':' ' ')
+			[ "$3" = "$A_NET" ] && continue
+			[ "$CNET" -lt $(( $1 + $2 )) ] && [ "$1" -lt $(( CNET + CSZ )) ] && { A_WHY="$A_CIDR overlaps a static address of network $3"; return 0; }
+		done
+		IPS="$IPS ${A_CIDR%/*}"; CIDRS="$CIDRS $CNET:$CSZ:$A_NET" ;;
+	*)	A_WHY="mode '$A_MODE' refused (static or dhcp)" ;;
+	esac
+	return 0
+}
+
+# ---- static ----
+static_start() {	# id dev cidr gw
+	local old
+	old=$(st_get "$1" set)
+	if [ -n "$old" ] && [ "$old" != "$3" ]; then ip addr del "$old" dev "$(st_get "$1" dev)" 2>/dev/null; fi
+	ip addr replace "$3" dev "$2" || return 1
+	st_set "$1" "set $3"
+	if [ -n "$4" ]; then ip route replace default via "$4" dev "$2" metric "$ADDR_METRIC" || return 1
+		st_set "$1" "route $4"
+	elif [ -n "$(st_get "$1" route)" ]; then
+		ip route del default dev "$2" metric "$ADDR_METRIC" 2>/dev/null; st_set "$1" "route -"
+	fi
+	return 0
+}
+# ---- DHCP: dhcpcd on the bridge in its own mount namespace ----
+dhcp_running() { [ -f "$AD/$1.dhcp.pid" ] && kill -0 "$(cat "$AD/$1.dhcp.pid")" 2>/dev/null; }
+dhcp_start() {	# dev
+	local d=$1 dir=$AD/dhcpcd-$1 conf=$AD/$1.dhcpcd.conf
+	dhcp_running "$d" && return 0
+	mkdir -p "$dir" /var/run/dhcpcd
+	{
+		echo "# generated by gt-be98-addr: the box's DHCP address on $d"
+		echo "allowinterfaces $d"
+		echo "ipv4only"; echo "noipv4ll"; echo "nogateway"; echo "clientid"
+		echo "option domain_name_servers, routers, subnet_mask"
+		echo "timeout 0"
+	} > "$conf"
+	# shellcheck disable=SC2016 # expanded by the inner shell
+	start-stop-daemon --start --background --make-pidfile --pidfile "$AD/$d.dhcp.pid" \
+		--exec /usr/bin/unshare -- -m /bin/sh -c \
+		'mount --bind "$1" /var/run/dhcpcd && exec "$5" -B -q -f "$2" -c "$3" -4 "$4"' \
+		sh "$dir" "$conf" "$SELF" "$d" "$DHCPCD"
+}
+dhcp_stop() {	# dev
+	[ -f "$AD/$1.dhcp.pid" ] && { start-stop-daemon --stop --pidfile "$AD/$1.dhcp.pid" --retry TERM/5/KILL/2 > /dev/null 2>&1; rm -f "$AD/$1.dhcp.pid"; }
+	rm -rf "${AD:?}/dhcpcd-$1" "$AD/$1.dhcpcd.conf" "$AD/$1.lease"
+	ip route del default dev "$1" metric "$ADDR_METRIC" 2>/dev/null
+	return 0
+}
+dhcp_event() {
+	local d=${interface:-} gw
+	case "$d" in brwifi[0-9]*) ;; *) exit 0 ;; esac
+	[ -f "$AD/$d.dhcpcd.conf" ] || exit 0
+	case "${reason:-}" in
+	BOUND|RENEW|REBIND|REBOOT)
+		gw=${new_routers:-}; gw=${gw%% *}
+		echo "${new_ip_address:-}/${new_subnet_cidr:-}" > "$AD/$d.lease"
+		[ -z "$gw" ] || ip route replace default via "$gw" dev "$d" metric "$ADDR_METRIC"
+		log "$d: lease ${new_ip_address:-?}/${new_subnet_cidr:-?} (${reason})" ;;
+	EXPIRE|FAIL|NAK|NOCARRIER|RELEASE|STOP|STOPPED|DEPARTED|TIMEOUT)
+		rm -f "$AD/$d.lease"
+		ip route del default dev "$d" metric "$ADDR_METRIC" 2>/dev/null
+		log "$d: no lease (${reason})" ;;
+	esac
+	exit 0
+}
+
+addr_stop() {	# id
+	local d s
+	d=$(st_get "$1" dev); s=$(st_get "$1" set)
+	[ -n "$d" ] && [ "$d" != - ] || return 0
+	case "$(st_get "$1" mode)" in
+	static)	[ -n "$s" ] && [ "$s" != - ] && ip addr del "$s" dev "$d" 2>/dev/null
+		[ "$(st_get "$1" route)" = - ] || [ -z "$(st_get "$1" route)" ] || ip route del default dev "$d" metric "$ADDR_METRIC" 2>/dev/null ;;
+	dhcp)	[ "$d" = "$MGMT_DEV" ] || dhcp_stop "$d" ;;
+	esac
+	st_set "$1" "set -" "route -" "state refused"
+}
+
+# the filter (header), from the state: the management devices
+mgmt_devs() {
+	local f id
+	for f in "$AD"/addr/*; do
+		[ -f "$f" ] || continue
+		id=${f##*/}
+		case "$(st_get "$id" state)" in up|waiting) echo "$(st_get "$id" dev)" ;; esac
+	done
+	# the gateway networks with management on (their bridges)
+	[ -x "$GWT" ] && "$GWT" mgmt-addrs 2>/dev/null | awk '$1 == "mgmt" && $5 != "" { print $5 }'
+}
+nft_text() {
+	local d l=
+	for d in $(mgmt_devs | sort -u); do l="${l:+$l, }\"$d\""; done
+	echo "table inet $NFT_TABLE {}"
+	echo "delete table inet $NFT_TABLE"
+	echo "table inet $NFT_TABLE {"
+	echo "	chain input {"
+	echo "		type filter hook input priority filter - 1; policy accept;"
+	echo "		iifname \"lo\" accept"
+	echo "		iifname \"usb*\" accept"
+	echo "		iifname \"enx*\" accept"
+	echo "		iifname \"bhm0\" accept"
+	[ -z "$l" ] || echo "		iifname { $l } tcp dport { $MGMT_PORTS } accept"
+	echo "		tcp dport { $MGMT_PORTS } counter drop"
+	echo "	}"
+	echo "}"
+}
+nft_apply() {
+	if [ -s "$AD/listed" ]; then
+		nft_text > "$AD/nft.new" && nft -c -f "$AD/nft.new" && nft -f "$AD/nft.new" ||
+			{ log "the management filter was rejected: the previous one stays"; return 1; }
+		echo nft > "$AD/applied"
+	elif [ -f "$AD/applied" ]; then
+		nft delete table inet "$NFT_TABLE" 2>/dev/null; rm -f "$AD/applied"
+	fi
+	return 0
+}
+
+cmd_apply() {
+	local l f id want= rc=0 s
+	SEEN= CIDRS= IPS= DHCPNETS=
+	: > "$AD/listed.new"
+	if [ -r "$ADDRS" ]; then
+		while IFS= read -r l || [ -n "$l" ]; do
+			case "$l" in ''|'#'*|[[:space:]]*'#'*) continue ;; esac
+			addr_init "$l" || { log "line refused: $A_WHY"; continue; }
+			want="$want $A_ID"; echo "$A_ID" >> "$AD/listed.new"
+			# a changed device or mode: the old address goes first
+			if [ -f "$AD/addr/$A_ID" ] && { [ "$(st_get "$A_ID" dev)" != "${A_DEV:--}" ] || [ "$(st_get "$A_ID" mode)" != "$A_MODE" ]; }; then
+				addr_stop "$A_ID"
+			fi
+			if [ -n "$A_WHY" ]; then
+				[ "$(st_get "$A_ID" state)" != refused ] || [ "$(st_get "$A_ID" why)" != "$A_WHY" ] && { st_bump "$A_ID" refusals; log "address $A_ID: refused: $A_WHY"; }
+				addr_stop "$A_ID"; st_set "$A_ID" "net ${A_NET:--}" "mode ${A_MODE:--}" "dev -" "cidr -" "state refused" "why $A_WHY"
+				continue
+			fi
+			s=up
+			if [ ! -e "$SYSNET/$A_DEV" ]; then
+				s=waiting; A_WHY="no $A_DEV yet"
+			elif [ "$A_MODE" = static ]; then
+				static_start "$A_ID" "$A_DEV" "$A_CIDR" "$A_GW" || { s=refused; A_WHY="$A_CIDR could not be set on $A_DEV"; rc=1; }
+			elif [ "$A_DEV" != "$MGMT_DEV" ]; then
+				dhcp_start "$A_DEV" || { s=refused; A_WHY="no DHCP client on $A_DEV"; rc=1; }
+			fi
+			[ "$(st_get "$A_ID" state)" = "$s" ] || { [ $s = up ] && st_bump "$A_ID" starts; log "address $A_ID (network $A_NET): $A_MODE on $A_DEV: $s${A_WHY:+ ($A_WHY)}"; }
+			st_set "$A_ID" "net $A_NET" "mode $A_MODE" "dev $A_DEV" "cidr ${A_CIDR:--}" "state $s" "why ${A_WHY:--}"
+		done < "$ADDRS"
+	fi
+	mv -f "$AD/listed.new" "$AD/listed"
+	for f in "$AD"/addr/*; do
+		[ -f "$f" ] || continue
+		id=${f##*/}; case "$id" in *.new) continue ;; esac
+		case " $want " in *" $id "*) continue ;; esac
+		addr_stop "$id"; rm -f "$f"; log "address $id: removed"
+	done
+	nft_apply || rc=1
+	return $rc
+}
+
+cmd_stop() {
+	local f
+	for f in "$AD"/addr/*; do [ -f "$f" ] && { addr_stop "${f##*/}"; rm -f "$f"; }; done
+	: > "$AD/listed"; nft_apply
+	return 0
+}
+
+cmd_status() {
+	local f id a r
+	for f in "$AD"/addr/*; do
+		[ -f "$f" ] || continue
+		id=${f##*/}; a=$(st_get "$id" starts); r=$(st_get "$id" refusals)
+		echo "addr $id $(st_get "$id" mode) $(st_get "$id" dev) $(st_get "$id" cidr) $(st_get "$id" state) network=$(st_get "$id" net) starts=${a:-0} refusals=${r:-0} why=$(st_get "$id" why)"
+	done
+}
+
+# the addresses in force (header): static = the one set, DHCP = the lease's,
+# Default = the untagged trunk's own (read at most one fork)
+cmd_addrs() {
+	local f id d c
+	for f in "$AD"/addr/*; do
+		[ -f "$f" ] || continue
+		id=${f##*/}
+		[ "$(st_get "$id" state)" = up ] || continue
+		d=$(st_get "$id" dev)
+		case "$(st_get "$id" mode)" in
+		static) c=$(st_get "$id" set) ;;
+		dhcp)	if [ "$d" = "$MGMT_DEV" ]; then
+				c=$(ip -4 -o addr show dev "$d" 2>/dev/null | awk '{ for (i = 1; i < NF; i++) if ($i == "inet") { print $(i + 1); exit } }')
+			else c=$(cat "$AD/$d.lease" 2>/dev/null); fi ;;
+		esac
+		[ -n "$c" ] && [ "$c" != - ] && echo "addr $id inet ${c%/*} $d"
+	done
+}
+
+if [ $# = 0 ] && [ -n "${reason:-}" ]; then dhcp_event; fi
+c=${1:-}; [ $# -gt 0 ] && shift
+case "$c" in
+apply)	lock || exit 1; cmd_apply; r=$?; unlock; exit $r ;;
+stop)	lock || exit 1; cmd_stop; r=$?; unlock; exit $r ;;
+status)	cmd_status ;;
+addrs)	cmd_addrs ;;
+nft-text) nft_text ;;
+features) echo "features addresses" ;;
+*)	log "usage: apply|stop|status|addrs|nft-text|features"; exit 2 ;;
+esac

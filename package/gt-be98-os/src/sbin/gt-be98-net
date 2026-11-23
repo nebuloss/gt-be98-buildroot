@@ -1,0 +1,243 @@
+#!/bin/sh
+# SPDX-License-Identifier: GPL-2.0
+# gt-be98-net: THE NETWORKS (owner 11-23). A network is an object of its own:
+# a name, a VLAN, an address range and who serves addresses on it (the box as
+# its gateway, mode=gateway: gt-be98-gw; else the upstream router), with zero
+# or more Wi-Fi SSIDs (gt-be98-wifi) and zero or more Ethernet ports
+# (gt-be98-lan) bound to it. Its L2 segment is ONE bridge, brwifi<100000 +
+# id>, which exists while the network exists, whatever SSID or port uses it:
+# every SSID bound to it puts its BSSes into that bridge (gt-be98-wifi-gen
+# -L), every port bound to it its wired member, and gt-be98-gw its address.
+# This tool is the network objects' owner: for each network of the web UI's
+# list (/etc/gt-be98-networks.conf) it holds the bridge as the gt-be98-l2
+# user "net" (the one owner of the bridges and their trunk VLAN: a VLAN-only
+# network carries <trunk>.<vid>, a gateway network none), and lets go of a
+# network that left the list (the bridge goes with its last user).
+#
+#   gt-be98-net apply     (re)apply the list: each network's bridge held, the
+#                         ones no longer listed (or refused) let go
+#   gt-be98-net stop      every network's bridge let go (an SSID's or a
+#                         port's use keeps it: their own gt-be98-l2 user)
+#   gt-be98-net status    one line per network: "net <id> <vid> <bridge>
+#                         <up|refused> starts=<n> refusals=<n> why=<text>"
+#   gt-be98-net bridge <vid>  the bridge of the network on VLAN <vid> (rc 1:
+#                         no network on it)
+#   gt-be98-net features  "features netbridges" (the web UI's handshake)
+#
+# The list (written by the web UI; parsed, never sourced; keys in any order,
+# unknown keys ignored): "network=<id> name=<pct> vlan=<vid> ..." per line.
+# PER NETWORK, one object (state $NETD/net/<id>): init (the line parsed and
+# checked), start (`gt-be98-l2 up net <bridge> <trunk> <vid>`), stop
+# (`gt-be98-l2 down net <bridge>`), destroy (state gone). States: up,
+# refused (why=). Counters: starts, refusals.
+# REFUSED (logged; that network only, never the whole list): an id outside
+# 1..99999, a VLAN outside 2..4094 (VLAN 1 is Default, the trunk's untagged
+# management: never bridged), a VLAN or id listed by an earlier line, and
+# every network while the box is a MESH LEAF (the Wi-Fi plan has a bhtrunk
+# line: the leaf bridges the root's networks on its backhaul, never a wired
+# trunk VLAN of its own, gt-be98-netguard rule 7); a gt-be98-l2 refusal (the
+# trunk absent, the VLAN bridged elsewhere) leaves it refused until the next
+# apply.
+# THE TRUNK is the Wi-Fi service's effective one (its l2.conf while it runs,
+# else WIFI_TRUNK of the web UI's file, else the defaults file, else rnr0),
+# as gt-be98-lan and gt-be98-netguard read it.
+# A NETWORK WHOSE VLAN CHANGED (same id): gt-be98-l2 moves the bridge to the
+# new VLAN and forgets its other users (their members joined the old one);
+# this tool then runs LAN_FOLLOW (gt-be98-lan reload: the jacks come back on
+# the new VLAN) unless -n. The web UI renders the SSIDs' VLAN with the
+# network's and reloads the Wi-Fi service itself.
+# Who runs apply: its service (gt-be98-net, default runlevel, after the
+# Wi-Fi: the plan says whether the box is a leaf, and the Wi-Fi's own
+# `gt-be98-l2 up wifi` creates a bridge hostapd needs before it), and
+# gt-be98-gw apply (-n), which every change of the list reaches (the web UI
+# reloads gt-be98-gw after each; gt-be98-wifi and gt-be98-lan after theirs).
+set -u
+RUNDIR=${GT_BE98_RUN:-/run}
+NETD=${GT_BE98_NET_STATE:-$RUNDIR/gt-be98-net}
+NETWORKS=${GT_BE98_NETWORKS:-/etc/gt-be98-networks.conf}
+L2=${GT_BE98_L2:-/usr/sbin/gt-be98-l2}
+WIFI_L2CONF=${GT_BE98_WIFI_L2:-$RUNDIR/gt-be98-wifi/l2.conf}
+WIFI_CONFS=${GT_BE98_WIFI_CONFS:-/etc/conf.d/gt-be98-wifi-ap /etc/conf.d/gt-be98-wifi}
+WIFI_PLAN=${GT_BE98_WIFI_PLAN:-$RUNDIR/gt-be98-wifi/gen/plan}
+LAN_FOLLOW=${GT_BE98_NET_LAN_FOLLOW-rc-service --ifstarted gt-be98-lan reload}
+# the box's own addresses (gt-be98-addr) follow their bridges: one that was
+# waiting for its network's bridge gets it now
+ADDR_FOLLOW=${GT_BE98_NET_ADDR_FOLLOW-rc-service --ifstarted gt-be98-addr reload}
+
+log() { logger -t gt-be98-net -- "$*" 2>/dev/null; echo "gt-be98-net: $*" >&2; }
+
+lock() {
+	local n=0 o
+	mkdir -p "$NETD/net" || return 1
+	while ! mkdir "$NETD/.lock" 2>/dev/null; do
+		o=$(cat "$NETD/.lock/pid" 2>/dev/null)
+		if [ -n "$o" ] && ! kill -0 "$o" 2>/dev/null; then rm -rf "$NETD/.lock"; continue; fi
+		n=$((n + 1)); [ $n -ge 60 ] && { rm -rf "$NETD/.lock"; n=0; continue; }
+		sleep 1
+	done
+	echo $$ > "$NETD/.lock/pid"
+}
+unlock() { rm -rf "$NETD/.lock"; }
+
+# the effective Wi-Fi trunk (header): the first file present decides
+trunk() {
+	local f t=
+	for f in "$WIFI_L2CONF" $WIFI_CONFS; do
+		[ -f "$f" ] || continue
+		t=$(sed -n 's/^WIFI_TRUNK="\{0,1\}\([A-Za-z0-9]*\)"\{0,1\}$/\1/p' "$f" 2>/dev/null | tail -n1)
+		break
+	done
+	echo "${t:-rnr0}"
+}
+
+# ---- the network object: state $NETD/net/<id>, "key value" lines ----
+st_get() { sed -n "s/^$2 //p" "$NETD/net/$1" 2>/dev/null | head -n1; }
+# st_set <id> "key value"...: the listed keys replaced, the others kept
+st_set() {
+	local id=$1 f="$NETD/net/$1" kv k
+	shift
+	[ -f "$f" ] || : > "$f"
+	for kv in "$@"; do
+		k=${kv%% *}
+		{ grep -v "^$k " "$f"; echo "$kv"; } > "$f.new" && mv -f "$f.new" "$f"
+	done
+}
+st_bump() { local v; v=$(st_get "$1" "$2"); st_set "$1" "$2 $(( ${v:-0} + 1 ))"; }
+
+# init: line $1 parsed and checked into N_ID N_VID N_WHY (N_WHY "" = ok);
+# SEEN_IDS / SEEN_VIDS: the earlier lines'. rc 1: the line names no object
+# of its own (no usable id, or an id an earlier line has): N_WHY says why
+net_init() {
+	local w
+	N_ID= N_VID= N_WHY=
+	set -f
+	# shellcheck disable=SC2086 # word split, no glob
+	for w in $1; do
+		case "$w" in network=*) N_ID=${w#network=} ;; vlan=*) N_VID=${w#vlan=} ;; esac
+	done
+	set +f
+	case "$N_ID" in ''|0*|*[!0-9]*) N_WHY="network id '$N_ID' refused (1..99999)"; return 1 ;; esac
+	[ ${#N_ID} -le 5 ] || { N_WHY="network id $N_ID refused (1..99999)"; return 1; }
+	case " $SEEN_IDS " in *" $N_ID "*) N_WHY="network $N_ID listed twice: the first line wins"; return 1 ;; esac
+	SEEN_IDS="$SEEN_IDS $N_ID"
+	case "$N_VID" in ''|0*|*[!0-9]*) N_WHY="VLAN '$N_VID' refused (2..4094)"; return 0 ;; esac
+	if [ ${#N_VID} -gt 4 ] || [ "$N_VID" -lt 1 ] || [ "$N_VID" -gt 4094 ]; then N_WHY="VLAN $N_VID refused (2..4094)"; return 0; fi
+	[ "$N_VID" != 1 ] || { N_WHY="VLAN 1 is Default, the untagged trunk (never bridged)"; return 0; }
+	case " $SEEN_VIDS " in *" $N_VID "*) N_WHY="VLAN $N_VID is another network's (one network per VLAN)"; return 0 ;; esac
+	SEEN_VIDS="$SEEN_VIDS $N_VID"
+	return 0
+}
+bridge_of() { echo "brwifi$((100000 + $1))"; }
+
+# start: network $1 on VLAN $2 holds its bridge (rc 1: gt-be98-l2 refused,
+# why in N_WHY); the VLAN it held before into MOVED when it changed
+net_start() {
+	local id=$1 v=$2 b o e
+	b=$(bridge_of "$id")
+	o=$(st_get "$id" vid)
+	if e=$("$L2" up net "$b" "$TRUNK" "$v" 2>&1); then
+		[ "$(st_get "$id" state)" = up ] && [ "$o" = "$v" ] || { st_bump "$id" starts; log "network $id: $b up (VLAN $v on $TRUNK)"; }
+		[ -n "$o" ] && [ "$o" != "$v" ] && [ "$(st_get "$id" state)" = up ] && MOVED="$MOVED $id"
+		st_set "$id" "vid $v" "bridge $b" "state up" "why -"
+		return 0
+	fi
+	N_WHY=$(echo "$e" | sed 's/^gt-be98-l2: //' | tail -n1)
+	N_WHY=${N_WHY:-gt-be98-l2 up failed}
+	return 1
+}
+# stop: network $1 lets its bridge go (the last user deletes it)
+net_stop() {
+	local b
+	b=$(st_get "$1" bridge)
+	[ -n "$b" ] && [ "$b" != - ] || return 0
+	"$L2" down net "$b" || log "network $1: $b not let go"
+	st_set "$1" "state refused"
+}
+net_refuse() {
+	[ "$(st_get "$1" state)" = up ] && net_stop "$1"
+	[ "$(st_get "$1" why)" = "$2" ] || { st_bump "$1" refusals; log "network $1: refused: $2"; }
+	st_set "$1" "state refused" "why $2"
+	[ -n "$(st_get "$1" bridge)" ] || st_set "$1" "bridge -"
+	[ -n "$(st_get "$1" vid)" ] || st_set "$1" "vid ${3:--}"
+}
+net_destroy() { rm -f "$NETD/net/$1"; }
+
+cmd_apply() {
+	local l f id want= leaf= rc=0
+	SEEN_IDS= SEEN_VIDS= MOVED=
+	TRUNK=$(trunk)
+	grep -q '^bhtrunk ' "$WIFI_PLAN" 2>/dev/null && leaf=1
+	if [ -r "$NETWORKS" ]; then
+		while IFS= read -r l || [ -n "$l" ]; do
+			case "$l" in ''|'#'*|[[:space:]]*'#'*) continue ;; esac
+			net_init "$l" || { log "line refused: $N_WHY"; continue; }
+			want="$want $N_ID"
+			[ -z "$leaf" ] || N_WHY=${N_WHY:-"the box is a mesh leaf (the root bridges its networks: no bridge of its own)"}
+			if [ -n "$N_WHY" ]; then net_refuse "$N_ID" "$N_WHY" "$N_VID"; continue; fi
+			net_start "$N_ID" "$N_VID" || { net_refuse "$N_ID" "$N_WHY" "$N_VID"; rc=1; }
+		done < "$NETWORKS"
+	fi
+	# the networks no longer listed: stopped, destroyed
+	for f in "$NETD"/net/*; do
+		[ -f "$f" ] || continue
+		id=${f##*/}; case "$id" in *.new) continue ;; esac
+		case " $want " in *" $id "*) continue ;; esac
+		[ "$(st_get "$id" state)" = up ] && { net_stop "$id"; log "network $id: gone from the list, $(st_get "$id" bridge) let go"; }
+		net_destroy "$id"
+	done
+	# a bridge moved to another VLAN: its jacks follow (header)
+	if [ -n "$MOVED" ] && [ "${NOFOLLOW:-0}" != 1 ] && [ -n "$LAN_FOLLOW" ]; then
+		log "network(s)$MOVED: VLAN changed, the LAN re-attaches its ports"
+		# shellcheck disable=SC2086 # a command line
+		$LAN_FOLLOW > /dev/null 2>&1
+	fi
+	# shellcheck disable=SC2086 # a command line
+	[ -z "$ADDR_FOLLOW" ] || $ADDR_FOLLOW > /dev/null 2>&1
+	return $rc
+}
+
+cmd_stop() {
+	local f id
+	for f in "$NETD"/net/*; do
+		[ -f "$f" ] || continue
+		id=${f##*/}; case "$id" in *.new) continue ;; esac
+		[ "$(st_get "$id" state)" = up ] && net_stop "$id"
+		net_destroy "$id"
+	done
+	return 0
+}
+
+cmd_status() {
+	local f id a r
+	for f in "$NETD"/net/*; do
+		[ -f "$f" ] || continue
+		id=${f##*/}; case "$id" in *.new) continue ;; esac
+		a=$(st_get "$id" starts); r=$(st_get "$id" refusals)
+		echo "net $id $(st_get "$id" vid) $(st_get "$id" bridge) $(st_get "$id" state) starts=${a:-0} refusals=${r:-0} why=$(st_get "$id" why)"
+	done | sort -n -k2
+}
+
+# the bridge of the network on VLAN $1 in the list (the same parse as apply)
+cmd_bridge() {
+	local l
+	SEEN_IDS= SEEN_VIDS=
+	[ -r "$NETWORKS" ] || return 1
+	while IFS= read -r l || [ -n "$l" ]; do
+		case "$l" in ''|'#'*|[[:space:]]*'#'*) continue ;; esac
+		net_init "$l" || continue
+		[ -z "$N_WHY" ] && [ "$N_VID" = "$1" ] && { bridge_of "$N_ID"; return 0; }
+	done < "$NETWORKS"
+	return 1
+}
+
+c=${1:-}; [ $# -gt 0 ] && shift
+NOFOLLOW=0
+[ "${1:-}" = -n ] && { NOFOLLOW=1; shift; }
+case "$c" in
+apply)	lock || exit 1; cmd_apply; r=$?; unlock; exit $r ;;
+stop)	lock || exit 1; cmd_stop; r=$?; unlock; exit $r ;;
+status)	cmd_status ;;
+bridge)	[ $# = 1 ] || { log "usage: bridge <vid>"; exit 2; }; cmd_bridge "$1" ;;
+features) echo "features netbridges" ;;
+*)	log "usage: apply [-n]|stop|status|bridge <vid>|features"; exit 2 ;;
+esac

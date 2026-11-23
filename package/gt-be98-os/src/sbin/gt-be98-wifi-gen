@@ -15,10 +15,22 @@
 #                    [-d "2g=bcawl3 5gl=bcawl0 5gh=bcawl1 6g=bcawl2"]
 #                    [-C MAX_BSS] [-x CTRL_DIR] [-c] [-R 0|1] [-K 0|1] [-N]
 #                    [-T "D HH:MM"] [-Q] [-U "2g=MHz ..."] [-X STA_CTRL_DIR] [-S]
-#                    [-B "BANDS"]
+#                    [-B "BANDS"] [-L NETWORK_OBJECTS]
 #   gt-be98-wifi-gen -F
 #
 #   -n  the network list (format below)          -o  output dir (created)
+#   -L  the NETWORK OBJECTS (the web UI's list, /etc/gt-be98-networks.conf:
+#       one line per network, "network=<id> ... vlan=<vid> ..."; keys in any
+#       order, unknown keys ignored; id 1..99999, vlan 2..4094, the first
+#       line of a VLAN wins). A network is the L2 segment (a VLAN, its
+#       bridge, its ports, its gateway); the Wi-Fi networks of -n are SSIDs
+#       BOUND to one (owner 11-23: several SSIDs may share one network). An
+#       SSID with vlan=V joins the bridge of the network on VLAN V,
+#       brwifi<100000 + its id> (gt-be98-net owns it whether or not any SSID
+#       or port uses it); an SSID whose VLAN no network of -L carries (no
+#       -L, a hand-written list) joins brwifi<id of the first SSID of the
+#       list on that VLAN>. Absent or unreadable: none (every SSID's bridge
+#       is the second form)
 #   -s  slot state file: read, and rewritten when the plan is valid (unless
 #       -N). Sticky slot and BSSID index per (network, radio).
 #   -m  the radios' own MAC addresses (default: /sys/class/net/<dev>/address)
@@ -93,7 +105,8 @@
 #       twt_responder (twt=), zwdfs, monitor, led; feature station (station= blocks), routed
 #       (routed= networks); feature mesh (the backhaul= block: the mesh root,
 #       and station trunk=1: the mesh leaf; buildroot docs/MESH-BACKHAUL-
-#       DESIGN.md §3.4 C0); feature wds 0 (the network key wds= stays refused).
+#       DESIGN.md §3.4 C0); feature wds 0 (the network key wds= stays refused);
+#       feature shared_vlan (several SSIDs on one VLAN, one bridge: -L).
 #
 # Network list (hostapd-like: key=value, the value is the rest of the line,
 # never quoted; '#' comment lines; a block starts at network= or radio=):
@@ -274,7 +287,9 @@
 #     led=0|1                       the radio's LED (gt-be98-leds): default
 #                                   1 (radio up + traffic), 0 off; a led
 #                                   line per radio in the plan
-#   network=ID                      1..99999, the bridge is brwifiID
+#   network=ID                      1..99999: one SSID (its BSS on each
+#                                   radio of bands=); its bridge is its
+#                                   network's (vlan=, -L), else brwifiID
 #     ssid=...                      1-32 bytes
 #     security=open|owe|open-owe|psk2|psk2sae|sae|wpa2-eap|wpa3-eap|wpa2-wpa3-eap
 #                                   open-owe: open on 2.4/5 GHz, OWE on 6 GHz;
@@ -293,8 +308,13 @@
 #     radius_acct_secret=...        optional RADIUS accounting (default secret:
 #                                   radius_secret)
 #     bands=2g 5gl 5gh 6g           any non-empty subset
-#     vlan=1..4094                  one VLAN per network: required, unless
-#                                   the network is routed=
+#     vlan=1..4094                  the VLAN of the NETWORK the SSID is
+#                                   bound to: required, unless the SSID is
+#                                   routed= or repeated=1. Several SSIDs may
+#                                   name one VLAN (feature shared_vlan): their
+#                                   BSSes share that network's one bridge
+#                                   (-L), each SSID keeping its own security,
+#                                   bands, isolate= and schedule
 #     routed=A.B.C.1/P              instead of vlan=: the network is ROUTED
 #                                   behind the station uplink (station=): its
 #                                   bridge brwifiID holds only its BSSes and
@@ -572,7 +592,9 @@
 #     station radio the virtual interface of its lowest slot, which the
 #     service creates before hostapd starts it)
 #   bss <dev> <ifname> <slot> <net> <index> <bssid> <bridge> <conf> <sha256 of the section>
-#   net <id> <bridge> <vlan> <isolate 0|1>     (networks on >= 1 radio)
+#   net <id> <bridge> <vlan> <isolate 0|1>     (networks on >= 1 radio; SSIDs
+#                                               on one VLAN: one line each, the
+#                                               same bridge)
 #   routed <id> <bridge> <A.B.C.1/P> <isolate 0|1>   (routed= networks on >= 1 radio)
 #   station <band> <dev> <conf> <sha256 of conf> <first AP ifname or ->
 #                                              (an enabled station on a live radio;
@@ -625,7 +647,7 @@ HT40_2G=${GT_BE98_HT40_2G:-0}
 # (GT_BE98_KV: the offline test harness only)
 KV=${GT_BE98_KV:-0}
 NETS='' OUT='' SLOTS='' MACS='' DEVS='' CAP=4 CTRL=/run/hostapd CC=0 RNR=1 KEEP=0 DRY=0
-NOW='' QUERY=0 UPF='' STACTRL=/run/wpa_supplicant SKIP=0 BPB='' SIXTOP=''
+NOW='' QUERY=0 UPF='' STACTRL=/run/wpa_supplicant SKIP=0 BPB='' SIXTOP='' NETOBJ=''
 SYSNET=${GT_BE98_SYSNET:-/sys/class/net}
 usage() { sed -n '/^#   gt-be98-wifi-gen -n/,/^#   -F  /p' "$0" | sed 's/^# \{0,1\}//' >&2; exit 2; }
 # what this generator supports (-F): keep it in line with the checks below
@@ -661,6 +683,7 @@ features() {
 	feature repeater 1
 	feature beacon_prot 1
 	feature acs 1
+	feature shared_vlan 1
 	acs 2g 5gl 5gh
 	feature wps 1
 	station_security psk2 sae
@@ -669,13 +692,14 @@ features() {
 	echo "feature kv $KV"
 	echo "feature steer $KV"
 }
-while getopts n:o:s:m:d:C:x:cR:K:NT:QFU:X:SB:6: o; do
+while getopts n:o:s:m:d:C:x:cR:K:NT:QFU:X:SB:6:L: o; do
 	case $o in
 	n) NETS=$OPTARG ;; o) OUT=$OPTARG ;; s) SLOTS=$OPTARG ;; m) MACS=$OPTARG ;;
 	d) DEVS=$OPTARG ;; C) CAP=$OPTARG ;; x) CTRL=$OPTARG ;; c) CC=1 ;;
 	R) RNR=$OPTARG ;; K) KEEP=$OPTARG ;; N) DRY=1 ;;
 	T) NOW=$OPTARG ;; Q) QUERY=1 ;; F) features; exit 0 ;;
-	U) UPF=$OPTARG ;; X) STACTRL=$OPTARG ;; S) SKIP=1 ;; B) BPB=$OPTARG ;; 6) SIXTOP=$OPTARG ;; *) usage ;;
+	U) UPF=$OPTARG ;; X) STACTRL=$OPTARG ;; S) SKIP=1 ;; B) BPB=$OPTARG ;; 6) SIXTOP=$OPTARG ;;
+	L) NETOBJ=$OPTARG ;; *) usage ;;
 	esac
 done
 [ "$QUERY" = 1 ] && [ -z "$OUT" ] && OUT=/dev/null
@@ -709,11 +733,13 @@ if [ "$QUERY" = 0 ]; then
 fi
 S=${SLOTS:-/dev/null}
 [ -f "$S" ] || S=/dev/null
+# the network objects (-L): absent or unreadable = none (header)
+[ -n "$NETOBJ" ] && [ -r "$NETOBJ" ] && [ -f "$NETOBJ" ] || NETOBJ=
 
 LC_ALL=C awk -v cap="$CAP" -v ctrl="$CTRL" -v devlist="$DEVS" -v maclist="$MACS" \
 	-v ccok="$CC" -v rnr="$RNR" -v keep="$KEEP" -v out="$OUT" -v slotsf="$S" \
 	-v now="$NOW" -v query="$QUERY" -v upf="$UPF" -v stactrl="$STACTRL" -v skipbad="$SKIP" \
-	-v ht402g="$HT40_2G" -v bpbands="$BPB" -v kvon="$KV" -v sixtop="$SIXTOP" '
+	-v ht402g="$HT40_2G" -v bpbands="$BPB" -v kvon="$KV" -v sixtop="$SIXTOP" -v netobjf="$NETOBJ" '
 function err(m) { print "gt-be98-wifi-gen: " m > "/dev/stderr"; nerr++ }
 function warn(m) { print "gt-be98-wifi-gen: warning: " m > "/dev/stderr" }
 # an error of network i itself: with -S the network is skipped (a warning),
@@ -1054,6 +1080,22 @@ BEGIN {
 	nsta = 0
 	# the backhaul= pseudo network id (header): above every network=
 	BHID = 100000; bhi = 0
+	# -L: the network objects, VLAN -> their bridge brwifi<100000 + id>
+	# (header; the parse of gt-be98-net and gt-be98-lan: keys in any order,
+	# unknown keys ignored, a bad line skipped, the first line of a VLAN wins)
+	if (netobjf != "") {
+		while ((getline objl < netobjf) > 0) {
+			if (objl ~ /^[ \t]*(#|$)/) continue
+			n = split(objl, t, /[ \t]+/); oid = ""; ov = ""
+			for (i = 1; i <= n; i++) {
+				if (t[i] ~ /^network=/) oid = substr(t[i], 9)
+				else if (t[i] ~ /^vlan=/) ov = substr(t[i], 6)
+			}
+			if (oid !~ /^[1-9][0-9]?[0-9]?[0-9]?[0-9]?$/ || ov !~ /^[1-9][0-9]?[0-9]?[0-9]?$/ || ov + 0 < 2 || ov + 0 > 4094) continue
+			if (!((ov + 0) in objbr)) objbr[ov + 0] = "brwifi" (100000 + oid)
+		}
+		close(netobjf)
+	}
 	if (havenow) { split(now, t, " "); tdow = t[1] + 0; tmin = hm(t[2]) }
 }
 # ---- slot state: "<band> <slot> <net> <index>" ----
@@ -1303,8 +1345,9 @@ END {
 			if (!nsta) nerrf(i, tag ": routed= needs a station= uplink in the list")
 			else if (strep != "0") nerrf(i, tag ": routed= needs the station repeater=0 (a 4-address station is a bridge port of the repeated network)")
 		} else if (!isnum(vlan[i]) || vlan[i] + 0 < 1 || vlan[i] + 0 > 4094) nerrf(i, tag ": vlan 1..4094 is required (or routed=)")
-		else if (vlan[i] in vseen) nerrf(i, tag ": vlan " vlan[i] " also used by network " vseen[vlan[i]])
-		else vseen[vlan[i]] = id
+		# several SSIDs on one VLAN share the bridge of its network (header:
+		# shared_vlan): no refusal; the bridge is chosen below, once the
+		# skipped SSIDs are known
 		# steering asks clients to move by 802.11v BSS transition requests: kv=1
 		if (steer[i] && !kv[i]) nerrf(i, tag ": steer=1 needs kv=1 (client steering uses the 802.11v BSS transition of kv=1)")
 	}
@@ -1313,6 +1356,18 @@ END {
 	for (i = 1; i <= nnet; i++) if (i in bad) {
 		for (bi = 1; bi <= nbands; bi++) delete hasb[i, BANDS[bi]]
 		nsch[i] = ""
+	}
+	# the bridge of each SSID (header -L): a routed or repeated SSID its own
+	# brwifiID; a vlan= SSID the bridge of its network (the -L object of its VLAN), else
+	# the bridge of the first SSID of the list on that VLAN that is not
+	# skipped: one bridge per VLAN, whatever the number of SSIDs on it
+	for (i = 1; i <= nnet; i++) {
+		nbr[i] = "brwifi" net[i]
+		if (bh[i] || rep[i] || rtd[i] != "" || (i in bad) || !isnum(vlan[i])) continue
+		bv = vlan[i] + 0
+		if (bv in objbr) nbr[i] = objbr[bv]
+		else if (bv in vfirst) nbr[i] = vfirst[bv]
+		else vfirst[bv] = nbr[i]
 	}
 	# WPS: one network per list (header: one hostapd, one push-button session)
 	nw = 0
@@ -1794,7 +1849,7 @@ END {
 		for (k = 0; k < cap; k++) {
 			i = used[b, k]; if (i == "") continue
 			id = net[i]; ifn = (k == 0) ? d : d "-" k
-			a = bssid(b, mi[b, id]); br = bh[i] ? "-" : "brwifi" id
+			a = bssid(b, mi[b, id]); br = bh[i] ? "-" : nbr[i]
 			f = out "/sec-" ifn
 			print "# " (bh[i] ? "backhaul" : "network " id) " slot " k " (BSSID index " mi[b, id] ")" > f
 			print "ctrl_interface=" ctrl > f
@@ -1928,7 +1983,7 @@ END {
 		}
 		if (rep[i]) print "repeated " net[i] " brwifi" net[i] " " iso[i] > plan
 		else if (rtd[i] != "") print "routed " net[i] " brwifi" net[i] " " rtd[i] " " iso[i] > plan
-		else print "net " net[i] " brwifi" net[i] " " vlan[i] " " iso[i] > plan
+		else print "net " net[i] " " nbr[i] " " vlan[i] " " iso[i] > plan
 	}
 	# 802.11k/v networks: gt-be98-wifi-steer syncs their neighbor lists (and steers with steer=1)
 	for (i = 1; i <= nnet; i++) if ((net[i] in onradio) && kv[i]) print "kv " net[i] " " steer[i] > plan
@@ -1967,9 +2022,12 @@ END {
 		if (strep != "0") print "repeater " d " " strep " " ((nrep && (repid in onradio)) ? "brwifi" repid : "-") > plan
 		if (sttrunk) {
 			tv = ""
-			for (j = 1; j <= nnet; j++) if ((net[j] in onradio) && !bh[j] && !rep[j] && rtd[j] == "") tv = tv (tv == "" ? "" : ",") vlan[j]
+			# each VID once (several SSIDs may share one: shared_vlan)
+			for (j = 1; j <= nnet; j++) if ((net[j] in onradio) && !bh[j] && !rep[j] && rtd[j] == "" && !((vlan[j] + 0) in tvseen)) {
+				tvseen[vlan[j] + 0] = 1; tv = tv (tv == "" ? "" : ",") vlan[j]
+			}
 			print "bhtrunk " d " " (tv == "" ? "-" : tv) > plan
-			if (mgi && (net[mgi] in onradio)) print "bhmgmt " vlan[mgi] " brwifi" net[mgi] > plan
+			if (mgi && (net[mgi] in onradio)) print "bhmgmt " vlan[mgi] " " nbr[mgi] > plan
 		}
 	}
 	for (bi = 1; bi <= nbands; bi++) {

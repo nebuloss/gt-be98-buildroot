@@ -4,8 +4,9 @@
 # /jffs with the other network settings.
 #
 # VLAN JACKS (AP mode, UniFi-style port profile): a jack joins the network
-# whose VLAN is its native VLAN, i.e. the bridge (brwifi<ID>) that network's
-# SSIDs use, and its devices get their addresses from that VLAN's own DHCP
+# whose VLAN is its native VLAN, i.e. that network's own bridge (the web UI's
+# list: brwifi<100000 + id>, which its SSIDs join too; else the SSID's
+# brwifi<ID>), and its devices get their addresses from that VLAN's own DHCP
 # upstream. The VLAN must belong to a network: of the Wi-Fi network list
 # (network=ID ... vlan=<vid>) or WIFI_VLANS (the SSID's bridge), or of the
 # web UI's network list /etc/gt-be98-networks.conf (a network without an

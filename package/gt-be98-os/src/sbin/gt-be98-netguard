@@ -15,7 +15,9 @@
 #      anything else is detached;
 #   2. no bridge port ever has hairpin mode on;
 #   3. the Wi-Fi ports (bcawl*) of the WIFI_ISOLATE bridges are isolated,
-#      those of other brwifi bridges and the trunk VLANs are not;
+#      and so is each BSS netdev listed in WIFI_ISOLATE_BSS (an isolated
+#      SSID on a network it shares with other SSIDs: gt-be98-wifi), those
+#      of other brwifi bridges and the trunk VLANs are not;
 #   4. a Wi-Fi STATION (the uplink of gt-be98-wifi, listed in
 #      $GT_BE98_WIFI_STATIONS) is never a bridge port: a 3-address station
 #      cannot be bridged (cfg80211 refuses it too, IFF_DONT_BRIDGE); its
@@ -213,6 +215,7 @@ wifi_conf() {
 	[ -f "$WIFI_L2" ] && f=$WIFI_L2
 	cfg_last "$f" WIFI_VLANS 'A-Za-z0-9: '; VLANS=$CFG
 	cfg_last "$f" WIFI_ISOLATE 'A-Za-z0-9 '; ISOLATE=$CFG
+	cfg_last "$f" WIFI_ISOLATE_BSS 'A-Za-z0-9 -'; ISOLATE_BSS=$CFG
 	cfg_last "$f" WIFI_TRUNK 'A-Za-z0-9'; TRUNK=${CFG:-rnr0}
 	cfg_last "$f" WIFI_MCAST_TO_UNICAST '01'; M2U=${CFG:-1}
 	# bhs: a mesh leaf's trunk (its station, rule 7)
@@ -780,7 +783,8 @@ sweep() {
 			case "$m" in
 			brwifi[0-9]*)
 				f=0
-				case "$i" in bcawl*) case " $ISOLATE " in *" $m "*) f=1 ;; esac ;; esac
+				case "$i" in bcawl*) case " $ISOLATE " in *" $m "*) f=1 ;; esac
+					case " ${ISOLATE_BSS:-} " in *" $i "*) f=1 ;; esac ;; esac
 				# the repeater's uplink port is the way out: never isolated
 				repeater_of "$i" "$m" && f=0
 				v=; { read -r v < "$n/brport/isolated"; } 2>/dev/null

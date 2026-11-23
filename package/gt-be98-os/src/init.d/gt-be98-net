@@ -1,0 +1,47 @@
+#!/sbin/openrc-run
+# SPDX-License-Identifier: GPL-2.0
+# The networks (owner 11-23): each network of the web UI's list
+# (/etc/gt-be98-networks.conf) has its bridge, brwifi<100000 + id>, whether
+# or not an SSID or an Ethernet port is bound to it. All the work is
+# /usr/sbin/gt-be98-net's (its header). In the default runlevel and a clean
+# no-op while the list holds no network on VLAN 2..4094 (D41's pattern).
+#   reload    the list changed (gt-be98-gw apply also runs it: the web UI
+#             reloads gt-be98-gw after every change of the list)
+#   features  "features netbridges" (the web UI's handshake)
+# After the Wi-Fi (its plan says whether the box is a mesh leaf; its own
+# gt-be98-l2 user creates the bridge its BSSes need), before the wired LAN and
+# the gateway networks (their ports and addresses join these bridges).
+description="Networks: one bridge per network of the web UI's list, independent of its SSIDs and ports"
+extra_commands="features"
+extra_started_commands="reload"
+
+NETTOOL=${GT_BE98_NET:-/usr/sbin/gt-be98-net}
+
+depend() {
+	need gt-be98-netguard
+	after gt-be98-drivers gt-be98-wifi
+	before gt-be98-lan gt-be98-gw gt-be98-router
+	use logger
+}
+
+features() { "$NETTOOL" features; }
+
+start() {
+	ebegin "Networks"
+	"$NETTOOL" apply
+	# a refused network leaves the service started (logged; a reload
+	# re-applies it)
+	eend 0
+}
+
+reload() {
+	ebegin "Networks: re-applying the network list"
+	"$NETTOOL" apply
+	eend $?
+}
+
+stop() {
+	ebegin "Stopping the networks (their bridges let go)"
+	"$NETTOOL" stop
+	eend $?
+}

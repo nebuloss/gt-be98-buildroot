@@ -35,12 +35,12 @@
 #   - the bare ports rnr2, rnr3: LAN_PORT_<port>="native=<vid> tagged=none",
 #     the port itself in the bridge (tagged=none only: a bare port carries
 #     its native VLAN alone).
-# A port's network may also be one WITHOUT an SSID (UniFi's wired-only
-# network): the web UI's network list, /etc/gt-be98-networks.conf (saved to
-# /jffs). A VLAN an SSID carries keeps the SSID's bridge; any other network
-# of that list gets brwifi<100000 + its id>, this service its only user
-# (lan_net_list). `rc-service gt-be98-lan features` prints "features tagged
-# networks" for the web UI.
+# A port's network may be any network of the web UI's list,
+# /etc/gt-be98-networks.conf (saved to /jffs), with or without an SSID: its
+# bridge is brwifi<100000 + its id> (gt-be98-net holds it; the SSIDs bound to
+# the network join it too), lan_net_list. `rc-service gt-be98-lan features`
+# prints "features tagged networks netbridges" for the web UI (netbridges:
+# a network's bridge is its own, never an SSID's).
 # The bridge and its trunk VLAN (<WIFI_TRUNK>.<vid>) belong to gt-be98-l2,
 # whose users are this service and gt-be98-wifi: the bridge exists while
 # either needs it. A VLAN no network carries is refused (a profile names a
@@ -159,7 +159,7 @@ GW_FOLLOW=${GT_BE98_GW_FOLLOW-rc-service --ifstarted gt-be98-gw reload}
 # tagged = LAN_JACK_<n> tagged=all|<list>; networks = a VLAN of a network
 # without an SSID (NETWORKS_FILE) is a port's network too
 extra_commands="features"
-features() { echo "features tagged networks"; }
+features() { echo "features tagged networks netbridges"; }
 
 depend() {
 	need gt-be98-netguard
@@ -299,14 +299,15 @@ jacks_conf() {
 }
 
 # the networks the box has (stdout, "<bridge>:<vid>" per line, in order: the
-# first one of a VID is its network): the Wi-Fi's (the running Wi-Fi
-# service's effective list, l2.conf, else the configured WIFI_VLANS then the
-# Wi-Fi network list: network=ID ... vlan=<vid> -> brwifiID:<vid>), then the
-# web UI's network list (lan_nets_file): a VLAN an SSID carries keeps the
-# SSID's bridge (one bridge per VLAN, both users), one without an SSID gets
-# its own. The one source of both a VLAN's bridge (lan_net_bridge) and a
-# jack's tagged=all.
-lan_net_list() { lan_net_wifi; lan_nets_file; }
+# first one of a VID is its network): the web UI's network list first
+# (lan_nets_file: every network's own bridge brwifi<100000 + id>, which
+# gt-be98-net holds and the SSIDs bound to it join, owner 11-23), then the
+# Wi-Fi's (the running Wi-Fi service's effective list, l2.conf, else the
+# configured WIFI_VLANS then the Wi-Fi network list: network=ID ... vlan=<vid>
+# -> brwifiID:<vid>) for a VLAN no network object carries (a hand-written
+# Wi-Fi list, HOSTAPD_CONFS). One bridge per VLAN. The one source of both a
+# VLAN's bridge (lan_net_bridge) and a jack's tagged=all.
+lan_net_list() { lan_nets_file; lan_net_wifi; }
 # the web UI's network list (NETWORKS_FILE) as "brwifi<100000 + id>:<vid>":
 # a network's own bridge name, above every Wi-Fi network's brwifi1..99999
 # (gt-be98-l2: such a lan-only bridge yields its VLAN to an SSID's bridge).
