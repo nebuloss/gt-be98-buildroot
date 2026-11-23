@@ -51,7 +51,9 @@
 #  AND the bench knob band5_full (class B: bench build only, folded to 0 in the shipped ko) with its census / declared rows)
 # om-dfs5gh-bgcac-r2-2026-11-19 2026-11-19 0a7588d3 (imgint12b: main 38e7be78 + ZW-ETSI: background CAC in ETSI on the 5 GHz-high
 #  radio, the timer-wheel abort fix; gates GREEN 0a7588d3 vs 38e7be78, 36 shipped params unchanged; q336 BG PASS with its bench ko)
-GT_BE98_OPEN_WIFI_VERSION = 0a7588d3150c033b4daad39570fb0206ae1cbab8
+# om-dfs5gh-bgcac-r3-2026-11-20 2026-11-23 b53e0487 (imgint13a, RC14 test: 0a7588d3 + ZW-ARM-UP, the q343 root cause: a pending
+#  background CAC armed inside hostapd START_AP; gates GREEN b53e0487 vs 0a7588d3, 36 shipped params unchanged)
+GT_BE98_OPEN_WIFI_VERSION = b53e04873c243b9cf4a8c1845e20836723f7552a
 GT_BE98_OPEN_WIFI_SITE = git@github.com:nebuloss/gt-be98-open-wifi.git
 GT_BE98_OPEN_WIFI_SITE_METHOD = git
 GT_BE98_OPEN_WIFI_LICENSE = GPL-2.0-only
