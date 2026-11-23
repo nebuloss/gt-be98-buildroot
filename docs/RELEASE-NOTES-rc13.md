@@ -1,10 +1,6 @@
 # GT-BE98 mainline OS 1.0-rc13 - release notes
 
-Date: 2026-11-20 · Status: **DRAFT**, release candidate 13, not tagged.
-
-> DRAFT until the release-image box phases have run: the release images,
-> their checks, the phases row and the tags are the last placeholders
-> (`⟨…⟩`). The candidate's box evidence (q320–q349b) is final.
+Date: 2026-11-23 · Status: **release candidate 13**, tagged `gt-be98-rc13`.
 
 Evidence is named by the orchestrator's queue (`qNNN`). The run directories
 stay on the orchestrator's machine and are not in this repository. Every
@@ -32,17 +28,28 @@ RC13 is a small candidate on top of RC12:
 
 | File | sha256 |
 |---|---|
-| `rootfs.squashfs` | `⟨release rootfs sha256⟩` |
-| `ml-bootfs.itb` | `⟨release itb sha256⟩` |
+| `rootfs.squashfs` | `0ee62c2cb5e1b8be042b50207d6509e688c21c92ded3fc38ea3cb345296ba4ae` |
+| `ml-bootfs.itb` | `5fd6e624ea91d2e9ce0e8d874b14c07a08d6eaa1cb4e10650961aa0a6be889f8` |
 
-Build id (DT): `⟨release build id⟩`
+Build id (DT): `20261120T170709Z-681670921497-rw-jffs`
 
-Built with `RELEASE=1` (`ml-bootfs.info`: `release mode: yes`).
+Built with `RELEASE=1` (`ml-bootfs.info`: `release mode: yes`) from
+`br-rc13-r-2026-11-20` `75a73a0`. Later commits of that branch change only
+`docs/`.
 
-- **Release check:** `⟨release-check.sh result, selftest n/n⟩` with RC7's lab-pattern list.
-- **Lab control:** `⟨the lab image imgint12e fails the same check with N findings⟩`.
-- **Exact-pattern list:** `⟨expected: finds only the lab public key, as in RC7–RC12⟩`.
-- **Modules against the tested lab image:** `⟨rtl8372 byte-identical; bca and runner: code and relocations identical, .rodata modulo the build path (as RC12)⟩`.
+- **Release check:** `release-check.sh` returned PASS (selftest 21/21) with RC7's lab-pattern list.
+- **Lab control:** the lab image imgint12e fails the same check with 15 findings, as it should.
+- **Exact-pattern list:** finds only the lab public key, as in RC7–RC12.
+- **Modules against the tested lab image (imgint12e)**, checked by the
+  release recipe's section gate (`kocmp.py`, the rule RC12 accepted):
+  - `rtl8372.ko` is byte-identical (`39323095`).
+  - `bca_pcie_ipc.ko` (release `cb1b96c3`, lab `c4f7adf3`): 34 of 37
+    sections byte-identical.
+  - `bcm4916-runner.ko` (release `8e26d710`, lab `c000a45b`): 38 of 41
+    sections byte-identical.
+  - In both, every code and relocation section is identical, `.rodata` is
+    identical once the build-path prefix is swapped, `.symtab` differs only
+    in `.rodata` symbol values, and the build-id follows.
 
 **These images are a TEST build.** Their `SSH_AUTHORIZED_KEYS` is the
 lab's public key, so they are never handed over. A hand-over build is the
@@ -70,7 +77,7 @@ rootfs differs in:
 
 The switch module is byte-identical.
 
-Built from (`gt-be98-rc13` tags, ⟨to be set⟩):
+Built from (`gt-be98-rc13` tags):
 
 | Component | Commit |
 |---|---|
@@ -259,7 +266,7 @@ release identity read FLAT.
 | q347 | imgint12d | 30-minute soak after a clean and a 10 min settle: INCONCLUSIVE on M1 (−95.1 MB/h); MemAvailable 1412.7 MB before, 1402.1 MB after the soak's teardown (most of the loss came back); AnonPages 19.8 → 23.4 MB, Slab 47.3 → 49.7, Cached/Shmem flat |
 | q349 | imgint12e | **both lease-drop fixes:** wan-leasedrop r2 LDF + LDR PASS; gw5-ipv6 r13 FULL PASS; pppoe6 r3 ship PV6-up/dn 0.039 / 0.032 cores/Gbit; WAN admin reach PASS; clean |
 | q349b | imgint12e | **RC13 soak: 60 min, instrumented, VERDICT PASS**, M1 +2.04 MB/h, SUnreclaim +0.91; READING-SHAPE FLAT (decline −1.2 MB, attribution n/a); stations 2 → 2; post-teardown +1.5 MB; CHECK clean |
-| ⟨qNNN⟩ | release | ⟨release-image box phases: first n/n, second n/n; lab image imgint12e restored⟩ |
+| q351 | release | **Release-image phases PASS:** first 16/16, with W2b-BIND: the LAN address bound 0 s after the arm looked, uptime 55.3 s, and every gated action answered need_auth on loopback and the LAN. Second 6/6: host keys kept across the reboot, setup token consumed, still configured. The lab image imgint12e restored afterwards (build `20261120T143058Z-bcc596edaa05-rw-jffs`) |
 
 ## Known open
 
