@@ -30,16 +30,43 @@ hostapd 2.12 (src/ap/dfs.c), enable_background_radar=1, on top of 0004:
    hostapd_dfs_nop_finished()) and hostapd_dfs_complete_cac() switches back
    to it when that CAC completes. Meanwhile a narrower standby stays out
    of that block (it would hold the background chain when the period ends).
+4. The firmware can hold the block out of service a little longer than the
+   kernel's non-occupancy period (silicon run q352: the driver's dfs_ap_move
+   -20 BADCHAN 51 s after cfg80211's NOP-FINISHED, the ROM's per-channel
+   out-of-service test), and no event follows when that ends: a way-back CAC
+   the driver ends without success is retried every 30 s, at most 20 times
+   (eloop timer, cancelled in hostapd_cleanup_iface()).
 
 Only an interface with enable_background_radar=1 on a driver declaring
 RADAR_BACKGROUND is affected. Applies after 0001-0004. Compile-checked
 (test/build-hostapd-confcheck.sh); host-tested with test/hostapd-dfs-bg-test.c
 (build-hostapd-dfs-bg-test.sh: the dfs5gh-zw80 scenario on the device's
-5 GHz-high channel table); r2 of the 0005 first run on the device in q343.
+5 GHz-high channel table); r3 of the 0005 first run on the device in q343
+(r1), q352 (r2: W1 PASS, way back refused).
 ---
+--- a/src/ap/dfs.h
++++ b/src/ap/dfs.h
+@@ -30,6 +30,7 @@
+ 			  int ht_enabled, int chan_offset, int chan_width,
+ 			  int cf1, int cf2);
+ int hostapd_handle_dfs_offload(struct hostapd_iface *iface);
++void hostapd_dfs_background_deinit(struct hostapd_iface *iface);
+ int hostapd_is_dfs_overlap(struct hostapd_iface *iface, enum chan_width width,
+ 			   int center_freq);
+ 
+--- a/src/ap/hostapd.c
++++ b/src/ap/hostapd.c
+@@ -797,6 +797,7 @@
+ 	hostapd_afc_stop(iface);
+ 	eloop_cancel_timeout(hostapd_interface_setup_failure_handler, iface,
+ 			     NULL);
++	hostapd_dfs_background_deinit(iface);
+ 
+ 	hostapd_cleanup_iface_partial(iface);
+ 	hostapd_config_free(iface->conf);
 --- a/src/ap/hostapd.h
 +++ b/src/ap/hostapd.h
-@@ -662,6 +662,19 @@
+@@ -662,6 +662,21 @@
  		unsigned int temp_ch:1;
  		/* CAC started on radar offchain */
  		unsigned int cac_started:1;
@@ -56,12 +83,22 @@ RADAR_BACKGROUND is affected. Applies after 0001-0004. Compile-checked
 +		/* the chain clears the configured-width block while the main
 +		 * chain runs narrower: switch back when its CAC completes */
 +		unsigned int upgrade:1;
++		/* way-back attempts the driver ended without a radar (r3) */
++		u8 upgrade_retries;
  	} radar_background;
  
  	u16 hw_flags;
 --- a/src/ap/dfs.c
 +++ b/src/ap/dfs.c
-@@ -41,6 +41,7 @@
+@@ -11,6 +11,7 @@
+ #include "utils/includes.h"
+ 
+ #include "utils/common.h"
++#include "utils/eloop.h"
+ #include "common/ieee802_11_defs.h"
+ #include "common/hw_features_common.h"
+ #include "common/wpa_ctrl.h"
+@@ -41,6 +42,7 @@
  }
  
  static void hostapd_dfs_update_background_chain(struct hostapd_iface *iface);
@@ -69,7 +106,7 @@ RADAR_BACKGROUND is affected. Applies after 0001-0004. Compile-checked
  
  
  static int dfs_get_used_n_chans(struct hostapd_iface *iface, int *seg1)
-@@ -962,6 +963,9 @@
+@@ -962,6 +964,9 @@
  			hostapd_get_oper_centr_freq_seg0_idx(iface->conf);
  		iface->radar_background.centr_freq_seg1_idx =
  			hostapd_get_oper_centr_freq_seg1_idx(iface->conf);
@@ -79,7 +116,7 @@ RADAR_BACKGROUND is affected. Applies after 0001-0004. Compile-checked
  
  		/*
  		 * Let's select a random channel according to the
-@@ -1105,41 +1109,270 @@
+@@ -1105,41 +1110,299 @@
  }
  
  
@@ -256,6 +293,35 @@ RADAR_BACKGROUND is affected. Applies after 0001-0004. Compile-checked
 +}
 +
 +
++/*
++ * gt-be98 0005 r3: the way back can be refused while the firmware still
++ * holds the block out of service after the kernel's own non-occupancy period
++ * has ended (silicon run q352: the driver's dfs_ap_move -20 BADCHAN on 100/80
++ * 51 s after cfg80211's NOP-FINISHED, the ROM's per-channel out-of-service
++ * test). No event follows when that ends, so the way back is retried.
++ */
++#define DFS_BG_RETRY_S 30
++#define DFS_BG_RETRY_MAX 20
++
++static void hostapd_dfs_background_retry(void *eloop_ctx, void *timeout_ctx)
++{
++	struct hostapd_iface *iface = eloop_ctx;
++
++	if (!iface->conf || iface->state != HAPD_IFACE_ENABLED ||
++	    iface->radar_background.channel != -1)
++		return;
++	wpa_printf(MSG_INFO, "DFS: way back retry %u/%u",
++		   iface->radar_background.upgrade_retries, DFS_BG_RETRY_MAX);
++	hostapd_dfs_update_background_chain(iface);
++}
++
++
++void hostapd_dfs_background_deinit(struct hostapd_iface *iface)
++{
++	eloop_cancel_timeout(hostapd_dfs_background_retry, iface, ELOOP_ALL_CTX);
++}
++
++
  static void hostapd_dfs_update_background_chain(struct hostapd_iface *iface)
  {
  	int sec = 0;
@@ -376,7 +442,7 @@ RADAR_BACKGROUND is affected. Applies after 0001-0004. Compile-checked
  		wpa_printf(MSG_ERROR, "DFS failed to start CAC offchannel");
  		iface->radar_background.channel = -1;
  		return;
-@@ -1150,10 +1383,19 @@
+@@ -1150,10 +1413,19 @@
  	iface->radar_background.secondary_channel = sec;
  	iface->radar_background.centr_freq_seg0_idx = oper_centr_freq_seg0_idx;
  	iface->radar_background.centr_freq_seg1_idx = oper_centr_freq_seg1_idx;
@@ -396,7 +462,7 @@ RADAR_BACKGROUND is affected. Applies after 0001-0004. Compile-checked
  }
  
  
-@@ -1198,6 +1440,14 @@
+@@ -1198,6 +1470,15 @@
  		iface->conf, iface->radar_background.centr_freq_seg0_idx);
  	hostapd_set_oper_centr_freq_seg1_idx(
  		iface->conf, iface->radar_background.centr_freq_seg1_idx);
@@ -408,10 +474,11 @@ RADAR_BACKGROUND is affected. Applies after 0001-0004. Compile-checked
 +	 */
 +	hostapd_set_oper_chwidth(iface->conf,
 +				 iface->radar_background.oper_chwidth);
++	iface->radar_background.upgrade_retries = 0;
  
  	hostapd_dfs_update_background_chain(iface);
  
-@@ -1255,10 +1505,12 @@
+@@ -1255,10 +1536,13 @@
  			 */
  			if (hostapd_dfs_is_background_event(iface, freq)) {
  				iface->radar_background.cac_started = 0;
@@ -422,6 +489,29 @@ RADAR_BACKGROUND is affected. Applies after 0001-0004. Compile-checked
  
  				iface->radar_background.temp_ch = 0;
 +				iface->radar_background.upgrade = 0;
++				iface->radar_background.upgrade_retries = 0;
  				return hostapd_dfs_start_channel_switch_background(iface);
  			}
  
+@@ -1284,8 +1568,21 @@
+ 			}
+ 		}
+ 	} else if (hostapd_dfs_is_background_event(iface, freq)) {
++		bool was_upgrade = iface->radar_background.upgrade;
++
+ 		iface->radar_background.cac_started = 0;
+ 		hostapd_dfs_update_background_chain(iface);
++		/* gt-be98 0005 r3: a way back ended without a radar: retry it */
++		if (was_upgrade &&
++		    iface->radar_background.channel == -1 &&
++		    iface->radar_background.upgrade_retries < DFS_BG_RETRY_MAX) {
++			iface->radar_background.upgrade_retries++;
++			eloop_cancel_timeout(hostapd_dfs_background_retry, iface,
++					     ELOOP_ALL_CTX);
++			eloop_register_timeout(DFS_BG_RETRY_S, 0,
++					       hostapd_dfs_background_retry,
++					       iface, NULL);
++		}
+ 	}
+ 
+ 	iface->radar_detected = false;

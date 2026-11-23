@@ -6,11 +6,10 @@
 # .config, no libnl, driver "none"), with the driver calls wrapped.
 #   sh test/build-hostapd-dfs-bg-test.sh HOSTAPD_SRC WORKDIR
 #   sh test/build-hostapd-dfs-bg-test.sh --selftest HOSTAPD_SRC WORKDIR
-# --selftest (env R1_PATCH = the 0005 of br-zw80-2026-11-20, r1): also builds
-# the tree with r1 in place of the given 0005 (the q343 hostapd, which picked
-# 132/80 over the disabled 144): the test must be RED there and GREEN on the
-# given tree. WORKDIR is scratch.
-# Exit 0 GREEN (selftest: GREEN + the control RED), 1 RED.
+# --selftest (env CONTROL_PATCHES = earlier 0005s, e.g. r1 and r2): also builds
+# the tree with each in place of the given 0005: the test must be RED on every
+# one and GREEN on the given tree. WORKDIR is scratch.
+# Exit 0 GREEN (selftest: GREEN + every control RED), 1 RED.
 set -eu
 st=0; [ "${1:-}" = --selftest ] && { st=1; shift; }
 src=${1:?HOSTAPD_SRC}; w=${2:?WORKDIR}
@@ -37,7 +36,7 @@ _OBJS_VAR := DFSBG
 include ../src/objs.mk
 DB_OBJS = $(filter-out %/hostapd/main.o %/src/drivers/drivers.o,$(OBJS)) $(DFSBG)
 hostapd-dfs-bg-test: $(DB_OBJS)
-	$(Q)$(LDO) $(LDFLAGS) -Wl,--wrap=hostapd_start_dfs_cac -Wl,--wrap=hostapd_switch_channel -Wl,--wrap=hostapd_disable_iface -Wl,--wrap=hostapd_enable_iface -o $@ $(DB_OBJS) $(LIBS)
+	$(Q)$(LDO) $(LDFLAGS) -Wl,--wrap=hostapd_start_dfs_cac -Wl,--wrap=hostapd_switch_channel -Wl,--wrap=hostapd_disable_iface -Wl,--wrap=hostapd_enable_iface -Wl,--wrap=eloop_register_timeout -Wl,--wrap=eloop_cancel_timeout -o $@ $(DB_OBJS) $(LIBS)
 MK
 	  make -s -j"$(nproc)" -f Makefile -f dfsbg.mk hostapd-dfs-bg-test CC="${HOSTCC:-gcc}" >/dev/null )
 	cp "$w/b/hostapd/hostapd-dfs-bg-test" "$2"
@@ -49,14 +48,19 @@ rc=0; "$w/t-given" "$conf" || rc=$?
 [ "$st" = 1 ] || exit $rc
 [ $rc = 0 ] || { echo "RED (selftest: the given tree is RED)"; exit 1; }
 fail=0
-# the control: the same tree with 0005 r1 (br-zw80-2026-11-20 f2467c5, the q343 hostapd) instead of
-# the given 0005 — r1 picked 132/80 over the disabled 144 and gave up: the test must be RED there
-[ -n "${R1_PATCH:-}" ] || { echo "RED (selftest needs R1_PATCH=<0005 r1>: git show f2467c5:<the 0005 path>)"; exit 1; }
-echo "=== control: 0005 r1 instead of the given 0005 (must be RED)"
-rm -rf "$w/cb"; cp -a "$src" "$w/cb"
-(cd "$w/cb" && patch -p1 -R -s < "$pd/0005-dfs-background-chain-narrower-standby-and-way-back.patch" && patch -p1 -s < "$R1_PATCH")
-build "$w/cb" "$w/t-cb"
-if "$w/t-cb" "$conf" > "$w/cb.out" 2>&1; then echo "  BLIND: GREEN on r1"; fail=1
-else echo "  ok: RED ($(grep -c '^RED ' "$w/cb.out") checks; first: $(grep '^RED ' "$w/cb.out" | head -1 | cut -c1-140))"; fi
+# the controls: the same tree with an EARLIER 0005 in place of the given one, each must be RED —
+# CONTROL_PATCHES="<0005 r1> <0005 r2>" (git show f2467c5: / 45f7c74:<the 0005 path>): r1 = the
+# q343 hostapd (132/80 over the disabled 144), r2 = the q352 hostapd (no retry of a refused way back)
+[ -n "${CONTROL_PATCHES:-}" ] || { echo "RED (selftest needs CONTROL_PATCHES)"; exit 1; }
+k=0
+for cp in $CONTROL_PATCHES; do
+	k=$((k + 1))
+	echo "=== control $k: $(basename "$cp") in place of the given 0005 (must be RED)"
+	rm -rf "$w/cb"; cp -a "$src" "$w/cb"
+	(cd "$w/cb" && patch -p1 -R -s < "$pd/0005-dfs-background-chain-narrower-standby-and-way-back.patch" && patch -p1 -s < "$cp")
+	build "$w/cb" "$w/t-cb$k"
+	if "$w/t-cb$k" "$conf" > "$w/cb$k.out" 2>&1; then echo "  BLIND: GREEN"; fail=1
+	else echo "  ok: RED ($(grep -c '^RED ' "$w/cb$k.out") checks; first: $(grep '^RED ' "$w/cb$k.out" | head -1 | cut -c1-140))"; fi
+done
 [ $fail = 0 ] && { echo "GREEN (selftest)"; exit 0; }
 echo "RED (selftest)"; exit 1

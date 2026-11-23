@@ -20,7 +20,10 @@
  *   S2 its CAC completes; a radar on 100/80: one CSA, to 5660 at 40 MHz, no
  *      AP stop;
  *   S3 the NOP ends on 5500..5560: the chain clears 100/80 only once all four
- *      are usable;
+ *      are usable; the firmware still holds the block out of service and the
+ *      driver ends that CAC at once (silicon q352: dfs_ap_move -20 BADCHAN 51 s
+ *      after cfg80211's NOP-FINISHED): the way back is retried (eloop timer,
+ *      run here by hand) and the retry clears 100/80;
  *   S4 that CAC completes: one CSA back, to 5500 at 80 MHz; 132/40 stays the
  *      standby (already available: no new CAC).
  * Exit 0 GREEN, 1 RED.
@@ -34,6 +37,7 @@
 #include "ap/ap_config.h"
 #include "ap/dfs.h"
 #include "config_file.h"
+#include "utils/eloop.h"
 
 static const struct wpa_driver_ops test_nl80211 = { .name = "nl80211", .desc = "name only" };
 const struct wpa_driver_ops *const wpa_drivers[] = { &test_nl80211, NULL };
@@ -102,6 +106,26 @@ int __wrap_hostapd_switch_channel(struct hostapd_data *hapd, struct csa_settings
 	r->freq = s->freq_params.freq;
 	r->bw = s->freq_params.bandwidth;
 	r->cf1 = s->freq_params.center_freq1;
+	return 0;
+}
+
+/* eloop is not running: timers are recorded and fired by the test */
+static eloop_timeout_handler tmo_h;
+static void *tmo_ctx;
+static int ntmo;
+int __wrap_eloop_register_timeout(unsigned int secs, unsigned int usecs, eloop_timeout_handler h, void *e, void *u);
+int __wrap_eloop_register_timeout(unsigned int secs, unsigned int usecs, eloop_timeout_handler h, void *e, void *u)
+{
+	tmo_h = h;
+	tmo_ctx = e;
+	ntmo++;
+	return 0;
+}
+int __wrap_eloop_cancel_timeout(eloop_timeout_handler h, void *e, void *u);
+int __wrap_eloop_cancel_timeout(eloop_timeout_handler h, void *e, void *u)
+{
+	if (h == tmo_h)
+		tmo_h = NULL;
 	return 0;
 }
 
@@ -197,6 +221,7 @@ int main(int argc, char *argv[])
 	iface->freq = 5500;
 	iface->drv_flags2 = WPA_DRIVER_FLAGS2_RADAR_BACKGROUND;
 	iface->dfs_domain = HOSTAPD_DFS_REGION_ETSI;
+	iface->state = HAPD_IFACE_ENABLED;	/* the AP is up (the checks below run in service) */
 
 	/* S1: the main CAC on 100/80 is done (cfg80211 holds 100-112 available) */
 	set_dfs(5500, 5560, HOSTAPD_CHAN_DFS_AVAILABLE);
@@ -245,6 +270,22 @@ int main(int argc, char *argv[])
 	      "S3 after the last NOP-FINISHED: a background CAC of 100/80, marked the way back (%d MHz bw %d cf1 %d upgrade %d)",
 	      ncac ? cac[ncac - 1].freq : 0, ncac ? cac[ncac - 1].bw : 0, ncac ? cac[ncac - 1].cf1 : 0,
 	      iface->radar_background.upgrade);
+	/* S3b q352: the firmware's own out-of-service period outlasts cfg80211's: the driver ends it */
+	c0 = ncac;
+	hostapd_dfs_complete_cac(iface, 0, 5500, 0, 0, CHAN_WIDTH_80, 5530, 0);
+	CHECK(ncac == c0 && ncsa == 1, "S3b the way-back CAC ended by the driver: no new request at once, no switch (%d new, %d CSA)",
+	      ncac - c0, ncsa);
+	CHECK(tmo_h != NULL, "S3b the way back is retried later (a timer is registered: %d registered)", ntmo);
+	if (tmo_h) {
+		eloop_timeout_handler h = tmo_h;
+
+		tmo_h = NULL;
+		h(tmo_ctx, NULL);	/* the timer fires: the firmware's period is over */
+	}
+	CHECK(ncac > c0 && cac[ncac - 1].bg && cac[ncac - 1].freq == 5500 && cac[ncac - 1].bw == 80 &&
+	      iface->radar_background.upgrade,
+	      "S3b the retry asks for 100/80 again, marked the way back (%d MHz bw %d upgrade %d)",
+	      ncac ? cac[ncac - 1].freq : 0, ncac ? cac[ncac - 1].bw : 0, iface->radar_background.upgrade);
 
 	/* S4: that CAC completes: switch back */
 	c0 = ncac;
