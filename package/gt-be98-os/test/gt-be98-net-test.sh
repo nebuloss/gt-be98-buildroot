@@ -136,7 +136,7 @@ check "... status empty" "" "$(NT status)"
 # 10. the package: tool + service installed, in the default runlevel, after the Wi-Fi, before the LAN and the gateway
 S="$here/.."
 check "gt-be98-os.mk installs gt-be98-net (tool and service) and puts it in the default runlevel" "yes yes yes" \
-	"$(grep -q 'gt-be98-mesh \\$' "$S/gt-be98-os.mk" && grep -q '^		gt-be98-net gt-be98-addr; do' "$S/gt-be98-os.mk" && echo yes || echo no) $(grep -q "gt-be98-gw gt-be98-net gt-be98-addr \\\\$" "$S/gt-be98-os.mk" && echo yes || echo no) $(grep -q 'gt-be98-lan gt-be98-gw gt-be98-net gt-be98-addr; do' "$S/gt-be98-os.mk" && echo yes || echo no)"
+	"$(grep -q 'gt-be98-mesh \\$' "$S/gt-be98-os.mk" && grep -qE '^		gt-be98-net gt-be98-addr( [a-z0-9-]+)*; do' "$S/gt-be98-os.mk" && echo yes || echo no) $(grep -q "gt-be98-gw gt-be98-net gt-be98-addr \\\\$" "$S/gt-be98-os.mk" && echo yes || echo no) $(grep -q 'gt-be98-lan gt-be98-gw gt-be98-net gt-be98-addr; do' "$S/gt-be98-os.mk" && echo yes || echo no)"
 check "the service: after gt-be98-wifi, before gt-be98-lan and gt-be98-gw; features when stopped" "yes yes features|features netbridges" \
 	"$(grep -q 'after gt-be98-drivers gt-be98-wifi$' "$S/src/init.d/gt-be98-net" && echo yes || echo no) $(grep -q 'before gt-be98-lan gt-be98-gw' "$S/src/init.d/gt-be98-net" && echo yes || echo no) $(GT_BE98_NET="$NETT"; extra_commands=; . "$S/src/init.d/gt-be98-net"; echo "$extra_commands|$(features)")"
 echo "gt-be98-net-test: $pass ok, $fail failed"
