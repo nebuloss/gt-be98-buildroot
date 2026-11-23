@@ -105,7 +105,7 @@
 #       twt_responder (twt=), zwdfs, monitor, led; feature station (station= blocks), routed
 #       (routed= networks); feature mesh (the backhaul= block: the mesh root,
 #       and station trunk=1: the mesh leaf; buildroot docs/MESH-BACKHAUL-
-#       DESIGN.md §3.4 C0); feature wds 0 (the network key wds= stays refused);
+#       DESIGN.md §3.4 C0); feature wds (the network key wds=: 4-address clients);
 #       feature shared_vlan (several SSIDs on one VLAN, one bridge: -L).
 #
 # Network list (hostapd-like: key=value, the value is the rest of the line,
@@ -410,13 +410,18 @@
 #                                   in the hostapd configs changes, only
 #                                   the plan's kv line. Dropped with kv=1
 #                                   while KV=0 (-F feature steer)
-#     twt=0|1  wds=0|1              network level: refused (-F: feature
+#     twt=0|1                       network level: refused (-F: feature
 #                                   twt 0). TWT is radio-wide in hostapd
-#                                   (radio twt=, feature twt_responder); a
-#                                   network never takes 4-address (WDS)
-#                                   clients: the 4-address peer is the
-#                                   mesh leaf of the backhaul= block
-#                                   (feature wds 0, feature mesh 1)
+#                                   (radio twt=, feature twt_responder)
+#     wds=0|1                       1: 4-ADDRESS (WDS) CLIENTS (owner 11-23,
+#                                   -F feature wds 1): hostapd wds_sta=1 on
+#                                   the network's BSSes, each 4-address
+#                                   station an AP_VLAN (<bss>.sta<aid>) that
+#                                   hostapd puts into the network's bridge
+#                                   (wds_bridge=): the devices behind that
+#                                   client are on the network, like a port.
+#                                   vlan= networks only (not routed=,
+#                                   repeated=1, backhaul=). Default 0
 #     slot.<band>=K  mac.<band>=S   optional explicit sticky slot / BSSID
 #                                   index S = 1..7 (0: the anchor's)
 #     bssid.<band>=MAC              optional: this BSS's own address (default
@@ -676,7 +681,7 @@ features() {
 	feature led 1
 	feature bssid 1
 	feature twt 0
-	feature wds 0
+	feature wds 1
 	feature mesh 1
 	feature station 1
 	feature routed 1
@@ -1119,7 +1124,7 @@ FILENAME == slotsf {
 function newnet(v) {
 	nnet++; net[nnet] = v; nid[v] = nnet; ci = nnet
 	sec[ci] = ""; ssid[ci] = ""; pass[ci] = ""; vlan[ci] = ""; hid[ci] = 0; iso[ci] = 0; maxc[ci] = ""
-	nsch[ci] = ""
+	nsch[ci] = ""; wds[ci] = 0
 	aw[ci] = ""; alim[ci] = 0; nasw[ci] = 0
 	nb[ci] = 0; nra[ci] = 0
 	rs[ci] = ""; rp[ci] = ""; rk[ci] = ""; as[ci] = ""; ap[ci] = ""; ak[ci] = ""
@@ -1234,6 +1239,7 @@ cur == "n" {
 	# v is a substr() result, a STRING: "0" is non-empty and so TRUE in awk; store the number
 	else if (k == "hidden" && (v == "0" || v == "1")) hid[ci] = v + 0
 	else if (k == "isolate" && (v == "0" || v == "1")) iso[ci] = v + 0
+	else if (k == "wds" && (v == "0" || v == "1")) wds[ci] = v + 0
 	else if (k == "kv" && (v == "0" || v == "1")) kv[ci] = v + 0
 	else if (k == "wps" && (v == "0" || v == "1")) wps[ci] = v + 0
 	else if (k == "steer" && (v == "0" || v == "1")) steer[ci] = v + 0
@@ -1250,7 +1256,7 @@ cur == "n" {
 	# a custom address (checked in END): bssid= (one band) or bssid.<band>=
 	else if (k == "bssid" && parsemac(v, tmo)) cmac0[ci] = tolower(v)
 	else if (k ~ /^bssid\./ && validband(substr(k, 7)) && parsemac(v, tmo)) cmac[ci, substr(k, 7)] = tolower(v)
-	else if (k ~ /^(repeated|hidden|isolate|kv|wps|steer|max_clients|schedule|airtime_weight|airtime_limit|airtime_sta_weight|slot\.[0-9a-z]+|mac\.[0-9a-z]+|bssid|bssid\.[0-9a-z]+)$/) nerrf(ci, "network " net[ci] ": " k "=" v " refused")
+	else if (k ~ /^(repeated|hidden|isolate|wds|kv|wps|steer|max_clients|schedule|airtime_weight|airtime_limit|airtime_sta_weight|slot\.[0-9a-z]+|mac\.[0-9a-z]+|bssid|bssid\.[0-9a-z]+)$/) nerrf(ci, "network " net[ci] ": " k "=" v " refused")
 	else nerrf(ci, "network " net[ci] ": unknown key " k)	# never echo a value that may be a secret
 	next
 }
@@ -1327,6 +1333,8 @@ END {
 			else if (nb[i] == 1 && ((i, "6g") in hasb)) nerrf(i, tag ": wps=1 refused: the network is on 6 GHz only, which is WPA3-only (no WPS)")
 			if (hid[i]) nerrf(i, tag ": wps=1 refused with hidden=1 (hostapd turns WPS off on a hidden SSID)")
 		}
+		# 4-address clients: on a VLAN network only (header wds=)
+		if (wds[i] && (rep[i] || rtd[i] != "" || bh[i])) nerrf(i, tag ": wds=1 only on a vlan= network (its clients bridge into its bridge)")
 		if (rep[i]) {
 			if (nsta && sttrunk) nerrf(i, tag ": repeated=1 excludes the station trunk=1 (the mesh leaf carries every vlan= network over its trunk)")
 			if (vlan[i] != "" || rtd[i] != "") nerrf(i, tag ": repeated=1 excludes vlan= and routed= (the network is bridged to the Wi-Fi uplink)")
@@ -1870,6 +1878,8 @@ END {
 			print "auth_algs=1" > f
 			if (hid[i]) print "ignore_broadcast_ssid=1" > f
 			if (iso[i]) print "ap_isolate=1" > f
+			# 4-address clients: their AP_VLAN into the network bridge
+			if (wds[i] && !bh[i]) { print "wds_sta=1" > f; print "wds_bridge=" br > f }
 			if (maxc[i] != "") print "max_num_sta=" maxc[i] > f
 			# the mesh root backhaul BSS (header: backhaul=): Multi-AP
 			# backhaul BSS, one 4-address AP_VLAN per leaf, 8 leaves

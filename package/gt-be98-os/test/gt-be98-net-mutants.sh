@@ -27,7 +27,7 @@ mutant() {
 	if [ $r != 0 ]; then pass=$((pass + 1)); echo "ok   mutant killed: $1 ($(grep -c '^FAIL' "$T/out") failing checks in $4)"
 	else fail=$((fail + 1)); echo "FAIL mutant SURVIVED: $1 ($4 still green)"; fi
 }
-for t in gt-be98-net-test.sh gt-be98-addr-test.sh gt-be98-wifi-gen-test.sh gt-be98-wifi-service-test.sh gt-be98-netguard-test.sh gt-be98-lan-test.sh gt-be98-gw-test.sh; do
+for t in gt-be98-net-test.sh gt-be98-addr-test.sh gt-be98-wifi-sta-test.sh gt-be98-wifi-gen-test.sh gt-be98-wifi-service-test.sh gt-be98-netguard-test.sh gt-be98-lan-test.sh gt-be98-gw-test.sh; do
 	mutant "control" "" "" "$t"
 done
 # gt-be98-net: the network object
@@ -70,5 +70,24 @@ mutant "addr: a removed DHCP address keeps its client" sbin/gt-be98-addr 's/\tdh
 mutant "addr: a filter without a list (the image default broken)" sbin/gt-be98-addr 's/^\tif \[ -s "\$AD\/listed" \]; then$/\tif true; then/' gt-be98-addr-test.sh
 mutant "addr: the lease's router not routed" sbin/gt-be98-addr 's/\[ -z "\$gw" \] || ip route replace default via "\$gw" dev "\$d" metric "\$ADDR_METRIC"/:/' gt-be98-addr-test.sh
 mutant "addr: the gateway mgmt bridges left out of the filter" sbin/gt-be98-addr "s/\[ -x \"\\\$GWT\" \] \&\& /false \&\& /" gt-be98-addr-test.sh
+# services (gt-be98-addr): the rows, the DHCP rules, the filter, the at-least-one rule
+mutant "svc: a DHCP server on a DHCP address accepted" sbin/gt-be98-addr 's/\[ "\$(st_get "\$V_ADDR" mode)" = static \] ||/[ 1 ] ||/' gt-be98-addr-test.sh
+mutant "svc: two DHCP servers on one network" sbin/gt-be98-addr 's/\*" \$n "\*) V_WHY="network \$n has a DHCP server already/*" nothing "*) V_WHY="network $n has a DHCP server already/' gt-be98-addr-test.sh
+mutant "svc: a range outside the subnet accepted" sbin/gt-be98-addr 's/|| { V_WHY="the range \$V_START-\$V_END is not inside/|| true || { V_WHY="the range $V_START-$V_END is not inside/' gt-be98-addr-test.sh
+mutant "svc: a range holding the box's address accepted" sbin/gt-be98-addr 's/\[ "\$m" -lt "\$s" \] || \[ "\$m" -gt "\$e" \] ||/true ||/' gt-be98-addr-test.sh
+mutant "svc: the admin page on every address despite its rows" sbin/gt-be98-addr 's/^\t\tsvc_has admin || { \[ -z "\$l" \]/\t\ttrue \&\& { [ -z "$l" ]/' gt-be98-addr-test.sh
+mutant "svc: no enabled admin row closes the admin page (lock-out)" sbin/gt-be98-addr 's/^\t\tsvc_has admin || { \[ -z "\$l" \]/\t\ttrue || { [ -z "$l" ]/' gt-be98-addr-test.sh
+mutant "svc: SSH opened on the admin rows" sbin/gt-be98-addr 's/sd=\$(svc_ips ssh |/sd=$(svc_ips admin |/' gt-be98-addr-test.sh
+mutant "svc: a lease change leaves the filter stale" sbin/gt-be98-addr 's/^\tlock \&\& { nft_apply; unlock; }$/\t:/' gt-be98-addr-test.sh
+mutant "svc: the DHCP clients get no router (the AP's upstream)" sbin/gt-be98-addr 's/echo "dhcp-option=tag:s\$id,option:router,\$g"/:/' gt-be98-addr-test.sh
+mutant "svc: dnsmasq restarted on every apply" sbin/gt-be98-addr 's/if dnsmasq_running \&\& \[ "\$t" = "\$(cat "\$AD\/dnsmasq.conf" 2>\/dev\/null)" \]; then return 0; fi/:/' gt-be98-addr-test.sh
+mutant "svc: dnsmasq left running with no DHCP service" sbin/gt-be98-addr 's/^\t\tdnsmasq_stop; return 0$/\t\treturn 0/' gt-be98-addr-test.sh
+# 4-address (WDS) clients and the client Wi-Fi's bridging witness
+mutant "wds: wds=1 renders no wds_sta" sbin/gt-be98-wifi-gen 's/print "wds_sta=1" > f; print "wds_bridge=" br > f/print "wds_bridge=" br > f/' gt-be98-wifi-gen-test.sh
+mutant "wds: the AP_VLAN into the SSID's own bridge, not the network's" sbin/gt-be98-wifi-gen 's/print "wds_bridge=" br > f }/print "wds_bridge=brwifi" net[i] > f }/' gt-be98-wifi-gen-test.sh
+mutant "wds: on a routed network accepted" sbin/gt-be98-wifi-gen 's/if (wds\[i\] \&\& (rep\[i\] || rtd\[i\] != "" || bh\[i\]))/if (0)/' gt-be98-wifi-gen-test.sh
+mutant "sta: bridged yes on own-address frames only" sbin/gt-be98-wifi-sta 's/elif \[ "\$foreign" != - \] \&\& \[ "\$foreign" -gt 0 \]; then v=yes/elif [ "$own" != - ] \&\& [ "$own" -gt 0 ]; then v=yes/' gt-be98-wifi-sta-test.sh
+mutant "sta: a 3-address station reported bridged" sbin/gt-be98-wifi-sta 's/elif \[ "\$mode" = 3addr \]; then v=no/elif [ "$mode" = 3addr ]; then v=yes/' gt-be98-wifi-sta-test.sh
+mutant "sta: the witness never loaded" sbin/gt-be98-wifi-sta 's/^\t\twitness_on "\$d"$/\t\t:/' gt-be98-wifi-sta-test.sh
 echo "gt-be98-net-mutants: $pass ok, $fail failed"
 [ $fail -eq 0 ]

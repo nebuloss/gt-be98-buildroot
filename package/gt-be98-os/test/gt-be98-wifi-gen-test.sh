@@ -246,6 +246,15 @@ check "... ap_isolate on b's BSS only" "no yes" "$(grep -qx ap_isolate=1 "$T/o/s
 { net 1 a sae short 2g 5; net 2 b sae password2 2g 5; } > "$T/r"
 gen "$T/r" -N -S; check "-S first SSID of the VLAN skipped: the second runs in its own brwifi2" "0 net 2 brwifi2 5 0|" "$? $(sh_net)"
 gen "$T/r" -N -S -L "$T/objs"; check "-S with -L: the second runs in the network bridge" "0 net 2 brwifi100007 5 0|" "$? $(sh_net)"
+# 4-address (WDS) clients (owner 11-23): wds=1 -> wds_sta=1 + wds_bridge=<the network bridge>
+{ net 1 a sae password1 "2g 5gl" 5; echo wds=1; net 2 b sae password2 2g 5; } > "$T/r"
+gen "$T/r" -N -L "$T/objs"; check "wds=1: accepted" 0 $?
+check "... wds_sta=1 + wds_bridge=brwifi100007 on a's BSSes, none on b's" "yes yes yes yes no no" \
+	"$(has bcawl3 wds_sta=1) $(has bcawl3 wds_bridge=brwifi100007) $(has bcawl0 wds_sta=1) $(has bcawl0 wds_bridge=brwifi100007) $(has bcawl3-1 wds_sta=1) $(has bcawl3-1 wds_bridge=brwifi100007)"
+conf_ok "wds=1"
+{ net 1 a sae password1 2g 5; echo wds=2; } > "$T/r"; gen "$T/r" -N; check "wds=2 refused" 1 $?
+{ printf 'station=5gl\nssid=up\nsecurity=sae\npassphrase=password9\nnetwork=1\nssid=a\nsecurity=sae\npassphrase=password1\nbands=2g\nrouted=192.168.50.1/24\nwds=1\n'; } > "$T/r"
+gen "$T/r" -N; check "wds=1 on a routed network refused" "1 yes" "$? $(grep -q 'wds=1 only on a vlan= network' "$T/err" && echo yes || echo no)"
 check "-F says shared_vlan 1" 1 "$($SH "$G" -F | awk '$1 == "feature" && $2 == "shared_vlan" { print $3 }')"
 { net 1 a sae password1 2g 5; net 2 a sae password2 2g 6; } > "$T/r"; refuse "one SSID twice" "$T/r"
 net 1 a sae short 2g 5 > "$T/r"; refuse "passphrase < 8" "$T/r"
@@ -1097,8 +1106,8 @@ mv "$T/slots.keep0" "$T/slots.keep"
 
 # ---- 11. -F: what the generator supports ----
 check "-F: exit 0 without -n/-o" 0 "$($SH "$G" -F > "$T/feat" 2>&1; echo $?)"
-check "-F: schedule and max_clients on, 6g up to 320 MHz, twt/wds not yet" \
-	"feature schedule 1|feature max_clients 1|width 6g 20 40 80 160 320|width 5gl 20 40 80 160|feature twt 0|feature wds 0|feature width320 1" \
+check "-F: schedule and max_clients on, 6g up to 320 MHz, twt not yet, wds on" \
+	"feature schedule 1|feature max_clients 1|width 6g 20 40 80 160 320|width 5gl 20 40 80 160|feature twt 0|feature wds 1|feature width320 1" \
 	"$(for k in 'feature schedule ' 'feature max_clients ' 'width 6g ' 'width 5gl ' 'feature twt ' 'feature wds ' 'feature width320 '; do grep "^$k" "$T/feat"; done | tr '\n' '|' | sed 's/|$//')"
 check "-F: the radio features he, eht, twt_responder, zwdfs, monitor, led" \
 	"feature he 1|feature eht 1|feature twt_responder 1|feature zwdfs 1|feature monitor 1|feature led 1|" \
@@ -1557,7 +1566,7 @@ stref "repeater bad value" "repeater=yes refused (0, 4addr or multiap)" station=
 stref "repeated=2" "network 1: repeated=2 refused" station=2g repeater=4addr $(nl "$N1") repeated=2
 
 # ---- 14. mesh (design §3.4 C0-C2, §8.2): the root's backhaul= BSS and the leaf's station trunk=1 ----
-check "-F: feature mesh 1, feature wds 0 (wds= stays refused)" "feature wds 0|feature mesh 1" "$(grep -E '^feature (wds|mesh) ' "$T/feat" | tr '\n' '|' | sed 's/|$//')"
+check "-F: feature mesh 1, feature wds 1 (wds=: 4-address clients, owner 11-23)" "feature wds 1|feature mesh 1" "$(grep -E '^feature (wds|mesh) ' "$T/feat" | tr '\n' '|' | sed 's/|$//')"
 BH='backhaul=5gl|ssid=mesh-bh|passphrase=SECRETpass1|leaf=02:00:00:00:00:0A'
 rm -f "$T/slots"
 { net 1 a sae password1 "2g 5gl" 1; nl "$BH"; } > "$T/bh1"

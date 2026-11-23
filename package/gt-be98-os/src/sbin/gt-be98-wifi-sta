@@ -22,6 +22,24 @@
 #                                   and policy routing out of the station
 #   gt-be98-wifi-sta unroute        all of that undone
 #   gt-be98-wifi-sta status         one line per station
+#   gt-be98-wifi-sta bridged DEV    the CLIENT Wi-Fi's bridging (owner 11-23):
+#                                   "bridged yes|no|unproven mode=<3addr|
+#                                   4addr|multiap> bridge=<br|-> own=<n>
+#                                   foreign=<n> why=<text>". yes: multiap
+#                                   associated (wpa_supplicant completes a
+#                                   Multi-AP backhaul STA join only with an
+#                                   AP that offers a backhaul BSS), or 4addr
+#                                   with at least one unicast frame for
+#                                   ANOTHER address than the station's
+#                                   received (a 3-address AP can only send
+#                                   the station its own: the witness,
+#                                   table bridge gt_be98_sta_w); unproven:
+#                                   4addr, associated, no such frame yet;
+#                                   no: 3-address (never a bridge port), or
+#                                   not associated. Not bridged: only this
+#                                   box's own addresses on the network can
+#                                   use the link (and only once they ride
+#                                   the station itself: DESIGN section 9)
 #   gt-be98-wifi-sta repeater DEV   the station's repeater mode and bridge
 #                                   ("4addr|multiap <bridge or ->", from the
 #                                   plan; nothing, exit 1: not a repeater)
@@ -153,12 +171,48 @@ rep_apply() {
 		case "$br" in brwifi[0-9]*) ;; *) return 0 ;; esac
 		[ -d "$SYSNET/$br/bridge" ] || { log "$d: repeater bridge $br missing"; return 1; }
 		ip link set dev "$d" master "$br" || { log "$d: not bridged into $br"; return 1; }
+		witness_on "$d"
 		log "$d: repeater (${r%% *}): 4-address mode, port of $br"
 	else
 		[ -n "$m" ] && ip link set dev "$d" nomaster
 		[ "$(rep_have "$d")" = off ] || iw dev "$d" set 4addr off
+		witness_off "$d"
 	fi
 	return 0
+}
+
+# the bridging witness of station $1 (bridged, header): two counters on the
+# frames it delivers into its bridge, unicast to its own address and unicast
+# to any other (only a 4-address AP sends those)
+W_TABLE=gt_be98_sta_w
+witness_on() {
+	local d=$1 mac
+	mac=$(cat "$SYSNET/$d/address" 2>/dev/null) || return 0
+	printf 'table bridge %s {}\ndelete table bridge %s\ntable bridge %s {\n\tchain pre {\n\t\ttype filter hook prerouting priority -300; policy accept;\n\t\tiifname "%s" ether daddr %s counter\n\t\tiifname "%s" ether daddr != %s ether daddr & 01:00:00:00:00:00 == 00:00:00:00:00:00 counter\n\t}\n}\n' \
+		"$W_TABLE" "$W_TABLE" "$W_TABLE" "$d" "$mac" "$d" "$mac" | nft -f - 2>/dev/null ||
+		log "$d: the bridging witness was not loaded (bridged stays unproven)"
+}
+witness_off() { nft list table bridge "$W_TABLE" > /dev/null 2>&1 && nft delete table bridge "$W_TABLE"; return 0; }
+# the two counters: "own foreign" (packets), "- -" without the table
+witness_read() {
+	nft list table bridge "$W_TABLE" 2>/dev/null | awk -v d="\"$1\"" '
+		$0 ~ "iifname " d && /counter packets/ {
+			for (i = 1; i < NF; i++) if ($i == "packets") n = $(i + 1)
+			if ($0 ~ /daddr !=/) f = n; else o = n
+		}
+		END { printf "%s %s\n", (o == "" ? "-" : o), (f == "" ? "-" : f) }'
+}
+bridged() {
+	local d=$1 r mode=3addr br=- st w own foreign v why
+	if r=$(repeater "$d"); then mode=${r%% *}; br=${r#* }; fi
+	st=$(wcli "$d" status | sed -n 's/^wpa_state=//p')
+	w=$(witness_read "$d"); own=${w% *}; foreign=${w#* }
+	if [ "$st" != COMPLETED ]; then v=no why="not associated (${st:-no supplicant})"
+	elif [ "$mode" = 3addr ]; then v=no why="a 3-address station is never a bridge port"
+	elif [ "$mode" = multiap ]; then v=yes why="Multi-AP backhaul association completed"
+	elif [ "$foreign" != - ] && [ "$foreign" -gt 0 ]; then v=yes why="4-address frames for other addresses received"
+	else v=unproven why="4-address on, no frame for another address yet"; fi
+	echo "bridged $v mode=$mode bridge=$br own=$own foreign=$foreign why=$why"
 }
 
 # the frequency the station is associated on
@@ -518,6 +572,7 @@ route)	route ;;
 unroute) unroute ;;
 status)	status ;;
 repeater) [ $# = 1 ] || die "repeater DEV"; need_dev "$1"; repeater "$1" ;;
+bridged) [ $# = 1 ] || die "bridged DEV"; need_dev "$1"; bridged "$1" ;;
 monitor) monitor ;;
 *)	sed -n '/^#   gt-be98-wifi-sta up/,/^#   (no argument/p' "$0" | sed 's/^# \{0,1\}//' >&2; exit 2 ;;
 esac

@@ -20,8 +20,33 @@
 #   gt-be98-addr addrs    "addr <id> inet <ip> <dev>" per address in
 #                         force (the web UI's listener binds exactly these;
 #                         cheap: own files only)
+#   gt-be98-addr svc-status  "svc <id> <type> address=<id> <on|off|refused|
+#                         waiting|ui> why=<text>" per service
+#   gt-be98-addr addrs admin|ssh  the addresses the admin page / SSH answer on
+#                         (the web UI's listener binds the admin ones)
+#   gt-be98-addr refresh  the filter rebuilt (a DHCP lease changed)
 #   gt-be98-addr nft-text the filter of the current state (tests)
-#   gt-be98-addr features "features addresses"
+#   gt-be98-addr dnsmasq-text  the DHCP servers' dnsmasq config (tests)
+#   gt-be98-addr features "features addresses services"
+#
+# SERVICES (owner 11-23, approved 11-23): a service = a type + ONE address
+# (its id) + on/off; it runs on that address's network. The list
+# (/etc/gt-be98-services.conf, the web UI's; parsed, never sourced):
+#   service=<id> type=dhcp|admin|ssh|radius|portal address=<id> enabled=0|1
+#     [start=<ip> end=<ip> lease=<n>m|<n>h|<n>d]     (dhcp only)
+# NO SERVICE LIST: admin and SSH on every address (as before). A LIST: the
+# admin page (80, 443) and SSH (22) answer on the addresses of their enabled
+# rows only (by destination address), and when no admin row is enabled the
+# admin page answers on every address all the same (logged: the box is never
+# left without one; the web UI refuses it first). DHCP SERVER: hands out the
+# range of its row on the address's network: the address must be STATIC
+# (its subnet holds the range, which excludes the address, the network and
+# the broadcast), one DHCP server per network; the clients' router and DNS
+# server are the address's gateway= when it has one (the upstream router of
+# an access point), else none. One dnsmasq for every DHCP server (port=0: no
+# DNS; bind-interfaces on their bridges; leases in $AD, volatile). radius and
+# portal rows are the web UI's (its RADIUS server and captive portal bind
+# them): state "ui" here.
 #   (no argument, dhcpcd's environment: the DHCP client's script)
 #
 # The list (/etc/gt-be98-addresses.conf, written by the web UI next to the
@@ -62,6 +87,7 @@ set -u
 RUNDIR=${GT_BE98_RUN:-/run}
 AD=${GT_BE98_ADDR_STATE:-$RUNDIR/gt-be98-addr}
 ADDRS=${GT_BE98_ADDRESSES:-/etc/gt-be98-addresses.conf}
+SVCS=${GT_BE98_SERVICES:-/etc/gt-be98-services.conf}
 NETWORKS=${GT_BE98_NETWORKS:-/etc/gt-be98-networks.conf}
 NETT=${GT_BE98_NET:-/usr/sbin/gt-be98-net}
 GWT=${GT_BE98_GW:-/usr/sbin/gt-be98-gw}
@@ -247,7 +273,10 @@ dhcp_event() {
 		rm -f "$AD/$d.lease"
 		ip route del default dev "$d" metric "$ADDR_METRIC" 2>/dev/null
 		log "$d: no lease (${reason})" ;;
+	*)	exit 0 ;;
 	esac
+	# the services filter names addresses: a lease change rebuilds it
+	lock && { nft_apply; unlock; }
 	exit 0
 }
 
@@ -263,6 +292,179 @@ addr_stop() {	# id
 	st_set "$1" "set -" "route -" "state refused"
 }
 
+# ---- services (header) ----
+sv_get() { sed -n "s/^$2 //p" "$AD/svc/$1" 2>/dev/null | head -n1; }
+sv_set() {
+	local f="$AD/svc/$1" kv k
+	shift
+	[ -f "$f" ] || : > "$f"
+	for kv in "$@"; do
+		k=${kv%% *}
+		{ grep -v "^$k " "$f"; echo "$kv"; } > "$f.new" && mv -f "$f.new" "$f"
+	done
+}
+# the IP of address $1 in force ("" none: not up, no lease yet)
+addr_ip() {
+	local d c
+	[ "$(st_get "$1" state)" = up ] || return 1
+	d=$(st_get "$1" dev)
+	case "$(st_get "$1" mode)" in
+	static) c=$(st_get "$1" set) ;;
+	dhcp)	if [ "$d" = "$MGMT_DEV" ]; then
+			c=$(ip -4 -o addr show dev "$d" 2>/dev/null | awk '{ for (i = 1; i < NF; i++) if ($i == "inet") { print $(i + 1); exit } }')
+		else c=$(cat "$AD/$d.lease" 2>/dev/null); fi ;;
+	esac
+	[ -n "$c" ] && [ "$c" != - ] || return 1
+	echo "${c%/*}"
+}
+# a lease time: <n>m (2..525600 minutes in all), <n>h, <n>d
+lease_ok() {
+	local n=${1%[mhd]} u=${1#"${1%[mhd]}"} m
+	case "$n" in ''|0*|*[!0-9]*) return 1 ;; esac
+	[ ${#n} -le 6 ] || return 1
+	case "$u" in m) m=$n ;; h) m=$((n * 60)) ;; d) m=$((n * 1440)) ;; *) return 1 ;; esac
+	[ "$m" -ge 2 ] && [ "$m" -le 525600 ]
+}
+# init of service line $1 into V_ID V_TYPE V_ADDR V_EN V_START V_END V_LEASE
+# V_WHY ("" ok); rc 1 = no object
+svc_init() {
+	local w n s e a m
+	V_ID= V_TYPE= V_ADDR= V_EN=1 V_START= V_END= V_LEASE=12h V_WHY=
+	set -f
+	# shellcheck disable=SC2086 # word split, no glob
+	for w in $1; do
+		case "$w" in service=*) V_ID=${w#service=} ;; type=*) V_TYPE=${w#type=} ;; address=*) V_ADDR=${w#address=} ;;
+		enabled=*) V_EN=${w#enabled=} ;; start=*) V_START=${w#start=} ;; end=*) V_END=${w#end=} ;; lease=*) V_LEASE=${w#lease=} ;; esac
+	done
+	set +f
+	case "$V_ID" in ''|0*|*[!0-9]*) V_WHY="service id '$V_ID' refused (1..9999)"; return 1 ;; esac
+	[ ${#V_ID} -le 4 ] || { V_WHY="service id $V_ID refused (1..9999)"; return 1; }
+	case " $SVSEEN " in *" $V_ID "*) V_WHY="service $V_ID listed twice (the first line wins)"; return 1 ;; esac
+	SVSEEN="$SVSEEN $V_ID"
+	case "$V_EN" in 0|1) ;; *) V_WHY="enabled='$V_EN' refused (0 or 1)"; return 0 ;; esac
+	case "$V_TYPE" in dhcp|admin|ssh|radius|portal) ;; *) V_WHY="type '$V_TYPE' refused (dhcp, admin, ssh, radius, portal)"; return 0 ;; esac
+	[ -f "$AD/addr/$V_ADDR" ] || { V_WHY="address '$V_ADDR' is not in the address list"; return 0; }
+	[ "$V_TYPE" = dhcp ] || return 0
+	[ "$V_EN" = 1 ] || return 0
+	[ "$(st_get "$V_ADDR" mode)" = static ] || { V_WHY="a DHCP server needs a STATIC address (address $V_ADDR is $(st_get "$V_ADDR" mode))"; return 0; }
+	n=$(st_get "$V_ADDR" net)
+	case " $SVDHCP " in *" $n "*) V_WHY="network $n has a DHCP server already (one per network)"; return 0 ;; esac
+	a=$(st_get "$V_ADDR" cidr)
+	cidr_ok "$a" || { V_WHY="address $V_ADDR has no usable subnet"; return 0; }
+	s=$(ip2n "$V_START") && e=$(ip2n "$V_END") || { V_WHY="start= and end= (A.B.C.D) are required"; return 0; }
+	m=$(ip2n "${a%/*}")
+	[ $(( s & ~(CSZ - 1) & 0xffffffff )) = "$CNET" ] && [ $(( e & ~(CSZ - 1) & 0xffffffff )) = "$CNET" ] || { V_WHY="the range $V_START-$V_END is not inside ${a%/*}'s subnet"; return 0; }
+	[ "$s" -le "$e" ] || { V_WHY="the range starts after its end"; return 0; }
+	[ "$s" -gt "$CNET" ] && [ "$e" -lt $(( CNET + CSZ - 1 )) ] || { V_WHY="the range holds the subnet's network or broadcast address"; return 0; }
+	[ "$m" -lt "$s" ] || [ "$m" -gt "$e" ] || { V_WHY="the range holds the box's own address ${a%/*}"; return 0; }
+	lease_ok "$V_LEASE" || { V_WHY="lease '$V_LEASE' refused (2m .. 365d: <n>m, <n>h, <n>d)"; return 0; }
+	V_MASK=$(( (0xffffffff << (32 - ${a#*/})) & 0xffffffff ))
+	V_MASK="$(( V_MASK >> 24 )).$(( (V_MASK >> 16) & 255 )).$(( (V_MASK >> 8) & 255 )).$(( V_MASK & 255 ))"
+	SVDHCP="$SVDHCP $n"
+	return 0
+}
+svc_apply() {
+	local l f id want= s r
+	SVSEEN= SVDHCP=
+	mkdir -p "$AD/svc"
+	: > "$AD/svclisted.new"
+	if [ -r "$SVCS" ]; then
+		while IFS= read -r l || [ -n "$l" ]; do
+			case "$l" in ''|'#'*|[[:space:]]*'#'*) continue ;; esac
+			svc_init "$l" || { log "service line refused: $V_WHY"; continue; }
+			want="$want $V_ID"; echo "$V_ID" >> "$AD/svclisted.new"
+			if [ -n "$V_WHY" ]; then
+				[ "$(sv_get "$V_ID" why)" = "$V_WHY" ] || log "service $V_ID: refused: $V_WHY"
+				sv_set "$V_ID" "type ${V_TYPE:--}" "address ${V_ADDR:--}" "state refused" "why $V_WHY" "range -"
+				continue
+			fi
+			s=off
+			if [ "$V_EN" = 1 ]; then
+				case "$V_TYPE" in
+				radius|portal) s=ui ;;
+				*) s=on; [ "$(st_get "$V_ADDR" state)" = up ] || s=waiting ;;
+				esac
+			fi
+			r=-
+			[ "$V_TYPE" = dhcp ] && [ "$V_EN" = 1 ] && r="$V_START,$V_END,$V_MASK,$V_LEASE"
+			sv_set "$V_ID" "type $V_TYPE" "address $V_ADDR" "state $s" "why -" "range $r"
+		done < "$SVCS"
+	fi
+	mv -f "$AD/svclisted.new" "$AD/svclisted"
+	for f in "$AD"/svc/*; do
+		[ -f "$f" ] || continue
+		id=${f##*/}; case "$id" in *.new) continue ;; esac
+		case " $want " in *" $id "*) continue ;; esac
+		rm -f "$f"; log "service $id: removed"
+	done
+	dnsmasq_apply
+}
+# the addresses (IPs) of the enabled rows of type $1 (admin, ssh), one per line
+svc_ips() {
+	local f id
+	for f in "$AD"/svc/*; do
+		[ -f "$f" ] || continue
+		id=${f##*/}
+		[ "$(sv_get "$id" type)" = "$1" ] || continue
+		case "$(sv_get "$id" state)" in on|waiting) addr_ip "$(sv_get "$id" address)" ;; esac
+	done
+}
+svc_listed() { [ -s "$AD/svclisted" ]; }
+# rows of type $1 enabled and not refused?
+svc_has() {
+	local f
+	for f in "$AD"/svc/*; do
+		[ -f "$f" ] || continue
+		[ "$(sv_get "${f##*/}" type)" = "$1" ] || continue
+		case "$(sv_get "${f##*/}" state)" in on|waiting) return 0 ;; esac
+	done
+	return 1
+}
+dnsmasq_text() {
+	local f id a d r g
+	echo "# generated by gt-be98-addr: the DHCP servers (services of type dhcp)"
+	echo "port=0"
+	echo "bind-interfaces"
+	echo "except-interface=lo"
+	echo "dhcp-authoritative"
+	echo "dhcp-leasefile=$AD/leases"
+	echo "pid-file=$AD/dnsmasq.pid"
+	for f in "$AD"/svc/*; do
+		[ -f "$f" ] || continue
+		id=${f##*/}
+		[ "$(sv_get "$id" type)" = dhcp ] && [ "$(sv_get "$id" state)" = on ] || continue
+		a=$(sv_get "$id" address); d=$(st_get "$a" dev); r=$(sv_get "$id" range)
+		echo "interface=$d"
+		echo "dhcp-range=set:s$id,$r"
+		g=$(sed -n 's/^route //p' "$AD/addr/$a" 2>/dev/null)
+		if [ -n "$g" ] && [ "$g" != - ]; then
+			echo "dhcp-option=tag:s$id,option:router,$g"
+			echo "dhcp-option=tag:s$id,option:dns-server,$g"
+		else
+			echo "dhcp-option=tag:s$id,3"
+			echo "dhcp-option=tag:s$id,6"
+		fi
+	done
+}
+dnsmasq_running() { [ -f "$AD/dnsmasq.pid" ] && kill -0 "$(cat "$AD/dnsmasq.pid")" 2>/dev/null; }
+dnsmasq_stop() {
+	dnsmasq_running && kill "$(cat "$AD/dnsmasq.pid")" 2>/dev/null
+	rm -f "$AD/dnsmasq.pid" "$AD/dnsmasq.conf"
+}
+dnsmasq_apply() {
+	local t
+	t=$(dnsmasq_text)
+	if ! echo "$t" | grep -q '^dhcp-range='; then
+		dnsmasq_running && log "no DHCP server left: dnsmasq stopped"
+		dnsmasq_stop; return 0
+	fi
+	if dnsmasq_running && [ "$t" = "$(cat "$AD/dnsmasq.conf" 2>/dev/null)" ]; then return 0; fi
+	dnsmasq_stop
+	echo "$t" > "$AD/dnsmasq.conf"
+	dnsmasq --conf-file="$AD/dnsmasq.conf" || { log "dnsmasq did not start: no DHCP server runs"; return 1; }
+	log "DHCP servers: dnsmasq (re)started ($(grep -c '^dhcp-range=' "$AD/dnsmasq.conf") range(s))"
+}
+
 # the filter (header), from the state: the management devices
 mgmt_devs() {
 	local f id
@@ -275,7 +477,7 @@ mgmt_devs() {
 	[ -x "$GWT" ] && "$GWT" mgmt-addrs 2>/dev/null | awk '$1 == "mgmt" && $5 != "" { print $5 }'
 }
 nft_text() {
-	local d l=
+	local d l= ad sd g
 	for d in $(mgmt_devs | sort -u); do l="${l:+$l, }\"$d\""; done
 	echo "table inet $NFT_TABLE {}"
 	echo "delete table inet $NFT_TABLE"
@@ -286,13 +488,25 @@ nft_text() {
 	echo "		iifname \"usb*\" accept"
 	echo "		iifname \"enx*\" accept"
 	echo "		iifname \"bhm0\" accept"
-	[ -z "$l" ] || echo "		iifname { $l } tcp dport { $MGMT_PORTS } accept"
+	if svc_listed; then
+		# services (header): the admin page and SSH on their rows' addresses
+		ad=$(svc_ips admin | sort -u | tr '\n' ' '); sd=$(svc_ips ssh | sort -u | tr '\n' ' ')
+		[ -n "$ad" ] && echo "		ip daddr { $(echo $ad | sed 's/ /, /g') } tcp dport { 80, 443 } accept"
+		[ -n "$sd" ] && echo "		ip daddr { $(echo $sd | sed 's/ /, /g') } tcp dport 22 accept"
+		# no enabled admin row: the admin page on every address all the same
+		svc_has admin || { [ -z "$l" ] || echo "		iifname { $l } tcp dport { 80, 443 } accept"; }
+		# the gateway networks' management (mgmt=1) is theirs, not a row's
+		g=$([ -x "$GWT" ] && "$GWT" mgmt-addrs 2>/dev/null | awk '$1 == "mgmt" && $5 != "" { print "\"" $5 "\"" }' | sort -u | tr '\n' ',' | sed 's/,$//; s/,/, /g')
+		[ -z "$g" ] || echo "		iifname { $g } tcp dport { $MGMT_PORTS } accept"
+	else
+		[ -z "$l" ] || echo "		iifname { $l } tcp dport { $MGMT_PORTS } accept"
+	fi
 	echo "		tcp dport { $MGMT_PORTS } counter drop"
 	echo "	}"
 	echo "}"
 }
 nft_apply() {
-	if [ -s "$AD/listed" ]; then
+	if [ -s "$AD/listed" ] || svc_listed; then
 		nft_text > "$AD/nft.new" && nft -c -f "$AD/nft.new" && nft -f "$AD/nft.new" ||
 			{ log "the management filter was rejected: the previous one stays"; return 1; }
 		echo nft > "$AD/applied"
@@ -339,6 +553,8 @@ cmd_apply() {
 		case " $want " in *" $id "*) continue ;; esac
 		addr_stop "$id"; rm -f "$f"; log "address $id: removed"
 	done
+	svc_apply || rc=1
+	svc_has admin || ! svc_listed || log "no enabled admin service: the admin page answers on every address"
 	nft_apply || rc=1
 	return $rc
 }
@@ -346,6 +562,7 @@ cmd_apply() {
 cmd_stop() {
 	local f
 	for f in "$AD"/addr/*; do [ -f "$f" ] && { addr_stop "${f##*/}"; rm -f "$f"; }; done
+	rm -f "$AD"/svc/*; : > "$AD/svclisted"; dnsmasq_stop
 	: > "$AD/listed"; nft_apply
 	return 0
 }
@@ -362,7 +579,12 @@ cmd_status() {
 # the addresses in force (header): static = the one set, DHCP = the lease's,
 # Default = the untagged trunk's own (read at most one fork)
 cmd_addrs() {
-	local f id d c
+	local f id d c ips
+	# addrs admin|ssh: the addresses of that service (header); every address
+	# while no service list (or no enabled admin row: admin everywhere)
+	if [ -n "${1:-}" ] && svc_listed && { [ "$1" = ssh ] || svc_has admin; }; then
+		ips=" $(svc_ips "$1" | tr '\n' ' ') "
+	fi
 	for f in "$AD"/addr/*; do
 		[ -f "$f" ] || continue
 		id=${f##*/}
@@ -374,7 +596,17 @@ cmd_addrs() {
 				c=$(ip -4 -o addr show dev "$d" 2>/dev/null | awk '{ for (i = 1; i < NF; i++) if ($i == "inet") { print $(i + 1); exit } }')
 			else c=$(cat "$AD/$d.lease" 2>/dev/null); fi ;;
 		esac
-		[ -n "$c" ] && [ "$c" != - ] && echo "addr $id inet ${c%/*} $d"
+		[ -n "$c" ] && [ "$c" != - ] || continue
+		case "${ips:-all}" in all|*" ${c%/*} "*) echo "addr $id inet ${c%/*} $d" ;; esac
+	done
+}
+
+cmd_svc_status() {
+	local f id
+	for f in "$AD"/svc/*; do
+		[ -f "$f" ] || continue
+		id=${f##*/}
+		echo "svc $id $(sv_get "$id" type) address=$(sv_get "$id" address) $(sv_get "$id" state) why=$(sv_get "$id" why)"
 	done
 }
 
@@ -384,8 +616,11 @@ case "$c" in
 apply)	lock || exit 1; cmd_apply; r=$?; unlock; exit $r ;;
 stop)	lock || exit 1; cmd_stop; r=$?; unlock; exit $r ;;
 status)	cmd_status ;;
-addrs)	cmd_addrs ;;
+addrs)	cmd_addrs "${1:-}" ;;
+svc-status) cmd_svc_status ;;
+refresh) lock || exit 1; nft_apply; r=$?; unlock; exit $r ;;
 nft-text) nft_text ;;
-features) echo "features addresses" ;;
-*)	log "usage: apply|stop|status|addrs|nft-text|features"; exit 2 ;;
+dnsmasq-text) dnsmasq_text ;;
+features) echo "features addresses services" ;;
+*)	log "usage: apply|stop|status|addrs [admin|ssh]|svc-status|refresh|nft-text|dnsmasq-text|features"; exit 2 ;;
 esac

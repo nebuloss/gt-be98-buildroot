@@ -12,7 +12,7 @@ here=$(cd "$(dirname "$0")" && pwd)
 AT="$here/../src/sbin/gt-be98-addr"
 T=$(mktemp -d)
 trap 'for f in "$T"/run/gt-be98-addr/*.dhcp.pid; do [ -f "$f" ] && kill "$(cat "$f")" 2>/dev/null; done; rm -rf "$T"' EXIT
-export FAKE="$T" GT_BE98_RUN="$T/run" GT_BE98_ADDRESSES="$T/addresses.conf" GT_BE98_NETWORKS="$T/networks.conf" \
+export FAKE="$T" GT_BE98_RUN="$T/run" GT_BE98_ADDRESSES="$T/addresses.conf" GT_BE98_SERVICES="$T/services.conf" GT_BE98_NETWORKS="$T/networks.conf" \
 	GT_BE98_NET="$T/bin/net" GT_BE98_GW="$T/bin/gw" GT_BE98_SYSNET="$T/sys" GT_BE98_DHCPCD=/sbin/dhcpcd
 mkdir -p "$T/bin" "$T/run" "$T/sys/rnr0" "$T/sys/brwifi100003" "$T/sys/brwifi100005"
 : > "$T/addrs"; : > "$T/routes"
@@ -49,6 +49,15 @@ X
 printf '#!/bin/sh\n[ "$1" = bridge ] || exit 2\ncase "$2" in 930) echo brwifi100003 ;; 940) echo brwifi100004 ;; 950) echo brwifi100005 ;; 960) echo brwifi100006 ;; *) exit 1 ;; esac\n' > "$T/bin/net"
 printf '#!/bin/sh\n[ "$1" = mgmt-addrs ] && cat "$FAKE/gwmgmt" 2>/dev/null\nexit 0\n' > "$T/bin/gw"
 printf '#!/bin/sh\nexit 0\n' > "$T/bin/logger"
+# dnsmasq: a sleeper writing the pid file its config names (as the gw test's)
+cat > "$T/bin/dnsmasq" <<'X'
+#!/bin/sh
+echo "dnsmasq $*" >> "$FAKE/log"
+c=${1#--conf-file=}
+sleep 300 &
+echo $! > "$(sed -n 's/^pid-file=//p' "$c")"
+exit 0
+X
 chmod +x "$T/bin/"*
 PATH="$T/bin:$PATH"
 pass=0 fail=0
@@ -65,7 +74,7 @@ X
 
 # 1. no list: a clean no-op (the image's management, no filter)
 A apply; check "no list: rc 0, no ip/nft call, no filter" "0 0" "$? $(grep -c '^ip \|^nft ' "$T/log")"
-check "features" "features addresses" "$(sh "$AT" features)"
+check "features" "features addresses services" "$(sh "$AT" features)"
 # 2. a static address and a DHCP one; Default by DHCP (the image's client); refusals
 # address ids: 13 = network 3 static, 15 = network 5 DHCP, 11 = Default, 14 =
 # a gateway network, 19 = no such network, 13 twice, 16 = no bridge yet, 23 =
@@ -137,5 +146,74 @@ printf 'address=0 network=5 mode=dhcp\naddress=10000 network=5 mode=dhcp\n' > "$
 printf 'address=1 network=3 mode=static cidr=10.3.0.9/16\naddress=2 network=1 mode=dhcp\n' > "$T/addresses.conf"; A apply; cp "$f" "$T/prev.nft"
 GT_BE98_ADDR_MGMT_DEV=REFUSE A apply; check "a filter nft refuses: rc 1, the previous one kept" "1 same" "$? $(cmp -s "$f" "$T/prev.nft" && echo same || echo changed)"
 A stop; check "stop: addresses removed, filter deleted, status empty" "no yes " "$(grep -q 10.3.0.9 "$T/addrs" && echo yes || echo no) $(grep -q 'nft delete table' "$T/log" && echo yes || echo no) $(sh "$AT" status)"
+# 8. SERVICES (owner 11-23): a type + one address; DHCP needs a static address
+mkdir -p "$T/sys/rnr0"
+cat > "$T/addresses.conf" <<'X'
+address=1 network=3 mode=static cidr=10.43.0.2/24 gateway=10.43.0.1
+address=2 network=5 mode=static cidr=10.55.0.2/24
+address=3 network=1 mode=dhcp
+address=4 network=5 mode=dhcp
+X
+grep -q '^rnr0 10.9.0.5/24' "$T/addrs" || echo "rnr0 10.9.0.5/24" >> "$T/addrs"
+cat > "$T/services.conf" <<'X'
+service=1 type=admin address=1 enabled=1
+service=2 type=ssh address=3 enabled=1
+service=3 type=dhcp address=1 enabled=1 start=10.43.0.100 end=10.43.0.150
+service=4 type=dhcp address=2 enabled=0 start=10.55.0.100 end=10.55.0.150
+service=5 type=radius address=1 enabled=1
+service=6 type=dhcp address=4 enabled=1 start=10.55.0.100 end=10.55.0.150
+service=7 type=dhcp address=1 enabled=1 start=10.43.0.160 end=10.43.0.170
+service=8 type=dhcp address=2 enabled=1 start=10.56.0.100 end=10.56.0.150
+service=9 type=dhcp address=2 enabled=1 start=10.55.0.0 end=10.55.0.50
+service=10 type=admin address=99 enabled=1
+service=11 type=bogus address=1 enabled=1
+service=12 type=dhcp address=2 enabled=1 start=10.55.0.100 end=10.55.0.150 lease=1m
+service=13 type=dhcp address=2 enabled=1 start=10.55.0.1 end=10.55.0.50
+X
+A apply
+sv() { sh "$AT" svc-status | awk -v i="$1" '$2 == i { print $5 }'; }
+svw() { sh "$AT" svc-status | awk -v i="$1" '$2 == i' | sed 's/.*why=//'; }
+check "refused: a range holding the box's own address" "refused yes" "$(sv 13) $(svw 13 | grep -q "box's own address 10.55.0.2" && echo yes || echo no)"
+check "services: admin on, ssh on, dhcp on, dhcp disabled off, radius the web UI's" "on on on off ui" "$(sv 1) $(sv 2) $(sv 3) $(sv 4) $(sv 5)"
+check "refused: DHCP on a DHCP address, a 2nd DHCP server on a network, a range outside the subnet, a range holding the network address, an unknown address, a bad type, a 1-minute lease" \
+	"refused refused refused refused refused refused refused" "$(sv 6) $(sv 7) $(sv 8) $(sv 9) $(sv 10) $(sv 11) $(sv 12)"
+check "... each says why" "a DHCP server needs a STATIC|has a DHCP server already|not inside|network or broadcast|not in the address list|type 'bogus'|lease '1m'" \
+	"$(for i in 6 7 8 9 10 11 12; do svw $i | sed 's/^\(a DHCP server needs a STATIC\).*/\1/; s/^network 3 \(has a DHCP server already\).*/\1/; s/^the range.*\(not inside\).*/\1/; s/.*\(network or broadcast\).*/\1/; s/.*\(not in the address list\).*/\1/; s/^\(type .bogus.\).*/\1/; s/^\(lease .1m.\).*/\1/'; done | tr '\n' '|' | sed 's/|$//')"
+check "the filter: admin on address 1 only, SSH on address 3 (Default's lease) only, nothing open by device" \
+	'ip daddr { 10.43.0.2 } tcp dport { 80, 443 } accept|ip daddr { 10.9.0.5 } tcp dport 22 accept|tcp dport { 22, 80, 443 } counter drop|' \
+	"$(grep -E 'daddr|dport' "$f" | sed 's/^[[:space:]]*//' | tr '\n' '|')"
+if command -v unshare > /dev/null 2>&1 && [ -x "${NFT:-/usr/sbin/nft}" ]; then
+	unshare -rn "${NFT:-/usr/sbin/nft}" -c -f "$f" > "$T/nft.err" 2>&1; r=$?
+	if grep -q 'Operation not permitted\|unshare' "$T/nft.err"; then echo "skip the kernel's parser (no user namespace)"
+	else check "the services filter parses (nft -c, kernel parser)" 0 $r; fi
+else echo "skip the kernel's parser (no nft/unshare)"; fi
+check "addrs admin: address 1 only; addrs ssh: address 3 only; addrs: all up" "addr 1 inet 10.43.0.2 brwifi100003|addr 3 inet 10.9.0.5 rnr0|3" \
+	"$(sh "$AT" addrs admin | tr '\n' '|')$(sh "$AT" addrs ssh | tr '\n' '|')$(sh "$AT" addrs | wc -l)"
+D=$T/run/gt-be98-addr
+check "DHCP server: one dnsmasq, no DNS, on brwifi100003, the range, router and DNS = the address's gateway" \
+	"port=0|bind-interfaces|interface=brwifi100003|dhcp-range=set:s3,10.43.0.100,10.43.0.150,255.255.255.0,12h|dhcp-option=tag:s3,option:router,10.43.0.1|dhcp-option=tag:s3,option:dns-server,10.43.0.1|yes" \
+	"$(grep -E '^(port|bind-interfaces|interface|dhcp-range|dhcp-option)' "$D/dnsmasq.conf" | tr '\n' '|')$(kill -0 "$(cat "$D/dnsmasq.pid")" 2>/dev/null && echo yes)"
+p=$(cat "$D/dnsmasq.pid"); A apply
+check "the same list again: dnsmasq not restarted" "$p" "$(cat "$D/dnsmasq.pid")"
+sed -i 's/^service=4 type=dhcp address=2 enabled=0/service=4 type=dhcp address=2 enabled=1/; /^service=1[23] /d' "$T/services.conf"; A apply
+check "a second network's DHCP server: dnsmasq restarted with both ranges; its address has no gateway: no router, no DNS" "yes 2 dhcp-option=tag:s4,3|dhcp-option=tag:s4,6|" \
+	"$([ "$(cat "$D/dnsmasq.pid")" != "$p" ] && echo yes) $(grep -c '^dhcp-range=' "$D/dnsmasq.conf") $(grep '^dhcp-option=tag:s4' "$D/dnsmasq.conf" | tr '\n' '|')"
+# the admin page is never left without an address: no enabled admin row -> every address
+sed -i 's/^service=1 type=admin address=1 enabled=1/service=1 type=admin address=1 enabled=0/' "$T/services.conf"; A apply
+check "no enabled admin row: the admin page answers on every address's device (80, 443), SSH still its row's only" \
+	'ip daddr { 10.9.0.5 } tcp dport 22 accept|iifname { "brwifi100003", "brwifi100005", "rnr0" } tcp dport { 80, 443 } accept|tcp dport { 22, 80, 443 } counter drop|' \
+	"$(grep -E 'daddr|dport' "$f" | sed 's/^[[:space:]]*//' | tr '\n' '|')"
+check "... and addrs admin lists every address in force (3: address 4 has no lease)" 3 "$(sh "$AT" addrs admin | wc -l)"
+# a DHCP lease change rebuilds the filter (an ssh row on a DHCP address of a bridge)
+printf 'service=1 type=admin address=4 enabled=1\n' > "$T/services.conf"; A apply
+check "admin on a DHCP address with no lease yet: no daddr rule for it (closed), the drop stays" "0" "$(grep -c 'daddr' "$f")"
+interface=brwifi100005 reason=BOUND new_ip_address=10.55.0.9 new_subnet_cidr=24 sh "$AT" 2>/dev/null
+check "its lease: the filter rebuilt with it" yes "$(grep -q 'ip daddr { 10.55.0.9 } tcp dport { 80, 443 } accept' "$f" && echo yes || echo no)"
+# no DHCP service left: dnsmasq stopped; no service list: the addresses' filter as before
+p=$(cat "$D/dnsmasq.pid"); A apply
+check "no DHCP service left: dnsmasq stopped" "no no" "$(kill -0 "$p" 2>/dev/null && echo yes || echo no) $([ -f "$D/dnsmasq.pid" ] && echo yes || echo no)"
+rm -f "$T/services.conf"; A apply
+check "no service list: admin and SSH on every address's device (the addresses' filter)" yes "$(grep -q 'iifname { "brwifi100003", "brwifi100005", "rnr0" } tcp dport { 22, 80, 443 } accept' "$f" && echo yes || echo no)"
+A stop
 echo "gt-be98-addr-test: $pass ok, $fail failed"
 [ $fail -eq 0 ]

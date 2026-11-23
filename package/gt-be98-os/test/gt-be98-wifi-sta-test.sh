@@ -54,11 +54,21 @@ c=${1#--conf-file=}
 sleep 1000 & echo $! > "$(sed -n 's/^pid-file=//p' "$c")"
 exit 0
 X
-# nft -c refuses a file holding the word REFUSE (the two-way control)
+# nft -c refuses a file holding the word REFUSE (the two-way control); the
+# bridging witness table: "-f -" keeps it, "list table bridge ..." prints it
+# with the counters of $FAKE/wcount ("<own> <foreign>")
 cat > "$T/bin/nft" <<'X'
 #!/bin/sh
 echo "nft $*" >> "$FAKE/log"
 [ "$1" = -c ] && grep -q REFUSE "$3" && exit 1
+if [ "$1 $2" = "-f -" ]; then cat > "$FAKE/wtable.in"; grep -q 'table bridge gt_be98_sta_w {$' "$FAKE/wtable.in" && cp "$FAKE/wtable.in" "$FAKE/wtable"; exit 0; fi
+if [ "$1 $2 $3 $4" = "list table bridge gt_be98_sta_w" ]; then
+	[ -f "$FAKE/wtable" ] || exit 1
+	read -r o f < "$FAKE/wcount" 2>/dev/null || { o=0; f=0; }
+	sed -e "/daddr != /s/counter\$/counter packets $f bytes 0/" -e "/daddr [0-9a-f]/s/counter\$/counter packets $o bytes 0/" "$FAKE/wtable"
+	exit 0
+fi
+[ "$1 $2 $3 $4" = "delete table bridge gt_be98_sta_w" ] && rm -f "$FAKE/wtable"
 exit 0
 X
 cat > "$T/bin/wpa_cli" <<'X'
@@ -263,6 +273,26 @@ run down bcawl0
 check "down repeater: detached, 4addr off" "0 ip link set dev bcawl0 nomaster|iw dev bcawl0 set 4addr off" "$rc $(log '(nomaster|4addr)')"
 : > "$P"; run repeater bcawl0
 check "control: no repeater line, exit 1" "1 " "$rc $(cat "$T/out")"
+
+# ---- bridged (owner 11-23): the client Wi-Fi's bridging, and its witness ----
+mkdir -p "$T/net/bcawl0"; echo 02:00:00:00:00:b0 > "$T/net/bcawl0/address"
+printf 'wpa_state=COMPLETED\nssid=up\n' > "$T/wpa-state-bcawl0"
+echo 'repeater bcawl0 4addr brwifi60' > "$P"; mkdir -p "$T/net/brwifi60/bridge"; rm -f "$T/net/bcawl0/master"
+run up bcawl0 "$T/sta.conf" rs7
+check "4addr port: the witness table loaded (own / foreign unicast counters on bcawl0)" "yes yes" \
+	"$(grep -q 'iifname "bcawl0" ether daddr 02:00:00:00:00:b0 counter' "$T/wtable" 2>/dev/null && echo yes || echo no) $(grep -q 'iifname "bcawl0" ether daddr != 02:00:00:00:00:b0 ether daddr & 01:00:00:00:00:00 == 00:00:00:00:00:00 counter' "$T/wtable" 2>/dev/null && echo yes || echo no)"
+echo "12 0" > "$T/wcount"; run bridged bcawl0
+check "4addr, only frames for the station itself: unproven" "bridged unproven mode=4addr bridge=brwifi60 own=12 foreign=0" "$(cut -d' ' -f1-6 "$T/out")"
+echo "12 3" > "$T/wcount"; run bridged bcawl0
+check "4addr, frames for another address: bridged yes" "bridged yes mode=4addr own=12 foreign=3" "$(cut -d' ' -f1-3,5,6 "$T/out")"
+echo 'repeater bcawl0 multiap brwifi60' > "$P"; run bridged bcawl0
+check "multiap associated: yes (wpa_supplicant completes it only with a backhaul BSS)" "bridged yes mode=multiap" "$(cut -d' ' -f1-3 "$T/out")"
+printf 'wpa_state=SCANNING\n' > "$T/wpa-state-bcawl0"; run bridged bcawl0
+check "not associated: no" "bridged no" "$(cut -d' ' -f1-2 "$T/out")"
+: > "$P"; printf 'wpa_state=COMPLETED\n' > "$T/wpa-state-bcawl0"; run bridged bcawl0
+check "3-address: no, never a bridge port" "bridged no mode=3addr bridge=-" "$(cut -d' ' -f1-4 "$T/out")"
+run up bcawl0 "$T/sta.conf" rs8
+check "leaving repeater mode drops the witness table" no "$([ -f "$T/wtable" ] && echo yes || echo no)"
 
 if [ $fail = 0 ]; then echo "ALL OK ($n checks)"; else echo "FAILED"; fi
 exit $fail
