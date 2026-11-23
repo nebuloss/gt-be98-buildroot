@@ -232,7 +232,7 @@ check "-L: net lines" "net 1 brwifi100007 5 0|net 2 brwifi100007 5 0|" "$(sh_net
 printf 'network=8 name=x vlan=9\n' > "$T/objs2"
 gen "$T/r" -N -L "$T/objs2"; check "control -L without VLAN 5: the first SSID's bridge" "net 1 brwifi1 5 0|net 2 brwifi1 5 0|" "$(sh_net)"
 gen "$T/r" -N -L "$T/nonexistent"; check "control -L missing: the first SSID's bridge" "0 net 1 brwifi1 5 0|net 2 brwifi1 5 0|" "$? $(sh_net)"
-printf 'network=3 vlan=5\nnetwork=4 vlan=5\nnetwork=0 vlan=9\nnetwork=123456 vlan=9\n' > "$T/objs3"
+printf 'network=3 vlan=5\nnetwork=4 vlan=5\nnetwork=0 vlan=9\nnetwork=900001 vlan=9\n' > "$T/objs3"
 gen "$T/r" -N -L "$T/objs3"; check "-L: the first line of VLAN 5 wins (network 3)" "net 1 brwifi100003 5 0|net 2 brwifi100003 5 0|" "$(sh_net)"
 # an SSID on another VLAN keeps its own bridge (no object): two bridges
 { net 1 a sae password1 2g 5; net 2 b sae password2 2g 5; net 3 c sae password3 2g 6; } > "$T/r"

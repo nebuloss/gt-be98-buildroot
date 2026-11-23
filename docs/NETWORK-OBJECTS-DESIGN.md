@@ -47,7 +47,7 @@ Files (all parsed, never sourced; keys in any order; unknown keys kept by the UI
 | `gt-be98-l2` | header: the user `net`; the yield path only for hand-written lists. |
 | `sbin/gt-be98-addr` + `init.d/gt-be98-addr` (new) | The box's addresses: static (`ip addr replace` on the bridge, its gateway at metric 2600) or DHCP (its own dhcpcd on the bridge, private mount namespace, the gt-be98-wifi-sta pattern); Default (VLAN 1) = the image's DHCP client on rnr0. Filter `table inet gt_be98_addr`: TCP 22/80/443 accepted from lo, `usb*`, `enx*`, `bhm0`, the listed networks' devices and gt-be98-gw's mgmt bridges; dropped elsewhere; only while the list holds an address. `addrs` feeds the web UI listener. |
 
-Tests (offline, run on dev-code; hostapd/wpa confchecks on dev-build): `gt-be98-net-test.sh` (31), `gt-be98-addr-test.sh` (37), `gt-be98-wifi-gen-test.sh` (+20 per awk: 2 SSIDs on one VLAN, -L, controls, -S, isolation), `gt-be98-wifi-service-test.sh` (+5), `gt-be98-netguard-test.sh` (+2), `gt-be98-lan-test.sh`, `gt-be98-gw-test.sh` (+2), `gt-be98-net-mutants.sh` (each rule broken on a copy must turn its suite red).
+Tests (offline, run on the dev VM; hostapd/wpa confchecks on the build host): `gt-be98-net-test.sh` (31), `gt-be98-addr-test.sh` (37), `gt-be98-wifi-gen-test.sh` (+20 per awk: 2 SSIDs on one VLAN, -L, controls, -S, isolation), `gt-be98-wifi-service-test.sh` (+5), `gt-be98-netguard-test.sh` (+2), `gt-be98-lan-test.sh`, `gt-be98-gw-test.sh` (+2), `gt-be98-net-mutants.sh` (each rule broken on a copy must turn its suite red).
 
 ## 4. Implemented (web UI)
 

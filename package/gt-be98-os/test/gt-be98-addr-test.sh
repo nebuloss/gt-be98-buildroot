@@ -129,7 +129,7 @@ check "... Default's untagged address never touched" "rnr0 10.9.0.5/24" "$(grep 
 rm -f "$T/addresses.conf"
 A apply; check "the list gone: the filter deleted (the image's management again)" yes "$(grep -q 'nft delete table inet gt_be98_addr' "$T/log" && echo yes || echo no)"
 # 6. validation: bad CIDRs, a static on Default, overlaps
-for c in 192.168.30.0/24 192.168.30.255/24 10.0.0.1/31 10.0.0.1/7 127.0.0.2/8 224.0.0.1/8 300.1.1.1/24 10.1.1.1 ""; do
+for c in 192.168.30.0/24 192.168.30.255/24 10.20.0.1/31 10.20.0.1/7 127.0.0.2/8 224.0.0.1/8 300.1.1.1/24 10.1.1.1 ""; do
 	printf 'address=1 network=3 mode=static cidr=%s\n' "$c" > "$T/addresses.conf"; A apply
 	check "refused static cidr [$c]" refused "$(st 1)"
 done
