@@ -1,0 +1,268 @@
+#!/bin/sh
+# SPDX-License-Identifier: GPL-2.0
+# gt-be98-lan detect <port> <seconds> : Detect VLANs on one wired port (owner 11-23).
+# gt-be98-lan detect-status <port>    : the last/current result of that port (JSON).
+#
+# <port>: a 2.5G jack 4..7 (RTL8372 port), or a Runner port rnr0 / rnr2 / rnr3.
+# <seconds>: 5..120. Prints one JSON object on stdout (also kept in
+# $RUN_DIR/detect-<port>.json, "state":"running" while it listens):
+#   {"port":"6","kind":"jack","seconds":30,"state":"done","at":<unix>,"frames":<n>,"untagged":<n|null>,
+#    "vlans":[{"vid":3999,"frames":5,"subnet":"192.0.2.0/24","source":"dhcp|arp|ipv4","guess":false,
+#              "router":"192.0.2.1"}],
+#    "not_probed":[<vid>...], "switch":{...the driver's jack_detect status...}, "error":""}
+#
+# A JACK (open-ethernet docs/rtl8372-vlan-detect.md, the driver's jack_detect): for the window the
+# switch gives every VID the jack set does not use a detect entry {jack, uplink} and the jack accepts
+# tagged frames; its ingress filter and the egress filter stay on, so a VID another jack carries is
+# still dropped from it (no leak into a network) and a detect VID leaves only towards rnr1. Here the
+# frames of those VIDs are counted on rnr1 (tcpdump, not promiscuous): a VID with no rnr1.<vid> device
+# reaches no bridge. Refused when that could leak: bare rnr1 is a LAN port (LAN_PORTS: rnr1 is then a
+# bridge port, it would forward any tag), or an rnr1.<vid> exists for a VID the switch does not carry
+# (its frames would enter that device's bridge). The jack set's own VIDs are not probed (not_probed:
+# every jack's frames of them reach rnr1 already, the jack cannot be told apart). The window ends at
+# <seconds> (and the driver's own timer), on any jack_profiles write and at module unload: the switch
+# restores exactly what it changed and reads it back ("switch":{"state":"idle","err":0,...}).
+# The jack's untagged frames are its native VLAN's as always; "untagged" is null for a jack.
+# A RUNNER PORT: a passive capture on the netdev (nothing configured, nothing transmitted). The
+# Runner delivers tagged frames with the tag in place; flows it offloads never reach the host
+# (broadcast, ARP and DHCP still do).
+# Subnets: a DHCP offer/ack (mask + router: exact, guess=false), else the most frequent ARP sender
+# /24, else the most frequent IPv4 source /24 (guess=true).
+# One detect at a time on the box (a lock); a second one is refused.
+set -u
+
+LAN_CONF=${LAN_CONF_FILE:-/etc/conf.d/gt-be98-lan}
+RUN_DIR=${GT_BE98_LAN_RUN:-/run/gt-be98-lan}
+RTL_GLOB=${GT_BE98_RTL8372:-/sys/bus/mdio_bus/drivers/rtl8372/*}
+SYS_NET=${GT_BE98_SYS_NET:-/sys/class/net}
+TCPDUMP=${GT_BE98_TCPDUMP:-tcpdump}
+SECS_MIN=5
+SECS_MAX=120
+# test seams (test/gt-be98-lan-detect-test.sh): a file that redefines the box-facing helpers below
+[ -n "${GT_BE98_LAN_TEST_HOOKS:-}" ] && . "$GT_BE98_LAN_TEST_HOOKS"
+
+say() { printf '%s\n' "$*" >&2; }
+
+# JSON string body (the inputs here are digits, names and messages of this script)
+jstr() { printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g'; }
+
+conf_get() {
+	sed -n "s/^$1=\"\\{0,1\\}\\([$2]*\\)\"\\{0,1\\}\$/\\1/p" "$LAN_CONF" 2>/dev/null | tail -n1
+}
+
+rtl_dir() {
+	for d in $RTL_GLOB; do [ -e "$d/jack_detect" ] && { echo "$d"; return 0; }; done
+	return 1
+}
+
+# the box-facing helpers (overridden by the test hooks)
+command -v sys_write > /dev/null 2>&1 || sys_write() { printf '%s\n' "$2" 2> /dev/null > "$1"; }
+command -v sys_read > /dev/null 2>&1 || sys_read() { cat "$1" 2> /dev/null; }
+command -v wait_secs > /dev/null 2>&1 || wait_secs() { sleep "$1"; }
+# the VIDs of the 802.1Q devices on rnr1 (any name: "<name>@rnr1 ... vlan protocol 802.1Q id <vid>")
+command -v rnr1_vids > /dev/null 2>&1 || rnr1_vids() {
+	ip -d -o link show type vlan 2> /dev/null |
+		awk '{ for (i = 1; i <= NF; i++) if ($i ~ /@rnr1:?$/) p = 1
+		       for (i = 1; i < NF; i++) if ($i == "id" && p) print $(i + 1); p = 0 }'
+}
+
+# the VIDs of a jack_profiles text ("4=3951+100,200 5=off ...")
+profile_vids() {
+	printf '%s\n' "$1" | tr ' ' '\n' | sed -n 's/^[4-7]=//p' | tr '+,' '\n\n' | grep -E '^[0-9]+$' | sort -n -u
+}
+
+json_list() { printf '%s' "$1" | tr '\n' ',' | sed 's/,$//'; }
+
+# the driver's jack_detect status line as a JSON object (key=value words)
+status_json() {
+	printf '%s\n' "$1" | awk '{
+		o = ""
+		for (i = 1; i <= NF; i++) {
+			k = $i; sub(/=.*/, "", k); v = substr($i, length(k) + 2)
+			if (k !~ /^[a-z_]+$/) continue
+			o = o (o == "" ? "" : ",") "\"" k "\":" (v ~ /^-?[0-9]+$/ ? v : "\"" v "\"")
+		}
+		printf "{%s}", o }'
+}
+
+# the frames of a tcpdump -e -vv capture -> the "frames" "untagged" "vlans" JSON members.
+# $1 = VIDs to leave out (one per line), $2 = 1: count untagged frames, 0: report null
+parse_capture() {
+	awk -v skip="$1" -v cnt_untag="$2" '
+	function ip4(s,   a, n) { n = split(s, a, "."); if (n < 4) return ""
+		if (a[1] !~ /^[0-9]+$/ || a[2] !~ /^[0-9]+$/ || a[3] !~ /^[0-9]+$/ || a[4] !~ /^[0-9]+:?$/) return ""
+		sub(/:$/, "", a[4]); return a[1] "." a[2] "." a[3] "." a[4] }
+	function usable(ip,   a) { split(ip, a, ".")
+		return !(a[1] == 0 || a[1] == 127 || a[1] >= 224 || (a[1] == 169 && a[2] == 254) || ip == "255.255.255.255") }
+	function s24(ip,   a) { split(ip, a, "."); return a[1] "." a[2] "." a[3] ".0/24" }
+	function masklen(m,   a, i, n, b) { split(m, a, "."); n = 0
+		for (i = 1; i <= 4; i++) { b = a[i] + 0; while (b > 0) { n += b % 2; b = int(b / 2) } } return n }
+	function netof(ip, len,   a, i, m, b, out) { split(ip, a, "."); out = ""
+		for (i = 1; i <= 4; i++) { m = (len >= 8 ? 8 : (len > 0 ? len : 0)); len -= 8
+			b = int(a[i] / 2 ^ (8 - m)) * 2 ^ (8 - m); out = out (i > 1 ? "." : "") b }
+		return out }
+	function endpkt() {
+		if (cur == "") return
+		if (dmsg == "Offer" || dmsg == "ACK") {
+			if (dmask != "" && (base = (drouter != "" ? drouter : dyour)) != "" && usable(base)) {
+				l = masklen(dmask)
+				if (l >= 8 && l <= 32) { dhcp[cur] = netof(base, l) "/" l; router[cur] = drouter }
+			}
+		}
+		cur = ""; dmsg = dmask = drouter = dyour = ""
+	}
+	BEGIN { n = split(skip, s, "\n"); for (i = 1; i <= n; i++) if (s[i] != "") skipped[s[i]] = 1 }
+	/^[^ \t]/ {
+		endpkt(); frames++
+		vid = ""
+		if (match($0, /vlan [0-9]+,/)) { vid = substr($0, RSTART + 5, RLENGTH - 6) + 0 }
+		if (vid == "" || vid == 0 || vid == 4095) { untagged++; next }
+		if (vid in skipped) next
+		cur = vid; seen[vid]++
+		if (match($0, /Request who-has [0-9.]+ tell [0-9.]+/) || match($0, /Reply [0-9.]+ is-at/)) {
+			t = substr($0, RSTART, RLENGTH); m = split(t, w, " ")
+			spa = (w[1] == "Request") ? w[m] : w[2]
+			if (ip4(spa) != "" && usable(spa)) arp[cur SUBSEP s24(spa)]++
+		}
+		next
+	}
+	cur != "" {
+		line = $0; sub(/^[ \t]+/, "", line)
+		if (match(line, /^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+(\.[0-9]+)? > /)) {
+			src = ip4(substr(line, 1, index(line, " ") - 1))
+			if (src != "" && usable(src)) v4[cur SUBSEP s24(src)]++
+		}
+		if (line ~ /^DHCP-Message/) { dmsg = line; sub(/.*: /, "", dmsg) }
+		else if (line ~ /^Subnet-Mask/) { dmask = line; sub(/.*: /, "", dmask) }
+		else if (line ~ /^Default-Gateway/) { drouter = line; sub(/.*: /, "", drouter); sub(/,.*/, "", drouter) }
+		else if (line ~ /^Your-IP /) { dyour = line; sub(/^Your-IP /, "", dyour) }
+	}
+	function top(arr, v,   k, b, bn, parts) { b = ""; bn = 0
+		for (k in arr) { split(k, parts, SUBSEP); if (parts[1] != v) continue
+			if (arr[k] > bn || (arr[k] == bn && parts[2] < b)) { bn = arr[k]; b = parts[2] } }
+		return b }
+	END {
+		endpkt()
+		printf "\"frames\":%d,\"untagged\":%s,\"vlans\":[", frames, cnt_untag ? untagged + 0 : "null"
+		nv = 0; for (v in seen) vids[++nv] = v + 0
+		for (i = 2; i <= nv; i++) { x = vids[i]; for (j = i - 1; j >= 1 && vids[j] > x; j--) vids[j + 1] = vids[j]; vids[j + 1] = x }
+		for (i = 1; i <= nv; i++) {
+			v = vids[i]; sn = ""; src = ""; g = "false"; r = ""
+			if (v in dhcp) { sn = dhcp[v]; src = "dhcp"; r = router[v] }
+			else if ((t = top(arp, v)) != "") { sn = t; src = "arp"; g = "true" }
+			else if ((t = top(v4, v)) != "") { sn = t; src = "ipv4"; g = "true" }
+			printf "%s{\"vid\":%d,\"frames\":%d,\"subnet\":\"%s\",\"source\":\"%s\",\"guess\":%s,\"router\":\"%s\"}", \
+				(i > 1 ? "," : ""), v, seen[v], sn, src, g, r
+		}
+		printf "]"
+	}'
+}
+
+# write the result file atomically
+put_result() {
+	mkdir -p "$RUN_DIR"
+	printf '%s\n' "$2" > "$RUN_DIR/detect-$1.json.tmp" && mv -f "$RUN_DIR/detect-$1.json.tmp" "$RUN_DIR/detect-$1.json"
+}
+
+fail_json() {	# port kind secs message
+	j=$(printf '{"port":"%s","kind":"%s","seconds":%s,"state":"refused","at":%s,"frames":0,"untagged":null,"vlans":[],"not_probed":[],"switch":{},"error":"%s"}' \
+		"$1" "$2" "${3:-0}" "$(date +%s)" "$(jstr "$4")")
+	case "$1" in [4-7]|rnr0|rnr2|rnr3) put_result "$1" "$j" ;; esac
+	printf '%s\n' "$j"
+	say "gt-be98-lan detect: $4"
+	exit 1
+}
+
+LOCK_HELD=
+lock_take() {
+	mkdir -p "$RUN_DIR"
+	if mkdir "$RUN_DIR/detect.lock" 2> /dev/null; then echo $$ > "$RUN_DIR/detect.lock/pid"; LOCK_HELD=1; return 0; fi
+	p=$(cat "$RUN_DIR/detect.lock/pid" 2> /dev/null)
+	if [ -n "$p" ] && kill -0 "$p" 2> /dev/null; then return 1; fi
+	# a stale lock (its holder died): taken over
+	rm -rf "$RUN_DIR/detect.lock"
+	mkdir "$RUN_DIR/detect.lock" 2> /dev/null || return 1
+	echo $$ > "$RUN_DIR/detect.lock/pid"; LOCK_HELD=1
+}
+
+CAP_PID= DETECT_ON= RTL=
+cleanup() {
+	[ -n "$CAP_PID" ] && kill "$CAP_PID" 2> /dev/null
+	[ -n "$DETECT_ON" ] && sys_write "$RTL/jack_detect" stop
+	[ -n "$LOCK_HELD" ] && rm -rf "$RUN_DIR/detect.lock"
+	[ -n "${CAP:-}" ] && rm -f "$CAP"
+}
+
+detect() {
+	port=${1:-}; secs=${2:-}
+	case "$port" in [4-7]) kind=jack; dev=rnr1 ;; rnr0|rnr2|rnr3) kind=runner; dev=$port ;;
+		*) fail_json "$port" "" 0 "port must be a jack 4..7 or rnr0, rnr2, rnr3" ;; esac
+	case "$secs" in ''|*[!0-9]*) fail_json "$port" "$kind" 0 "seconds must be $SECS_MIN..$SECS_MAX" ;; esac
+	[ "$secs" -ge $SECS_MIN ] && [ "$secs" -le $SECS_MAX ] || fail_json "$port" "$kind" 0 "seconds must be $SECS_MIN..$SECS_MAX"
+	secs=$((secs + 0))
+	command -v "$TCPDUMP" > /dev/null 2>&1 || fail_json "$port" "$kind" "$secs" "no tcpdump on this box"
+	[ -e "$SYS_NET/$dev" ] || fail_json "$port" "$kind" "$secs" "$dev is not present"
+	lock_take || fail_json "$port" "$kind" "$secs" "another detect is running"
+	trap cleanup EXIT
+	trap 'exit 1' INT TERM HUP
+	skip= ; filter=
+	if [ $kind = jack ]; then
+		for p in $(conf_get LAN_PORTS 'a-z0-9 '); do
+			[ "$p" = rnr1 ] && fail_json "$port" "$kind" "$secs" "bare rnr1 is a LAN port (LAN_PORTS): its bridge would forward any tag; detect needs VLAN jacks"
+		done
+		[ -e "$SYS_NET/rnr1/master" ] &&
+			fail_json "$port" "$kind" "$secs" "rnr1 is a bridge port: its bridge would forward any tag; detect needs VLAN jacks"
+		RTL=$(rtl_dir) || fail_json "$port" "$kind" "$secs" "the switch is off (no jack configured) or its driver has no jack_detect"
+		prof=$(sys_read "$RTL/jack_profiles")
+		skip=$(profile_vids "$prof")
+		for v in $(rnr1_vids); do
+			printf '%s\n' "$skip" | grep -qx "$v" ||
+				fail_json "$port" "$kind" "$secs" "rnr1 has a VLAN device for $v, which the switch does not carry: its frames would enter that bridge"
+		done
+		filter=vlan
+	fi
+	CAP=$(mktemp "${TMPDIR:-/tmp}/gt-be98-detect.XXXXXX")
+	at0=$(date +%s)
+	put_result "$port" "$(printf '{"port":"%s","kind":"%s","seconds":%s,"state":"running","at":%s,"frames":0,"untagged":null,"vlans":[],"not_probed":[%s],"switch":{},"error":""}' \
+		"$port" "$kind" "$secs" "$at0" "$(json_list "$skip")")"
+	# not promiscuous (-p): broadcast ARP / DHCP are what the subnets come from
+	"$TCPDUMP" -l -p -n -e -vv -i "$dev" $filter > "$CAP" 2> /dev/null &
+	CAP_PID=$!
+	err=
+	if [ $kind = jack ]; then
+		if sys_write "$RTL/jack_detect" "start $port $secs"; then
+			DETECT_ON=1
+		else
+			err="the switch refused the detect: $(sys_read "$RTL/jack_detect" | tr -d '\n')"
+		fi
+	fi
+	[ -z "$err" ] && wait_secs "$secs"
+	sw="{}"
+	if [ -n "$DETECT_ON" ]; then
+		sys_write "$RTL/jack_detect" stop || err="the switch's restore did not read back: $(sys_read "$RTL/jack_detect" | tr -d '\n')"
+		DETECT_ON=
+		st=$(sys_read "$RTL/jack_detect")
+		sw=$(status_json "$st")
+		case "$st" in *state=idle*) ;; *) err=${err:-"the switch is not idle after the detect: $st"} ;; esac
+	fi
+	kill "$CAP_PID" 2> /dev/null; wait "$CAP_PID" 2> /dev/null; CAP_PID=
+	body=$(parse_capture < "$CAP" "$skip" $([ $kind = runner ] && echo 1 || echo 0))
+	state=done; [ -n "$err" ] && state=failed
+	j=$(printf '{"port":"%s","kind":"%s","seconds":%s,"state":"%s","at":%s,%s,"not_probed":[%s],"switch":%s,"error":"%s"}' \
+		"$port" "$kind" "$secs" "$state" "$(date +%s)" "$body" "$(json_list "$skip")" "$sw" "$(jstr "$err")")
+	put_result "$port" "$j"
+	printf '%s\n' "$j"
+	[ -z "$err" ]
+}
+
+detect_status() {
+	case "${1:-}" in [4-7]|rnr0|rnr2|rnr3) ;; *) say "usage: gt-be98-lan detect-status <4..7|rnr0|rnr2|rnr3>"; exit 2 ;; esac
+	if [ -r "$RUN_DIR/detect-$1.json" ]; then cat "$RUN_DIR/detect-$1.json"
+	else printf '{"port":"%s","state":"none"}\n' "$1"; fi
+}
+
+case "${1:-}" in
+detect) shift; detect "$@" ;;
+detect-status) shift; detect_status "$@" ;;
+*) say "usage: gt-be98-lan detect <4..7|rnr0|rnr2|rnr3> <$SECS_MIN..$SECS_MAX> | detect-status <port>"; exit 2 ;;
+esac
