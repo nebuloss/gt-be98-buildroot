@@ -24,8 +24,9 @@
  *      driver ends that CAC at once (silicon q352: dfs_ap_move -20 BADCHAN 51 s
  *      after cfg80211's NOP-FINISHED): the way back is retried (eloop timer,
  *      run here by hand) and the retry clears 100/80;
- *   S4 that CAC completes: one CSA back, to 5500 at 80 MHz; 132/40 stays the
- *      standby (already available: no new CAC).
+ *   S4 that CAC completes: one CSA back, to 5500 at 80 MHz, that passes
+ *      hostapd_change_config_freq()'s old-frequency check (q400: refused, the
+ *      AP restarted); 132/40 stays the standby (already available: no new CAC).
  * Exit 0 GREEN, 1 RED.
  */
 #include "utils/includes.h"
@@ -98,14 +99,36 @@ int __wrap_hostapd_start_dfs_cac(struct hostapd_iface *iface, enum hostapd_hw_mo
 	return 0;
 }
 
+/*
+ * hostapd_switch_channel() is wrapped (no driver, no beacon), but its first
+ * step is kept: hostapd_fill_csa_settings() -> hostapd_change_config_freq()
+ * rebuilds the OLD frequency from iface->conf with hostapd_set_freq_params()
+ * and refuses the switch (-1) when that is not a valid block (silicon q400:
+ * the way back 132/40 -> 100/80 with conf = new channel + old width, "20/40
+ * MHz: center segment 0 (=106) and center freq 1 (=5510) not in sync"). A
+ * refused CSA is recorded (refused=1) and hostapd then restarts the AP.
+ */
 int __wrap_hostapd_switch_channel(struct hostapd_data *hapd, struct csa_settings *s);
 int __wrap_hostapd_switch_channel(struct hostapd_data *hapd, struct csa_settings *s)
 {
 	struct rec *r = &csa[ncsa < 16 ? ncsa++ : 15];
+	struct hostapd_config *conf = hapd->iconf;
+	struct hostapd_freq_params old;
 
 	r->freq = s->freq_params.freq;
 	r->bw = s->freq_params.bandwidth;
 	r->cf1 = s->freq_params.center_freq1;
+	os_memset(&old, 0, sizeof(old));
+	if (hostapd_set_freq_params(&old, conf->hw_mode, 5000 + 5 * conf->channel, conf->channel,
+				    conf->enable_edmg, conf->edmg_channel, conf->ieee80211n,
+				    conf->ieee80211ac, conf->ieee80211ax, conf->ieee80211be,
+				    conf->secondary_channel, hostapd_get_oper_chwidth(conf),
+				    hostapd_get_oper_centr_freq_seg0_idx(conf),
+				    hostapd_get_oper_centr_freq_seg1_idx(conf), conf->vht_capab,
+				    &mode.he_capab[IEEE80211_MODE_AP], &mode.eht_capab[IEEE80211_MODE_AP], 0)) {
+		r->refused = 1;
+		return -1;
+	}
 	return 0;
 }
 
@@ -250,11 +273,15 @@ int main(int argc, char *argv[])
 	set_dfs(5500, 5560, HOSTAPD_CHAN_DFS_UNAVAILABLE);	/* cfg80211's NOP, as the kernel reports it */
 	c0 = ncac;
 	hostapd_dfs_radar_detected(iface, 5500, 1, 1, CHAN_WIDTH_80, 5530, 0);
-	CHECK(ncsa == 1 && csa[0].freq == 5660 && csa[0].bw == 40 && csa[0].cf1 == 5670,
-	      "S2 one CSA after the radar, to 5660 at 40 MHz (%d CSA, %d MHz bw %d cf1 %d)", ncsa,
-	      ncsa ? csa[0].freq : 0, ncsa ? csa[0].bw : 0, ncsa ? csa[0].cf1 : 0);
+	CHECK(ncsa == 1 && csa[0].freq == 5660 && csa[0].bw == 40 && csa[0].cf1 == 5670 && !csa[0].refused,
+	      "S2 one CSA after the radar, to 5660 at 40 MHz (%d CSA, %d MHz bw %d cf1 %d%s)", ncsa,
+	      ncsa ? csa[0].freq : 0, ncsa ? csa[0].bw : 0, ncsa ? csa[0].cf1 : 0,
+	      ncsa && csa[0].refused ? ", REFUSED by the old-frequency check" : "");
 	CHECK(nstop == 0, "S2 the AP was not stopped (%d disable/enable)", nstop);
 	CHECK(!bg_inside(5490, 5570, c0), "S2 no background CAC on the NOP channels 5500-5560 during the NOP");
+	CHECK(conf->channel == 100 && hostapd_get_oper_chwidth(conf) == CONF_OPER_CHWIDTH_80MHZ,
+	      "S2 until the switch is notified the AP keeps its running channel in the conf (channel %d width %d)",
+	      conf->channel, hostapd_get_oper_chwidth(conf));
 	if (ncsa)
 		notify(iface, 5660, 40, 5670);
 
@@ -290,9 +317,15 @@ int main(int argc, char *argv[])
 	/* S4: that CAC completes: switch back */
 	c0 = ncac;
 	hostapd_dfs_complete_cac(iface, 1, 5500, 1, 1, CHAN_WIDTH_80, 5530, 0);
-	CHECK(ncsa == 2 && csa[1].freq == 5500 && csa[1].bw == 80 && csa[1].cf1 == 5530,
-	      "S4 one CSA back, to 5500 at 80 MHz (%d CSA, %d MHz bw %d cf1 %d)", ncsa,
-	      ncsa > 1 ? csa[1].freq : 0, ncsa > 1 ? csa[1].bw : 0, ncsa > 1 ? csa[1].cf1 : 0);
+	CHECK(ncsa == 2 && csa[1].freq == 5500 && csa[1].bw == 80 && csa[1].cf1 == 5530 && !csa[1].refused,
+	      "S4 one CSA back, to 5500 at 80 MHz (%d CSA, %d MHz bw %d cf1 %d%s)", ncsa,
+	      ncsa > 1 ? csa[1].freq : 0, ncsa > 1 ? csa[1].bw : 0, ncsa > 1 ? csa[1].cf1 : 0,
+	      ncsa > 1 && csa[1].refused ? ", REFUSED by the old-frequency check (q400)" : "");
+	CHECK(ncsa < 2 || (conf->channel == 132 && hostapd_get_oper_chwidth(conf) == CONF_OPER_CHWIDTH_USE_HT),
+	      "S4 until the switch is notified the AP keeps its running channel in the conf (channel %d width %d)",
+	      conf->channel, hostapd_get_oper_chwidth(conf));
+	if (ncsa > 1 && !csa[1].refused)
+		notify(iface, 5500, 80, 5530);
 	CHECK(nstop == 0, "S4 the AP was never stopped (%d disable/enable)", nstop);
 	CHECK(iface->radar_background.channel == 132 && iface->radar_background.cac_started == 0 && ncac == c0,
 	      "S4 132/40 is the standby again, already available: no new CAC (chain %d, cac_started %d, new CACs %d)",

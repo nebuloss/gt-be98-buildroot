@@ -36,17 +36,28 @@ hostapd 2.12 (src/ap/dfs.c), enable_background_radar=1, on top of 0004:
    out-of-service test), and no event follows when that ends: a way-back CAC
    the driver ends without success is retried every 30 s, at most 20 times
    (eloop timer, cancelled in hostapd_cleanup_iface()).
+5. A background switch at a width other than the running one kept the
+   running AP's width in iface->conf with the NEW channel and centre index:
+   hostapd_fill_csa_settings() rebuilds the old frequency from it, a block
+   that does not exist when the width changes (silicon run q400: the way
+   back 132/40 -> 100/80 failed with "20/40 MHz: center segment 0 (=106)
+   and center freq 1 (=5510) not in sync", the fallback restarted the AP).
+   hostapd_dfs_start_channel_switch_background() now picks the next standby
+   against the new home, then puts the running channel back and passes the
+   new one to hostapd_dfs_request_channel_switch(), as the radar path does.
 
 Only an interface with enable_background_radar=1 on a driver declaring
 RADAR_BACKGROUND is affected. Applies after 0001-0004. Compile-checked
 (test/build-hostapd-confcheck.sh); host-tested with test/hostapd-dfs-bg-test.c
 (build-hostapd-dfs-bg-test.sh: the dfs5gh-zw80 scenario on the device's
-5 GHz-high channel table); r3 of the 0005 first run on the device in q343
-(r1), q352 (r2: W1 PASS, way back refused).
+5 GHz-high channel table; the CSA wrapper applies hostapd_change_config_freq()'s
+own old-frequency check); r4 of the 0005 first run on the device in q343
+(r1), q352 (r2: W1 PASS, way back refused), q400 (r3: way back cleared, its
+CSA refused, AP restarted).
 ---
 --- a/src/ap/dfs.h
 +++ b/src/ap/dfs.h
-@@ -30,6 +30,7 @@
+@@ -30,6 +30,7 @@ int hostapd_dfs_start_cac(struct hostapd
  			  int ht_enabled, int chan_offset, int chan_width,
  			  int cf1, int cf2);
  int hostapd_handle_dfs_offload(struct hostapd_iface *iface);
@@ -56,7 +67,7 @@ RADAR_BACKGROUND is affected. Applies after 0001-0004. Compile-checked
  
 --- a/src/ap/hostapd.c
 +++ b/src/ap/hostapd.c
-@@ -797,6 +797,7 @@
+@@ -797,6 +797,7 @@ static void hostapd_cleanup_iface(struct
  	hostapd_afc_stop(iface);
  	eloop_cancel_timeout(hostapd_interface_setup_failure_handler, iface,
  			     NULL);
@@ -66,7 +77,7 @@ RADAR_BACKGROUND is affected. Applies after 0001-0004. Compile-checked
  	hostapd_config_free(iface->conf);
 --- a/src/ap/hostapd.h
 +++ b/src/ap/hostapd.h
-@@ -662,6 +662,21 @@
+@@ -662,6 +662,21 @@ struct hostapd_iface {
  		unsigned int temp_ch:1;
  		/* CAC started on radar offchain */
  		unsigned int cac_started:1;
@@ -98,7 +109,7 @@ RADAR_BACKGROUND is affected. Applies after 0001-0004. Compile-checked
  #include "common/ieee802_11_defs.h"
  #include "common/hw_features_common.h"
  #include "common/wpa_ctrl.h"
-@@ -41,6 +42,7 @@
+@@ -41,6 +42,7 @@ static bool dfs_use_radar_background(str
  }
  
  static void hostapd_dfs_update_background_chain(struct hostapd_iface *iface);
@@ -106,7 +117,7 @@ RADAR_BACKGROUND is affected. Applies after 0001-0004. Compile-checked
  
  
  static int dfs_get_used_n_chans(struct hostapd_iface *iface, int *seg1)
-@@ -962,6 +964,9 @@
+@@ -962,6 +964,9 @@ int hostapd_handle_dfs(struct hostapd_if
  			hostapd_get_oper_centr_freq_seg0_idx(iface->conf);
  		iface->radar_background.centr_freq_seg1_idx =
  			hostapd_get_oper_centr_freq_seg1_idx(iface->conf);
@@ -116,7 +127,7 @@ RADAR_BACKGROUND is affected. Applies after 0001-0004. Compile-checked
  
  		/*
  		 * Let's select a random channel according to the
-@@ -1105,41 +1110,299 @@
+@@ -1105,41 +1110,299 @@ static int hostapd_dfs_request_channel_s
  }
  
  
@@ -352,7 +363,27 @@ RADAR_BACKGROUND is affected. Applies after 0001-0004. Compile-checked
 +		channel = NULL;
 +		ready = false;
 +		upgrade = false;
-+
+ 
+-	channel = dfs_get_valid_channel(iface, &sec, &oper_centr_freq_seg0_idx,
+-					&oper_centr_freq_seg1_idx,
+-					channel_type);
+-	if (!channel ||
+-	    channel->chan == iface->conf->channel ||
+-	    channel->chan == iface->radar_background.channel)
+-		channel = dfs_downgrade_bandwidth(iface, &sec,
+-						  &oper_centr_freq_seg0_idx,
+-						  &oper_centr_freq_seg1_idx,
+-						  &channel_type);
+-	if (!channel ||
+-	    hostapd_start_dfs_cac(iface, iface->conf->hw_mode,
+-				  channel->freq, channel->chan,
+-				  iface->conf->ieee80211n,
+-				  iface->conf->ieee80211ac,
+-				  iface->conf->ieee80211ax,
+-				  iface->conf->ieee80211be,
+-				  sec, hostapd_get_oper_chwidth(iface->conf),
+-				  oper_centr_freq_seg0_idx,
+-				  oper_centr_freq_seg1_idx, true)) {
 +		/*
 +		 * gt-be98 0005: the main chain runs narrower than configured (a
 +		 * radar moved it to a narrower standby): clear the configured-
@@ -394,27 +425,7 @@ RADAR_BACKGROUND is affected. Applies after 0001-0004. Compile-checked
 +			if (channel)
 +				break;
 +		}
- 
--	channel = dfs_get_valid_channel(iface, &sec, &oper_centr_freq_seg0_idx,
--					&oper_centr_freq_seg1_idx,
--					channel_type);
--	if (!channel ||
--	    channel->chan == iface->conf->channel ||
--	    channel->chan == iface->radar_background.channel)
--		channel = dfs_downgrade_bandwidth(iface, &sec,
--						  &oper_centr_freq_seg0_idx,
--						  &oper_centr_freq_seg1_idx,
--						  &channel_type);
--	if (!channel ||
--	    hostapd_start_dfs_cac(iface, iface->conf->hw_mode,
--				  channel->freq, channel->chan,
--				  iface->conf->ieee80211n,
--				  iface->conf->ieee80211ac,
--				  iface->conf->ieee80211ax,
--				  iface->conf->ieee80211be,
--				  sec, hostapd_get_oper_chwidth(iface->conf),
--				  oper_centr_freq_seg0_idx,
--				  oper_centr_freq_seg1_idx, true)) {
++
 +		if (!channel || ready)
 +			break;
 +		if (!hostapd_start_dfs_cac(iface, iface->conf->hw_mode,
@@ -442,7 +453,7 @@ RADAR_BACKGROUND is affected. Applies after 0001-0004. Compile-checked
  		wpa_printf(MSG_ERROR, "DFS failed to start CAC offchannel");
  		iface->radar_background.channel = -1;
  		return;
-@@ -1150,10 +1413,19 @@
+@@ -1150,10 +1413,19 @@ static void hostapd_dfs_update_backgroun
  	iface->radar_background.secondary_channel = sec;
  	iface->radar_background.centr_freq_seg0_idx = oper_centr_freq_seg0_idx;
  	iface->radar_background.centr_freq_seg1_idx = oper_centr_freq_seg1_idx;
@@ -462,7 +473,21 @@ RADAR_BACKGROUND is affected. Applies after 0001-0004. Compile-checked
  }
  
  
-@@ -1198,6 +1470,15 @@
+@@ -1189,6 +1461,13 @@ static int
+ hostapd_dfs_start_channel_switch_background(struct hostapd_iface *iface)
+ {
+ 	u8 current_vht_oper_chwidth = hostapd_get_oper_chwidth(iface->conf);
++	/* gt-be98 0005 r4: the running channel, put back before the CSA */
++	int old_channel = iface->conf->channel, old_freq = iface->freq;
++	int old_sec = iface->conf->secondary_channel;
++	u8 old_seg0 = hostapd_get_oper_centr_freq_seg0_idx(iface->conf);
++	u8 old_seg1 = hostapd_get_oper_centr_freq_seg1_idx(iface->conf);
++	int channel, freq, sec;
++	u8 seg0, seg1, new_w;
+ 
+ 	iface->conf->channel = iface->radar_background.channel;
+ 	iface->freq = iface->radar_background.freq;
+@@ -1198,14 +1477,46 @@ hostapd_dfs_start_channel_switch_backgro
  		iface->conf, iface->radar_background.centr_freq_seg0_idx);
  	hostapd_set_oper_centr_freq_seg1_idx(
  		iface->conf, iface->radar_background.centr_freq_seg1_idx);
@@ -476,9 +501,44 @@ RADAR_BACKGROUND is affected. Applies after 0001-0004. Compile-checked
 +				 iface->radar_background.oper_chwidth);
 +	iface->radar_background.upgrade_retries = 0;
  
++	/* the next standby is picked against the NEW home (as in stock) */
  	hostapd_dfs_update_background_chain(iface);
  
-@@ -1255,10 +1536,13 @@
++	channel = iface->conf->channel;
++	freq = iface->freq;
++	sec = iface->conf->secondary_channel;
++	seg0 = hostapd_get_oper_centr_freq_seg0_idx(iface->conf);
++	seg1 = hostapd_get_oper_centr_freq_seg1_idx(iface->conf);
++	new_w = hostapd_get_oper_chwidth(iface->conf);
++	/*
++	 * gt-be98 0005 r4: until the switch is notified the running AP keeps
++	 * its own channel. hostapd_dfs_request_channel_switch() puts the
++	 * current width back, and hostapd_fill_csa_settings() rebuilds the old
++	 * frequency from iface->conf: the new channel at the old width is a
++	 * block that does not exist when the width changes (silicon run q400:
++	 * the way back 132/40 -> 100/80 gave "20/40 MHz: center segment 0
++	 * (=106) and center freq 1 (=5510) not in sync", the CSA failed and
++	 * the fallback restarted the AP). The new channel goes in the
++	 * arguments; the fallback writes it on a failure.
++	 */
++	iface->conf->channel = old_channel;
++	iface->freq = old_freq;
++	iface->conf->secondary_channel = old_sec;
++	hostapd_set_oper_centr_freq_seg0_idx(iface->conf, old_seg0);
++	hostapd_set_oper_centr_freq_seg1_idx(iface->conf, old_seg1);
++	hostapd_set_oper_chwidth(iface->conf, new_w);
++
+ 	return hostapd_dfs_request_channel_switch(
+-		iface, iface->conf->channel, iface->freq,
+-		iface->conf->secondary_channel, current_vht_oper_chwidth,
+-		hostapd_get_oper_centr_freq_seg0_idx(iface->conf),
+-		hostapd_get_oper_centr_freq_seg1_idx(iface->conf));
++		iface, channel, freq, sec, current_vht_oper_chwidth,
++		seg0, seg1);
+ }
+ 
+ 
+@@ -1255,10 +1566,13 @@ int hostapd_dfs_complete_cac(struct host
  			 */
  			if (hostapd_dfs_is_background_event(iface, freq)) {
  				iface->radar_background.cac_started = 0;
@@ -493,7 +553,7 @@ RADAR_BACKGROUND is affected. Applies after 0001-0004. Compile-checked
  				return hostapd_dfs_start_channel_switch_background(iface);
  			}
  
-@@ -1284,8 +1568,21 @@
+@@ -1284,8 +1598,21 @@ int hostapd_dfs_complete_cac(struct host
  			}
  		}
  	} else if (hostapd_dfs_is_background_event(iface, freq)) {
