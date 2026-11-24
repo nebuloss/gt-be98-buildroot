@@ -1,0 +1,102 @@
+From: gt-be98-buildroot <noreply@example.invalid>
+Subject: [PATCH] AP MLD (device SME): an MLD STA that associates on a link with
+ no STA entry takes over the SAE state of the partner link where SAE ran
+
+A FullMAC AP MLD (Broadcom BCM6726/6717 firmware, gt-be98-open-wifi) reports a
+client's SAE Authentication frames on the MLD's first link, while the client
+runs SAE with, and then associates on, another link. hostapd keeps the SAE STA
+and its PMK on the BSS that received the frames (switch_link_hapd on the
+frame's link_id); EVENT_ASSOC with assoc_link_id = the other link switches to
+that link's BSS, finds no STA there, and ap_sta_add() makes a fresh one with
+auth_alg 0 and no sae. With no PMKID in the request, the 4-way handshake then
+has no PMK: WPA_PTK INITPSK -> "No PSK for STA trying to use SAE with PMKSA
+caching" -> DISCONNECT, reason 2 (PREV_AUTH_NOT_VALID). Analysis: gt-be98-open-wifi
+docs/MLO-RE-HOST.md §8 (branch om-mlo-re-host-2026-11-24).
+
+An AP MLD's SAE is per MLD, not per link. In hostapd_notif_assoc(), for an ML
+association that created a new STA, look for the same MLD address on the ML
+partner links; if one holds a completed SAE (SAE_ACCEPTED, not associated),
+move its sae (and auth_alg / WLAN_STA_AUTH) to the new STA. The donor entry is
+left inert: no AUTH flag, its assoc timeout and inactivity timer cancelled (the
+60 s assoc timeout would otherwise deauthenticate the MLD address through the
+donor's link); hostapd_notif_disassoc_mld() frees it with the ML association.
+Logged at MSG_INFO as "MLD-SAE-TAKEOVER".
+
+Bench status: built for lab arms only (gt-be98-open-wifi lane mlo-order); not
+verified on silicon. A driver-side alternative (report SAE on the link the
+firmware names, WLC_E_AUTH_REQ A3) makes this patch a no-op when it works: the
+STA then already exists on the assoc link.
+
+--- a/src/ap/drv_callbacks.c
++++ b/src/ap/drv_callbacks.c
+@@ -314,6 +314,59 @@
+ #endif /* HOSTAPD || CONFIG_IEEE80211BE */
+ 
+ 
++#if defined(CONFIG_IEEE80211BE) && defined(CONFIG_SAE)
++/*
++ * gt-be98: device-SME AP MLD firmware (Broadcom BCM6726/6717 FullMAC) reports a
++ * client's SAE Authentication frames on the MLD's first link while the client
++ * runs SAE with, and then associates on, another link. hostapd keeps the SAE
++ * STA (and its PMK) on the BSS that received the frames; the association
++ * switches to the assoc link's BSS, finds no STA there and creates a fresh one
++ * with no SAE state, and the 4-way handshake then has no PMK: INITPSK ->
++ * "No PSK for STA trying to use SAE with PMKSA caching" -> DISCONNECT, reason 2.
++ * An AP MLD's SAE is per MLD, not per link: when an MLD STA associates on a link
++ * with no STA entry, it takes over the SAE state of the ML partner link where SAE
++ * completed. The donor entry is left inert (no AUTH flag, no timers) and is freed
++ * with the ML association (hostapd_notif_disassoc_mld).
++ */
++static void hostapd_mld_take_sae(struct hostapd_data *hapd,
++				 struct sta_info *sta, const u8 *addr)
++{
++	struct hapd_interfaces *interfaces = hapd->iface->interfaces;
++	size_t i;
++
++	if (sta->sae || !interfaces)
++		return;
++	for (i = 0; i < interfaces->count; i++) {
++		struct hostapd_data *bss = interfaces->iface[i]->bss[0];
++		struct sta_info *d;
++
++		if (bss == hapd || !bss->conf->mld_ap ||
++		    !hostapd_is_ml_partner(hapd, bss))
++			continue;
++		d = ap_get_sta(bss, addr);
++		if (!d || d->auth_alg != WLAN_AUTH_SAE || !d->sae ||
++		    d->sae->state != SAE_ACCEPTED || (d->flags & WLAN_STA_ASSOC))
++			continue;
++		wpa_printf(MSG_INFO,
++			   "MLD-SAE-TAKEOVER: STA " MACSTR
++			   " associates on link %d with no STA entry there: takes over the SAE state (PMK) of link %d, where SAE completed",
++			   MAC2STR(addr), hapd->mld_link_id, bss->mld_link_id);
++		sta->sae = d->sae;
++		d->sae = NULL;
++		sta->auth_alg = WLAN_AUTH_SAE;
++		sta->flags |= WLAN_STA_AUTH;
++		d->flags &= ~WLAN_STA_AUTH;
++		ap_sta_clear_assoc_timeout(bss, d);
++		eloop_cancel_timeout(ap_handle_timer, bss, d);
++		return;
++	}
++	wpa_printf(MSG_DEBUG, "MLD-SAE-TAKEOVER: STA " MACSTR
++		   " on link %d: no ML partner link holds a completed SAE for it",
++		   MAC2STR(addr), hapd->mld_link_id);
++}
++#endif /* CONFIG_IEEE80211BE && CONFIG_SAE */
++
++
+ int hostapd_notif_assoc(struct hostapd_data *hapd, const u8 *addr,
+ 			const u8 *req_ies, size_t req_ies_len,
+ 			const u8 *resp_ies, size_t resp_ies_len,
+@@ -421,6 +474,10 @@
+ 						 WLAN_REASON_DISASSOC_AP_BUSY);
+ 			return -1;
+ 		}
++#if defined(CONFIG_IEEE80211BE) && defined(CONFIG_SAE)
++		if (link_addr && hapd->conf->mld_ap)
++			hostapd_mld_take_sae(hapd, sta, addr);
++#endif /* CONFIG_IEEE80211BE && CONFIG_SAE */
+ 	}
+ 
+ 	if (hapd->conf->wpa && check_sa_query_need(hapd, sta)) {
