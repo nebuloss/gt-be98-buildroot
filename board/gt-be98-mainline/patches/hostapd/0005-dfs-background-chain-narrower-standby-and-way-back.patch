@@ -45,6 +45,8 @@ hostapd 2.12 (src/ap/dfs.c), enable_background_radar=1, on top of 0004:
    hostapd_dfs_start_channel_switch_background() now picks the next standby
    against the new home, then puts the running channel back and passes the
    new one to hostapd_dfs_request_channel_switch(), as the radar path does.
+   Logged "DFS: background switch to chan ... the running channel kept until
+   notified".
 
 Only an interface with enable_background_radar=1 on a driver declaring
 RADAR_BACKGROUND is affected. Applies after 0001-0004. Compile-checked
@@ -487,7 +489,7 @@ CSA refused, AP restarted).
  
  	iface->conf->channel = iface->radar_background.channel;
  	iface->freq = iface->radar_background.freq;
-@@ -1198,14 +1477,46 @@ hostapd_dfs_start_channel_switch_backgro
+@@ -1198,14 +1477,49 @@ hostapd_dfs_start_channel_switch_backgro
  		iface->conf, iface->radar_background.centr_freq_seg0_idx);
  	hostapd_set_oper_centr_freq_seg1_idx(
  		iface->conf, iface->radar_background.centr_freq_seg1_idx);
@@ -527,6 +529,9 @@ CSA refused, AP restarted).
 +	hostapd_set_oper_centr_freq_seg0_idx(iface->conf, old_seg0);
 +	hostapd_set_oper_centr_freq_seg1_idx(iface->conf, old_seg1);
 +	hostapd_set_oper_chwidth(iface->conf, new_w);
++	wpa_printf(MSG_INFO,
++		   "DFS: background switch to chan %d (%d MHz) width %d from chan %d width %d, the running channel kept until notified",
++		   channel, freq, new_w, old_channel, current_vht_oper_chwidth);
 +
  	return hostapd_dfs_request_channel_switch(
 -		iface, iface->conf->channel, iface->freq,
@@ -538,7 +543,7 @@ CSA refused, AP restarted).
  }
  
  
-@@ -1255,10 +1566,13 @@ int hostapd_dfs_complete_cac(struct host
+@@ -1255,10 +1569,13 @@ int hostapd_dfs_complete_cac(struct host
  			 */
  			if (hostapd_dfs_is_background_event(iface, freq)) {
  				iface->radar_background.cac_started = 0;
@@ -553,7 +558,7 @@ CSA refused, AP restarted).
  				return hostapd_dfs_start_channel_switch_background(iface);
  			}
  
-@@ -1284,8 +1598,21 @@ int hostapd_dfs_complete_cac(struct host
+@@ -1284,8 +1601,21 @@ int hostapd_dfs_complete_cac(struct host
  			}
  		}
  	} else if (hostapd_dfs_is_background_event(iface, freq)) {
