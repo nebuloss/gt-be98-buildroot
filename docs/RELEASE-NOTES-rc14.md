@@ -1,8 +1,6 @@
 # GT-BE98 mainline OS 1.0-rc14 - release notes
 
-Date: 2026-11-25 · Status: **release candidate 14** (DRAFT: the release
-images and their box phases are filled in once they have run; tag
-`gt-be98-rc14` after that).
+Date: 2026-11-25 · Status: **release candidate 14**, tagged `gt-be98-rc14`.
 
 Evidence is named by the orchestrator's queue (`qNNN`). The run directories
 stay on the orchestrator's machine and are not in this repository. Every
@@ -44,13 +42,35 @@ RC14 on top of RC13, in short:
 
 | File | sha256 |
 |---|---|
-| `rootfs.squashfs` | (filled in after the `RELEASE=1` build) |
-| `ml-bootfs.itb` | (filled in after the `RELEASE=1` build) |
+| `rootfs.squashfs` | `9390ebb7796cf51f97b66498d45f8267c3d813a25e20425854097a87fdf4beb2` |
+| `ml-bootfs.itb` | `0d64b1f63609b853b785b9d3086705bb2e4bf58802d44f61a9a9e733313e2378` |
 
-Build id (DT): (filled in after the build)
+Build id (DT): `20261125T142640Z-775c11c59a57-rw-jffs`
 
-Built with `RELEASE=1` from `br-rc14-r-2026-11-25`. Later commits of that
-branch change only `docs/`.
+Built with `RELEASE=1` (`ml-bootfs.info`: `release mode: yes`) from
+`br-rc14-r-2026-11-25` `74b3505`. Later commits of that branch change only
+`docs/`.
+
+- **Release check:** `release-check.sh` returned PASS (selftest 21/21) with RC7's lab-pattern list.
+- **Lab control:** the lab image imgint15a fails the same check with 15 findings, as it should.
+- **Exact-pattern list:** finds only the lab public key, as in RC7–RC13.
+- **Modules against the tested lab image (imgint15a)**, checked by the
+  release recipe's section gate (`kocmp.py`, the rule RC12 accepted):
+  - `rtl8372.ko` is byte-identical (`7010af97`).
+  - `bca_pcie_ipc.ko` (release `9d744e89`, lab `088cd0d2`): 34 of 37
+    sections byte-identical.
+  - `bcm4916-runner.ko` (release `4a6aa3d5`, lab `c000a45b`): 38 of 41
+    sections byte-identical.
+  - In both, every code and relocation section is identical, `.rodata` is
+    identical once the build-path prefix is swapped, `.symtab` differs only
+    in `.rodata` symbol values, and the build-id follows.
+- **The rest of the rootfs against imgint15a**, file by file: hostapd, the
+  web UI, the Wi-Fi generator and every OS script are byte-identical. The
+  release image has no SSH host keys and no web UI password file (7 fewer
+  entries), the lab test key, and `release-mode yes`. Other userland
+  binaries differ only in layout: Buildroot replaces the build path in them
+  by padding of the same length, and the release build directory's path
+  has a different length from the lab one.
 
 **These images are a TEST build.** Their `SSH_AUTHORIZED_KEYS` is the
 lab's public key, so they are never handed over. A hand-over build is the
@@ -180,7 +200,7 @@ table) is GREEN on `0005`, and RED on each earlier revision of the patch.
 | q415 | imgint15a | zero-wait W1, W2 PASS on the image's hostapd; network objects, Detect VLANs, fixed primary, UI degraded-apply, WIFISTOP PASS; L1 radio cycles clean; its client-dependent steps VOID (a lab-client fault, re-run in q424) |
 | q423, q425 | imgint15a | perf smoke NO-REGRESSION (5 GHz-low down 750–761, 6 GHz down 1430 Mbit/s) |
 | q424 | imgint15a | rfscan PASS; L1 2 cycles clean; WIFISTOP PASS; soak DRY-OK; **30-minute RC14 soak VERDICT PASS** (0 unplanned disconnects; client traffic medians 84.6 Mbit/s on 5 GHz-low and 17.1 Mbit/s on 2.4 GHz, 29 minutes each; M1 1359 → 1351 MB, first-10 vs last-10 −1.4 MB, SUnreclaim flat; load max 0.55); clean, CHECK and baseline PASS |
-| q426 | release | (release-image phases: filled in after the run) |
+| q426 | release | **Release-image phases PASS:** first 16/16, with W2b-BIND: the LAN address bound 0 s after the arm looked, uptime 55.3 s, and every gated action answered need_auth on loopback and the LAN. Second 6/6: host keys kept across the reboot, setup token consumed, still configured. The lab image imgint15a restored afterwards (build `20261125T022617Z-6522da1ad5ad-rw-jffs`, release-mode no) |
 
 ## Known open
 
