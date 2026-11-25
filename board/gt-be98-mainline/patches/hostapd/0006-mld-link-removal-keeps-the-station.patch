@@ -1,0 +1,119 @@
+From: Guillaume Chaye <guillaume.chaye@zeetim.com>
+Subject: [PATCH] MLD: disabling or removing one link keeps the MLD station; LINK_REMOVE is not a testing option
+
+On this AP (gt-be98, FullMAC with device SME) one link of an AP MLD can be disabled or removed while a multi-link
+station keeps its other links: the driver maps the link's stop to the firmware's own ML reconfiguration removal
+(open-wifi MLO-RE-FIRMWARE §33, `mlo` ADD_DEL_LINK).
+
+- ap_free_sta() / hostapd_free_stas(): the link copy of an MLD station whose association link remains is not
+  the station. Freeing it emitted AP-STA-DISCONNECTED and an MLME deauthenticate indication for a station that
+  stays associated (silicon q432: the station kept link 0, managers saw it leave). The association link's copy
+  still emits both. (hostapd_set_sta_flags() already skips a link station.)
+- LINK_REMOVE <count> (hostapd_link_remove(), its beacon countdown and eht_mld_link_removal_count) was built only
+  with CONFIG_TESTING_OPTIONS; it is the product's link-removal command here. LINK_ENABLE stays a testing command.
+
+Test: package/gt-be98-os/test/build-hostapd-link-sta-test.sh (host build, --selftest with two controls).
+
+Signed-off-by: Guillaume Chaye <guillaume.chaye@zeetim.com>
+---
+diff --git a/hostapd/ctrl_iface.c b/hostapd/ctrl_iface.c
+index e6ef615..af55692 100644
+--- a/hostapd/ctrl_iface.c
++++ b/hostapd/ctrl_iface.c
+@@ -3558,8 +3558,6 @@ static int hostapd_ctrl_iface_disable_mld(struct hostapd_iface *iface)
+ }
+ 
+ 
+-#ifdef CONFIG_TESTING_OPTIONS
+-
+ static int hostapd_ctrl_iface_link_remove(struct hostapd_data *hapd, char *cmd)
+ {
+ 	u32 count = atoi(cmd);
+@@ -3570,6 +3568,8 @@ static int hostapd_ctrl_iface_link_remove(struct hostapd_data *hapd, char *cmd)
+ 	return hostapd_link_remove(hapd, count);
+ }
+ 
++#ifdef CONFIG_TESTING_OPTIONS
++
+ 
+ static int hostapd_ctrl_iface_link_enable(struct hostapd_data *hapd, char *cmd)
+ {
+@@ -4663,10 +4663,10 @@ static int hostapd_ctrl_iface_receive_process(struct hostapd_data *hapd,
+ 	} else if (os_strcmp(buf, "DISABLE_MLD") == 0) {
+ 		if (hostapd_ctrl_iface_disable_mld(hapd->iface))
+ 			reply_len = -1;
+-#ifdef CONFIG_TESTING_OPTIONS
+ 	} else if (os_strncmp(buf, "LINK_REMOVE ", 12) == 0) {
+ 		if (hostapd_ctrl_iface_link_remove(hapd, buf + 12))
+ 			reply_len = -1;
++#ifdef CONFIG_TESTING_OPTIONS
+ 	} else if (os_strncmp(buf, "LINK_ENABLE ", 12) == 0) {
+ 		if (hostapd_ctrl_iface_link_enable(hapd, buf + 12))
+ 			reply_len = -1;
+diff --git a/src/ap/hostapd.c b/src/ap/hostapd.c
+index 3ccac6d..8b0056e 100644
+--- a/src/ap/hostapd.c
++++ b/src/ap/hostapd.c
+@@ -443,8 +443,9 @@ static int hostapd_broadcast_wep_set(struct hostapd_data *hapd)
+ 
+ 
+ #ifdef CONFIG_IEEE80211BE
+-#ifdef CONFIG_TESTING_OPTIONS
+ 
++/* gt-be98 0006: link removal is a product feature on this AP (the driver maps the link's stop to the firmware's
++ * own ML reconfiguration removal), not a testing option */
+ static void hostapd_link_remove_timeout_handler(void *eloop_data,
+ 						void *user_ctx)
+ {
+@@ -494,7 +495,6 @@ int hostapd_link_remove(struct hostapd_data *hapd, u32 count)
+ 	return 0;
+ }
+ 
+-#endif /* CONFIG_TESTING_OPTIONS */
+ #endif /* CONFIG_IEEE80211BE */
+ 
+ 
+diff --git a/src/ap/hostapd.h b/src/ap/hostapd.h
+index fb8017c..d27bc02 100644
+--- a/src/ap/hostapd.h
++++ b/src/ap/hostapd.h
+@@ -517,9 +517,7 @@ struct hostapd_data {
+ 	 * total, additional 7 characters required. */
+ 	char ctrl_sock_iface[IFNAMSIZ + 7 + 1];
+ 
+-#ifdef CONFIG_TESTING_OPTIONS
+-	u8 eht_mld_link_removal_count;
+-#endif /* CONFIG_TESTING_OPTIONS */
++	u8 eht_mld_link_removal_count;	/* gt-be98 0006: not a testing option */
+ #endif /* CONFIG_IEEE80211BE */
+ 
+ #ifdef CONFIG_NAN_USD
+diff --git a/src/ap/sta_info.c b/src/ap/sta_info.c
+index a88f275..671ca5c 100644
+--- a/src/ap/sta_info.c
++++ b/src/ap/sta_info.c
+@@ -288,6 +288,11 @@ void ap_free_sta(struct hostapd_data *hapd, struct sta_info *sta)
+ 	accounting_sta_stop(hapd, sta);
+ 
+ 	/* just in case */
++#ifdef CONFIG_IEEE80211BE
++	/* gt-be98 0006: freeing the link copy of an MLD station whose association link remains (its link was
++	 * disabled or removed) does not end the station: no AP-STA-DISCONNECTED for it */
++	if (!hostapd_sta_is_link_sta(hapd, sta))
++#endif /* CONFIG_IEEE80211BE */
+ 	ap_sta_set_authorized(hapd, sta, 0);
+ 	hostapd_set_sta_flags(hapd, sta);
+ 
+@@ -565,7 +570,11 @@ void hostapd_free_stas(struct hostapd_data *hapd)
+ 
+ 	while (sta) {
+ 		prev = sta;
+-		if (sta->flags & WLAN_STA_AUTH) {
++		if ((sta->flags & WLAN_STA_AUTH)
++#ifdef CONFIG_IEEE80211BE
++		    && !hostapd_sta_is_link_sta(hapd, sta)	/* gt-be98 0006 */
++#endif /* CONFIG_IEEE80211BE */
++		    ) {
+ 			mlme_deauthenticate_indication(
+ 				hapd, sta, WLAN_REASON_UNSPECIFIED);
+ 		}
