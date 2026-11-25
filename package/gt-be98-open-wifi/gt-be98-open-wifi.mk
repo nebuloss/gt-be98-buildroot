@@ -56,7 +56,10 @@
 # om-zw80-int-2026-11-24 2026-11-24 b3a483c1 (imgint15a: aca26928 + ZW-ARM-UP (a pending background CAC is not armed while
 #  hostapd's START_AP has no AP up yet) + DFS-NOP-END (the firmware's end-of-NOP event 160 handled, not read as a radar); gates GREEN,
 #  shipped params unchanged; with hostapd 0005 r4: q402 W1/W2 PASS)
-GT_BE98_OPEN_WIFI_VERSION = b3a483c1c014e09f406d942fda69ca14b5d98f83
+# fix-pmf-deauth-order-2026-11-25 2026-11-25 0dcc9043 (imgint16a / RC15 candidate: RC14 b3a483c1 + PMF-DEAUTH-ORDER: an AP-initiated
+#  disconnect sends the deauth while the station still holds its keys (protected on a PMF BSS), then deauthorizes; q442 K0 dropped /
+#  K1 taken; gates GREEN, no module parameter)
+GT_BE98_OPEN_WIFI_VERSION = 0dcc9043b8a141ef5ab19a73921dd7c167dfd0bb
 GT_BE98_OPEN_WIFI_SITE = git@github.com:nebuloss/gt-be98-open-wifi.git
 GT_BE98_OPEN_WIFI_SITE_METHOD = git
 GT_BE98_OPEN_WIFI_LICENSE = GPL-2.0-only
