@@ -53,7 +53,10 @@
 #  radio, the timer-wheel abort fix; gates GREEN 0a7588d3 vs 38e7be78, 36 shipped params unchanged; q336 BG PASS with its bench ko)
 # rfscan-2026-11-23 2026-11-23 aca26928 (imgint14a: 0a7588d3 = RC13 + the RF-environment survey/scan; gates GREEN aca26928, 36 shipped
 #  params unchanged)
-GT_BE98_OPEN_WIFI_VERSION = aca269288e4aa1b611275489c0f3e12bea4c1e2d
+# om-zw80-int-2026-11-24 2026-11-24 b3a483c1 (imgint15a: aca26928 + ZW-ARM-UP (a pending background CAC is not armed while
+#  hostapd's START_AP has no AP up yet) + DFS-NOP-END (the firmware's end-of-NOP event 160 handled, not read as a radar); gates GREEN,
+#  shipped params unchanged; with hostapd 0005 r4: q402 W1/W2 PASS)
+GT_BE98_OPEN_WIFI_VERSION = b3a483c1c014e09f406d942fda69ca14b5d98f83
 GT_BE98_OPEN_WIFI_SITE = git@github.com:nebuloss/gt-be98-open-wifi.git
 GT_BE98_OPEN_WIFI_SITE_METHOD = git
 GT_BE98_OPEN_WIFI_LICENSE = GPL-2.0-only
