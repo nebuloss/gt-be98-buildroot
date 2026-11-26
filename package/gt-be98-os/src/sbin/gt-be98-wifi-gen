@@ -15,10 +15,14 @@
 #                    [-d "2g=bcawl3 5gl=bcawl0 5gh=bcawl1 6g=bcawl2"]
 #                    [-C MAX_BSS] [-x CTRL_DIR] [-c] [-R 0|1] [-K 0|1] [-N]
 #                    [-T "D HH:MM"] [-Q] [-U "2g=MHz ..."] [-X STA_CTRL_DIR] [-S]
-#                    [-B "BANDS"] [-L NETWORK_OBJECTS]
+#                    [-B "BANDS"] [-L NETWORK_OBJECTS] [-M 0|1]
 #   gt-be98-wifi-gen -F
 #
 #   -n  the network list (format below)          -o  output dir (created)
+#   -M  1: the Wi-Fi driver is its MLO build (one multi-radio wiphy: the
+#       5 GHz-high and 6 GHz radio netdevs on one wiphy); 0: it is not.
+#       Default: read from /sys (the two radios' wiphy). mld_ap=1 needs it;
+#       -F prints it as "feature mlo"
 #   -L  the NETWORK OBJECTS (the web UI's list, /etc/gt-be98-networks.conf:
 #       one line per network, "network=<id> ... vlan=<vid> ..."; keys in any
 #       order, unknown keys ignored; id 1..99999, vlan 2..4094, the first
@@ -413,6 +417,31 @@
 #     twt=0|1                       network level: refused (-F: feature
 #                                   twt 0). TWT is radio-wide in hostapd
 #                                   (radio twt=, feature twt_responder)
+#     mld_ap=0|1                    1: Wi-Fi 7 MULTI-LINK (MLO; hostapd's
+#                                   key, orchestrator 2026-11-26): one AP MLD
+#                                   (mld0) with a 6 GHz and a 5 GHz-high link;
+#                                   the network's other bands stay plain BSSes.
+#                                   Rendered per open-wifi docs/MLO-PROD2-
+#                                   2026-11-24.md 19: on each link radio the
+#                                   network's own plain BSS first (a legacy
+#                                   client joins it), the MLD link a later
+#                                   bss=mld0 (mld_ap=1, mld_addr = the 6 GHz
+#                                   link's BSSID, SAE H2E); plan line "mld".
+#                                   Refused (with -S: the network skipped)
+#                                   without the MLO build (-M), unless
+#                                   security=sae (WPA3-Personal: PMF required),
+#                                   without bands 6g and 5gh, with wds=1,
+#                                   hidden=1, a schedule, repeated=/routed=, a
+#                                   second MLO network; and while radio 6g,
+#                                   5gh or 2g (the firmware MLO group's
+#                                   members) is disabled, a monitor, scheduled
+#                                   or the station's radio, with channel=auto
+#                                   on 6g/5gh, zwdfs=1 on 5gh, a 5gh block in
+#                                   the weather-radar channels 116-128 (160 MHz
+#                                   included), or no network on 2.4 GHz.
+#                                   gt-be98-wifi restarts hostapd whole on
+#                                   every change of the MLD or a link radio
+#                                   (open-wifi ledger MLD-RADIO-RESTART)
 #     wds=0|1                       1: 4-ADDRESS (WDS) CLIENTS (owner 11-23,
 #                                   -F feature wds 1), as MULTI-AP BACKHAUL
 #                                   STAs: hostapd multi_ap=3 (fronthaul +
@@ -669,11 +698,22 @@ HT40_2G=${GT_BE98_HT40_2G:-0}
 # -F: feature kv 0|1, feature steer 0|1 (the web UI offers them only on 1).
 # (GT_BE98_KV: the offline test harness only)
 KV=${GT_BE98_KV:-0}
+# -M: the MLO build of the Wi-Fi driver (empty: detected, mlo_cap)
+MLOCAP=
 NETS='' OUT='' SLOTS='' MACS='' DEVS='' CAP=4 CTRL=/run/hostapd CC=0 RNR=1 KEEP=0 DRY=0
 NOW='' QUERY=0 UPF='' STACTRL=/run/wpa_supplicant SKIP=0 BPB='' SIXTOP='' NETOBJ=''
 SYSNET=${GT_BE98_SYSNET:-/sys/class/net}
 usage() { sed -n '/^#   gt-be98-wifi-gen -n/,/^#   -F  /p' "$0" | sed 's/^# \{0,1\}//' >&2; exit 2; }
 # what this generator supports (-F): keep it in line with the checks below
+# [MLO] 1 when the 5 GHz-high and 6 GHz radio netdevs are on one wiphy (the
+# Wi-Fi driver's MLO build); -M overrides (tests)
+mlo_cap() {
+	case "$MLOCAP" in 0|1) echo "$MLOCAP"; return ;; esac
+	d5=bcawl1 d6=bcawl2
+	for x in ${DEVS:-}; do case $x in 5gh=*) d5=${x#5gh=} ;; 6g=*) d6=${x#6g=} ;; esac; done
+	p5=$(cat "$SYSNET/$d5/phy80211/name" 2>/dev/null) p6=$(cat "$SYSNET/$d6/phy80211/name" 2>/dev/null)
+	if [ -n "$p5" ] && [ "$p5" = "$p6" ]; then echo 1; else echo 0; fi
+}
 features() {
 	cat <<-'EOF'
 	# gt-be98-wifi-gen features: <what> <values>
@@ -711,18 +751,19 @@ features() {
 	feature wps 1
 	station_security psk2 sae
 	EOF
+	echo "feature mlo $(mlo_cap)"
 	echo "feature ht40_2g $HT40_2G"
 	echo "feature kv $KV"
 	echo "feature steer $KV"
 }
-while getopts n:o:s:m:d:C:x:cR:K:NT:QFU:X:SB:6:L: o; do
+while getopts n:o:s:m:d:C:x:cR:K:NT:QFU:X:SB:6:L:M: o; do
 	case $o in
 	n) NETS=$OPTARG ;; o) OUT=$OPTARG ;; s) SLOTS=$OPTARG ;; m) MACS=$OPTARG ;;
 	d) DEVS=$OPTARG ;; C) CAP=$OPTARG ;; x) CTRL=$OPTARG ;; c) CC=1 ;;
 	R) RNR=$OPTARG ;; K) KEEP=$OPTARG ;; N) DRY=1 ;;
 	T) NOW=$OPTARG ;; Q) QUERY=1 ;; F) features; exit 0 ;;
 	U) UPF=$OPTARG ;; X) STACTRL=$OPTARG ;; S) SKIP=1 ;; B) BPB=$OPTARG ;; 6) SIXTOP=$OPTARG ;;
-	L) NETOBJ=$OPTARG ;; *) usage ;;
+	L) NETOBJ=$OPTARG ;; M) MLOCAP=$OPTARG ;; *) usage ;;
 	esac
 done
 [ "$QUERY" = 1 ] && [ -z "$OUT" ] && OUT=/dev/null
@@ -736,6 +777,7 @@ case "$CAP" in [1-8]) ;; *) echo "gt-be98-wifi-gen: -C $CAP: 1..8" >&2; exit 1 ;
 case "$HT40_2G" in 0|1) ;; *) echo "gt-be98-wifi-gen: HT40_2G=$HT40_2G: 0 or 1" >&2; exit 1 ;; esac
 case "$SIXTOP" in ''|[1-9]|[1-9][0-9]|1[0-9][0-9]|2[0-2][0-9]|23[0-3]) ;; *) echo "gt-be98-wifi-gen: -6 $SIXTOP: a 6 GHz channel 1..233" >&2; exit 1 ;; esac
 case "$KV" in 0|1) ;; *) echo "gt-be98-wifi-gen: KV=$KV: 0 or 1" >&2; exit 1 ;; esac
+case "$MLOCAP" in ''|0|1) ;; *) echo "gt-be98-wifi-gen: -M $MLOCAP: 0 or 1" >&2; exit 1 ;; esac
 case "$CTRL" in /*) ;; *) echo "gt-be98-wifi-gen: -x must be absolute" >&2; exit 1 ;; esac
 case "$CTRL" in *[!A-Za-z0-9/_.-]*) echo "gt-be98-wifi-gen: -x $CTRL refused" >&2; exit 1 ;; esac
 case "$STACTRL" in /*) ;; *) echo "gt-be98-wifi-gen: -X must be absolute" >&2; exit 1 ;; esac
@@ -762,7 +804,7 @@ S=${SLOTS:-/dev/null}
 LC_ALL=C awk -v cap="$CAP" -v ctrl="$CTRL" -v devlist="$DEVS" -v maclist="$MACS" \
 	-v ccok="$CC" -v rnr="$RNR" -v keep="$KEEP" -v out="$OUT" -v slotsf="$S" \
 	-v now="$NOW" -v query="$QUERY" -v upf="$UPF" -v stactrl="$STACTRL" -v skipbad="$SKIP" \
-	-v ht402g="$HT40_2G" -v bpbands="$BPB" -v kvon="$KV" -v sixtop="$SIXTOP" -v netobjf="$NETOBJ" '
+	-v ht402g="$HT40_2G" -v bpbands="$BPB" -v kvon="$KV" -v sixtop="$SIXTOP" -v netobjf="$NETOBJ" -v mlocap="$(mlo_cap)" '
 function err(m) { print "gt-be98-wifi-gen: " m > "/dev/stderr"; nerr++ }
 function warn(m) { print "gt-be98-wifi-gen: warning: " m > "/dev/stderr" }
 # an error of network i itself: with -S the network is skipped (a warning),
@@ -794,6 +836,16 @@ function dfsetsi(c) { return c != "US" && c != "JP" }
 # a start whose channel is not available needs an AVAILABLE temp channel, and
 # every 5gh channel is DFS in ETSI, so a cold boot fails the radio setup).
 function zwetsi5gh() { return 0 }
+# [MLO] the plain primary of an MLD link radio (6g, 5gh; design note open-wifi
+# docs/MLO-PROD2-2026-11-24.md 19, rule 2: the first BSS of the radio config is
+# a plain BSS, the MLD link a later bss=mld0). "own": the MLO network itself is
+# also a plain BSS there (same SSID and security; Wi-Fi 7 clients join the MLD,
+# the others the plain BSS: orchestrator decision (b), 2026-11-26, its bench
+# proof pending). "hidden": the MLO network is on the link radios as its MLD
+# link only and a radio with no other network gets a hidden placeholder
+# primary (decision (c), the q467 arm topology). NOT a user option: a bench
+# FAIL of (b) is this one line
+function mldprimary() { return "own" }
 # MAC "aa:bb:cc:dd:ee:ff" -> o[0..5]; 1 on success
 function parsemac(m, o,    i, p, n) {
 	m = tolower(m)
@@ -1052,6 +1104,40 @@ function schedon(s, dow, mn,    w, n, i, wd, prev) {
 # WPS: one UUID per list (the one WPS network, all its BSSes): RFC 4122
 # layout, version nibble 5, from the network id and the address of the
 # first radio (band order) the box has
+# [MLO] the checks of an mld_ap=1 network (header mld_ap=); each refusal names
+# the setting to change. Radio settings are read as listed (before defaults)
+function mldcheck(i, tag,    b, li, n, j, ch, w) {
+	if (!mlocap) { nerrf(i, tag ": mld_ap=1 needs the MLO build of the Wi-Fi driver (one multi-radio wiphy: the 5 GHz-high and 6 GHz radios on one wiphy); this image runs the single-radio build"); return }
+	if (sec[i] != "sae") { nerrf(i, tag ": mld_ap=1 needs security=sae (WPA3-Personal: PMF required, H2E); Wi-Fi 7 multi-link is offered on WPA3 only"); return }
+	if (!((i, "6g") in hasb) || !((i, "5gh") in hasb)) { nerrf(i, tag ": mld_ap=1 needs bands 6g and 5gh (the multi-link device: the 6 GHz link and the 5 GHz-high link)"); return }
+	if (wds[i]) { nerrf(i, tag ": mld_ap=1 refused with wds=1 (4-address clients on a multi-link device are not offered)"); return }
+	if (rep[i] || rtd[i] != "") { nerrf(i, tag ": mld_ap=1 needs a vlan= network (not repeated or routed)"); return }
+	if (hid[i]) { nerrf(i, tag ": mld_ap=1 refused with hidden=1 (the links announce each other: a hidden MLD is not offered)"); return }
+	if (nsch[i] != "") { nerrf(i, tag ": mld_ap=1 refused with a schedule (each change of the multi-link device restarts every Wi-Fi radio)"); return }
+	split("6g 5gh 2g", li, " ")
+	for (n = 1; n <= 3; n++) {
+		b = li[n]
+		if (renab[b] == "0") { nerrf(i, tag ": mld_ap=1 needs radio " b " enabled (" (b == "2g" ? "the 2.4 GHz radio is a member of the firmware MLO group, fixed at its start: it stays enabled while MLO is on" : "a link radio of the multi-link device") ")"); return }
+		if (rmon[b]) { nerrf(i, tag ": mld_ap=1 refused with radio " b " monitor=1 (an MLO group member serves BSSes)"); return }
+		if (rsch[b] != "") { nerrf(i, tag ": mld_ap=1 refused with a schedule on radio " b " (an MLO group member stays up)"); return }
+		if (nsta && stenab && stab == b) { nerrf(i, tag ": mld_ap=1 refused with the station (Wi-Fi uplink) on radio " b " (an MLO group member)"); return }
+	}
+	for (n = 1; n <= 2; n++) {
+		b = li[n]
+		if (racs[b]) { nerrf(i, tag ": mld_ap=1 refused with radio " b " channel=auto (an MLD link carries exactly its radio channel and width: give a channel)"); return }
+	}
+	if (rzw["5gh"]) { nerrf(i, tag ": mld_ap=1 refused with radio 5gh zwdfs=1 (zero-wait DFS under an MLD link is not offered)"); return }
+	# the 5 GHz-high link never in the weather-radar block (5600-5650 MHz, a
+	# 10 min CAC): the radio defaults (channel 100, 20 MHz) when unset
+	ch = ("5gh" in rch) ? rch["5gh"] : 100; w = ("5gh" in rw) ? rw["5gh"] : 20
+	if (chans("5gh", ch) && (w == 20 || (w == 40 && ht40("5gh", ch) != "") || (w == 80 && vht80(ch)) || (w == 160 && vht160(ch)))) {
+		blk5(ch, w)
+		if (BHI >= 120 && BLO <= 128) { nerrf(i, tag ": mld_ap=1 refused with radio 5gh channel " ch " at " w " MHz: the block holds the weather-radar channels 120-128 (5600-5650 MHz, a 10 min CAC); pick a 5gh channel outside 116-128 (160 MHz: none)"); return }
+	}
+	# the 2.4 GHz member up: a network of the list on 2g
+	n = 0; for (j = 1; j <= nnet; j++) if (!bh[j] && ((j, "2g") in hasb)) n++
+	if (!n) nerrf(i, tag ": mld_ap=1 needs a Wi-Fi network on 2.4 GHz (the 2.4 GHz radio is a member of the firmware MLO group and must be up as an AP)")
+}
 function wpsuuid(    bi, m) {
 	m = ""
 	for (bi = 1; bi <= nbands; bi++) if (BANDS[bi] in bmac) { m = bmac[BANDS[bi]]; break }
@@ -1142,7 +1228,7 @@ FILENAME == slotsf {
 function newnet(v) {
 	nnet++; net[nnet] = v; nid[v] = nnet; ci = nnet
 	sec[ci] = ""; ssid[ci] = ""; pass[ci] = ""; vlan[ci] = ""; hid[ci] = 0; iso[ci] = 0; maxc[ci] = ""
-	nsch[ci] = ""; wds[ci] = 0
+	nsch[ci] = ""; wds[ci] = 0; mld[ci] = 0; mlk[ci] = 0; mlph[ci] = 0
 	aw[ci] = ""; alim[ci] = 0; nasw[ci] = 0
 	nb[ci] = 0; nra[ci] = 0
 	rs[ci] = ""; rp[ci] = ""; rk[ci] = ""; as[ci] = ""; ap[ci] = ""; ak[ci] = ""
@@ -1260,6 +1346,8 @@ cur == "n" {
 	else if (k == "hidden" && (v == "0" || v == "1")) hid[ci] = v + 0
 	else if (k == "isolate" && (v == "0" || v == "1")) iso[ci] = v + 0
 	else if (k == "wds" && (v == "0" || v == "1")) wds[ci] = v + 0
+	# Wi-Fi 7 multi-link (header mld_ap=): the key name hostapd itself uses
+	else if (k == "mld_ap" && (v == "0" || v == "1")) mld[ci] = v + 0
 	else if (k == "kv" && (v == "0" || v == "1")) kv[ci] = v + 0
 	else if (k == "wps" && (v == "0" || v == "1")) wps[ci] = v + 0
 	else if (k == "steer" && (v == "0" || v == "1")) steer[ci] = v + 0
@@ -1276,7 +1364,7 @@ cur == "n" {
 	# a custom address (checked in END): bssid= (one band) or bssid.<band>=
 	else if (k == "bssid" && parsemac(v, tmo)) cmac0[ci] = tolower(v)
 	else if (k ~ /^bssid\./ && validband(substr(k, 7)) && parsemac(v, tmo)) cmac[ci, substr(k, 7)] = tolower(v)
-	else if (k ~ /^(repeated|hidden|isolate|wds|kv|wps|steer|max_clients|schedule|airtime_weight|airtime_limit|airtime_sta_weight|slot\.[0-9a-z]+|mac\.[0-9a-z]+|bssid|bssid\.[0-9a-z]+)$/) nerrf(ci, "network " net[ci] ": " k "=" v " refused")
+	else if (k ~ /^(repeated|hidden|isolate|wds|mld_ap|kv|wps|steer|max_clients|schedule|airtime_weight|airtime_limit|airtime_sta_weight|slot\.[0-9a-z]+|mac\.[0-9a-z]+|bssid|bssid\.[0-9a-z]+)$/) nerrf(ci, "network " net[ci] ": " k "=" v " refused")
 	else nerrf(ci, "network " net[ci] ": unknown key " k)	# never echo a value that may be a secret
 	next
 }
@@ -1378,7 +1466,15 @@ END {
 		# skipped SSIDs are known
 		# steering asks clients to move by 802.11v BSS transition requests: kv=1
 		if (steer[i] && !kv[i]) nerrf(i, tag ": steer=1 needs kv=1 (client steering uses the 802.11v BSS transition of kv=1)")
+		if (mld[i]) mldcheck(i, tag)
 	}
+	# one MLO network per list: one multi-link device (mld0)
+	nml = 0
+	for (i = 1; i <= nnet; i++) if (mld[i] && !(i in bad)) {
+		if (nml++) err("network " net[i] ": mld_ap=1: network " net[mldi] " is already the MLO network (one multi-link device, mld0, per list)")
+		else mldi = i
+	}
+	if (!nml) mldi = 0
 	# -S: a skipped network is no longer in the list (no band: no BSS, no
 	# slot, no net/routed/repeated line; no schedule)
 	for (i = 1; i <= nnet; i++) if (i in bad) {
@@ -1396,6 +1492,25 @@ END {
 		if (bv in objbr) nbr[i] = objbr[bv]
 		else if (bv in vfirst) nbr[i] = vfirst[bv]
 		else vfirst[bv] = nbr[i]
+	}
+	# [MLO] the MLD link: a network of its own (id MLDID, like the backhaul:
+	# sticky slot and BSSID index), on the link radios 6g and 5gh, never slot 0,
+	# its interface mld0 (header mld_ap=). mldprimary(): the plain primary
+	MLDID = 100001; MLPH6 = 100002; MLPH5 = 100003
+	if (mldi) {
+		if (mldprimary() == "hidden") {
+			delete hasb[mldi, "6g"]; delete hasb[mldi, "5gh"]
+			for (n = 1; n <= 2; n++) {
+				b = (n == 1) ? "6g" : "5gh"; m = 0
+				for (j = 1; j <= nnet; j++) if (!(j in bad) && !bh[j] && ((j, b) in hasb)) m++
+				if (m) continue
+				newnet(n == 1 ? MLPH6 : MLPH5); mlph[ci] = 1; hid[ci] = 1; sec[ci] = "sae"; pass[ci] = pass[mldi]
+				ssid[ci] = "gt-be98-mlo-" b; vlan[ci] = vlan[mldi]; nbr[ci] = nbr[mldi]; nb[ci] = 1; hasb[ci, b] = 1
+			}
+		}
+		newnet(MLDID); mlk[ci] = 1; mlkof = mldi; sec[ci] = "sae"; pass[ci] = pass[mldi]; ssid[ci] = ssid[mldi]
+		vlan[ci] = vlan[mldi]; nbr[ci] = nbr[mldi]; iso[ci] = iso[mldi]; maxc[ci] = maxc[mldi]
+		nb[ci] = 2; hasb[ci, "6g"] = 1; hasb[ci, "5gh"] = 1; mldk = ci
 	}
 	# WPS: one network per list (header: one hostapd, one push-button session)
 	nw = 0
@@ -1582,6 +1697,7 @@ END {
 				k = ex_slot[b, id]
 				if (k >= cap) err("network " id ": slot." b "=" k ": at most " cap " BSS per radio (slots 0.." cap - 1 ")")
 				else if (k == 0 && ista[b]) err("network " id ": slot." b "=0 is the station (the radio netdev)")
+				else if (k == 0 && mlk[i]) err("slot." b "=0: the MLD link is never the first BSS of a radio")
 				else if (used[b, k] != "") err("network " id ": slot." b "=" k " also network " net[used[b, k]])
 				else { used[b, k] = i; sl[b, id] = k }
 			}
@@ -1590,7 +1706,7 @@ END {
 			i = mem[b, j]; id = net[i]
 			if (sl[b, id] >= 0 || !((b, id) in st_slot)) continue
 			k = st_slot[b, id]
-			if (k < cap && used[b, k] == "" && !(k == 0 && ista[b])) { used[b, k] = i; sl[b, id] = k }
+			if (k < cap && used[b, k] == "" && !(k == 0 && (ista[b] || mlk[i]))) { used[b, k] = i; sl[b, id] = k }
 			else warn("network " id ": remembered slot " k " on " b " not available: reallocated")
 		}
 		# a network scheduled off keeps its slot for when it comes back;
@@ -1606,7 +1722,7 @@ END {
 		# the anchor left: the lowest slot becomes the anchor (one radio restart)
 		if (m && !ista[b] && used[b, 0] == "") {
 			best = -1
-			for (k = 1; k < cap; k++) if (used[b, k] != "") { best = k; break }
+			for (k = 1; k < cap; k++) if (used[b, k] != "" && !mlk[used[b, k]]) { best = k; break }
 			if (best > 0) {
 				i = used[b, best]; used[b, best] = ""; used[b, 0] = i; sl[b, net[i]] = 0
 				promoted[b, net[i]] = 1
@@ -1616,7 +1732,7 @@ END {
 		for (j = 1; j <= m; j++) {
 			i = mem[b, j]; id = net[i]
 			if (sl[b, id] >= 0) continue
-			for (k = ista[b]; k < cap; k++) if (used[b, k] == "" && !((b, k) in rsv)) break
+			for (k = (ista[b] || mlk[i]) ? 1 : 0; k < cap; k++) if (used[b, k] == "" && !((b, k) in rsv)) break
 			if (k >= cap) { err("radio " b ": no free slot for network " id); continue }
 			used[b, k] = i; sl[b, id] = k
 		}
@@ -1887,6 +2003,8 @@ END {
 			id = net[i]; ifn = (k == 0) ? d : d "-" k
 			a = bssid(b, mi[b, id]); br = bh[i] ? "-" : nbr[i]
 			f = out "/sec-" ifn
+			# [MLO] the MLD link: interface mld0 on each link radio (bss=mld0)
+			if (mlk[i]) { ifn = "mld0"; f = out "/sec-" d "-mld0" }
 			print "# " (bh[i] ? "backhaul" : "network " id) " slot " k " (BSSID index " mi[b, id] ")" > f
 			print "ctrl_interface=" ctrl > f
 			print "bssid=" a > f
@@ -1905,6 +2023,8 @@ END {
 			print "uapsd_advertisement_enabled=1" > f
 			print "auth_algs=1" > f
 			if (hid[i]) print "ignore_broadcast_ssid=1" > f
+			# the MLD (header mld_ap=): one AP MLD, its address = the 6 GHz link BSSID
+			if (mlk[i]) { print "mld_ap=1" > f; print "mld_addr=" bssid("6g", mi["6g", id]) > f }
 			if (iso[i]) print "ap_isolate=1" > f
 			# 4-address clients: their AP_VLAN into the network bridge
 			if (wds[i] && !bh[i]) { print "multi_ap=3" > f; print "wds_sta=1" > f; print "wds_bridge=" br > f }
@@ -1932,7 +2052,8 @@ END {
 			}
 			# (the hidden backhaul BSS is never advertised: no RNR, no 6 GHz
 			# discovery frames)
-			if (rnr && b != "6g" && !bh[i]) print "rnr=1" > f
+			# (the MLD link: hostapd builds the partner-link report of the MLD itself; q467 proved the links without rnr=)
+			if (rnr && b != "6g" && !bh[i] && !mlk[i]) print "rnr=1" > f
 			# 6 GHz in-band discovery, one frame every 20 TU (802.11ax: a 6 GHz AP
 			# sends unsolicited broadcast probe responses or FILS discovery frames),
 			# so a client need not wait for a 100 TU beacon. Radio scope in the
@@ -1968,7 +2089,7 @@ END {
 				else if (s == "wpa2-wpa3-eap") { print "wpa_key_mgmt=WPA-EAP WPA-EAP-SHA256" > f; print "ieee80211w=1" > f }
 				else if (s == "wpa3-eap") { print "wpa_key_mgmt=WPA-EAP-SHA256" > f; print "ieee80211w=2" > f }
 				else if (s == "psk2sae") { print "wpa_key_mgmt=WPA-PSK SAE" > f; print "ieee80211w=1" > f; print "sae_pwe=2" > f }
-				else { print "wpa_key_mgmt=SAE" > f; print "ieee80211w=2" > f; print "sae_require_mfp=1" > f; print "sae_pwe=" (b == "6g" ? 1 : 2) > f }
+				else { print "wpa_key_mgmt=SAE" > f; print "ieee80211w=2" > f; print "sae_require_mfp=1" > f; print "sae_pwe=" ((b == "6g" || mlk[i]) ? 1 : 2) > f }
 				# beacon protection (-B: the driver advertises it): SAE and
 				# OWE BSSes, PMF on in each (stock: bcnprot 1 on SAE, 0 on WPA2)
 				if ((b in bpok) && (s == "sae" || s == "psk2sae" || s == "owe")) print "beacon_prot=1" > f
@@ -2009,11 +2130,14 @@ END {
 				print "send_probe_response=0" > f
 			}
 			close(f)
-			print "bss " d " " ifn " " k " " id " " mi[b, id] " " a " " br " " out "/bss-" ifn ".conf" > plan
+			print "bss " d " " ifn " " k " " id " " mi[b, id] " " a " " br " " out "/bss-" (mlk[i] ? d "-" : "") ifn ".conf" > plan
 			onradio[id] = 1
 		}
 	}
+	# [MLO] mld <ifname> <mld address> <6 GHz link dev> <5 GHz-high link dev> <network>
+	if (mldk && (MLDID in onradio)) print "mld mld0 " bssid("6g", mi["6g", MLDID]) " " dev["6g"] " " dev["5gh"] " " net[mlkof] > plan
 	for (i = 1; i <= nnet; i++) if (net[i] in onradio) {
+		if (mlk[i] || mlph[i]) continue
 		if (bh[i]) {
 			for (k = 0; k < cap; k++) if (used[bhband, k] == i) break
 			print "backhaul " bhband " " dev[bhband] " " (k == 0 ? dev[bhband] : dev[bhband] "-" k) " " bssid(bhband, mi[bhband, net[i]]) > plan
@@ -2106,13 +2230,16 @@ while read -r t a b c d e f g h; do
 		{ echo "$H"; echo "interface=$first"; cat "$OUT/hdr-$b"; } > "$c"
 		echo "radio $a $b $c $(sum "$OUT/hdr-$b") $first" >> "$OUT/plan" ;;
 	bss)	# bss <dev> <ifname> <slot> <net> <index> <bssid> <bridge> <conf>
+		# the MLD link (mld0) has a section per link radio
+		sf="$OUT/sec-$b"; [ "$b" = mld0 ] && sf="$OUT/sec-$a-mld0"
 		if [ "$b" = "$first" ]; then
-			{ echo; cat "$OUT/sec-$b"; } >> "$OUT/hostapd-$a.conf"
+			{ echo; cat "$sf"; } >> "$OUT/hostapd-$a.conf"
 		else
-			{ echo; echo "bss=$b"; cat "$OUT/sec-$b"; } >> "$OUT/hostapd-$a.conf"
+			{ echo; echo "bss=$b"; cat "$sf"; } >> "$OUT/hostapd-$a.conf"
 		fi
-		{ echo "$H"; echo "interface=$b"; cat "$OUT/hdr-$a"; echo; cat "$OUT/sec-$b"; } > "$h"
-		echo "bss $a $b $c $d $e $f $g $h $(sum "$OUT/sec-$b")" >> "$OUT/plan" ;;
+		{ echo "$H"; echo "interface=$b"; cat "$OUT/hdr-$a"; echo; cat "$sf"; } > "$h"
+		echo "bss $a $b $c $d $e $f $g $h $(sum "$sf")" >> "$OUT/plan" ;;
+	mld)	echo "$t $a $b $c $d $e" >> "$OUT/plan" ;;
 	net|routed) echo "$t $a $b $c $d" >> "$OUT/plan" ;;
 	repeated|repeater) echo "$t $a $b $c" >> "$OUT/plan" ;;
 	backhaul) echo "$t $a $b $c $d" >> "$OUT/plan" ;;

@@ -74,7 +74,7 @@ INTERFACES) awk '{ for (i = 2; i <= NF; i++) print $i }' "$S" ;;
 ADD)	a=${2#bss_config=}; phy=${a%%:*}; f=${a#*:}
 	[ -f "$f" ] || { echo FAIL; exit 0; }
 	names=$(sed -n 's/^\(interface\|bss\)=//p' "$f")
-	for n in $names; do inuse "$n" && { echo FAIL; exit 0; }; done
+	for n in $names; do case $n in mld*) continue ;; esac; inuse "$n" && { echo FAIL; exit 0; }; done
 	if grep -q "^$phy " "$S"; then
 		[ "$(echo $names | wc -w)" = 1 ] || { echo FAIL; exit 0; }
 		sed -i "s/^$phy .*/& $names/" "$S"
@@ -114,6 +114,8 @@ case "$*" in
 "phy "*" interface add "*" type monitor") mkdir -p "$FAKE/net/$5"; echo "$*" >> "$FAKE/iwlog" ;;
 "dev "*" del") rm -rf "${FAKE:?}/net/$2"; echo "$*" >> "$FAKE/iwlog" ;;
 "dev "*" interface add "*" type __ap") mkdir -p "$FAKE/net/$5"; echo "$*" >> "$FAKE/iwlog"; echo "iw add $5" >> "$FAKE/seq" ;;
+"phy "*" interface add "*" type __ap addr "*" radios "*) mkdir -p "$FAKE/net/$5"; echo "$*" >> "$FAKE/iwlog"; echo "iw add $5" >> "$FAKE/seq" ;;
+"phy "*" interface add "*" type monitor radios "*) mkdir -p "$FAKE/net/$5"; echo "$*" >> "$FAKE/iwlog" ;;
 "dev "*" set freq "*) echo "$*" >> "$FAKE/iwlog" ;;
 esac
 exit 0
@@ -858,6 +860,58 @@ check "shared network: one gt-be98-l2 up per network bridge" "ups 2 brwifi100007
 check "shared network: the BSSes (ifname ssid bridge)" "bcawl3 10 brwifi100007|bcawl3-1 11 brwifi100007|bcawl3-2 30 brwifi100008|bcawl0 10 brwifi100007|bcawl0-1 31 brwifi100008|" \
 	"$(grep '^bcawl' "$T/shared.out" | tr '\n' '|')"
 check "control (no network objects): the first SSID's bridges, still once each" 'ctl "brwifi10:10 brwifi30:30" brwifi10 rnr0 10,brwifi30 rnr0 30,' "$(grep '^ctl ' "$T/shared.out")"
+
+# ---- [MLO] the AP MLD (gt-be98-wifi-gen mld_ap=1; open-wifi ledger MLD-RADIO-RESTART, MLO-PROD2 19) ----
+# the MLO build: 2.4 GHz, 5 GHz-high and 6 GHz on ONE wiphy (phy9), its radios listed by iw
+for d in bcawl1 bcawl2 bcawl3; do echo phy9 > "$T/net/$d/phy80211/name"; done
+printf '\tSupported wiphy radios:\n\t\t* Idx 0:\n\t\t\tFrequency Range: 2400 MHz - 2500 MHz\n\t\t* Idx 1:\n\t\t\tFrequency Range: 5470 MHz - 5895 MHz\n\t\t* Idx 2:\n\t\t\tFrequency Range: 5925 MHz - 7125 MHz\n\tSupported commands:\n' > "$T/iw-phy9"
+mlo_nets() {
+	printf 'country=FR\nradio=6g\nchannel=%s\nwidth=160\nradio=5gh\nchannel=100\nwidth=80\n' "${1:-37}"
+	printf 'network=1\nssid=home\nsecurity=sae\npassphrase=password1\nbands=2g 5gl 5gh 6g\nvlan=10\nmld_ap=%s\n' "${2:-1}"
+}
+hap_down_all() { hap_daemon_stop > /dev/null 2>&1; rm -rf "$T/run/gt-be98-wifi/applied" "$T/run/gt-be98-wifi/mld" "$T/run/gt-be98-wifi/mld.applied" "$T/net/mld0" "$T"/state-*; : > "$T/daemon"; }
+hap_down_all; rm -f "$T/slots"; : > "$T/seq"; : > "$T/iwlog"
+mlo_nets > "$T/nets"; apply
+check "MLO start: rc" 0 $rc
+L6=$(awk '$1 == "mld" { print $3 }' "$G/plan")
+check "MLO start: mld0 created with the 6 GHz link address and the radio mask of 6g + 5gh (radios 2 and 1)" "phy phy9 interface add mld0 type __ap addr $L6 radios 0x6" "$(grep 'mld0' "$T/iwlog")"
+check "MLO start: mld0 created before the first radio is added" "iw add mld0" "$(grep -m1 -E '^(iw add mld0|hapd ADD)' "$T/seq")"
+check "MLO start: the radios added MAP first (6g), then 2g, then 5gh, then 5gl; keyed by netdev on the shared wiphy" \
+	"ADD bss_config=bcawl2:$G/hostapd-bcawl2.conf|ADD bss_config=bcawl3:$G/hostapd-bcawl3.conf|ADD bss_config=bcawl1:$G/hostapd-bcawl1.conf|ADD bss_config=phy0:$G/hostapd-bcawl0.conf|" \
+	"$(grep '^ADD' "$T/cmds" | tr '\n' '|')"
+check "MLO start: the MLD state recorded" "yes yes" "$([ -f "$T/run/gt-be98-wifi/mld" ] && echo yes || echo no) $([ -f "$T/run/gt-be98-wifi/mld.applied" ] && echo yes || echo no)"
+: > "$T/daemon"; apply
+check "MLO unchanged: no command, no restart" "|" "$(printf '%s' "$cmds" | tr '\n' ' ')|$(cat "$T/daemon")"
+# a link radio's change (6 GHz channel): the whole hostapd, the old one awaited, mld0 made again, the MAP first
+: > "$T/daemon"; : > "$T/iwlog"; mlo_nets 53 > "$T/nets"; apply
+check "MLO 6 GHz change: rc" 0 $rc
+check "MLO 6 GHz change: hostapd stopped and started again (full restart)" "stop|start" "$(cut -d' ' -f1 "$T/daemon" | tr '\n' '|' | sed 's/|$//')"
+check "MLO 6 GHz change: no per-radio REMOVE (a re-added link would get a new link id)" "0" "$(grep -c '^REMOVE' "$T/cmds")"
+check "MLO 6 GHz change: mld0 deleted and created again" "dev mld0 del|phy phy9 interface add mld0 type __ap addr $L6 radios 0x6|" "$(grep mld0 "$T/iwlog" | tr '\n' '|')"
+check "MLO 6 GHz change: MAP first again" "ADD bss_config=bcawl2:$G/hostapd-bcawl2.conf" "$(grep -m1 '^ADD' "$T/cmds")"
+check "MLO stop waits for the old hostapd (TERM 30 s, an MLD exit takes 12-15 s)" "yes" "$(grep -q 'TERM/${HOSTAPD_STOP_WAIT:-30}/KILL/5' "${SVC:-$here/../src/init.d/gt-be98-wifi}" && echo yes || echo no)"
+# a link radio that failed late (DISABLED): recorded first (the bounded retry, 30 s), then at the retry never
+# restarted alone: hostapd whole instead
+: > "$T/daemon"; echo DISABLED > "$T/state-bcawl1"; at 1000
+check "MLO link radio DISABLED: the first time recorded, no restart yet" "0 " "$(grep -c '^REMOVE' "$T/cmds") $(cat "$T/daemon")"
+at 1031; rm -f "$T/state-bcawl1"
+check "MLO link radio DISABLED, retry due: no REMOVE of it alone; a full restart" "0 stop|start" "$(grep -c '^REMOVE' "$T/cmds") $(cut -d' ' -f1 "$T/daemon" | tr '\n' '|' | sed 's/|$//')"
+check "MLO link radio DISABLED, retry due: said so (MLD-RADIO-RESTART)" "yes" "$(grep -q 'MLD-RADIO-RESTART' "$T/out" && echo yes || echo no)"
+check "MLO link radio DISABLED, retry due: the MAP first again" "ADD bss_config=bcawl2:$G/hostapd-bcawl2.conf" "$(grep -m1 '^ADD' "$T/cmds")"
+unset GT_BE98_NOW; rm -rf "$T/run/gt-be98-wifi/failed"
+# MLO turned off: hostapd whole again, mld0 gone, no MLD state
+: > "$T/daemon"; : > "$T/iwlog"; mlo_nets 53 0 > "$T/nets"; apply
+check "MLO off: full restart, mld0 deleted, no MLD state" "stop|start dev mld0 del no no" \
+	"$(cut -d' ' -f1 "$T/daemon" | tr '\n' '|' | sed 's/|$//') $(grep mld0 "$T/iwlog" | tr '\n' ' ' | sed 's/ $//') $([ -e "$T/net/mld0" ] && echo yes || echo no) $([ -f "$T/run/gt-be98-wifi/mld" ] && echo yes || echo no)"
+: > "$T/daemon"; apply
+check "MLO off, unchanged: no restart" "" "$(cat "$T/daemon")"
+# a monitor on the multi-radio wiphy names its radio (radios <mask>)
+hap_down_all; : > "$T/iwlog"
+printf 'radio=2g\nmonitor=1\nchannel=6\nnetwork=1\nssid=home\nsecurity=psk2\npassphrase=password1\nbands=5gl\nvlan=10\n' > "$T/nets"; apply
+check "MLO build monitor: created with radios = the radio holding 2437 MHz (radio 0)" "phy phy9 interface add bcawl3mon type monitor radios 0x1" "$(grep 'type monitor' "$T/iwlog")"
+hap_down_all; mon_prune "" > /dev/null 2>&1
+for p in 1 2 3; do echo "phy$p" > "$T/net/bcawl$p/phy80211/name"; done
+rm -f "$T/iw-phy9"
 
 if [ $fail = 0 ]; then echo "ALL OK ($n checks)"; else echo "FAILED"; cat "$T/out"; fi
 exit $fail

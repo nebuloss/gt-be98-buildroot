@@ -1768,5 +1768,79 @@ check "6 GHz ch 1: FILS discovery on both BSSes, no probe responses" "yes yes no
 	"$(has bcawl2 fils_discovery_max_interval=20) $(has bcawl2-1 fils_discovery_max_interval=20) $(has bcawl2 unsol_bcast_probe_resp_interval=20) $(has bcawl2-1 unsol_bcast_probe_resp_interval=20)"
 conf_ok "6 GHz ch 1 FILS discovery"
 
+# ---- [MLO] Wi-Fi 7 multi-link (mld_ap=1; open-wifi docs/MLO-PROD2-2026-11-24.md 19; orchestrator 2026-11-26) ----
+# mlo_net ID SSID SEC BANDS [extra lines]: an MLO network block
+mlo_net() { printf 'network=%s\nssid=%s\nsecurity=%s\npassphrase=password1\nbands=%s\nvlan=921\nmld_ap=1\n' "$1" "$2" "$3" "$4"; [ -n "${5:-}" ] && printf '%s\n' "$5"; return 0; }
+mlo_radios() { printf 'country=FR\nradio=6g\nchannel=37\nwidth=160\nradio=5gh\nchannel=%s\nwidth=%s\n' "${1:-100}" "${2:-80}"; }
+mlo_refuse() {	# name list [-S...]: refused (rc 1) with an error that names $3
+	l=$1; shift; want=$1; shift
+	rm -f "$T/slots"; gen "$l" -c -M 1 "$@"; r=$?
+	check "MLO refuse: $want" "1 yes" "$r $(grep -qF -- "$want" "$T/err" && echo yes || echo no)"
+}
+line_of() { grep -n -x -- "$2" "$1" | head -1 | cut -d: -f1; }
+{ mlo_radios; mlo_net 1 Home sae "2g 5gl 5gh 6g"; } > "$T/m1"
+rm -f "$T/slots"; gen "$T/m1" -c -M 1; check "MLO: one network on every band, mld_ap=1: accepted" 0 $?
+A6=$(bssid_of bcawl2); A5=$(bssid_of bcawl1)
+L6=$(awk '$1 == "bss" && $2 == "bcawl2" && $3 == "mld0" { print $7 }' "$T/o/plan")
+L5=$(awk '$1 == "bss" && $2 == "bcawl1" && $3 == "mld0" { print $7 }' "$T/o/plan")
+check "MLO: the plan names the MLD (mld0, its address = the 6 GHz link BSSID, the link radios, the network)" "mld mld0 $L6 bcawl2 bcawl1 1" "$(grep '^mld ' "$T/o/plan")"
+check "MLO: the MLD link is a later BSS (slot > 0) on 6g and 5gh, nowhere else" "1 1 2" \
+	"$(awk '$1 == "bss" && $2 == "bcawl2" && $3 == "mld0" { print $4 }' "$T/o/plan") $(awk '$1 == "bss" && $2 == "bcawl1" && $3 == "mld0" { print $4 }' "$T/o/plan") $(awk '$1 == "bss" && $3 == "mld0"' "$T/o/plan" | wc -l | tr -d ' ')"
+check "MLO (b): the MLO network itself is the plain primary of 6g and 5gh (slot 0, same SSID)" "bcawl2 0 1 bcawl1 0 1" \
+	"$(awk '$1 == "bss" && $3 == "bcawl2" { printf "%s %s %s ", $3, $4, $5 }' "$T/o/plan")$(awk '$1 == "bss" && $3 == "bcawl1" { printf "%s %s %s", $3, $4, $5 }' "$T/o/plan")"
+check "MLO: both links carry mld_ap=1 and the same mld_addr (the 6 GHz link BSSID)" "yes yes yes yes" \
+	"$(has bcawl2-mld0 mld_ap=1) $(has bcawl1-mld0 mld_ap=1) $(has bcawl2-mld0 mld_addr=$L6) $(has bcawl1-mld0 mld_addr=$L6)"
+check "MLO: the links are SAE, PMF required, H2E (sae_pwe=1) on both radios" "yes yes yes yes yes yes" \
+	"$(has bcawl2-mld0 wpa_key_mgmt=SAE) $(has bcawl2-mld0 ieee80211w=2) $(has bcawl2-mld0 sae_pwe=1) $(has bcawl1-mld0 wpa_key_mgmt=SAE) $(has bcawl1-mld0 ieee80211w=2) $(has bcawl1-mld0 sae_pwe=1)"
+check "MLO: the 5 GHz-high link has no rnr= (q467), its plain primary keeps rnr=1" "no yes" "$(has bcawl1-mld0 rnr=1) $(has bcawl1 rnr=1)"
+check "MLO: the link BSSIDs differ from the primaries and from each other" "yes" \
+	"$([ "$L6" != "$A6" ] && [ "$L5" != "$A5" ] && [ "$L6" != "$L5" ] && echo yes || echo no)"
+c6=$T/o/hostapd-bcawl2.conf; c5=$T/o/hostapd-bcawl1.conf
+check "MLO: in each radio config the plain primary is first, bss=mld0 after it" "yes yes" \
+	"$([ "$(line_of "$c6" interface=bcawl2)" -lt "$(line_of "$c6" bss=mld0)" ] && echo yes || echo no) $([ "$(line_of "$c5" interface=bcawl1)" -lt "$(line_of "$c5" bss=mld0)" ] && echo yes || echo no)"
+check "MLO: no_pri_sec_switch=1 on both link radios" "yes yes" "$(grep -qx no_pri_sec_switch=1 "$c6" && echo yes || echo no) $(grep -qx no_pri_sec_switch=1 "$c5" && echo yes || echo no)"
+check "MLO: 5gh chanlist leaves out the weather-radar block 116-128" "chanlist=100-112 132-144 149-177" "$(grep '^chanlist=' "$c5")"
+check "MLO: no net line for the MLD link (one network, net 1)" "net 1 brwifi1 921 0" "$(grep '^net ' "$T/o/plan" | tr '\n' '|' | sed 's/|$//')"
+check "MLO: 2g and 5gl carry the network as plain BSSes only" "no no" "$(grep -q mld_ap "$T/o/hostapd-bcawl3.conf" && echo yes || echo no) $(grep -q mld_ap "$T/o/hostapd-bcawl0.conf" && echo yes || echo no)"
+conf_ok "MLO configs"
+gen "$T/m1" -c -M 1; check "MLO: a second run keeps both link BSSIDs (sticky)" "$L6 $L5" \
+	"$(awk '$1 == "bss" && $2 == "bcawl2" && $3 == "mld0" { print $7 }' "$T/o/plan") $(awk '$1 == "bss" && $2 == "bcawl1" && $3 == "mld0" { print $7 }' "$T/o/plan")"
+# the refusals (each names the setting)
+{ mlo_radios; mlo_net 1 Home sae "2g 5gl 5gh 6g"; } > "$T/m2"; rm -f "$T/slots"; gen "$T/m2" -c
+check "MLO refuse: the single-radio build (no -M, no shared wiphy)" "1 yes" "$? $(grep -qF 'needs the MLO build' "$T/err" && echo yes || echo no)"
+{ mlo_radios; mlo_net 1 Home psk2sae "2g 5gl 5gh 6g"; } > "$T/m3"; mlo_refuse "$T/m3" "needs security=sae"
+{ mlo_radios; mlo_net 1 Home sae "2g 5gl 6g"; } > "$T/m4"; mlo_refuse "$T/m4" "needs bands 6g and 5gh"
+{ printf 'country=FR\nradio=6g\nchannel=37\nwidth=160\nradio=5gh\nchannel=auto\nwidth=80\n'; mlo_net 1 Home sae "2g 5gh 6g"; } > "$T/m5"; mlo_refuse "$T/m5" "radio 5gh channel=auto"
+{ printf 'country=US\nradio=6g\nchannel=37\nwidth=160\nradio=5gh\nchannel=100\nwidth=80\nzwdfs=1\n'; mlo_net 1 Home sae "2g 5gh 6g"; } > "$T/m6"; mlo_refuse "$T/m6" "radio 5gh zwdfs=1"
+{ mlo_radios; printf 'radio=2g\nenabled=0\n'; mlo_net 1 Home sae "2g 5gh 6g"; } > "$T/m7"; mlo_refuse "$T/m7" "needs radio 2g enabled"
+{ mlo_radios; mlo_net 1 Home sae "5gh 6g"; } > "$T/m8"; mlo_refuse "$T/m8" "needs a Wi-Fi network on 2.4 GHz"
+{ mlo_radios; mlo_net 1 Home sae "2g 5gh 6g"; mlo_net 2 Two sae "5gh 6g"; } > "$T/m9"; mlo_refuse "$T/m9" "one multi-link device"
+{ mlo_radios 120 20; mlo_net 1 Home sae "2g 5gh 6g"; } > "$T/m10"; mlo_refuse "$T/m10" "weather-radar"
+{ mlo_radios 100 160; mlo_net 1 Home sae "2g 5gh 6g"; } > "$T/m11"; mlo_refuse "$T/m11" "weather-radar"
+{ mlo_radios 132 80; mlo_net 1 Home sae "2g 5gh 6g"; } > "$T/m12"; rm -f "$T/slots"; gen "$T/m12" -c -M 1
+check "MLO: 5gh 132/80 (outside the weather block) accepted" 0 $?
+{ mlo_radios; mlo_net 1 Home sae "2g 5gh 6g" "wds=1"; } > "$T/m13"; mlo_refuse "$T/m13" "refused with wds=1"
+{ mlo_radios; mlo_net 1 Home sae "2g 5gh 6g" "hidden=1"; } > "$T/m14"; mlo_refuse "$T/m14" "refused with hidden=1"
+{ mlo_radios; mlo_net 1 Home sae "2g 5gh 6g" "schedule=daily@08:00-20:00"; } > "$T/m15"; mlo_refuse "$T/m15" "refused with a schedule"
+{ mlo_radios; printf 'radio=2g\nmonitor=1\n'; mlo_net 1 Home sae "2g 5gh 6g"; } > "$T/m16"; mlo_refuse "$T/m16" "radio 2g monitor=1"
+# -S (the service): a refused MLO network is skipped, every other network and radio still rendered
+{ mlo_radios; mlo_net 1 Home psk2sae "2g 5gh 6g"; printf 'network=2\nssid=Guest\nsecurity=sae\npassphrase=password2\nbands=2g 5gh 6g\nvlan=922\n'; } > "$T/m17"
+rm -f "$T/slots"; gen "$T/m17" -c -M 1 -S
+check "MLO -S: the refused MLO network skipped, the others rendered, no MLD" "0 yes 1 0" \
+	"$? $(grep -q 'network 1 skipped' "$T/err" && echo yes || echo no) $(grep -c '^skipped 1$' "$T/o/plan") $(grep -c 'mld' "$T/o/plan")"
+# -F: the feature follows the driver build
+check "MLO -F: feature mlo 0 without the MLO build, 1 with -M 1" "feature mlo 0|feature mlo 1" \
+	"$($SH "$G" -F | grep '^feature mlo')|$($SH "$G" -M 1 -F | grep '^feature mlo')"
+# the (c) fallback (mldprimary "hidden": one line of the generator): a hidden placeholder primary on a link radio
+# that carries no other network, the MLO network on 6g/5gh as its MLD link only
+sed 's/^function mldprimary() { return "own" }$/function mldprimary() { return "hidden" }/' "$G" > "$T/genc"
+check "MLO (c): the switch is one line" 1 "$(diff "$G" "$T/genc" | grep -c '^>')"
+rm -f "$T/slots"; $SH "$T/genc" -n "$T/m1" -o "$T/o" -s "$T/slots" -m "$M" -c -M 1 2> "$T/err"
+check "MLO (c): accepted; a hidden placeholder primary first on 6g and 5gh, the MLD link after it" "0 yes yes 1 1" \
+	"$? $(has bcawl2 ignore_broadcast_ssid=1) $(has bcawl1 ignore_broadcast_ssid=1) $(awk '$1 == "bss" && $2 == "bcawl2" && $3 == "mld0" { print $4 }' "$T/o/plan") $(awk '$1 == "bss" && $2 == "bcawl1" && $3 == "mld0" { print $4 }' "$T/o/plan")"
+check "MLO (c): no plain BSS of the MLO network on 6g/5gh; 2g and 5gl keep it" "100002 100003 1 1" \
+	"$(awk '$1 == "bss" && $3 == "bcawl2" { print $5 }' "$T/o/plan") $(awk '$1 == "bss" && $3 == "bcawl1" { print $5 }' "$T/o/plan") $(awk '$1 == "bss" && $3 == "bcawl3" { print $5 }' "$T/o/plan") $(awk '$1 == "bss" && $3 == "bcawl0" { print $5 }' "$T/o/plan")"
+conf_ok "MLO (c) configs"
+
 if [ $fail = 0 ]; then echo "ALL OK ($n checks)"; else echo "FAILED"; fi
 exit $fail

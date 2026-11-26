@@ -77,7 +77,22 @@
 # (iw phy <phy> interface add <dev>mon type monitor), set up and tuned to the
 # radio's channel/width. A monitor no longer listed is deleted before the
 # radio's BSSes start again; only what this service created ($STATE/monitors)
-# is ever deleted.
+# is ever deleted. On a multi-radio wiphy (the Wi-Fi driver's MLO build) the
+# monitor names its radio: radios <the bit of the radio whose frequency range
+# holds the channel> (iw phy info, "Supported wiphy radios").
+#
+# The AP MLD (Wi-Fi 7 multi-link: a network with mld_ap=1, gt-be98-wifi-gen,
+# plan line "mld"; open-wifi docs/MLO-PROD2-2026-11-24.md 19 and ledger
+# MLD-RADIO-RESTART): mld0 is created before any radio starts (iw phy <phy>
+# interface add mld0 type __ap addr <the 6 GHz link BSSID> radios <the 6 GHz
+# and 5 GHz-high radios>), the radios are added MAP first (6 GHz, then
+# 2.4 GHz, then 5 GHz-high: hostapd numbers the links in that order), each
+# keyed by its netdev (the radios share one wiphy). Any change of the MLD or
+# of a link radio's config, and a link radio that would be restarted alone
+# (a re-added link gets a new link id, which the driver refuses), restarts
+# hostapd WHOLE: the old process is awaited (TERM, up to HOSTAPD_STOP_WAIT
+# = 30 s: with an MLD its exit takes 12-15 s), its MLD control socket and
+# mld0 removed, then started again. Other radios keep the per-radio path.
 #
 # Driver re-probe (open-wifi radio_rebind, INV-RECOVERY): the driver may
 # remove and re-probe ONE radio after a firmware trap; its netdev comes back
@@ -502,10 +517,12 @@ br_prune() {
 conf_check() {
 	local c=$1 brs=$2 v
 	# shellcheck disable=SC2013 # netdev names: no whitespace
-	for v in $(sed -nE 's/^(interface|bss)=//p' "$c"); do
+	for v in $(sed -nE 's/^(interface|bss)=/\1:/p' "$c"); do
 		case "$v" in
-		bcawl[0-9]*) ;;
-		*) eerror "$c: $v is not a Wi-Fi netdev (bcawl*)"; return 1 ;;
+		interface:bcawl[0-9]*|bss:bcawl[0-9]*) ;;
+		# the AP MLD's link (gt-be98-wifi-gen mld_ap=1): a later BSS of a link radio, never its first
+		bss:mld0) ;;
+		*) eerror "$c: ${v#*:} is not a Wi-Fi netdev (bcawl*)"; return 1 ;;
 		esac
 	done
 	# shellcheck disable=SC2013 # bridge names: no whitespace
@@ -556,12 +573,16 @@ hap_args_sum() { echo "$(hap_global) ${HOSTAPD_ARGS:-}" | sha256sum | cut -d' ' 
 hap_daemon_stop() {
 	if hap_running; then
 		ebegin "Stopping hostapd"
+		# [MLD-RADIO-RESTART] the old process must be GONE before a new one
+		# starts: with an AP MLD its exit takes 12-15 s (each link stop is a
+		# whole-group cycle), and it holds the MLD control socket until then
 		start-stop-daemon --stop --exec /usr/sbin/hostapd --pidfile "$HAP_PID" \
-			--retry TERM/5/KILL/2
+			--retry "TERM/${HOSTAPD_STOP_WAIT:-30}/KILL/5"
 		eend $?
 	fi
 	rm -f "$HAP_PID" "$STATE/hostapd.args" "$(hap_global)"
 	rm -rf "$STATE/applied"
+	mld_down
 }
 
 # hostapd with only its global control socket; the radios are added to it
@@ -582,7 +603,21 @@ hap_daemon_start() {
 	hap_args_sum > "$STATE/hostapd.args"
 }
 
-# the wiphy of a radio netdev (the key of ADD bss_config=), waiting for it
+# [MLO] the key of ADD bss_config=<key>:<file> for radio netdev $1: its wiphy,
+# except on a wiphy shared by several radio netdevs (the Wi-Fi driver's MLO
+# build), where hostapd 2.12 would append a second radio's config to the
+# first radio's iface (hostapd_interface_init_bss matches iface->phy): the
+# netdev name then, one key per radio (as q467's arm)
+hap_key() {
+	local d=$1 phy o n=0
+	phy=$(radio_phy "$d") || return 1
+	for o in "$SYSNET"/bcawl[0-9]*; do
+		[ "$(cat "$o/phy80211/name" 2>/dev/null)" = "$phy" ] && n=$((n + 1))
+	done
+	if [ "$n" -gt 1 ]; then echo "$d"; else echo "$phy"; fi
+}
+
+# the wiphy of a radio netdev, waiting for it
 radio_phy() {
 	local d=$1 n=0
 	while [ ! -e "$SYSNET/$d" ] && [ $n -lt "${IFACE_WAIT:-20}" ]; do
@@ -787,6 +822,14 @@ fail_clear() {
 # (re)start radio $1 with all its BSSes
 unit_restart() {
 	local d=$1 w="$STATE/want/$1" c phy f o
+	# [MLD-RADIO-RESTART] a link radio of the AP MLD is never restarted alone
+	# (a re-added link gets a new link id, which the driver refuses: q467 RR):
+	# the whole hostapd instead, once per apply (apply_hostapd)
+	if mld_radio "$d" && [ "${MLD_FULL_DONE:-0}" != 1 ] && [ -f "$STATE/mld" ]; then
+		ewarn "radio $d carries an MLD link: a restart of this radio alone is refused (MLD-RADIO-RESTART): a full hostapd restart follows"
+		MLD_NEED_FULL=1
+		return 1
+	fi
 	c=$(unit_line "$w" conf)
 	f=$(unit_first "$w" "$d")
 	o=$(unit_first "$STATE/applied/$d" "$d")
@@ -796,7 +839,7 @@ unit_restart() {
 		eend $?
 		rm -f "$STATE/applied/$d"
 	fi
-	phy=$(radio_phy "$d") || return 1
+	phy=$(hap_key "$d") || return 1
 	# a station radio: hostapd starts its first AP on a virtual interface
 	# that must exist (gone with an earlier REMOVE when hostapd had made it)
 	if [ "$f" != "$d" ]; then vif_add "$d" "$f" || return 1; fi
@@ -854,7 +897,7 @@ unit_apply() {
 		if [ $ok = 1 ]; then einfo "hostapd on $d: unchanged"; return 0; fi
 		ok=1
 	fi
-	phy=$(cat "$SYSNET/$d/phy80211/name" 2>/dev/null) || { unit_restart "$d"; return; }
+	phy=$(hap_key "$d") || { unit_restart "$d"; return; }
 	# removed or changed BSSes first (frees their netdev name and BSSID)
 	while read -r i s p; do
 		[ -n "$i" ] || continue
@@ -1073,14 +1116,19 @@ mon_prune() {
 
 # monitor <dev>mon on radio $1 at $2 MHz, width $3 MHz, centre $4 MHz
 mon_add() {
-	local d=$1 f=$2 w=$3 c=$4 m="$1mon" phy
+	local d=$1 f=$2 w=$3 c=$4 m="$1mon" phy r
 	case "$d$f$w$c" in *[!a-z0-9]*) eerror "monitor $d: refused"; return 1 ;; esac
 	phy=$(radio_phy "$d") || return 1
 	# the driver refuses a monitor while the radio's primary netdev is up
 	ip link set dev "$d" down 2>/dev/null
 	if [ ! -e "$SYSNET/$m" ]; then
 		ebegin "Creating monitor $m on $d"
-		iw phy "$phy" interface add "$m" type monitor
+		# [MLO] on a multi-radio wiphy the monitor names its radio (the
+		# driver binds it at its first open; open-ethernet patch 1200 lets
+		# it tune that radio): radios <the radio holding f>
+		r=$(wiphy_radio_of "$phy" "$f")
+		if [ -n "$r" ]; then iw phy "$phy" interface add "$m" type monitor radios "$(printf '0x%x' $((1 << r)))"
+		else iw phy "$phy" interface add "$m" type monitor; fi
 		eend $? || return 1
 		mkdir -p "$STATE"
 		mon_owned "$m" || echo "$m" >> "$STATE/monitors"
@@ -1288,8 +1336,84 @@ sta_mon_apply() {
 }
 
 # bring hostapd in line with the settings: only what changed
+# ---- the AP MLD (gt-be98-wifi-gen mld_ap=1; open-wifi ledger MLD-RADIO-RESTART,
+# design note MLO-PROD2 19) ----
+# the plan's MLD: "<ifname> <address> <6 GHz link dev> <5 GHz-high link dev> <network>" ("" = none)
+mld_want() { awk '$1 == "mld" { print $2, $3, $4, $5, $6; exit }' "$STATE/gen/plan" 2>/dev/null; }
+# is radio netdev $1 a link radio of the planned (or applied) MLD?
+mld_radio() {
+	local m
+	m=$(mld_want); [ -n "$m" ] || m=$(cat "$STATE/mld" 2>/dev/null)
+	set -- "$1" $m
+	[ -n "${4:-}" ] && { [ "$1" = "$4" ] || [ "$1" = "$5" ]; }
+}
+# the index of the radio of wiphy $1 whose frequency range holds MHz $2
+# (iw phy info, "Supported wiphy radios"); empty on a single-radio wiphy
+wiphy_radio_of() {
+	iw phy "$1" info 2>/dev/null | awk -v f="$2" '
+		/Supported wiphy radios:/ { r = 1; next }
+		r && /^\t[^\t]/ { r = 0 }
+		r && /\* Idx [0-9]+:/ { i = $3; sub(/:/, "", i); next }
+		r && /Frequency Range:/ { if ($3 + 0 <= f + 0 && f + 0 <= $6 + 0) { print i; exit } }'
+}
+# the radio mask of the MLD: the radios of its 6 GHz and 5 GHz-high links
+mld_mask() {
+	local phy=$1 r6 r5
+	r6=$(wiphy_radio_of "$phy" 6135); r5=$(wiphy_radio_of "$phy" 5500)
+	[ -n "$r6" ] && [ -n "$r5" ] && [ "$r6" != "$r5" ] || return 1
+	printf '0x%x\n' $(((1 << r6) | (1 << r5)))
+}
+# create the MLD interface (before any member radio starts: the driver writes
+# the firmware's MLD address table in the radios' core-down window)
+mld_create() {
+	local ifn a d6 d5 nid phy p5 mask
+	read -r ifn a d6 d5 nid <<-EOF
+	$(mld_want)
+	EOF
+	[ -n "$ifn" ] || return 0
+	case "$ifn" in mld0) ;; *) eerror "MLD interface '$ifn' refused (mld0 only)"; return 1 ;; esac
+	phy=$(radio_phy "$d6") || return 1
+	p5=$(radio_phy "$d5") || return 1
+	[ "$phy" = "$p5" ] || { eerror "MLD: $d6 ($phy) and $d5 ($p5) are not on one wiphy: not the MLO build of the Wi-Fi driver"; return 1; }
+	mask=$(mld_mask "$phy") || { eerror "MLD: no 6 GHz / 5 GHz-high radio in wiphy $phy's radio list (iw phy $phy info)"; return 1; }
+	[ -e "$SYSNET/$ifn" ] && { iw dev "$ifn" del 2>/dev/null || :; }
+	ebegin "Creating the AP MLD $ifn ($a, radios $mask on $phy)"
+	iw phy "$phy" interface add "$ifn" type __ap addr "$a" radios "$mask"
+	eend $? || return 1
+	echo "$ifn $a $d6 $d5 $nid" > "$STATE/mld"
+}
+# after hostapd is gone: its MLD control socket and the MLD interface
+mld_down() {
+	local ifn
+	ifn=$(awk '{ print $1; exit }' "$STATE/mld" 2>/dev/null)
+	[ -n "$ifn" ] || return 0
+	case "$ifn" in mld0) ;; *) return 0 ;; esac
+	rm -f "${HOSTAPD_CTRL:-$RUNDIR/hostapd}/$ifn" "${HOSTAPD_CTRL:-$RUNDIR/hostapd}/${ifn}_link"*
+	if [ -e "$SYSNET/$ifn" ]; then iw dev "$ifn" del 2>/dev/null || ewarn "MLD: $ifn not deleted"; fi
+	rm -f "$STATE/mld" "$STATE/mld.applied"
+}
+# what the MLD depends on: its plan line and its link radios' units
+mld_sum() {
+	local m
+	m=$(mld_want); [ -n "$m" ] || return 0
+	set -- $m
+	{ echo "$m"; cat "$STATE/want/$3" "$STATE/want/$4" 2>/dev/null; } | sha256sum | cut -d' ' -f1
+}
+# the order the radios are added in: the MAP (6 GHz link) radio first, then
+# the 2.4 GHz member, then the 5 GHz-high link (hostapd numbers the MLD
+# links in parse order; MLO-PROD2 19 rule 1), then the others
+mld_order() {
+	local m d6 d5 d2 first='' d
+	m=$(mld_want); [ -n "$m" ] || { echo "$1"; return; }
+	set -- "$1" $m
+	d6=$4; d5=$5; d2=$(awk '$1 == "radio" && $2 == "2g" { print $3; exit }' "$STATE/gen/plan" 2>/dev/null)
+	for d in $d6 $d2 $d5; do in_list " $1 " "$d" && first="$first $d"; done
+	for d in $1; do in_list " $first " "$d" || first="$first $d"; done
+	echo "$first"
+}
+
 apply_hostapd() {
-	local c i b v want='' brs='' subs='' rc=0 t d p plan="$STATE/gen/plan"
+	local c i b v want='' brs='' subs='' rc=0 t d p m plan="$STATE/gen/plan"
 	reprobed_scan
 	[ "$REPROBED" = ' ' ] || ewarn "re-probed by the Wi-Fi driver:${REPROBED% }: restarting those radios"
 	ap_override
@@ -1403,6 +1527,21 @@ apply_hostapd() {
 		mesh_apply || rc=1
 		return $rc
 	fi
+	# [MLD-RADIO-RESTART] an AP MLD that appeared, went away or changed (its
+	# plan line or a link radio's unit), or lost its interface: hostapd is
+	# restarted whole, the old process awaited (hap_daemon_stop)
+	# (mld.tried: the MLD last attempted; a link radio that keeps failing is
+	# retried by its own bounded backoff, each due retry one full restart)
+	MLD_FULL_DONE=0 MLD_NEED_FULL=0
+	m=$(mld_want)
+	if [ -n "$m" ] || [ -f "$STATE/mld" ]; then
+		if [ -z "$m" ] || [ "$(mld_sum)" != "$(cat "$STATE/mld.tried" 2>/dev/null)" ] || [ ! -e "$SYSNET/mld0" ]; then
+			hap_running && einfo "the AP MLD or one of its link radios changed: full hostapd restart (MLD-RADIO-RESTART)"
+			hap_daemon_stop
+			MLD_FULL_DONE=1
+		fi
+	fi
+	if [ -n "$m" ]; then mld_sum > "$STATE/mld.tried"; else rm -f "$STATE/mld.tried"; fi
 	# the process: (re)started when dead or started with other arguments
 	if ! hap_running || [ "$(cat "$STATE/hostapd.args" 2>/dev/null)" != "$(hap_args_sum)" ] ||
 	   [ "$(hap_cmd PING)" != PONG ]; then
@@ -1416,9 +1555,27 @@ apply_hostapd() {
 		d=${p##*/}
 		case " $want " in *" $d "*) ;; *) unit_remove "$d" ;; esac
 	done
-	for d in $want; do
+	# the AP MLD's interface, before any of its member radios starts
+	if [ -n "$(mld_want)" ] && [ ! -e "$SYSNET/mld0" ]; then mld_create || rc=1; fi
+	for d in $(mld_order "$want"); do
 		unit_apply "$d" || rc=1
 	done
+	# a link radio that needed a restart of its own: hostapd whole, once
+	if [ "$MLD_NEED_FULL" = 1 ] && [ "$MLD_FULL_DONE" != 1 ]; then
+		einfo "full hostapd restart for the AP MLD (MLD-RADIO-RESTART)"
+		MLD_FULL_DONE=1
+		hap_daemon_stop
+		hap_daemon_start || { APPLY_HARD=1; return 1; }
+		mld_create || rc=1
+		for d in $(mld_order "$want"); do unit_apply "$d" || rc=1; done
+	fi
+	if [ -n "$(mld_want)" ]; then
+		m=$(mld_want); set -- $m
+		if [ -f "$STATE/applied/$3" ] && [ -f "$STATE/applied/$4" ]; then mld_sum > "$STATE/mld.applied"
+		else rm -f "$STATE/mld.applied"; rc=1; fi
+	else
+		rm -f "$STATE/mld.applied"
+	fi
 	isolate_ports "$brs"
 	mcast_ports "$brs"
 	# virtual interfaces, VLANs and bridges no longer listed, now that no BSS
