@@ -18,7 +18,8 @@
  *   S4 the rejoin right after it: link 1's copy is still there (hostapd keeps a deauthenticated station for
  *      AP_MAX_INACTIVITY_AFTER_DEAUTH), and the new association's link processing (ieee80211_ml_process_link on link 1,
  *      the origin being the re-associated station) frees it instead of refusing ("MLD: link: Station already exists",
- *      q472) and adds the new link station.
+ *      q472) and adds the new link station (no Multi-Link element in this unit: the link processing stops after
+ *      ap_sta_add, which is the step the refusal blocked).
  * Exit 0 GREEN, 1 RED.
  */
 #include "utils/includes.h"
@@ -138,12 +139,14 @@ int main(void)
 			struct sta_info *n;
 			int ne = nexists;
 
+			s1->listen_interval = 77;	/* marks the stale copy (a new station starts at 0) */
 			s0->flags |= WLAN_STA_AUTH | WLAN_STA_ASSOC;	/* the station associated again on link 0 */
 			(void)ieee80211_ml_process_link(&l1, s0, &s0->mld_info.links[1], NULL, 0,
 							LINK_PARSE_ASSOC, true, &sb);
 			n = ap_get_sta(&l1, maddr);
 			CHECK(nexists == ne, "S4b the new association is not refused (no \"Station already exists\")");
-			CHECK(n != NULL && (n->flags & WLAN_STA_ASSOC_REQ_OK), "S4c link 1 has the NEW association's station");
+			CHECK(n != NULL && n->listen_interval != 77,
+			      "S4c link 1 has the NEW association's station (the stale copy is gone)");
 		}
 	}
 	printf("%s: %d failure(s)\n", bad ? "RED" : "GREEN", bad);
