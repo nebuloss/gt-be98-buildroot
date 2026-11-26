@@ -20,4 +20,14 @@ config BR2_PACKAGE_GT_BE98_OPEN_WIFI_BENCH
 	  box, tools/mainline-boot/build.sh WIFI_BENCH=1). The bench-only
 	  bca_barpeek.ko is never installed.
 
+config BR2_PACKAGE_GT_BE98_OPEN_WIFI_MLO
+	bool "the MLO build (one multi-radio wiphy, Wi-Fi 7 multi-link)"
+	help
+	  Build with -DBCA_MLO_BUILD (the driver's `make mlo`): the radios of
+	  the firmware's MLO group (2.4 GHz, 5 GHz-high, 6 GHz) share one
+	  wiphy and an AP MLD can form when hostapd configures one
+	  (gt-be98-wifi-gen mld_ap=1). The shipped parameter set, no bench
+	  parameter. Set by the local configuration (WIFI_MLO=1); off by
+	  default.
+
 endif

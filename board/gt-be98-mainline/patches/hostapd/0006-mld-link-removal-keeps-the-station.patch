@@ -1,4 +1,4 @@
-From: Guillaume Chaye <guillaume.chaye@zeetim.com>
+From: gt-be98-buildroot <noreply@example.invalid>
 Subject: [PATCH] MLD: disabling or removing one link keeps the MLD station; LINK_REMOVE is not a testing option
 
 On this AP (gt-be98, FullMAC with device SME) one link of an AP MLD can be disabled or removed while a multi-link
@@ -14,7 +14,6 @@ station keeps its other links: the driver maps the link's stop to the firmware's
 
 Test: package/gt-be98-os/test/build-hostapd-link-sta-test.sh (host build, --selftest with two controls).
 
-Signed-off-by: Guillaume Chaye <guillaume.chaye@zeetim.com>
 ---
 diff --git a/hostapd/ctrl_iface.c b/hostapd/ctrl_iface.c
 index e6ef615..af55692 100644

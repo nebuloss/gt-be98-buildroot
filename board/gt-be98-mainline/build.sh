@@ -25,17 +25,24 @@ EXT=$(cd "$HERE/../.." && pwd)
 CONF=${GT_BE98_LOCAL_CONF:-$HOME/.config/gt-be98-os/local.conf}
 [ -f "$CONF" ] || { echo "no local configuration $CONF (see $HERE/local.conf.example)"; exit 1; }
 REL_ENV=${RELEASE:-}
-BR2_SRC= OUT= BR2_DL_DIR= SSH_HOSTKEY_DIR= WEBUI_DIR= RELEASE=
+BR2_SRC= OUT= BR2_DL_DIR= SSH_HOSTKEY_DIR= WEBUI_DIR= RELEASE= WIFI_MLO=
 . "$CONF"
 # the environment can only turn release mode on, never off
 [ "$REL_ENV" = 1 ] && RELEASE=1
 case "${RELEASE:-0}" in 0|'') RELEASE=0 ;; 1) ;; *) echo "RELEASE must be 0 or 1"; exit 1 ;; esac
+# WIFI_MLO=1: the Wi-Fi module's MLO build (package/gt-be98-open-wifi, BR2_PACKAGE_GT_BE98_OPEN_WIFI_MLO)
+case "${WIFI_MLO:-0}" in 0|'') WIFI_MLO=0 ;; 1) ;; *) echo "WIFI_MLO must be 0 or 1"; exit 1 ;; esac
 : "${BR2_SRC:?BR2_SRC not set in $CONF}" "${OUT:?OUT not set in $CONF}"
 export BR2_DL_DIR
 
 fragment() {
 	echo "BR2_PACKAGE_GT_BE98_OS_LOCAL_CONF=\"$CONF\""
 	echo "BR2_PACKAGE_GT_BE98_WEBUI_DIR=\"$WEBUI_DIR\""
+	if [ "$WIFI_MLO" = 1 ]; then
+		echo "BR2_PACKAGE_GT_BE98_OPEN_WIFI_MLO=y"
+	else
+		echo "# BR2_PACKAGE_GT_BE98_OPEN_WIFI_MLO is not set"
+	fi
 	if [ "$RELEASE" = 1 ]; then
 		echo "BR2_PACKAGE_GT_BE98_OS_RELEASE=y"
 	else

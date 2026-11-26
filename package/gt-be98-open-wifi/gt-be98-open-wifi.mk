@@ -59,7 +59,10 @@
 # fix-pmf-deauth-order-2026-11-25 2026-11-25 0dcc9043 (imgint16a / RC15 candidate: RC14 b3a483c1 + PMF-DEAUTH-ORDER: an AP-initiated
 #  disconnect sends the deauth while the station still holds its keys (protected on a PMF BSS), then deauthorizes; q442 K0 dropped /
 #  K1 taken; gates GREEN, no module parameter)
-GT_BE98_OPEN_WIFI_VERSION = 0dcc9043b8a141ef5ab19a73921dd7c167dfd0bb
+# om-mlo-product-2026-11-26 2d17800b (imgint17a, MLO: RC15 0dcc9043 + the MLO product path; driver tree = 9d1fada4, gates GREEN
+#  at 9ca8ab17; q467 FULL PASS with its MLO build mlo 234fdb5f). The image ships the MLO build when BR2_PACKAGE_GT_BE98_OPEN_WIFI_MLO
+#  (local conf WIFI_MLO=1), else the shipped build as before.
+GT_BE98_OPEN_WIFI_VERSION = 2d17800bf4dcec22dd5ee48634ea95e296bd3646
 GT_BE98_OPEN_WIFI_SITE = git@github.com:nebuloss/gt-be98-open-wifi.git
 GT_BE98_OPEN_WIFI_SITE_METHOD = git
 GT_BE98_OPEN_WIFI_LICENSE = GPL-2.0-only
@@ -67,6 +70,10 @@ GT_BE98_OPEN_WIFI_MODULE_SUBDIRS = driver
 
 ifeq ($(BR2_PACKAGE_GT_BE98_OPEN_WIFI_BENCH),y)
 GT_BE98_OPEN_WIFI_MODULE_MAKE_OPTS = BCA_BENCH_CFLAGS=-DBCA_BENCH_PARAMS
+endif
+# the MLO build (driver/Makefile `mlo`): one multi-radio wiphy, the MLO group on, the shipped parameter set
+ifeq ($(BR2_PACKAGE_GT_BE98_OPEN_WIFI_MLO),y)
+GT_BE98_OPEN_WIFI_MODULE_MAKE_OPTS += BCA_MLO_CFLAGS=-DBCA_MLO_BUILD
 endif
 
 # bca_barpeek.ko (bench builds only) is a reverse-engineering tool: never ship

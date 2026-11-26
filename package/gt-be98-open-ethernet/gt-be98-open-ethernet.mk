@@ -75,7 +75,9 @@
 #  the PPPoE WAN built (push + pull) instead of refused; box-proven with its bench ko q329/q330; driver/runner + tools only; no linux-dirclean)
 # oe-detect-2026-11-23 2026-11-24 ba2aae8 (imgint14d: c56b79b = RC13 + RTL8372 jack_detect, a time-boxed Detect VLANs window per jack,
 #  restored and read back; the LAB poke stays behind -DRTL8372_LAB; shipped rtl8372.ko 7010af97, 0 params; driver/rtl8372 + tests + docs)
-GT_BE98_OPEN_ETHERNET_VERSION = ba2aae831a3a31d17b8db696919b0b8efa461850
+# oe-cfg80211-monitor-radio-2026-11-25 65712bd (imgint17a, MLO: RC15 ba2aae8 + kernel patch 1200 in series.wifi: on a
+#  multi-radio wiphy a monitor tunes its own radio; single-radio wiphys unchanged; KUnit 64/64 under UML on v7.2.9)
+GT_BE98_OPEN_ETHERNET_VERSION = 65712bd9bb3868b9df9478818b48a81a6a6b0027
 GT_BE98_OPEN_ETHERNET_SITE = git@github.com:nebuloss/gt-be98-open-ethernet.git
 GT_BE98_OPEN_ETHERNET_SITE_METHOD = git
 GT_BE98_OPEN_ETHERNET_LICENSE = GPL-2.0
@@ -86,7 +88,7 @@ GT_BE98_OPEN_ETHERNET_PATCH_DIR = $(GT_BE98_OPEN_ETHERNET_DIR)/kernel-patches/ma
 # kernel-patches/mainline/README, "Apply order"
 GT_BE98_OPEN_ETHERNET_SERIES = series.pmb series series.phy series.phylink \
 	series.postcode series.usb series.mdio series.mdio-debug series.rxfcs \
-	series.mpm series.pcie
+	series.mpm series.pcie series.wifi
 
 GT_BE98_OPEN_ETHERNET_MODULE_SUBDIRS =
 ifeq ($(BR2_PACKAGE_GT_BE98_OPEN_ETHERNET_RUNNER),y)
