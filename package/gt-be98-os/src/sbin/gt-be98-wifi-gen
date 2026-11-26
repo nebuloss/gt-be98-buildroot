@@ -422,11 +422,16 @@
 #                                   (mld0) with a 6 GHz and a 5 GHz-high link;
 #                                   the network's other bands stay plain BSSes.
 #                                   Rendered per open-wifi docs/MLO-PROD2-
-#                                   2026-11-24.md 19: on each link radio the
-#                                   network's own plain BSS first (a legacy
-#                                   client joins it), the MLD link a later
+#                                   2026-11-24.md 19: the first BSS of each
+#                                   link radio is a plain one (another network
+#                                   of the list, else a hidden placeholder
+#                                   gt-be98-mlo-<band>, the MLO network's
+#                                   security and bridge), the MLD link a later
 #                                   bss=mld0 (mld_ap=1, mld_addr = the 6 GHz
-#                                   link's BSSID, SAE H2E); plan line "mld".
+#                                   link's BSSID, SAE H2E); the MLO network
+#                                   has no other BSS on 6g/5gh (q469 r44: a
+#                                   plain BSS of the same SSID drew Wi-Fi 7
+#                                   clients off the MLD); plan line "mld".
 #                                   Refused (with -S: the network skipped)
 #                                   without the MLO build (-M), unless
 #                                   security=sae (WPA3-Personal: PMF required),
@@ -838,14 +843,14 @@ function dfsetsi(c) { return c != "US" && c != "JP" }
 function zwetsi5gh() { return 0 }
 # [MLO] the plain primary of an MLD link radio (6g, 5gh; design note open-wifi
 # docs/MLO-PROD2-2026-11-24.md 19, rule 2: the first BSS of the radio config is
-# a plain BSS, the MLD link a later bss=mld0). "own": the MLO network itself is
-# also a plain BSS there (same SSID and security; Wi-Fi 7 clients join the MLD,
-# the others the plain BSS: orchestrator decision (b), 2026-11-26, its bench
-# proof pending). "hidden": the MLO network is on the link radios as its MLD
-# link only and a radio with no other network gets a hidden placeholder
-# primary (decision (c), the q467 arm topology). NOT a user option: a bench
-# FAIL of (b) is this one line
-function mldprimary() { return "own" }
+# a plain BSS, the MLD link a later bss=mld0). "hidden" (decision (c), the
+# q467 arm topology): the MLO network is on the link radios as its MLD link
+# only, and a link radio with no other network gets a hidden placeholder
+# primary. "own" (decision (b)) made the MLO network also a plain BSS there
+# with the same SSID: bench q469 r44 SS, an MLD-capable client joining the
+# SSID picked the plain 6 GHz BSS, so MLO went unused; (c) is the default. NOT
+# a user option: one line
+function mldprimary() { return "hidden" }
 # MAC "aa:bb:cc:dd:ee:ff" -> o[0..5]; 1 on success
 function parsemac(m, o,    i, p, n) {
 	m = tolower(m)

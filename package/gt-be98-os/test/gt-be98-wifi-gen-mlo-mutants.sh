@@ -34,5 +34,7 @@ mutant "the link H2E line" 's/print "sae_pwe=" ((b == "6g" || mlk\[i\]) ? 1 : 2)
 mutant "rnr on the link" 's/if (rnr \&\& b != "6g" \&\& !bh\[i\] \&\& !mlk\[i\]) print "rnr=1" > f/if (rnr \&\& b != "6g" \&\& !bh[i]) print "rnr=1" > f/'
 mutant "no mld plan line" 's/	if (mldk \&\& (MLDID in onradio)) print "mld mld0 "/	if (0) print "mld mld0 "/'
 mutant "the link without mld_addr" 's/print "mld_ap=1" > f; print "mld_addr=" bssid("6g", mi\["6g", id\]) > f/print "mld_ap=1" > f/'
+mutant "(b) instead of (c) (q469 r44 SS FAIL)" 's/^function mldprimary() { return "hidden" }$/function mldprimary() { return "own" }/'
+mutant "no placeholder primary" 's/				if (m) continue$/				continue/'
 echo "gt-be98-wifi-gen MLO mutants: $killed killed, $survived survived"
 [ $survived = 0 ]

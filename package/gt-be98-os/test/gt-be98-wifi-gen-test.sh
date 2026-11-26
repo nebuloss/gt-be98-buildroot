@@ -1786,8 +1786,12 @@ L5=$(awk '$1 == "bss" && $2 == "bcawl1" && $3 == "mld0" { print $7 }' "$T/o/plan
 check "MLO: the plan names the MLD (mld0, its address = the 6 GHz link BSSID, the link radios, the network)" "mld mld0 $L6 bcawl2 bcawl1 1" "$(grep '^mld ' "$T/o/plan")"
 check "MLO: the MLD link is a later BSS (slot > 0) on 6g and 5gh, nowhere else" "1 1 2" \
 	"$(awk '$1 == "bss" && $2 == "bcawl2" && $3 == "mld0" { print $4 }' "$T/o/plan") $(awk '$1 == "bss" && $2 == "bcawl1" && $3 == "mld0" { print $4 }' "$T/o/plan") $(awk '$1 == "bss" && $3 == "mld0"' "$T/o/plan" | wc -l | tr -d ' ')"
-check "MLO (b): the MLO network itself is the plain primary of 6g and 5gh (slot 0, same SSID)" "bcawl2 0 1 bcawl1 0 1" \
-	"$(awk '$1 == "bss" && $3 == "bcawl2" { printf "%s %s %s ", $3, $4, $5 }' "$T/o/plan")$(awk '$1 == "bss" && $3 == "bcawl1" { printf "%s %s %s", $3, $4, $5 }' "$T/o/plan")"
+check "MLO (c): a hidden placeholder primary first on 6g and 5gh (slot 0), the MLD link after it" "bcawl2 0 100002 bcawl1 0 100003 yes yes" \
+	"$(awk '$1 == "bss" && $3 == "bcawl2" { printf "%s %s %s ", $3, $4, $5 }' "$T/o/plan")$(awk '$1 == "bss" && $3 == "bcawl1" { printf "%s %s %s", $3, $4, $5 }' "$T/o/plan") $(has bcawl2 ignore_broadcast_ssid=1) $(has bcawl1 ignore_broadcast_ssid=1)"
+check "MLO (c): the MLO network has no plain BSS on 6g/5gh (q469 r44 SS: a same-SSID plain BSS drew Wi-Fi 7 clients off the MLD)" "0" \
+	"$(awk '$1 == "bss" && ($2 == "bcawl2" || $2 == "bcawl1") && $3 != "mld0" && $5 == 1' "$T/o/plan" | wc -l | tr -d ' ')"
+check "MLO (c): the placeholders carry the MLO network's security and bridge, their own SSIDs" "yes yes yes yes" \
+	"$(has bcawl2 wpa_key_mgmt=SAE) $(has bcawl2 bridge=brwifi1) $(has bcawl2 ssid=gt-be98-mlo-6g) $(has bcawl1 ssid=gt-be98-mlo-5gh)"
 check "MLO: both links carry mld_ap=1 and the same mld_addr (the 6 GHz link BSSID)" "yes yes yes yes" \
 	"$(has bcawl2-mld0 mld_ap=1) $(has bcawl1-mld0 mld_ap=1) $(has bcawl2-mld0 mld_addr=$L6) $(has bcawl1-mld0 mld_addr=$L6)"
 check "MLO: the links are SAE, PMF required, H2E (sae_pwe=1) on both radios" "yes yes yes yes yes yes" \
@@ -1831,16 +1835,20 @@ check "MLO -S: the refused MLO network skipped, the others rendered, no MLD" "0 
 # -F: the feature follows the driver build
 check "MLO -F: feature mlo 0 without the MLO build, 1 with -M 1" "feature mlo 0|feature mlo 1" \
 	"$($SH "$G" -F | grep '^feature mlo')|$($SH "$G" -M 1 -F | grep '^feature mlo')"
-# the (c) fallback (mldprimary "hidden": one line of the generator): a hidden placeholder primary on a link radio
-# that carries no other network, the MLO network on 6g/5gh as its MLD link only
-sed 's/^function mldprimary() { return "own" }$/function mldprimary() { return "hidden" }/' "$G" > "$T/genc"
-check "MLO (c): the switch is one line" 1 "$(diff "$G" "$T/genc" | grep -c '^>')"
-rm -f "$T/slots"; $SH "$T/genc" -n "$T/m1" -o "$T/o" -s "$T/slots" -m "$M" -c -M 1 2> "$T/err"
-check "MLO (c): accepted; a hidden placeholder primary first on 6g and 5gh, the MLD link after it" "0 yes yes 1 1" \
-	"$? $(has bcawl2 ignore_broadcast_ssid=1) $(has bcawl1 ignore_broadcast_ssid=1) $(awk '$1 == "bss" && $2 == "bcawl2" && $3 == "mld0" { print $4 }' "$T/o/plan") $(awk '$1 == "bss" && $2 == "bcawl1" && $3 == "mld0" { print $4 }' "$T/o/plan")"
-check "MLO (c): no plain BSS of the MLO network on 6g/5gh; 2g and 5gl keep it" "100002 100003 1 1" \
-	"$(awk '$1 == "bss" && $3 == "bcawl2" { print $5 }' "$T/o/plan") $(awk '$1 == "bss" && $3 == "bcawl1" { print $5 }' "$T/o/plan") $(awk '$1 == "bss" && $3 == "bcawl3" { print $5 }' "$T/o/plan") $(awk '$1 == "bss" && $3 == "bcawl0" { print $5 }' "$T/o/plan")"
-conf_ok "MLO (c) configs"
+# another network of the list on the link radios: it is their primary, no placeholder
+{ mlo_radios; printf 'network=2\nssid=Guest\nsecurity=sae\npassphrase=password2\nbands=2g 5gh 6g\nvlan=922\n'; mlo_net 1 Home sae "2g 5gl 5gh 6g"; } > "$T/m18"
+rm -f "$T/slots"; gen "$T/m18" -c -M 1
+check "MLO (c): another network on 6g/5gh is their primary (slot 0), no placeholder" "0 bcawl2 0 2 bcawl1 0 2 0" \
+	"$? $(awk '$1 == "bss" && $3 == "bcawl2" { printf "%s %s %s", $3, $4, $5 }' "$T/o/plan") $(awk '$1 == "bss" && $3 == "bcawl1" { printf "%s %s %s", $3, $4, $5 }' "$T/o/plan") $(grep -c ' 10000[23] ' "$T/o/plan")"
+conf_ok "MLO (c) with another primary"
+# the (b) alternative (mldprimary "own": one line of the generator; bench q469 r44 SS FAIL): the MLO network itself
+# is the plain primary of the link radios
+sed 's/^function mldprimary() { return "hidden" }$/function mldprimary() { return "own" }/' "$G" > "$T/genb"
+check "MLO (b): the switch is one line" 1 "$(diff "$G" "$T/genb" | grep -c '^>')"
+rm -f "$T/slots"; $SH "$T/genb" -n "$T/m1" -o "$T/o" -s "$T/slots" -m "$M" -c -M 1 2> "$T/err"
+check "MLO (b): accepted; the MLO network itself the primary of 6g and 5gh, the MLD link after it, no placeholder" "0 bcawl2 0 1 bcawl1 0 1 0" \
+	"$? $(awk '$1 == "bss" && $3 == "bcawl2" { printf "%s %s %s", $3, $4, $5 }' "$T/o/plan") $(awk '$1 == "bss" && $3 == "bcawl1" { printf "%s %s %s", $3, $4, $5 }' "$T/o/plan") $(grep -c ' 10000[23] ' "$T/o/plan")"
+conf_ok "MLO (b) configs"
 
 if [ $fail = 0 ]; then echo "ALL OK ($n checks)"; else echo "FAILED"; fi
 exit $fail
