@@ -1,8 +1,6 @@
 # GT-BE98 mainline OS 1.0-rc15 - release notes
 
-Date: 2026-11-26 · Status: **release candidate 15** (DRAFT: the release
-images and their box phases are filled in once they have run; tag
-`gt-be98-rc15` after that).
+Date: 2026-11-26 · Status: **release candidate 15**, tagged `gt-be98-rc15`.
 
 Evidence is named by the orchestrator's queue (`qNNN`). The run directories
 stay on the orchestrator's machine and are not in this repository. Every
@@ -28,13 +26,35 @@ RC15 is a **defect-fix release** on top of RC14. It changes one thing:
 
 | File | sha256 |
 |---|---|
-| `rootfs.squashfs` | (filled in after the `RELEASE=1` build) |
-| `ml-bootfs.itb` | (filled in after the `RELEASE=1` build) |
+| `rootfs.squashfs` | `095fc1cb3d14f074e9c449d5f245cc5a0ba13c06f7b711e98cc18f5282dbda29` |
+| `ml-bootfs.itb` | `268229b68410896d69400f816ddc33ee05edf45fb4f4af61e6b435d7ca26274d` |
 
-Build id (DT): (filled in after the build)
+Build id (DT): `20261126T085532Z-159c0d883129-rw-jffs`
 
-Built with `RELEASE=1` from `br-rc15-r-2026-11-26`. Later commits of that
-branch change only `docs/`.
+Built with `RELEASE=1` (`ml-bootfs.info`: `release mode: yes`) from
+`br-rc15-r-2026-11-26` `84e8b77`. Later commits of that branch change only
+`docs/`.
+
+- **Release check:** `release-check.sh` returned PASS (selftest 21/21) with RC7's lab-pattern list.
+- **Lab control:** the lab image imgint16a fails the same check with 15 findings, as it should.
+- **Exact-pattern list:** finds only the lab public key, as in RC7–RC14.
+- **Modules against the tested lab image (imgint16a)**, by the release
+  recipe's section gate (`kocmp.py`):
+  - `rtl8372.ko` is byte-identical (`7010af97`).
+  - `bca_pcie_ipc.ko` (release `1d83f4d2`, lab `050c7070`): 34 of 37
+    sections byte-identical.
+  - `bcm4916-runner.ko` (release `95b09b77`, lab `c000a45b`): 38 of 41
+    sections byte-identical.
+  - In both, every code and relocation section is identical, `.rodata` is
+    identical once the build-path prefix is swapped, `.symtab` differs only
+    in `.rodata` symbol values, and the build-id follows.
+- **Against RC14's release image**, file by file (1757 entries each): the
+  Wi-Fi module and `/etc/gt-be98-release` (the change), and otherwise only
+  build metadata. BusyBox, OpenSSL and socat carry their build time; perf,
+  lsof, gawkbug and the libstdc++ gdb script carry the release build
+  directory's name; `libdw` and the Runner module differ in their 20-byte
+  build-id; chrony in a few bytes, consistent with its NTP era being taken
+  from the build time (not confirmed further).
 
 **These images are a TEST build.** Their `SSH_AUTHORIZED_KEYS` is the
 lab's public key, so they are never handed over. A hand-over build is the
@@ -97,11 +117,16 @@ deauthorized after it.
 | q442 | RC14 + bench modules | the defect found and the order swap proven (above) |
 | q444 | imgint16a | **PMF disconnect P6 + C5 PASS**; L1 radio cycles clean; WIFISTOP PASS; soak DRY-OK; multi-SSID (two BSS, one removed and re-added under the other's ping: 0 % loss; isolation holds) PASS; perf smoke 5 GHz-low and 6 GHz as RC14; its 2.4 GHz client rows low and its 30-minute soak INCONCLUSIVE, both re-run in q448 |
 | q448 | imgint15a / imgint16a / imgint15a | **2.4 GHz A/B/A: no image regression.** perf 2.4 GHz tcp-up RC14 28.1–32.5, RC15 30.1–31.4, RC14 again 28.1–31.2 Mbit/s (down 42–44 everywhere); the low L1 2.4 GHz battery reading (5.3 / 3.8 Mbit/s up) hit RC14's first leg too (RC15's legs 30.4 / 28.0, RC14's second 31.1 / 30.0), a lab-bench effect. **60-minute instrumented soak VERDICT PASS** (shape FLAT, decline 7.6 MB, +16.3 MB after teardown, stations 2 → 3); clean, CHECK and baseline PASS |
-| q450 | release | (release-image phases: filled in after the run) |
+| q450 | release | Release-image phases: FIRST 16/16 PASS (W2b-BIND 0 s). Its SECOND did not reach the release image: after FIRST's reboot the slot-1 boot did not answer within the queue's boot budget (port 22 refused, the box back on the stock firmware when the check began), the queue did not check that, and the phase scored empty reads (3 FAIL, 3 hollow ok). The saved release state was on the NAND (q454 read it: host keys and the web UI database present). A harness fault, not a product verdict; the arm was hardened (r3: no check scored unless the release image answers) |
+| q454 | release | **Release-image phases PASS:** FIRST 16/16 (W2b-BIND 0 s); the slot-1 boot watched: the release image answered after 85 s on the first attempt; SECOND (r3) 6/6 on the confirmed release build: same host-key fingerprint after the reboot, keys restored not regenerated, still configured, no setup token, login. The lab image imgint16a restored afterwards |
 
 ## Known open
 
 Unchanged from RC14. In addition:
+- **One slot-1 boot did not answer within the release test's budget**
+  (q450: after the first-boot phase the box was found on the stock firmware
+  about 9 minutes later). Not reproduced: q454's boot answered after 85 s on
+  the first attempt. Watched in every later release run.
 - **MLO:** an AP MLD link going down is not yet a clean, protected
   disconnect for its clients (work in the separate MLO driver build; MLO is
   not in RC15).
