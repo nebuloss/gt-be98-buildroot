@@ -12,8 +12,13 @@
  *      freed too, and the plain BSS's station is untouched;
  *   S2 the rejoin: the next association's partner-link check (ieee802_11.c, "MLD: link: Station already exists") finds
  *      no station on link 1 — ap_get_sta(link 1, the MLD address) is NULL — and a new partner copy can be added;
- *   S3 an AP-initiated deauthentication of the ML station (ap_sta_deauthenticate on link 0) reaches link 1's copy
- *      (its ASSOC flag cleared by ap_sta_handle_deauthenticate), not only the association link's.
+ *   S3 an AP-initiated deauthentication of the ML station (ap_sta_deauthenticate on link 0, what hostapd_cli
+ *      DEAUTHENTICATE runs) reaches link 1's copy (its ASSOC flag cleared by ap_sta_handle_deauthenticate), not only the
+ *      association link's;
+ *   S4 the rejoin right after it: link 1's copy is still there (hostapd keeps a deauthenticated station for
+ *      AP_MAX_INACTIVITY_AFTER_DEAUTH), and the new association's link processing (ieee80211_ml_process_link on link 1,
+ *      the origin being the re-associated station) frees it instead of refusing ("MLD: link: Station already exists",
+ *      q472) and adds the new link station.
  * Exit 0 GREEN, 1 RED.
  */
 #include "utils/includes.h"
@@ -24,16 +29,24 @@
 #include "ap/hostapd.h"
 #include "ap/ap_config.h"
 #include "ap/sta_info.h"
+#include "ap/ieee802_11.h"
 
 static const struct wpa_driver_ops test_nl80211 = { .name = "nl80211", .desc = "name only" };
 const struct wpa_driver_ops *const wpa_drivers[] = { &test_nl80211, NULL };
 
-static int bad;
+static int bad, nexists;
 #define CHECK(c, ...) do { if (c) { printf("ok   "); } else { printf("RED  "); bad++; } printf(__VA_ARGS__); printf("\n"); } while (0)
 
 void __real_wpa_msg(void *ctx, int level, const char *fmt, ...);
 void __wrap_wpa_msg(void *ctx, int level, const char *fmt, ...)
 {
+}
+
+void __real_wpa_printf(int level, const char *fmt, ...);
+void __wrap_wpa_printf(int level, const char *fmt, ...)
+{
+	if (os_strstr(fmt, "Station already exists"))
+		nexists++;
 }
 
 int __wrap_ieee802_11_set_beacon(struct hostapd_data *hapd)
@@ -117,6 +130,21 @@ int main(void)
 		ap_sta_deauthenticate(&l0, s0, WLAN_REASON_UNSPECIFIED);
 		CHECK(!(s1->flags & WLAN_STA_ASSOC), "S3a link 1's copy is deauthenticated too (ASSOC cleared)");
 		CHECK(!(s0->flags & WLAN_STA_ASSOC), "S3b the association link's station is deauthenticated");
+
+		printf("=== S4 the rejoin right after the AP-initiated deauthentication\n");
+		CHECK(ap_get_sta(&l1, maddr) == s1, "S4a link 1's deauthenticated copy is still kept (its removal timer)");
+		{
+			bool sb = false;
+			struct sta_info *n;
+			int ne = nexists;
+
+			s0->flags |= WLAN_STA_AUTH | WLAN_STA_ASSOC;	/* the station associated again on link 0 */
+			(void)ieee80211_ml_process_link(&l1, s0, &s0->mld_info.links[1], NULL, 0,
+							LINK_PARSE_ASSOC, true, &sb);
+			n = ap_get_sta(&l1, maddr);
+			CHECK(nexists == ne, "S4b the new association is not refused (no \"Station already exists\")");
+			CHECK(n != NULL && (n->flags & WLAN_STA_ASSOC_REQ_OK), "S4c link 1 has the NEW association's station");
+		}
 	}
 	printf("%s: %d failure(s)\n", bad ? "RED" : "GREEN", bad);
 	return bad ? 1 : 0;

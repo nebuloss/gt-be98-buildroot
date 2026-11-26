@@ -12,6 +12,13 @@ only at each interface's bss[0]. A link at bss[1..] was invisible to them:
   VLAN missed it;
 - switch_link_scan(), the HT-scan result for the other links, the Reconfiguration Multi-Link element.
 
+- ieee80211_ml_process_link(): a link station a PREVIOUS association of the MLD left behind (disassociated or
+  deauthenticated, waiting for its removal timer: an AP-initiated deauthentication keeps every link's station
+  AP_MAX_INACTIVITY_AFTER_DEAUTH) refused the new association ("MLD: link: Station already exists"), and its later
+  removal took the new association's link station out of the driver (q472: the client re-associated on two links
+  and passed no data). It is now freed before the new link station is added; a still-associated one is refused as
+  before.
+
 hostapd_iface_ml_bss(iface, hapd) returns the BSS of @iface that is an ML partner of @hapd at any index, else bss[0]
 (the previous behaviour), and replaces iface->bss[0] at those ten places. No behaviour changes when every MLD link
 is its interface's first BSS.
@@ -102,6 +109,27 @@ Test: package/gt-be98-os/test/build-hostapd-ml-partner-test.sh (host build, --se
  
  				if (hostapd_is_ml_partner(hapd, h_hapd) &&
  				    h_hapd->iface->scan_cb)
+--- a/src/ap/ieee802_11.c
++++ b/src/ap/ieee802_11.c
+@@ -6256,6 +6256,18 @@
+ 	}
+ 
+ 	sta = ap_get_sta(hapd, origin_sta->addr);
++	/* gt-be98 0007: a link station that a previous association of this MLD left behind (disassociated or
++	 * deauthenticated, waiting for its removal timer: an AP-initiated deauthentication keeps every link's
++	 * station AP_MAX_INACTIVITY_AFTER_DEAUTH) is not this association's. Refusing the new association for it
++	 * locked a client that rejoins at once out of this link, and the stale copy's later removal took the new
++	 * association's link station out of the driver (open-wifi q472). Free it now, before this association's
++	 * link station is added. A link station that is still associated keeps the refusal. */
++	if (sta && sta != origin_sta && !(sta->flags & WLAN_STA_ASSOC)) {
++		wpa_printf(MSG_DEBUG,
++			   "MLD: link: freeing a stale station of a previous association");
++		ap_free_sta(hapd, sta);
++		sta = NULL;
++	}
+ 	if (sta || TEST_FAIL()) {
+ 		wpa_printf(MSG_INFO, "MLD: link: Station already exists");
+ 		status = WLAN_STATUS_UNSPECIFIED_FAILURE;
 --- a/src/ap/ieee802_11_eht.c
 +++ b/src/ap/ieee802_11_eht.c
 @@ -757,7 +757,8 @@
