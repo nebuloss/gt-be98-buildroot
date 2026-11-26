@@ -1,0 +1,171 @@
+From: gt-be98-buildroot <noreply@example.invalid>
+Subject: [PATCH] MLD: an AP MLD link may be any BSS of its interface, not only bss[0]
+
+On this AP (gt-be98) each radio has one hostapd configuration: its plain BSSes first (the radio's primary runs the
+CAC and brings the radio up), the AP MLD link as a later bss=. Every MLD loop below walked the interfaces and looked
+only at each interface's bss[0]. A link at bss[1..] was invisible to them:
+- hostapd_notif_disassoc() / hostapd_notif_disassoc_mld(): a leaving ML station's copy on such a link was never
+  freed. Its next association was refused while adding that link ("MLD: link: Station already exists", status 1)
+  until the copy expired (open-wifi q471: an MLD-capable client could not rejoin after leaving);
+- ap_sta_ml_disconnect(): an AP-initiated disassociation / deauthentication missed that link's copy;
+- ieee802_1x_ml_set_sta_authorized(), ap_sta_set_vlan(), ap_sta_bind_vlan(): the partner links' authorized flag and
+  VLAN missed it;
+- switch_link_scan(), the HT-scan result for the other links, the Reconfiguration Multi-Link element.
+
+hostapd_iface_ml_bss(iface, hapd) returns the BSS of @iface that is an ML partner of @hapd at any index, else bss[0]
+(the previous behaviour), and replaces iface->bss[0] at those ten places. No behaviour changes when every MLD link
+is its interface's first BSS.
+
+Test: package/gt-be98-os/test/build-hostapd-ml-partner-test.sh (host build, --selftest with two controls).
+
+---
+--- a/src/ap/hostapd.c
++++ b/src/ap/hostapd.c
+@@ -5272,6 +5272,28 @@
+ }
+ 
+ 
++/* gt-be98 0007: the BSS of @iface that is affiliated with @hapd's AP MLD, at ANY BSS index. An MLD link need not be
++ * its interface's first BSS: a radio's configuration may put its plain BSSes first and the AP MLD link as a later
++ * bss= (the radio's CAC and primary then come first). The loops below looked at bss[0] only, so every station record
++ * of a link at bss[1..] was invisible to them: a leaving ML station's partner copy stayed ("MLD: link: Station already
++ * exists" on its next association). Returns bss[0] when no BSS of @iface is a partner (the previous behaviour). */
++struct hostapd_data * hostapd_iface_ml_bss(struct hostapd_iface *iface,
++					   struct hostapd_data *hapd)
++{
++	size_t j;
++
++	if (hapd && hapd->conf && hapd->conf->mld_ap && iface->bss) {
++		for (j = 0; j < iface->num_bss; j++) {
++			struct hostapd_data *b = iface->bss[j];
++
++			if (b && b->conf && hostapd_is_ml_partner(hapd, b))
++				return b;
++		}
++	}
++	return iface->bss[0];
++}
++
++
+ u8 hostapd_get_mld_id(struct hostapd_data *hapd)
+ {
+ 	if (!hapd->conf->mld_ap)
+--- a/src/ap/hostapd.h
++++ b/src/ap/hostapd.h
+@@ -951,6 +951,8 @@
+ struct hostapd_data * hostapd_mld_get_link_bss(struct hostapd_data *hapd,
+ 					       u8 link_id);
+ int hostapd_link_remove(struct hostapd_data *hapd, u32 count);
++struct hostapd_data * hostapd_iface_ml_bss(struct hostapd_iface *iface,
++					   struct hostapd_data *hapd);
+ bool hostapd_is_ml_partner(struct hostapd_data *hapd1,
+ 			   struct hostapd_data *hapd2);
+ u8 hostapd_get_mld_id(struct hostapd_data *hapd);
+--- a/src/ap/drv_callbacks.c
++++ b/src/ap/drv_callbacks.c
+@@ -1093,7 +1093,8 @@
+ 	for (i = 0; i < interfaces->count; i++) {
+ 		struct sta_info *tmp_sta;
+ 
+-		tmp_hapd = interfaces->iface[i]->bss[0];
++		tmp_hapd = hostapd_iface_ml_bss(interfaces->iface[i],
++						assoc_hapd);
+ 
+ 		if (!tmp_hapd->conf->mld_ap ||
+ 		    assoc_hapd == tmp_hapd ||
+@@ -1143,7 +1144,8 @@
+ 			for (i = 0; i < hapd->iface->interfaces->count; ++i) {
+ 				struct hostapd_iface *h =
+ 					hapd->iface->interfaces->iface[i];
+-				struct hostapd_data *h_hapd = h->bss[0];
++				struct hostapd_data *h_hapd =
++					hostapd_iface_ml_bss(h, hapd);
+ 				struct hostapd_bss_config *hconf = h_hapd->conf;
+ 
+ 				if (!hconf->mld_ap ||
+@@ -1924,7 +1926,7 @@
+ 			struct hostapd_data *h_hapd;
+ 
+ 			h = hapd->iface->interfaces->iface[i];
+-			h_hapd = h->bss[0];
++			h_hapd = hostapd_iface_ml_bss(h, hapd);
+ 			if (!hostapd_is_ml_partner(hapd, h_hapd))
+ 				continue;
+ 
+@@ -2691,7 +2693,8 @@
+ 			for (i = 0; i < hapd->iface->interfaces->count; i++) {
+ 				struct hostapd_iface *h =
+ 					hapd->iface->interfaces->iface[i];
+-				struct hostapd_data *h_hapd = h->bss[0];
++				struct hostapd_data *h_hapd =
++					hostapd_iface_ml_bss(h, hapd);
+ 
+ 				if (hostapd_is_ml_partner(hapd, h_hapd) &&
+ 				    h_hapd->iface->scan_cb)
+--- a/src/ap/ieee802_11_eht.c
++++ b/src/ap/ieee802_11_eht.c
+@@ -757,7 +757,8 @@
+ 
+ 	/* First check if the element needs to be added */
+ 	for (i = 0; i < hapd->iface->interfaces->count; i++) {
+-		other_hapd = hapd->iface->interfaces->iface[i]->bss[0];
++		other_hapd = hostapd_iface_ml_bss(
++			hapd->iface->interfaces->iface[i], hapd);
+ 
+ 		wpa_printf(MSG_DEBUG, "MLD: Reconfiguration ML: %u",
+ 			   other_hapd->eht_mld_link_removal_count);
+@@ -787,7 +788,8 @@
+ 
+ 	/* Add the per station profiles */
+ 	for (i = 0; i < hapd->iface->interfaces->count; i++) {
+-		other_hapd = hapd->iface->interfaces->iface[i]->bss[0];
++		other_hapd = hostapd_iface_ml_bss(
++			hapd->iface->interfaces->iface[i], hapd);
+ 		if (!other_hapd->eht_mld_link_removal_count)
+ 			continue;
+ 
+--- a/src/ap/ieee802_1x.c
++++ b/src/ap/ieee802_1x.c
+@@ -164,8 +164,8 @@
+ 	for (i = 0; i < hapd->iface->interfaces->count; i++) {
+ 		struct sta_info *tmp_sta;
+ 		struct mld_link_info *link;
+-		struct hostapd_data *tmp_hapd =
+-			hapd->iface->interfaces->iface[i]->bss[0];
++		struct hostapd_data *tmp_hapd = hostapd_iface_ml_bss(
++			hapd->iface->interfaces->iface[i], hapd);
+ 
+ 		if (!hostapd_is_ml_partner(hapd, tmp_hapd))
+ 			continue;
+--- a/src/ap/sta_info.c
++++ b/src/ap/sta_info.c
+@@ -1205,7 +1205,8 @@
+ 		for (i = 0; i < interfaces->count; i++) {
+ 			struct sta_info *tmp_sta;
+ 
+-			tmp_hapd = interfaces->iface[i]->bss[0];
++			tmp_hapd = hostapd_iface_ml_bss(interfaces->iface[i],
++							assoc_hapd);
+ 
+ 			if (!hostapd_is_ml_partner(tmp_hapd, assoc_hapd))
+ 				continue;
+@@ -1457,7 +1458,8 @@
+ #ifdef CONFIG_IEEE80211BE
+ 	for (i = 0; interfaces && i < interfaces->count; i++) {
+ 		struct sta_info *tmp_sta;
+-		struct hostapd_data *tmp_hapd = interfaces->iface[i]->bss[0];
++		struct hostapd_data *tmp_hapd =
++			hostapd_iface_ml_bss(interfaces->iface[i], hapd);
+ 
+ 		if (!tmp_hapd->conf->mld_ap ||
+ 		    hapd == tmp_hapd ||
+@@ -1586,7 +1588,8 @@
+ #ifdef CONFIG_IEEE80211BE
+ 	for (i = 0; interfaces && i < interfaces->count; i++) {
+ 		struct sta_info *tmp_sta;
+-		struct hostapd_data *tmp_hapd = interfaces->iface[i]->bss[0];
++		struct hostapd_data *tmp_hapd =
++			hostapd_iface_ml_bss(interfaces->iface[i], hapd);
+ 
+ 		if (!tmp_hapd->conf->mld_ap ||
+ 		    hapd == tmp_hapd ||
