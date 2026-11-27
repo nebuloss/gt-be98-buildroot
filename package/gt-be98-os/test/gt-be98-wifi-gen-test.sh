@@ -1816,11 +1816,8 @@ check "MLO refuse: the single-radio build (no -M, no shared wiphy)" "1 yes" "$? 
 { mlo_radios; mlo_net 1 Home sae "2g 5gl 6g"; } > "$T/m4"; mlo_refuse "$T/m4" "needs bands 6g and 5gh"
 { printf 'country=FR\nradio=6g\nchannel=37\nwidth=160\nradio=5gh\nchannel=auto\nwidth=80\n'; mlo_net 1 Home sae "2g 5gh 6g"; } > "$T/m5"; mlo_refuse "$T/m5" "radio 5gh channel=auto"
 { printf 'country=US\nradio=6g\nchannel=37\nwidth=160\nradio=5gh\nchannel=100\nwidth=80\nzwdfs=1\n'; mlo_net 1 Home sae "2g 5gh 6g"; } > "$T/m6"; mlo_refuse "$T/m6" "radio 5gh zwdfs=1"
-{ mlo_radios; printf 'radio=2g\nenabled=0\n'; mlo_net 1 Home sae "2g 5gh 6g"; } > "$T/m7"; mlo_refuse "$T/m7" "radio 2g: enabled=0 refused on the MLO build"
-# INTERIM MLO-MEMBER-KEEP: the 2.4 GHz member without a network gets its keeper
-{ mlo_radios; mlo_net 1 Home sae "5gh 6g"; } > "$T/m8"; rm -f "$T/slots"; gen "$T/m8" -c -M 1
-check "MLO, no network on 2.4 GHz: accepted, a keeper first on 2g (network 100006)" "0 bcawl3 0 100006" \
-	"$? $(awk '$1 == "bss" && $2 == "bcawl3" { print $3, $4, $5 }' "$T/o/plan")"
+{ mlo_radios; printf 'radio=2g\nenabled=0\n'; mlo_net 1 Home sae "2g 5gh 6g"; } > "$T/m7"; mlo_refuse "$T/m7" "needs radio 2g enabled"
+{ mlo_radios; mlo_net 1 Home sae "5gh 6g"; } > "$T/m8"; mlo_refuse "$T/m8" "needs a Wi-Fi network on 2.4 GHz"
 { mlo_radios; mlo_net 1 Home sae "2g 5gh 6g"; mlo_net 2 Two sae "5gh 6g"; } > "$T/m9"; mlo_refuse "$T/m9" "one multi-link device"
 { mlo_radios 120 20; mlo_net 1 Home sae "2g 5gh 6g"; } > "$T/m10"; mlo_refuse "$T/m10" "weather-radar"
 { mlo_radios 100 160; mlo_net 1 Home sae "2g 5gh 6g"; } > "$T/m11"; mlo_refuse "$T/m11" "weather-radar"
@@ -1829,26 +1826,7 @@ check "MLO: 5gh 132/80 (outside the weather block) accepted" 0 $?
 { mlo_radios; mlo_net 1 Home sae "2g 5gh 6g" "wds=1"; } > "$T/m13"; mlo_refuse "$T/m13" "refused with wds=1"
 { mlo_radios; mlo_net 1 Home sae "2g 5gh 6g" "hidden=1"; } > "$T/m14"; mlo_refuse "$T/m14" "refused with hidden=1"
 { mlo_radios; mlo_net 1 Home sae "2g 5gh 6g" "schedule=daily@08:00-20:00"; } > "$T/m15"; mlo_refuse "$T/m15" "refused with a schedule"
-{ mlo_radios; printf 'radio=2g\nmonitor=1\n'; mlo_net 1 Home sae "2g 5gh 6g"; } > "$T/m16"; mlo_refuse "$T/m16" "radio 2g: monitor=1 refused on the MLO build"
-# INTERIM MLO-MEMBER-KEEP (header): on the MLO build the members 6g, 5gh, 2g
-# stay up whatever the list; a member with no network up gets a keeper
-{ printf 'country=FR\nradio=6g\nenabled=0\n'; net 1 a sae password1 "2g 5gl" 1; } > "$T/k1"; mlo_refuse "$T/k1" "radio 6g: enabled=0 refused on the MLO build"
-{ printf 'country=FR\nradio=5gh\nschedule=daily@08:00-20:00\n'; net 1 a sae password1 "2g 5gl" 1; } > "$T/k2"; mlo_refuse "$T/k2" "radio 5gh: a schedule refused on the MLO build"
-{ printf 'country=FR\nradio=5gl\nenabled=0\n'; net 1 a sae password1 "2g 5gh 6g" 1; } > "$T/k3"; rm -f "$T/slots"; gen "$T/k3" -c -M 1
-check "MLO build: 5gl (not a member) may be disabled, no keeper (every member has a network)" "0 0" \
-	"$? $(grep -c '^bss .* 10000[456] ' "$T/o/plan")"
-{ printf 'country=FR\n'; net 1 a sae password1 "2g 5gl" 1; } > "$T/k4"; rm -f "$T/slots"; gen "$T/k4" -c -M 1
-check "MLO build, no MLO network, a network on 2g+5gl only: keepers first on 6g (100004) and 5gh (100005), none on 5gl/2g" "0 bcawl1 0 100005 bcawl2 0 100004 0" \
-	"$? $(awk '$1 == "bss" && $5 >= 100004 { printf "%s %s %s ", $3, $4, $5 }' "$T/o/plan")$(awk '$1 == "bss" && $5 >= 100004 && $2 != "bcawl2" && $2 != "bcawl1"' "$T/o/plan" | wc -l | tr -d ' ')"
-check "keeper: hidden, SAE, max_num_sta=0 (admits no client), its own SSID, no bridge" "yes yes yes yes yes no" \
-	"$(has bcawl2 ignore_broadcast_ssid=1) $(has bcawl2 wpa_key_mgmt=SAE) $(has bcawl2 max_num_sta=0) $(has bcawl2 ssid=gt-be98-keep-6g) $(has bcawl1 max_num_sta=0) $(grep -q '^bridge=' "$T/o/sec-bcawl2" && echo yes || echo no)"
-check "keeper: no net line, bridge - in its bss line" "0 - -" \
-	"$(grep -c '^net 10000' "$T/o/plan") $(awk '$1 == "bss" && $5 == 100004 { print $8 }' "$T/o/plan") $(awk '$1 == "bss" && $5 == 100005 { print $8 }' "$T/o/plan")"
-conf_ok "keeper configs"
-rm -f "$T/slots"; gen "$T/k4" -c -M 0
-check "single-radio build (-M 0): no keeper, 6g/5gh without a network stay down" "0 0" "$? $(grep -c '^bss .* 10000[456] ' "$T/o/plan")"
-{ printf 'country=FR\nradio=2g\nenabled=0\n'; net 1 a sae password1 "5gl" 1; } > "$T/k5"; rm -f "$T/slots"; gen "$T/k5" -c -M 0
-check "single-radio build (-M 0): 2g may be disabled" 0 $?
+{ mlo_radios; printf 'radio=2g\nmonitor=1\n'; mlo_net 1 Home sae "2g 5gh 6g"; } > "$T/m16"; mlo_refuse "$T/m16" "radio 2g monitor=1"
 # -S (the service): a refused MLO network is skipped, every other network and radio still rendered
 { mlo_radios; mlo_net 1 Home psk2sae "2g 5gh 6g"; printf 'network=2\nssid=Guest\nsecurity=sae\npassphrase=password2\nbands=2g 5gh 6g\nvlan=922\n'; } > "$T/m17"
 rm -f "$T/slots"; gen "$T/m17" -c -M 1 -S

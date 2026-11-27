@@ -437,30 +437,16 @@
 #                                   security=sae (WPA3-Personal: PMF required),
 #                                   without bands 6g and 5gh, with wds=1,
 #                                   hidden=1, a schedule, repeated=/routed=, a
-#                                   second MLO network; while radio 6g, 5gh or
-#                                   2g (the firmware MLO group's members) is
-#                                   the station's radio; with channel=auto on
-#                                   6g/5gh, zwdfs=1 on 5gh, or a 5gh block in
+#                                   second MLO network; and while radio 6g,
+#                                   5gh or 2g (the firmware MLO group's
+#                                   members) is disabled, a monitor, scheduled
+#                                   or the station's radio, with channel=auto
+#                                   on 6g/5gh, zwdfs=1 on 5gh, a 5gh block in
 #                                   the weather-radar channels 116-128 (160 MHz
-#                                   included). A member disabled, a monitor or
-#                                   scheduled: refused on the MLO build whatever
-#                                   the list (INTERIM below); 2.4 GHz without a
-#                                   network: its keeper (INTERIM below).
+#                                   included), or no network on 2.4 GHz.
 #                                   gt-be98-wifi restarts hostapd whole on
 #                                   every change of the MLD or a link radio
 #                                   (open-wifi ledger MLD-RADIO-RESTART)
-#   INTERIM [open-wifi ledger MLO-MEMBER-KEEP, orchestrator 2026-11-26, until
-#   the driver stops gating a member radio on the group]: on the MLO build
-#   (-M 1), WHATEVER the list (an MLO network or none), radios 6g, 5gh and 2g
-#   (the firmware MLO group's members) stay up as APs: a member radio answers
-#   no client until the group is ACTIVE, and the group goes ACTIVE only when
-#   every member's AP is up (bench q468: 6 GHz SAE unanswered with 2.4 GHz
-#   down). So enabled=0, monitor=1 or a schedule on 6g, 5gh or 2g is refused
-#   there, and a member radio with no network up (none listed, all skipped,
-#   or all scheduled off) gets a KEEPER: a hidden BSS gt-be98-keep-<band>,
-#   SAE, no bridge, max_num_sta=0 (hostapd admits no client), never in the
-#   plan's net lines. Not the product answer: disabling 2.4 GHz with MLO off
-#   must work once the driver no longer gates on the group
 #     wds=0|1                       1: 4-ADDRESS (WDS) CLIENTS (owner 11-23,
 #                                   -F feature wds 1), as MULTI-AP BACKHAUL
 #                                   STAs: hostapd multi_ap=3 (fronthaul +
@@ -1136,8 +1122,9 @@ function mldcheck(i, tag,    b, li, n, j, ch, w) {
 	split("6g 5gh 2g", li, " ")
 	for (n = 1; n <= 3; n++) {
 		b = li[n]
-		# (enabled=0, monitor=1, a schedule: refused on the MLO build whatever
-		# the list, INTERIM MLO-MEMBER-KEEP, radio checks)
+		if (renab[b] == "0") { nerrf(i, tag ": mld_ap=1 needs radio " b " enabled (" (b == "2g" ? "the 2.4 GHz radio is a member of the firmware MLO group, fixed at its start: it stays enabled while MLO is on" : "a link radio of the multi-link device") ")"); return }
+		if (rmon[b]) { nerrf(i, tag ": mld_ap=1 refused with radio " b " monitor=1 (an MLO group member serves BSSes)"); return }
+		if (rsch[b] != "") { nerrf(i, tag ": mld_ap=1 refused with a schedule on radio " b " (an MLO group member stays up)"); return }
 		if (nsta && stenab && stab == b) { nerrf(i, tag ": mld_ap=1 refused with the station (Wi-Fi uplink) on radio " b " (an MLO group member)"); return }
 	}
 	for (n = 1; n <= 2; n++) {
@@ -1152,8 +1139,9 @@ function mldcheck(i, tag,    b, li, n, j, ch, w) {
 		blk5(ch, w)
 		if (BHI >= 120 && BLO <= 128) { nerrf(i, tag ": mld_ap=1 refused with radio 5gh channel " ch " at " w " MHz: the block holds the weather-radar channels 120-128 (5600-5650 MHz, a 10 min CAC); pick a 5gh channel outside 116-128 (160 MHz: none)"); return }
 	}
-	# (the 2.4 GHz member without a network: its keeper, INTERIM
-	# MLO-MEMBER-KEEP, below)
+	# the 2.4 GHz member up: a network of the list on 2g
+	n = 0; for (j = 1; j <= nnet; j++) if (!bh[j] && ((j, "2g") in hasb)) n++
+	if (!n) nerrf(i, tag ": mld_ap=1 needs a Wi-Fi network on 2.4 GHz (the 2.4 GHz radio is a member of the firmware MLO group and must be up as an AP)")
 }
 function wpsuuid(    bi, m) {
 	m = ""
@@ -1245,7 +1233,7 @@ FILENAME == slotsf {
 function newnet(v) {
 	nnet++; net[nnet] = v; nid[v] = nnet; ci = nnet
 	sec[ci] = ""; ssid[ci] = ""; pass[ci] = ""; vlan[ci] = ""; hid[ci] = 0; iso[ci] = 0; maxc[ci] = ""
-	nsch[ci] = ""; wds[ci] = 0; mld[ci] = 0; mlk[ci] = 0; mlph[ci] = 0; kp[ci] = 0
+	nsch[ci] = ""; wds[ci] = 0; mld[ci] = 0; mlk[ci] = 0; mlph[ci] = 0
 	aw[ci] = ""; alim[ci] = 0; nasw[ci] = 0
 	nb[ci] = 0; nra[ci] = 0
 	rs[ci] = ""; rp[ci] = ""; rk[ci] = ""; as[ci] = ""; ap[ci] = ""; ak[ci] = ""
@@ -1587,13 +1575,6 @@ END {
 		if (!(b in dev)) { err("no netdev for radio " b " (-d)"); continue }
 		# rax/rtwt/rzw/rmon/rled hold numbers (the "0" string trap)
 		if (rzw[b] && b != "5gl" && b != "5gh") err("radio " b ": zwdfs=1 refused (zero-wait DFS: 5gl, 5gh only)")
-		# INTERIM [open-wifi ledger MLO-MEMBER-KEEP] (header): on the MLO
-		# build the members of the firmware MLO group (6g, 5gh, 2g) stay up as APs
-		if (mlocap && (b == "6g" || b == "5gh" || b == "2g")) {
-			if (renab[b] == "0") err("radio " b ": enabled=0 refused on the MLO build of the Wi-Fi driver: radio " b " is a member of the firmware MLO group, and with a member down the other members answer no client (interim, open-wifi ledger MLO-MEMBER-KEEP)")
-			if (rmon[b]) err("radio " b ": monitor=1 refused on the MLO build of the Wi-Fi driver: radio " b " is a member of the firmware MLO group and stays up as an AP (interim, open-wifi ledger MLO-MEMBER-KEEP)")
-			if (rsch[b] != "") err("radio " b ": a schedule refused on the MLO build of the Wi-Fi driver: radio " b " is a member of the firmware MLO group and stays up (interim, open-wifi ledger MLO-MEMBER-KEEP)")
-		}
 		# [open-wifi ZW-N3] no background CAC in an ETSI DFS region: the driver
 		# refuses it (-EOPNOTSUPP) and hostapd 2.12 (dfs.c) then fails the
 		# interface setup, so enable_background_radar=1 would keep the radio
@@ -1684,27 +1665,6 @@ END {
 	for (i = 1; i <= nnet; i++) if (nsch[i] != "") sch = sch "net " net[i] " " (noff[i] ? "off" : "on") "\n"
 	for (bi = 1; bi <= nbands; bi++) { b = BANDS[bi]; if (rsch[b] != "") sch = sch "radio " b " " (roff[b] ? "off" : "on") "\n" }
 	if (query) { printf "%s", sch; exit 0 }
-
-	# INTERIM [open-wifi ledger MLO-MEMBER-KEEP] (header): on the MLO build a
-	# member radio (6g, 5gh, 2g) with no network up gets a keeper BSS (hidden,
-	# SAE, no bridge, max_num_sta=0), so the firmware MLO group goes ACTIVE.
-	# Its passphrase is the boot id (no client is admitted whatever it is:
-	# max_num_sta=0 refuses the authentication itself, hostapd ap_sta_add)
-	if (mlocap) {
-		kpw = ""
-		if ((getline kpw < "/proc/sys/kernel/random/boot_id") > 0) gsub(/-/, "", kpw)
-		close("/proc/sys/kernel/random/boot_id")
-		if (length(kpw) < 8) kpw = "gt-be98-keeper-admits-no-client"
-		split("6g 5gh 2g", kl, " ")
-		for (n = 1; n <= 3; n++) {
-			b = kl[n]
-			if (!(b in bmac) || renab[b] == "0") continue
-			m = 0; for (j = 1; j <= nnet; j++) if (((j, b) in hasb) && !noff[j]) m++
-			if (m) continue
-			newnet(100003 + n); kp[ci] = 1; hid[ci] = 1; sec[ci] = "sae"; pass[ci] = kpw
-			ssid[ci] = "gt-be98-keep-" b; maxc[ci] = "0"; nbr[ci] = "-"; nb[ci] = 1; hasb[ci, b] = 1; noff[ci] = 0
-		}
-	}
 
 	# ---- slots, per radio: sticky, slot 0 = anchor ----
 	for (bi = 1; bi <= nbands; bi++) {
@@ -2046,7 +2006,7 @@ END {
 		for (k = 0; k < cap; k++) {
 			i = used[b, k]; if (i == "") continue
 			id = net[i]; ifn = (k == 0) ? d : d "-" k
-			a = bssid(b, mi[b, id]); br = (bh[i] || kp[i]) ? "-" : nbr[i]
+			a = bssid(b, mi[b, id]); br = bh[i] ? "-" : nbr[i]
 			f = out "/sec-" ifn
 			# [MLO] the MLD link: interface mld0 on each link radio (bss=mld0)
 			if (mlk[i]) { ifn = "mld0"; f = out "/sec-" d "-mld0" }
@@ -2055,8 +2015,7 @@ END {
 			print "bssid=" a > f
 			# the backhaul BSS has no bridge (header: its AP_VLANs are
 			# gt-be98-l2 trunks, attached by gt-be98-mesh)
-			# (a keeper, MLO-MEMBER-KEEP, has none: no client is admitted)
-			if (!bh[i] && !kp[i]) print "bridge=" br > f
+			if (!bh[i]) print "bridge=" br > f
 			print ssidline(ssid[i]) > f
 			print "utf8_ssid=1" > f
 			# REQUIRED: without WMM the firmware RSN capabilities (0x000c) do
@@ -2183,7 +2142,7 @@ END {
 	# [MLO] mld <ifname> <mld address> <6 GHz link dev> <5 GHz-high link dev> <network>
 	if (mldk && (MLDID in onradio)) print "mld mld0 " bssid("6g", mi["6g", MLDID]) " " dev["6g"] " " dev["5gh"] " " net[mlkof] > plan
 	for (i = 1; i <= nnet; i++) if (net[i] in onradio) {
-		if (mlk[i] || mlph[i] || kp[i]) continue
+		if (mlk[i] || mlph[i]) continue
 		if (bh[i]) {
 			for (k = 0; k < cap; k++) if (used[bhband, k] == i) break
 			print "backhaul " bhband " " dev[bhband] " " (k == 0 ? dev[bhband] : dev[bhband] "-" k) " " bssid(bhband, mi[bhband, net[i]]) > plan
