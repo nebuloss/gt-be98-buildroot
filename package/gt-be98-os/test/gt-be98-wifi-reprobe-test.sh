@@ -260,7 +260,7 @@ cat > "$T/bin/mlorec" <<'X'
 echo mlo_recover >> "$FAKE/mlorec"
 X
 chmod +x "$T/bin/mlorec"
-export GT_BE98_MLO_RECOVER="$T/bin/mlorec" GT_BE98_KMSG="$T/kmsg"; : > "$T/kmsg"; : > "$T/mlorec"
+export GT_BE98_MLO_RECOVER="$T/bin/mlorec" GT_BE98_KMSG="$T/kmsg" GT_BE98_KO_FILE="$T/nonexistent.ko"; : > "$T/kmsg"; : > "$T/mlorec"
 mlo_at() { : > "$T/reloads"; GT_BE98_NOW=$1 $SH "$R" check; echo "$? $(wc -l < "$T/mlorec" | tr -d ' ')"; }
 printf 'given_up=0\nnext=999999\n' > "$S/failed/bcawl2"
 echo 'x MLO-REBIND-FUTILE (dom1)' > "$T/kmsg"; echo 0 > "$MWD.base.tmp" 2>/dev/null; mkdir -p "$MWD"; echo 0 > "$MWD/futile.base"
@@ -284,7 +284,27 @@ echo 'GT_BE98_MODULES' > /dev/null; : > "$T/modules"
 echo 'x MLO-REBIND-FUTILE (dom2)' >> "$T/kmsg"
 check "the driver not loaded: no module reload" "0 2" "$(mlo_at 4000)"
 echo 'bca_pcie_ipc 4194304 0 - Live 0x0' > "$T/modules"
-unset GT_BE98_MLO_RECOVER GT_BE98_KMSG
+# a member netdev VANISHED on the MLO build (q478): the same reload, same bound
+rm -rf "$S" "$MWD"; mkdir -p "$S/ids"; : > "$T/mlorec"; : > "$T/log"; : > "$T/kmsg"
+for d in bcawl0 bcawl1 bcawl2 bcawl3; do dev $d 1$d 2>/dev/null; mkdir -p "$T/net/$d/phy80211"; echo phy9 > "$T/net/$d/phy80211/name"; done
+for d in bcawl0 bcawl1 bcawl2 bcawl3; do cp "$T/net/$d/ifindex" "$S/ids/$d"; done
+rm -rf "$T/net/bcawl2"
+check "MLO build, bcawl2 vanished at 5000: the ids pass records it, no module reload yet" "0 0" "$(mlo_at 5000)"
+check "  5089 (89 s gone): still none" "0 0" "$(mlo_at 5089)"
+check "  5091 (91 s gone, REPROBE_GONE 90): ONE module reload, said why" "0 1 yes" "$(mlo_at 5091) $(grep -q 'bcawl2 dead (its netdev vanished' "$T/log" && echo yes || echo no)"
+check "  still gone 200 s later: no second reload (bound), said once" "0 1 1" "$(mlo_at 5300) $(grep -c 'dead again (netdev vanished)' "$T/log")"
+check "  past 600 s: the next module reload" "0 2" "$(mlo_at 5700)"
+rm -rf "$MWD"; : > "$T/mlorec"
+for d in bcawl1 bcawl3; do echo "phy1$d" > "$T/net/$d/phy80211/name"; done
+rm -rf "$S/reprobe"
+check "single-radio build (separate wiphys, no MLO module file), bcawl2 gone 91 s: no module reload" "0 0" "$(mlo_at 6000 > /dev/null; mlo_at 6091 > /dev/null; mlo_at 6092)"
+echo 'MLO-ORDER: SYNC' > "$T/mlo.ko"; rm -rf "$S/reprobe"
+check "  the same with the loaded module file of the MLO build: one module reload" "0 1" "$(GT_BE98_KO_FILE="$T/mlo.ko"; export GT_BE98_KO_FILE; mlo_at 7000 > /dev/null; mlo_at 7091)"
+rm -rf "$S/reprobe" "$MWD"; : > "$T/mlorec"; for d in bcawl1 bcawl3; do echo phy9 > "$T/net/$d/phy80211/name"; done; rm -f "$S/ids/bcawl2"
+check "a vanished netdev the service never started (not in ids): nothing" "0 0" "$(mlo_at 8000 > /dev/null; mlo_at 8091 > /dev/null; mlo_at 8092)"
+rm -rf "$T/net/bcawl0"; dev bcawl2 12; echo phy9 > /dev/null; rm -rf "$S/reprobe"
+check "5gl (not a member) vanished: no module reload" "0 0" "$(mlo_at 9000 > /dev/null; mlo_at 9091 > /dev/null; mlo_at 9092)"
+unset GT_BE98_MLO_RECOVER GT_BE98_KMSG GT_BE98_KO_FILE
 for d in bcawl0 bcawl1 bcawl2 bcawl3; do rm -rf "$T/net/$d/phy80211"; done
 rm -rf "$S/failed" "$MWD"
 
