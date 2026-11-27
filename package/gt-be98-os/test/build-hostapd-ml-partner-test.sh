@@ -5,9 +5,10 @@
 # target's EHT config WITHOUT CONFIG_TESTING_OPTIONS).
 #   sh test/build-hostapd-ml-partner-test.sh HOSTAPD_SRC WORKDIR
 #   sh test/build-hostapd-ml-partner-test.sh --selftest HOSTAPD_SRC WORKDIR
-# --selftest: control 1 = the tree WITHOUT 0007 (reversed; must be RED by behaviour: S1b, S2a, S3a); control 2 = 0007
-# without its src/ap/sta_info.c half (must be RED at S3a: the AP-initiated deauth misses link 1); the given tree must
-# be GREEN. Exit 0 GREEN, 1 RED.
+# --selftest: control 1 = the tree WITHOUT 0007 (reversed; must be RED by behaviour: S1b, S2a, S3a, S4b); control 2 = 0007
+# without its src/ap/sta_info.c half (must be RED at S3a: the AP-initiated deauth misses link 1); control 3 = 0007
+# without its src/ap/ieee802_11.c half (must be RED at S4b: the rejoin right after a deauthentication is refused); the
+# given tree must be GREEN. Exit 0 GREEN, 1 RED.
 set -eu
 st=0; [ "${1:-}" = --selftest ] && { st=1; shift; }
 src=${1:?HOSTAPD_SRC}; w=${2:?WORKDIR}
@@ -28,7 +29,7 @@ _OBJS_VAR := MLPARTNER
 include ../src/objs.mk
 MP_OBJS = $(filter-out %/hostapd/main.o %/src/drivers/drivers.o,$(OBJS)) $(MLPARTNER)
 hostapd-ml-partner-test: $(MP_OBJS)
-	$(Q)$(LDO) $(LDFLAGS) -Wl,--wrap=wpa_msg -Wl,--wrap=ieee802_11_set_beacon -o $@ $(MP_OBJS) $(LIBS)
+	$(Q)$(LDO) $(LDFLAGS) -Wl,--wrap=wpa_msg -Wl,--wrap=wpa_printf -Wl,--wrap=ieee802_11_set_beacon -o $@ $(MP_OBJS) $(LIBS)
 MK
 	  make -s -j"$(nproc)" -f Makefile -f mlpartner.mk hostapd-ml-partner-test CC="${HOSTCC:-gcc}" >/dev/null ) || return 1
 	cp "$w/b/hostapd/hostapd-ml-partner-test" "$2"
@@ -48,5 +49,10 @@ echo "=== control 2: 0007 without its src/ap/sta_info.c half (must be RED at S3a
 rm -rf "$w/c2"; cp -a "$src" "$w/c2"; cp "$w/cb/src/ap/sta_info.c" "$w/c2/src/ap/sta_info.c"
 c2=0; build "$w/c2" "$w/t-c2" && { "$w/t-c2" > "$w/c2.out" 2>&1 || c2=$?; } || c2=1
 cat "$w/c2.out" 2>/dev/null | grep -E '^(RED|ok)' || true
-if [ $c2 != 0 ] && grep -q '^RED  S3a' "$w/c2.out"; then echo "GREEN (selftest: given GREEN, both controls RED)"; exit 0; fi
-echo "RED (selftest: control 2 is not RED at S3a)"; exit 1
+[ $c2 != 0 ] && grep -q '^RED  S3a' "$w/c2.out" || { echo "RED (selftest: control 2 is not RED at S3a)"; exit 1; }
+echo "=== control 3: 0007 without its src/ap/ieee802_11.c half (must be RED at S4b)"
+rm -rf "$w/c3"; cp -a "$src" "$w/c3"; cp "$w/cb/src/ap/ieee802_11.c" "$w/c3/src/ap/ieee802_11.c"
+c3=0; build "$w/c3" "$w/t-c3" && { "$w/t-c3" > "$w/c3.out" 2>&1 || c3=$?; } || c3=1
+grep -E '^(RED|ok)' "$w/c3.out" 2>/dev/null || true
+if [ $c3 != 0 ] && grep -q '^RED  S4b' "$w/c3.out"; then echo "GREEN (selftest: given GREEN, all three controls RED)"; exit 0; fi
+echo "RED (selftest: control 3 is not RED at S4b)"; exit 1
