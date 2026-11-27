@@ -72,6 +72,13 @@ run cited. **[HYP]** an inference an arm still has to settle. **[PROPOSAL]** des
   `brwifi<N>`. A network's leaf bridge has exactly one uplink, `bhs.<vid>`, in place of
   `rnr0.<vid>`. Wired jacks on the leaf (`rnr1..rnr3` access ports) join the same bridges, so a
   wired device behind the leaf works too.
+- **[11-27, lane sta4addr, G-B1] A network with no SSID crosses too.** Until 11-27 a leaf carried only the
+  VLANs of the SSIDs it re-serves, so a wired-only network of the root (a server LAN) never reached the
+  leaf. The station key `carry=V[,V...]` (trunk=1 only) lists VLANs the trunk ALSO carries: each one not
+  already carried by an SSID gets a bridge with no BSS (the `-L` network object's, else
+  `brwifi<200000+V>`), plan line `carry <vid> <bridge>`, on `bhs.<V>` like the others; the leaf's jacks
+  join it by VID. A leaf with `carry=` and no network block is a pure bridge (no Wi-Fi of its own,
+  G-B3: the web UI's leaf setting). `mgmt_vid=` may name a carry VLAN. `-F`: `feature mesh_carry 1`.
 - **Loop rule:** a leaf never has both a wired trunk and a backhaul trunk for one VID. netguard
   already refuses a trunk VLAN in a repeater bridge (`sbin/gt-be98-netguard:313-314`). The same guard
   generalises to "one uplink per network bridge".
