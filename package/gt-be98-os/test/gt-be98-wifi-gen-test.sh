@@ -1677,7 +1677,8 @@ stref "trunk and a backhaul" "a backhaul= block and a station trunk=1 exclude ea
 stref "trunk and routed" "routed= needs the station repeater=0" station=2g repeater=multiap trunk=1 network=1 ssid=a security=sae passphrase=password1 bands=2g routed=192.168.50.1/24
 stref "trunk=2" "station 2g: unknown key trunk" station=2g repeater=multiap trunk=2 $(nl "$N1")
 # [sta4addr G-B1] carry=: VLANs the leaf's trunk carries with NO SSID (a wired-only server LAN; a pure bridge leaf)
-{ cat "$T/lf1"; echo 'carry=20,30'; } > "$T/lc1"	# 20 is network 2's (no carry line), 30 has no SSID
+{ stab 5gh ssid=mesh-bh security=sae passphrase=saepassword1 repeater=multiap trunk=1 carry=20,30	# 20 is network 2's (no carry line), 30 has no SSID
+  net 1 a sae password1 "2g 5gh" 10; net 2 b sae password2 "2g" 20; } > "$T/lc1"
 gen "$T/lc1"; check "carry=20,30: accepted; bhtrunk carries 10,20 then 30; one carry line (30, its own bridge)" "0 bhtrunk bcawl1 10,20,30|carry 30 brwifi200030" \
 	"$? $(grep -E '^(bhtrunk|carry) ' "$T/o/plan" | sort | tr '\n' '|' | sed 's/|$//')"
 check "control: without carry= no carry line" 0 "$(gen "$T/lf1"; grep -c '^carry ' "$T/o/plan")"
