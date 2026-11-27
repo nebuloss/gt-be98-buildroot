@@ -25,7 +25,7 @@ mutant() {	# name sed-expression: the expression must change the generator
 }
 mutant "no SAE-only rule" 's/	if (sec\[i\] != "sae") { nerrf(i, tag ": mld_ap=1 needs security=sae/	if (0) { nerrf(i, tag ": mld_ap=1 needs security=sae/'
 mutant "no MLO-build rule" 's/	if (!mlocap) { nerrf/	if (0) { nerrf/'
-mutant "no 2.4 GHz network rule" 's/	if (!n) nerrf(i, tag ": mld_ap=1 needs a Wi-Fi network on 2.4 GHz/	if (0) nerrf(i, tag ": mld_ap=1 needs a Wi-Fi network on 2.4 GHz/'
+mutant "no member-monitor rule (MLO build)" 's/		if (mlocap \&\& rmon\[b\] \&\& /		if (0 \&\& rmon[b] \&\& /'
 mutant "no weather-block rule" 's/		if (BHI >= 120 \&\& BLO <= 128) { nerrf(i, tag ": mld_ap=1 refused with radio 5gh channel/		if (0) { nerrf(i, tag ": mld_ap=1 refused with radio 5gh channel/'
 mutant "no ACS rule" 's/		if (racs\[b\]) { nerrf(i, tag ": mld_ap=1 refused with radio/		if (0) { nerrf(i, tag ": mld_ap=1 refused with radio/'
 mutant "no zero-wait rule" 's/	if (rzw\["5gh"\]) { nerrf/	if (0) { nerrf/'

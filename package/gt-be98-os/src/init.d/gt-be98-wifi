@@ -1336,6 +1336,30 @@ sta_mon_apply() {
 }
 
 # bring hostapd in line with the settings: only what changed
+# ---- the MLO build's member radios (open-wifi MLO-MEMBER-CORE-UP, design
+# note MLO-PROD2 20) ----
+# On the MLO build of the Wi-Fi driver (the 5 GHz-high and 6 GHz radios on one
+# wiphy) the radios of the firmware MLO group, 6 GHz bcawl2, 5 GHz-high bcawl1
+# and 2.4 GHz bcawl3, answer no client until the group is ACTIVE; the driver
+# counts a member with no BSS when its netdev is up (a core-only WLC_UP), never
+# one whose netdev is down. So after every apply each member netdev is set up,
+# configured or not (hostapd sets a radio's netdev down when it releases it: a
+# band disabled, or left without a network). gt-be98-wifi-gen refuses a monitor
+# on a member there (a monitor needs its radio's netdev down).
+members_up() {
+	local d p5 p6
+	p5=$(cat "$SYSNET/bcawl1/phy80211/name" 2>/dev/null)
+	p6=$(cat "$SYSNET/bcawl2/phy80211/name" 2>/dev/null)
+	[ -n "$p5" ] && [ "$p5" = "$p6" ] || return 0
+	for d in bcawl2 bcawl1 bcawl3; do
+		[ -e "$SYSNET/$d" ] || continue
+		[ $(( $(cat "$SYSNET/$d/flags" 2>/dev/null || echo 0) & 1 )) = 1 ] && continue
+		ip link set dev "$d" up 2>/dev/null && einfo "$d: up (an MLO group member with no BSS, MLO-PROD2 20)" ||
+			ewarn "$d: up failed (an MLO group member down keeps the other members from serving)"
+	done
+	return 0
+}
+
 # ---- the AP MLD (gt-be98-wifi-gen mld_ap=1; open-wifi ledger MLD-RADIO-RESTART,
 # design note MLO-PROD2 19) ----
 # the plan's MLD: "<ifname> <address> <6 GHz link dev> <5 GHz-high link dev> <network>" ("" = none)
@@ -1523,6 +1547,7 @@ apply_hostapd() {
 		"$WIFI_STA" route || rc=1
 		sta_mon_apply
 		mon_apply || rc=1
+		members_up
 		ids_prune "$(ids_want "")"
 		mesh_apply || rc=1
 		return $rc
@@ -1589,6 +1614,7 @@ apply_hostapd() {
 	sta_mon_apply
 	# the monitors, now that hostapd released their radios
 	mon_apply || rc=1
+	members_up
 	ids_prune "$(ids_want "$want")"
 	mesh_apply || rc=1
 	return $rc

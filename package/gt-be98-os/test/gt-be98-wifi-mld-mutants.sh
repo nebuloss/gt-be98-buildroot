@@ -28,5 +28,7 @@ mutant "mld0 without its radio mask" 's/	iw phy "$phy" interface add "$ifn" type
 mutant "no wait for the old hostapd" 's|--retry "TERM/${HOSTAPD_STOP_WAIT:-30}/KILL/5"|--retry TERM/5/KILL/2|'
 mutant "a monitor without radios" 's/		if \[ -n "$r" \]; then iw phy "$phy" interface add "$m" type monitor radios/		if false; then iw phy "$phy" interface add "$m" type monitor radios/'
 mutant "mld0 kept when the MLD goes away" 's/	if \[ -e "$SYSNET\/$ifn" \]; then iw dev "$ifn" del 2>\/dev\/null || ewarn "MLD: $ifn not deleted"; fi/	:/'
+mutant "no member netdev up (MLO-PROD2 20)" 's/^	members_up$/	:/'
+mutant "a member up only when configured" 's/	for d in bcawl2 bcawl1 bcawl3; do$/	for d in; do/'
 echo "gt-be98-wifi MLD mutants: $killed killed, $survived survived"
 [ $survived = 0 ]

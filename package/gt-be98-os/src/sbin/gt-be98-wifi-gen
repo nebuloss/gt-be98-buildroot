@@ -439,14 +439,29 @@
 #                                   hidden=1, a schedule, repeated=/routed=, a
 #                                   second MLO network; and while radio 6g,
 #                                   5gh or 2g (the firmware MLO group's
-#                                   members) is disabled, a monitor, scheduled
-#                                   or the station's radio, with channel=auto
-#                                   on 6g/5gh, zwdfs=1 on 5gh, a 5gh block in
+#                                   members) is disabled, scheduled or the
+#                                   station's radio, with channel=auto on
+#                                   6g/5gh, zwdfs=1 on 5gh, or a 5gh block in
 #                                   the weather-radar channels 116-128 (160 MHz
-#                                   included), or no network on 2.4 GHz.
+#                                   included). A member radio may carry no
+#                                   network (open-wifi MLO-MEMBER-CORE-UP: the
+#                                   driver counts a member whose netdev is up;
+#                                   gt-be98-wifi keeps bcawl1/2/3 up on the MLO
+#                                   build, MLO-PROD2 20).
 #                                   gt-be98-wifi restarts hostapd whole on
 #                                   every change of the MLD or a link radio
 #                                   (open-wifi ledger MLD-RADIO-RESTART)
+#   THE MLO BUILD WITHOUT AN MLO NETWORK (orchestrator 2026-11-26, q476): the
+#   image ships ONE Wi-Fi module, the MLO build; with no mld_ap=1 network
+#   every radio may be disabled or carry no network as on the single-radio
+#   build (no BSS; gt-be98-wifi keeps the member netdevs up: MLO-PROD2 20).
+#   One rule holds whatever the list: monitor=1 on 6g, 5gh or 2g is refused
+#   (a monitor needs its radio's netdev down, and a member radio whose netdev
+#   is down keeps the firmware MLO group short: the other members answer no
+#   client, open-wifi MLO-MEMBER-LONE / F2R). A member band started later
+#   (a first network on it) is a member start on an ACTIVE group: one
+#   whole-group cycle, a ~2 s gap for the clients of the other member bands
+#   (q476)
 #     wds=0|1                       1: 4-ADDRESS (WDS) CLIENTS (owner 11-23,
 #                                   -F feature wds 1), as MULTI-AP BACKHAUL
 #                                   STAs: hostapd multi_ap=3 (fronthaul +
@@ -1123,7 +1138,7 @@ function mldcheck(i, tag,    b, li, n, j, ch, w) {
 	for (n = 1; n <= 3; n++) {
 		b = li[n]
 		if (renab[b] == "0") { nerrf(i, tag ": mld_ap=1 needs radio " b " enabled (" (b == "2g" ? "the 2.4 GHz radio is a member of the firmware MLO group, fixed at its start: it stays enabled while MLO is on" : "a link radio of the multi-link device") ")"); return }
-		if (rmon[b]) { nerrf(i, tag ": mld_ap=1 refused with radio " b " monitor=1 (an MLO group member serves BSSes)"); return }
+		# (monitor=1 on a member: refused on the MLO build whatever the list, radio checks)
 		if (rsch[b] != "") { nerrf(i, tag ": mld_ap=1 refused with a schedule on radio " b " (an MLO group member stays up)"); return }
 		if (nsta && stenab && stab == b) { nerrf(i, tag ": mld_ap=1 refused with the station (Wi-Fi uplink) on radio " b " (an MLO group member)"); return }
 	}
@@ -1139,9 +1154,7 @@ function mldcheck(i, tag,    b, li, n, j, ch, w) {
 		blk5(ch, w)
 		if (BHI >= 120 && BLO <= 128) { nerrf(i, tag ": mld_ap=1 refused with radio 5gh channel " ch " at " w " MHz: the block holds the weather-radar channels 120-128 (5600-5650 MHz, a 10 min CAC); pick a 5gh channel outside 116-128 (160 MHz: none)"); return }
 	}
-	# the 2.4 GHz member up: a network of the list on 2g
-	n = 0; for (j = 1; j <= nnet; j++) if (!bh[j] && ((j, "2g") in hasb)) n++
-	if (!n) nerrf(i, tag ": mld_ap=1 needs a Wi-Fi network on 2.4 GHz (the 2.4 GHz radio is a member of the firmware MLO group and must be up as an AP)")
+	# (no network on a member radio: allowed, MLO-MEMBER-CORE-UP; header)
 }
 function wpsuuid(    bi, m) {
 	m = ""
@@ -1575,6 +1588,8 @@ END {
 		if (!(b in dev)) { err("no netdev for radio " b " (-d)"); continue }
 		# rax/rtwt/rzw/rmon/rled hold numbers (the "0" string trap)
 		if (rzw[b] && b != "5gl" && b != "5gh") err("radio " b ": zwdfs=1 refused (zero-wait DFS: 5gl, 5gh only)")
+		# the MLO build (header): a member radio never a monitor
+		if (mlocap && rmon[b] && (b == "6g" || b == "5gh" || b == "2g")) err("radio " b ": monitor=1 refused on the MLO build of the Wi-Fi driver: radio " b " is a member of the firmware MLO group, and a monitor takes its netdev down, which leaves the other members answering no client (open-wifi MLO-MEMBER-LONE); a monitor is offered on 5gl")
 		# [open-wifi ZW-N3] no background CAC in an ETSI DFS region: the driver
 		# refuses it (-EOPNOTSUPP) and hostapd 2.12 (dfs.c) then fails the
 		# interface setup, so enable_background_radar=1 would keep the radio

@@ -905,12 +905,23 @@ check "MLO off: full restart, mld0 deleted, no MLD state" "stop|start dev mld0 d
 	"$(cut -d' ' -f1 "$T/daemon" | tr '\n' '|' | sed 's/|$//') $(grep mld0 "$T/iwlog" | tr '\n' ' ' | sed 's/ $//') $([ -e "$T/net/mld0" ] && echo yes || echo no) $([ -f "$T/run/gt-be98-wifi/mld" ] && echo yes || echo no)"
 : > "$T/daemon"; apply
 check "MLO off, unchanged: no restart" "" "$(cat "$T/daemon")"
-# a monitor on the multi-radio wiphy names its radio (radios <mask>)
+# the MLO build's member radios (MLO-PROD2 20): every member netdev set up after the apply, configured or not
+hap_down_all; : > "$T/iplog"
+printf 'network=1\nssid=home\nsecurity=psk2\npassphrase=password1\nbands=5gl\nvlan=10\n' > "$T/nets"; apply
+check "MLO build, no network on 6g/5gh/2g: rc 0, each member netdev set up" "0 dev bcawl2 up|dev bcawl1 up|dev bcawl3 up|" \
+	"$rc $(grep -E '^link set dev bcawl[123] up$' "$T/iplog" | sed 's/^link set //' | tr '\n' '|')"
+# a member radio is never a monitor on the MLO build (the generator refuses it: its netdev must stay up)
 hap_down_all; : > "$T/iwlog"
 printf 'radio=2g\nmonitor=1\nchannel=6\nnetwork=1\nssid=home\nsecurity=psk2\npassphrase=password1\nbands=5gl\nvlan=10\n' > "$T/nets"; apply
-check "MLO build monitor: created with radios = the radio holding 2437 MHz (radio 0)" "phy phy9 interface add bcawl3mon type monitor radios 0x1" "$(grep 'type monitor' "$T/iwlog")"
+check "MLO build monitor on 2g: refused (no monitor created)" "1 0" "$rc $(grep -c 'type monitor' "$T/iwlog")"
+# a monitor on the multi-radio wiphy names its radio (radios <mask>): 5gl, not a member
+echo phy9 > "$T/net/bcawl0/phy80211/name"
+printf '\tSupported wiphy radios:\n\t\t* Idx 0:\n\t\t\tFrequency Range: 2400 MHz - 2500 MHz\n\t\t* Idx 1:\n\t\t\tFrequency Range: 5470 MHz - 5895 MHz\n\t\t* Idx 2:\n\t\t\tFrequency Range: 5925 MHz - 7125 MHz\n\t\t* Idx 3:\n\t\t\tFrequency Range: 5150 MHz - 5350 MHz\n\tSupported commands:\n' > "$T/iw-phy9"
+hap_down_all; : > "$T/iwlog"
+printf 'radio=5gl\nmonitor=1\nchannel=36\nnetwork=1\nssid=home\nsecurity=psk2\npassphrase=password1\nbands=2g\nvlan=10\n' > "$T/nets"; apply
+check "MLO build monitor: created with radios = the radio holding 5180 MHz (radio 3)" "phy phy9 interface add bcawl0mon type monitor radios 0x8" "$(grep 'type monitor' "$T/iwlog")"
 hap_down_all; mon_prune "" > /dev/null 2>&1
-for p in 1 2 3; do echo "phy$p" > "$T/net/bcawl$p/phy80211/name"; done
+for p in 0 1 2 3; do echo "phy$p" > "$T/net/bcawl$p/phy80211/name"; done
 rm -f "$T/iw-phy9"
 
 if [ $fail = 0 ]; then echo "ALL OK ($n checks)"; else echo "FAILED"; cat "$T/out"; fi
