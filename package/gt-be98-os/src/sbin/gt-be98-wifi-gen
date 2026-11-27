@@ -1597,10 +1597,10 @@ END {
 		# the mesh leaf (header: trunk=1): a Multi-AP backhaul STA
 		if (sttrunk && strep != "multiap") err(tag ": trunk=1 needs repeater=multiap (the mesh leaf is a Multi-AP backhaul STA of the root backhaul BSS)")
 		if (sttrunk && !stenab) err(tag ": trunk=1 needs enabled=1 (a leaf without its station has no uplink)")
-		# the VLANs the leaf's trunk carries with no SSID (header carry=)
+		# the VLANs the trunk of the leaf carries with no SSID (header carry=)
 		ncarry = 0
 		if (stcarry != "") {
-			if (!sttrunk) err(tag ": carry= needs trunk=1 (the VLANs of a mesh leaf's trunk)")
+			if (!sttrunk) err(tag ": carry= needs trunk=1 (the VLANs of the trunk of a mesh leaf)")
 			nc = split(stcarry, ct, ",")
 			for (j = 1; j <= nc; j++) {
 				if (!isnum(ct[j]) || ct[j] + 0 < 2 || ct[j] + 0 > 4094) { err(tag ": carry=" stcarry " refused (VLAN ids 2..4094, comma-separated)"); break }
@@ -2247,8 +2247,8 @@ END {
 			for (j = 1; j <= nnet; j++) if ((net[j] in onradio) && !bh[j] && !rep[j] && rtd[j] == "" && !((vlan[j] + 0) in tvseen)) {
 				tvseen[vlan[j] + 0] = 1; tv = tv (tv == "" ? "" : ",") vlan[j]
 			}
-			# the carry= VLANs (header): after the networks', each once; a VID no
-			# rendered network carries gets its own bridge (the -L object's, else
+			# the carry= VLANs (header): after those of the networks, each once; a VID no
+			# rendered network carries gets its own bridge (that of the -L object, else
 			# brwifi<200000 + vid>), a "carry" plan line
 			for (j = 1; j <= ncarry; j++) if (!(carryv[j] in tvseen)) {
 				tvseen[carryv[j]] = 1; tv = tv (tv == "" ? "" : ",") carryv[j]
