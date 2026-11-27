@@ -21,7 +21,8 @@
 #   -n  the network list (format below)          -o  output dir (created)
 #   -M  1: the Wi-Fi driver is its MLO build (one multi-radio wiphy: the
 #       5 GHz-high and 6 GHz radio netdevs on one wiphy); 0: it is not.
-#       Default: read from /sys (the two radios' wiphy). mld_ap=1 needs it;
+#       Default: read from /sys (the two radios' wiphy), else from the loaded
+#       module file (the MLO build's MLO-ORDER messages). mld_ap=1 needs it;
 #       -F prints it as "feature mlo"
 #   -L  the NETWORK OBJECTS (the web UI's list, /etc/gt-be98-networks.conf:
 #       one line per network, "network=<id> ... vlan=<vid> ..."; keys in any
@@ -732,7 +733,12 @@ mlo_cap() {
 	d5=bcawl1 d6=bcawl2
 	for x in ${DEVS:-}; do case $x in 5gh=*) d5=${x#5gh=} ;; 6g=*) d6=${x#6g=} ;; esac; done
 	p5=$(cat "$SYSNET/$d5/phy80211/name" 2>/dev/null) p6=$(cat "$SYSNET/$d6/phy80211/name" 2>/dev/null)
-	if [ -n "$p5" ] && [ "$p5" = "$p6" ]; then echo 1; else echo 0; fi
+	if [ -n "$p5" ] && [ "$p5" = "$p6" ]; then echo 1; return; fi
+	# the loaded module itself (q473b: a lost 6 GHz radio netdev made this read 0, so the MLO network was
+	# skipped as "needs the MLO build" and the web UI said MLO was not supported): the MLO build's file
+	# carries its group-order messages
+	k=$(modinfo -n bca_pcie_ipc 2>/dev/null)
+	if [ -d /sys/module/bca_pcie_ipc ] && [ -f "$k" ] && grep -q 'MLO-ORDER: SYNC' "$k" 2>/dev/null; then echo 1; else echo 0; fi
 }
 features() {
 	cat <<-'EOF'
