@@ -1676,6 +1676,27 @@ stref "trunk and a repeated network" "repeated=1 excludes the station trunk=1" s
 stref "trunk and a backhaul" "a backhaul= block and a station trunk=1 exclude each other" station=5gh repeater=multiap trunk=1 $(nl "$N1") backhaul=5gl ssid=x passphrase=SECRETpass1 leaf=02:00:00:00:00:01
 stref "trunk and routed" "routed= needs the station repeater=0" station=2g repeater=multiap trunk=1 network=1 ssid=a security=sae passphrase=password1 bands=2g routed=192.168.50.1/24
 stref "trunk=2" "station 2g: unknown key trunk" station=2g repeater=multiap trunk=2 $(nl "$N1")
+# [sta4addr G-B1] carry=: VLANs the leaf's trunk carries with NO SSID (a wired-only server LAN; a pure bridge leaf)
+{ stab 5gh ssid=mesh-bh security=sae passphrase=saepassword1 repeater=multiap trunk=1 carry=20,30	# 20 is network 2's (no carry line), 30 has no SSID
+  net 1 a sae password1 "2g 5gh" 10; net 2 b sae password2 "2g" 20; } > "$T/lc1"
+gen "$T/lc1"; check "carry=20,30: accepted; bhtrunk carries 10,20 then 30; one carry line (30, its own bridge)" "0 bhtrunk bcawl1 10,20,30|carry 30 brwifi200030" \
+	"$? $(grep -E '^(bhtrunk|carry) ' "$T/o/plan" | sort | tr '\n' '|' | sed 's/|$//')"
+check "control: without carry= no carry line" 0 "$(gen "$T/lf1"; grep -c '^carry ' "$T/o/plan")"
+printf 'network=4 name=server vlan=30\n' > "$T/objsc"
+gen "$T/lc1" -L "$T/objsc"; check "carry=30 with a -L network object on VLAN 30: its bridge brwifi100004" "carry 30 brwifi100004" "$(grep '^carry ' "$T/o/plan")"
+{ stab 5gh ssid=mesh-bh security=sae passphrase=saepassword1 repeater=multiap trunk=1 carry=10,20; } > "$T/lc2"
+gen "$T/lc2"; check "pure bridge leaf (no network= block): every VLAN a carry line, bhtrunk 10,20, management on the first" \
+	"0 bhmgmt 10 brwifi200010|bhtrunk bcawl1 10,20|carry 10 brwifi200010|carry 20 brwifi200020" \
+	"$? $(grep -E '^(bhtrunk|carry|bhmgmt) ' "$T/o/plan" | sort | tr '\n' '|' | sed 's/|$//')"
+check "pure bridge leaf: no BSS at all (no hostapd config, no bss line)" "0 0" "$(grep -c '^bss ' "$T/o/plan") $(ls "$T/o" | grep -c '^hostapd-')"
+{ stab 5gh ssid=mesh-bh security=sae passphrase=saepassword1 repeater=multiap trunk=1 carry=10,20 mgmt_vid=20; } > "$T/lc3"
+gen "$T/lc3"; check "pure bridge leaf mgmt_vid=20: bhmgmt 20 brwifi200020" "0 bhmgmt 20 brwifi200020" "$? $(grep '^bhmgmt ' "$T/o/plan")"
+stref "carry without trunk" "carry= needs trunk=1" station=5gh repeater=multiap carry=20 $(nl "$N1")
+stref "carry=1 (Default)" "carry=1 refused (VLAN ids 2..4094" station=5gh repeater=multiap trunk=1 carry=1 $(nl "$N1")
+stref "carry not a number" "carry=20,x refused" station=5gh repeater=multiap trunk=1 carry=20,x $(nl "$N1")
+stref "carry twice" "VLAN 20 listed twice" station=5gh repeater=multiap trunk=1 carry=20,20 $(nl "$N1")
+stref "mgmt_vid neither a network nor carried" "nor a carry= VLAN" station=5gh repeater=multiap trunk=1 carry=20 mgmt_vid=30 $(nl "$N1")
+check "-F: feature mesh_carry 1" yes "$($SH "$G" -F 2>/dev/null | grep -qx 'feature mesh_carry 1' && echo yes || echo no)"
 
 # ---- WPS (network wps=1): off by default, push-button + enrollee PIN, never a
 # static AP PIN, never on a WPA3-only BSS, one network per list ----

@@ -174,7 +174,9 @@
 # of gt-be98-l2 (bh<k>.<backhaul VID> in every network bridge), and
 # `gt-be98-mesh sync` after every apply catches the links that came or went
 # while it was not attached. A LEAF (station trunk=1, plan line "bhtrunk
-# <dev>") bridges every VLAN network on the station's bhs.<vid> instead of
+# <dev>") bridges every VLAN network on the station's bhs.<vid> (and every
+# carry= VLAN of its station, plan line "carry <vid> <bridge>": a bridge with
+# no BSS, its jacks join it by VID) instead of
 # <WIFI_TRUNK>.<vid>: the effective trunk is "bhs" (gt-be98-l2 uplink
 # <dev>, l2.conf WIFI_TRUNK="bhs", so gt-be98-lan's jacks and netguard
 # follow), never the wired trunk (a leaf never bridges its wired port with
@@ -1055,6 +1057,10 @@ gen_networks() {
 		net)	case " $net_br " in *" $b "*) ;; *) net_br="$net_br $b"; net_vl="$net_vl $b:$c" ;; esac
 			if [ "$d" = 1 ]; then iso_ids="$iso_ids $a"; case " $net_isb " in *" $b "*) ;; *) net_isb="$net_isb $b" ;; esac
 			else case " $net_opn " in *" $b "*) ;; *) net_opn="$net_opn $b" ;; esac; fi
+			continue ;;
+		# carry <vid> <bridge>: a mesh leaf's trunk VLAN with no SSID (station
+		# carry=, MESH G-B1): a bridge with no BSS, on bhs.<vid> like the others
+		carry)	case " $net_br " in *" $b "*) ;; *) net_br="$net_br $b"; net_vl="$net_vl $b:$a"; net_opn="$net_opn $b" ;; esac
 			continue ;;
 		routed) WIFI_ROUTED="${WIFI_ROUTED:-} $b=$c" ;;
 		# repeated <id> <bridge> <isolate>: the isolate flag is the 4th field

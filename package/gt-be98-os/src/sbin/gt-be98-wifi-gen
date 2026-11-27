@@ -561,7 +561,20 @@
 #                                   limited to replies, ICMP, DHCP and the
 #                                   management ports). One of the vlan= of
 #                                   the list's networks; default the first
-#                                   vlan= network's. Plan line bhmgmt
+#                                   vlan= network's. Plan line bhmgmt.
+#                                   Also a carry= VID (below)
+#     carry=V[,V...]                trunk=1 only (lane sta4addr 11-27, MESH
+#                                   G-B1): VLANs (2..4094, each once) the
+#                                   leaf's trunk ALSO carries with no SSID
+#                                   of its own: a wired-only network of the
+#                                   root (a server LAN), or every network of
+#                                   a pure bridge leaf (no network= block at
+#                                   all). Each VID not already carried by a
+#                                   vlan= network gets its bridge: the -L
+#                                   network object's of that VLAN, else
+#                                   brwifi<200000 + V>; plan line carry. Its
+#                                   jacks join it by VID (gt-be98-lan), as on
+#                                   any leaf bridge. Default none
 #   backhaul=2g|5gl|6g              the MESH ROOT: a hidden, dedicated
 #                                   backhaul BSS on that radio for the mesh
 #                                   leaves (Multi-AP backhaul STAs, station
@@ -680,7 +693,11 @@
 #                                               is rendered: gt-be98-mesh mgmt <bridge>)
 #   bhtrunk <dev> <vid,vid,...|->              (a live station with trunk=1: the
 #                                               mesh leaf's trunk, gt-be98-l2 uplink;
-#                                               the VIDs of the vlan= networks rendered)
+#                                               the VIDs of the vlan= networks rendered,
+#                                               then the station's carry= VIDs)
+#   carry <vid> <bridge>                       (a carry= VID of a live leaf station
+#                                               that no rendered vlan= network carries:
+#                                               a bridge with no BSS on bhs.<vid>)
 #   backhaul <band> <dev> <ifname> <bssid>     (the backhaul= BSS, on a live radio;
 #                                               its bss line has bridge -; its leaf in
 #                                               OUTDIR/accept-<ifname>)
@@ -767,6 +784,7 @@ features() {
 	feature twt 0
 	feature wds 1
 	feature mesh 1
+	feature mesh_carry 1
 	feature station 1
 	feature routed 1
 	feature repeater 1
@@ -1284,7 +1302,7 @@ k == "station" {
 	if (!validband(v)) { err("line " FNR ": station 2g|5gl|5gh|6g"); cur = "x"; next }
 	if (nsta) { err("station " v ": one station= block only (station " stab " is listed)"); cur = "x"; next }
 	nsta = 1; stab = v; cur = "s"; stenab = 1; stssid = ""; stsec = ""; stpass = ""; stbssid = ""
-	strep = "0"; sttrunk = 0; stmgmt = ""; stvlan = ""
+	strep = "0"; sttrunk = 0; stmgmt = ""; stvlan = ""; stcarry = ""
 	next
 }
 cur == "" {
@@ -1308,6 +1326,7 @@ cur == "s" {
 	else if (k == "mgmt_vid") err("station " stab ": mgmt_vid=" v " refused (a VLAN id 1..4094)")
 	else if (k == "vlan" && isnum(v) && v + 0 >= 2 && v + 0 <= 4094) stvlan = v + 0
 	else if (k == "vlan") err("station " stab ": vlan=" v " refused (2..4094)")
+	else if (k == "carry") stcarry = v
 	else err("station " stab ": unknown key " k)	# never echo a value that may be a secret
 	next
 }
@@ -1578,6 +1597,17 @@ END {
 		# the mesh leaf (header: trunk=1): a Multi-AP backhaul STA
 		if (sttrunk && strep != "multiap") err(tag ": trunk=1 needs repeater=multiap (the mesh leaf is a Multi-AP backhaul STA of the root backhaul BSS)")
 		if (sttrunk && !stenab) err(tag ": trunk=1 needs enabled=1 (a leaf without its station has no uplink)")
+		# the VLANs the trunk of the leaf carries with no SSID (header carry=)
+		ncarry = 0
+		if (stcarry != "") {
+			if (!sttrunk) err(tag ": carry= needs trunk=1 (the VLANs of the trunk of a mesh leaf)")
+			nc = split(stcarry, ct, ",")
+			for (j = 1; j <= nc; j++) {
+				if (!isnum(ct[j]) || ct[j] + 0 < 2 || ct[j] + 0 > 4094) { err(tag ": carry=" stcarry " refused (VLAN ids 2..4094, comma-separated)"); break }
+				if ((ct[j] + 0) in cseen) { err(tag ": carry=" stcarry ": VLAN " ct[j] " listed twice"); break }
+				cseen[ct[j] + 0] = 1; carryv[++ncarry] = ct[j] + 0
+			}
+		}
 		# the management VLAN of the leaf (header: mgmt_vid=): a vlan= of the list
 		if (stmgmt != "" && !sttrunk) err(tag ": mgmt_vid= needs trunk=1 (the management VLAN of a mesh leaf)")
 		else if (sttrunk) {
@@ -1586,7 +1616,10 @@ END {
 				if (bh[j] || rep[j] || rtd[j] != "" || (j in bad) || !isnum(vlan[j])) continue
 				if (stmgmt == "" || vlan[j] + 0 == stmgmt + 0) { mgi = j; break }
 			}
-			if (stmgmt != "" && !mgi) err(tag ": mgmt_vid=" stmgmt " is not the vlan= of a network of the list (the trunk carries the networks of the list)")
+			# no network block on it: a carry= VID (its carry bridge, below)
+			mgc = 0
+			if (!mgi) for (j = 1; j <= ncarry; j++) if (stmgmt == "" || carryv[j] == stmgmt + 0) { mgc = carryv[j]; break }
+			if (stmgmt != "" && !mgi && !mgc) err(tag ": mgmt_vid=" stmgmt " is not the vlan= of a network of the list nor a carry= VLAN (the trunk carries the networks of the list and the carry= VLANs)")
 		}
 	}
 	for (bi = 1; bi <= nbands; bi++) {
@@ -2214,8 +2247,17 @@ END {
 			for (j = 1; j <= nnet; j++) if ((net[j] in onradio) && !bh[j] && !rep[j] && rtd[j] == "" && !((vlan[j] + 0) in tvseen)) {
 				tvseen[vlan[j] + 0] = 1; tv = tv (tv == "" ? "" : ",") vlan[j]
 			}
+			# the carry= VLANs (header): after those of the networks, each once; a VID no
+			# rendered network carries gets its own bridge (that of the -L object, else
+			# brwifi<200000 + vid>), a "carry" plan line
+			for (j = 1; j <= ncarry; j++) if (!(carryv[j] in tvseen)) {
+				tvseen[carryv[j]] = 1; tv = tv (tv == "" ? "" : ",") carryv[j]
+				cbr[carryv[j]] = (carryv[j] in objbr) ? objbr[carryv[j]] : ((carryv[j] in vfirst) ? vfirst[carryv[j]] : "brwifi" (200000 + carryv[j]))
+				print "carry " carryv[j] " " cbr[carryv[j]] > plan
+			}
 			print "bhtrunk " d " " (tv == "" ? "-" : tv) > plan
 			if (mgi && (net[mgi] in onradio)) print "bhmgmt " vlan[mgi] " " nbr[mgi] > plan
+			else if (!mgi && mgc && (mgc in cbr)) print "bhmgmt " mgc " " cbr[mgc] > plan
 		}
 	}
 	for (bi = 1; bi <= nbands; bi++) {
@@ -2269,7 +2311,7 @@ while read -r t a b c d e f g h; do
 	net|routed) echo "$t $a $b $c $d" >> "$OUT/plan" ;;
 	repeated|repeater) echo "$t $a $b $c" >> "$OUT/plan" ;;
 	backhaul) echo "$t $a $b $c $d" >> "$OUT/plan" ;;
-	bhtrunk|bhmgmt) echo "$t $a $b" >> "$OUT/plan" ;;
+	bhtrunk|bhmgmt|carry) echo "$t $a $b" >> "$OUT/plan" ;;
 	station) # station <band> <dev> <conf> <first AP ifname or ->
 		echo "station $a $b $c $(sum "$c") $d" >> "$OUT/plan" ;;
 	monitor) echo "$t $a $b $c $d $e" >> "$OUT/plan" ;;

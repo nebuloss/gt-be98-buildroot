@@ -800,6 +800,18 @@ check "leaf: rc 0, uplink bcawl0 (gt-be98-l2), the network bridged on bhs, l2.co
 	"$rc $(grep '^uplink' "$T/l2mesh") $(tail -n +$((l0 + 1)) "$T/l2log" | grep -q '^up brwifi1 bhs 1$' && echo yes || echo no) $(grep -q '^WIFI_TRUNK="bhs"$' "$T/run/gt-be98-wifi/l2.conf" && echo yes || echo no)"
 check "leaf: the management address on the management VLAN's bridge (gt-be98-mesh mgmt brwifi1)" yes "$(grep -qx 'mgmt brwifi1' "$T/meshlog" && echo yes || echo no)"
 check "leaf: the station is no repeater bridge port (repeaters empty), no mesh hook" "|0" "$(cat "$T/run/gt-be98-wifi/repeaters")|$(grep -c '^action' "$T/meshlog")"
+# [sta4addr G-B1] carry=: a VLAN with no SSID crosses the leaf's trunk (a bridge with no BSS on bhs)
+{ printf 'radio=5gl\nchannel=36\nwidth=80\n'; sta; printf 'repeater=multiap\ntrunk=1\ncarry=20\n'; net 1 a sae password1 "2g 5gl" 1; } > "$T/nets"
+l0=$(wc -l < "$T/l2log"); : > "$T/l2mesh"; : > "$T/meshlog"; apply
+check "leaf carry=20: rc 0, the SSID network AND brwifi200020 bridged on bhs" "0 yes yes" \
+	"$rc $(tail -n +$((l0 + 1)) "$T/l2log" | grep -q '^up brwifi1 bhs 1$' && echo yes || echo no) $(tail -n +$((l0 + 1)) "$T/l2log" | grep -q '^up brwifi200020 bhs 20$' && echo yes || echo no)"
+check "leaf carry=20: the carry bridge is listed with its VLAN in l2.conf (netguard reads it)" yes \
+	"$(grep -q '^WIFI_VLANS=".*brwifi200020:20' "$T/run/gt-be98-wifi/l2.conf" && echo yes || echo no)"
+# a pure bridge leaf: no network= block, every VLAN carried, the management on a carry VLAN
+{ printf 'radio=5gl\nchannel=36\nwidth=80\n'; sta; printf 'repeater=multiap\ntrunk=1\ncarry=10,20\nmgmt_vid=20\n'; } > "$T/nets"
+l0=$(wc -l < "$T/l2log"); : > "$T/l2mesh"; : > "$T/meshlog"; apply
+check "pure bridge leaf: rc 0, brwifi200010 and brwifi200020 on bhs, mgmt on brwifi200020" "0 yes yes yes" \
+	"$rc $(tail -n +$((l0 + 1)) "$T/l2log" | grep -q '^up brwifi200010 bhs 10$' && echo yes || echo no) $(tail -n +$((l0 + 1)) "$T/l2log" | grep -q '^up brwifi200020 bhs 20$' && echo yes || echo no) $(grep -qx 'mgmt brwifi200020' "$T/meshlog" && echo yes || echo no)"
 touch "$T/l2bhs"
 { printf 'radio=5gl\nchannel=36\nwidth=80\n'; net 1 a sae password1 "2g 5gl" 1; printf 'backhaul=5gl\nssid=mesh-bh\npassphrase=meshpass12\nleaf=02:00:00:00:00:0a\n'; } > "$T/nets"
 l0=$(wc -l < "$T/l2log"); : > "$T/l2mesh"; : > "$T/meshlog"; apply
