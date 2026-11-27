@@ -446,7 +446,7 @@
 #                                   included). A member radio may carry no
 #                                   network (open-wifi MLO-MEMBER-CORE-UP: the
 #                                   driver counts a member whose netdev is up;
-#                                   gt-be98-wifi keeps bcawl1/2/3 up on the MLO
+#                                   gt-be98-wifi keeps the member netdevs up on the MLO
 #                                   build, MLO-PROD2 20).
 #                                   gt-be98-wifi restarts hostapd whole on
 #                                   every change of the MLD or a link radio
