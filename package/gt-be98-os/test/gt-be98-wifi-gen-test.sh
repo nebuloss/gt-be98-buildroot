@@ -1861,6 +1861,18 @@ check "MLO build, no MLO network: 6g and 5gh without a network accepted, no BSS 
 check "MLO build: monitor=1 on 5gl (not a member) accepted" 0 $?
 { printf 'country=FR\nradio=6g\nmonitor=1\n'; net 1 a sae password1 "2g 5gl" 1; } > "$T/k5"; rm -f "$T/slots"; gen "$T/k5" -c -M 0
 check "single-radio build (-M 0): monitor=1 on 6g accepted" 0 $?
+# [STA-ON-MLO-MEMBER] on the MLO build a Wi-Fi client only on 5gl (the non-member); each refusal with its control
+for b in 6g 5gh 2g; do
+	{ printf 'country=FR\nstation=%s\nssid=up\nsecurity=sae\npassphrase=saepassword1\n' "$b"; } > "$T/sm-$b"
+	mlo_refuse "$T/sm-$b" "station $b: refused on the MLO build"
+	rm -f "$T/slots"; gen "$T/sm-$b" -c -M 0; check "control: a $b client on the single-radio build (-M 0) accepted" 0 $?
+done
+{ printf 'country=FR\nstation=5gl\nssid=up\nsecurity=sae\npassphrase=saepassword1\n'; } > "$T/sm-5gl"
+rm -f "$T/slots"; gen "$T/sm-5gl" -c -M 1; check "MLO build: a 5gl client (the non-member) accepted" "0 1" "$? $(grep -c '^station 5gl ' "$T/o/plan")"
+{ printf 'country=FR\nstation=6g\nenabled=0\nssid=up\nsecurity=sae\npassphrase=saepassword1\n'; } > "$T/sm-off"
+rm -f "$T/slots"; gen "$T/sm-off" -c -M 1; check "MLO build: a disabled 6g client (settings kept, no station) accepted" "0 0" "$? $(grep -c '^station ' "$T/o/plan")"
+{ printf 'country=FR\nstation=2g\nssid=mesh-bh\nsecurity=sae\npassphrase=saepassword1\nrepeater=multiap\ntrunk=1\n'; } > "$T/sm-leaf"
+mlo_refuse "$T/sm-leaf" "station 2g: refused on the MLO build"
 # -S (the service): a refused MLO network is skipped, every other network and radio still rendered
 { mlo_radios; mlo_net 1 Home psk2sae "2g 5gh 6g"; printf 'network=2\nssid=Guest\nsecurity=sae\npassphrase=password2\nbands=2g 5gh 6g\nvlan=922\n'; } > "$T/m17"
 rm -f "$T/slots"; gen "$T/m17" -c -M 1 -S

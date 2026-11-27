@@ -36,5 +36,7 @@ mutant "no mld plan line" 's/	if (mldk \&\& (MLDID in onradio)) print "mld mld0 
 mutant "the link without mld_addr" 's/print "mld_ap=1" > f; print "mld_addr=" bssid("6g", mi\["6g", id\]) > f/print "mld_ap=1" > f/'
 mutant "(b) instead of (c) (q469 r44 SS FAIL)" 's/^function mldprimary() { return "hidden" }$/function mldprimary() { return "own" }/'
 mutant "no placeholder primary" 's/				if (m) continue$/				continue/'
+mutant "no client-on-member rule (STA-ON-MLO-MEMBER)" 's/		if (mlocap \&\& stenab \&\& (stab == "6g"/		if (0 \&\& stenab \&\& (stab == "6g"/'
+mutant "the client rule refuses 5gl too" 's/(stab == "6g" || stab == "5gh" || stab == "2g")) err(tag ": refused on the MLO build/(stab == "6g" || stab == "5gh" || stab == "2g" || stab == "5gl")) err(tag ": refused on the MLO build/'
 echo "gt-be98-wifi-gen MLO mutants: $killed killed, $survived survived"
 [ $survived = 0 ]

@@ -499,7 +499,10 @@
 #                                   nontransmitted BSSIDs, derived, and a
 #                                   bssid.6g= on one is refused
 #   station=2g|5gl|5gh|6g           the radio's STATION (Wi-Fi uplink, client
-#                                   mode): wpa_supplicant on the radio netdev
+#                                   mode; on the MLO build 5gl only: 6g, 5gh
+#                                   and 2g are firmware MLO members, whose
+#                                   scans find nothing, STA-ON-MLO-MEMBER):
+#                                   wpa_supplicant on the radio netdev
 #                                   bcawlN itself (bsscfg 0, the firmware's
 #                                   AP+STA model). At most one station= block.
 #                                   The radio's networks then run on virtual
@@ -1597,6 +1600,10 @@ END {
 		# the mesh leaf (header: trunk=1): a Multi-AP backhaul STA
 		if (sttrunk && strep != "multiap") err(tag ": trunk=1 needs repeater=multiap (the mesh leaf is a Multi-AP backhaul STA of the root backhaul BSS)")
 		if (sttrunk && !stenab) err(tag ": trunk=1 needs enabled=1 (a leaf without its station has no uplink)")
+		# [STA-ON-MLO-MEMBER, open-wifi lane sta4addr q483/q484] on the MLO build a client never runs on a member
+		# radio: its firmware boots with the MLO TLV and answers every scan with no BSS record (proven: the same
+		# station on 5gh works on one shared wiphy WITHOUT the TLV, and on 5gl, a non-member, on the MLO build)
+		if (mlocap && stenab && (stab == "6g" || stab == "5gh" || stab == "2g")) err(tag ": refused on the MLO build of the Wi-Fi driver: radio " stab " is a member of the firmware MLO group (its firmware boots as an MLO member), and the scans of a member radio find no network (open-wifi STA-ON-MLO-MEMBER); a Wi-Fi client (uplink) runs on 5gl")
 		# the VLANs the trunk of the leaf carries with no SSID (header carry=)
 		ncarry = 0
 		if (stcarry != "") {
