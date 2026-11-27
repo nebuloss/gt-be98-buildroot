@@ -62,7 +62,11 @@
 # om-mlo-product-2026-11-26 2d17800b (imgint17a, MLO: RC15 0dcc9043 + the MLO product path; driver tree = 9d1fada4, gates GREEN
 #  at 9ca8ab17; q467 FULL PASS with its MLO build mlo 234fdb5f). The image ships the MLO build when BR2_PACKAGE_GT_BE98_OPEN_WIFI_MLO
 #  (local conf WIFI_MLO=1), else the shipped build as before.
-GT_BE98_OPEN_WIFI_VERSION = 2d17800bf4dcec22dd5ee48634ea95e296bd3646
+# om-mlo-product-2026-11-26 8bbfa315 (imgint17b: 2d17800b + ZW-FG-DUE e074903f (the placeholder's CAC_FINISHED held until
+#  cfg80211's own CAC end: the cfg80211_cac_event WARNING of q468/q472) + MLO-MEMBER-CORE-UP 8bbfa315 (a member radio with no AP
+#  counts for the group after 10 s when its netdev is up; q475 F2A, q476 r48 PASS with no MLD and a member band empty); gates GREEN).
+#  imgint17b ships this ONE module, the MLO build (orchestrator 2026-11-26 after q476), WIFI_MLO=1.
+GT_BE98_OPEN_WIFI_VERSION = 8bbfa3150da6586b46b8627849c8b2c9f301e15a
 GT_BE98_OPEN_WIFI_SITE = git@github.com:nebuloss/gt-be98-open-wifi.git
 GT_BE98_OPEN_WIFI_SITE_METHOD = git
 GT_BE98_OPEN_WIFI_LICENSE = GPL-2.0-only
