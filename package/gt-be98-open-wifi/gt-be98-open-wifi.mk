@@ -70,7 +70,9 @@
 #  while an MLO whole-group cycle is open; the background margin 15 s in the group build, 5 s shipped) + JOIN-SDK52 (the directed
 #  join's wl_join_params in the SDK's 52-byte layout) + MLO-REBIND-FUTILE (a HALTED group's member is not rebound into our own
 #  probe refusal: it stays bound, latched dead, its netdev kept; the OS reloads the module, gt-be98-wifi-reprobe)
-GT_BE98_OPEN_WIFI_VERSION = 9abe2dbdd612b5851998715d75e0cf0bd8a77302
+# om-mlo-product-2026-11-26 eb7662dd (imgint17d): 9abe2dbd + MLO-REBIND-FUTILE r2 (ask the teardown's own question, not
+#  "HALTED": q478's psm-watchdog MAP death vanished bcawl2 because the r1 test covered a trapped group only)
+GT_BE98_OPEN_WIFI_VERSION = eb7662dd21402e1bf5a76bc91e1528c99c2cacd4
 GT_BE98_OPEN_WIFI_SITE = git@github.com:nebuloss/gt-be98-open-wifi.git
 GT_BE98_OPEN_WIFI_SITE_METHOD = git
 GT_BE98_OPEN_WIFI_LICENSE = GPL-2.0-only
