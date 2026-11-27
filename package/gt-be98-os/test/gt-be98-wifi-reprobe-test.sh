@@ -251,5 +251,42 @@ for B in bash busybox; do
 done
 kill "$alive" 2>/dev/null
 
+# ---- [MLO-REBIND-FUTILE] a dead MLO member: one module reload, bounded (header) ----
+S="$T/run/gt-be98-wifi"; MWD="$T/run/gt-be98-wifi-mlo"
+rm -rf "$S" "$MWD"; mkdir -p "$S/ids" "$S/failed" "$S/want"; : > "$T/log"
+for d in bcawl0 bcawl1 bcawl2 bcawl3; do mkdir -p "$T/net/$d/phy80211"; echo "phy$d" > "$T/net/$d/phy80211/name"; done
+cat > "$T/bin/mlorec" <<'X'
+#!/bin/sh
+echo mlo_recover >> "$FAKE/mlorec"
+X
+chmod +x "$T/bin/mlorec"
+export GT_BE98_MLO_RECOVER="$T/bin/mlorec" GT_BE98_KMSG="$T/kmsg"; : > "$T/kmsg"; : > "$T/mlorec"
+mlo_at() { : > "$T/reloads"; GT_BE98_NOW=$1 $SH "$R" check; echo "$? $(wc -l < "$T/mlorec" | tr -d ' ')"; }
+printf 'given_up=0\nnext=999999\n' > "$S/failed/bcawl2"
+echo 'x MLO-REBIND-FUTILE (dom1)' > "$T/kmsg"; echo 0 > "$MWD.base.tmp" 2>/dev/null; mkdir -p "$MWD"; echo 0 > "$MWD/futile.base"
+check "single-radio build (separate wiphys): a FUTILE line and a failed bcawl2 start no module reload" "0 0" "$(mlo_at 1000)"
+for d in bcawl0 bcawl1 bcawl2 bcawl3; do echo phy9 > "$T/net/$d/phy80211/name"; done
+: > "$T/kmsg"
+check "MLO build, bcawl2 failed, no FUTILE line since the load: no module reload" "0 0" "$(mlo_at 1010)"
+echo 'x MLO-REBIND-FUTILE (dom1)' > "$T/kmsg"
+check "MLO build, bcawl2 failed, a new FUTILE line: ONE module reload" "0 1" "$(mlo_at 1020)"
+check "  said so, base and time recorded" "yes 1 1020" "$(grep -q 'bcawl2 dead (MLO-REBIND-FUTILE' "$T/log" && echo yes || echo no) $(cat "$MWD/futile.base") $(cat "$MWD/last")"
+check "  the same line again: nothing more" "0 1" "$(mlo_at 1030)"
+echo 'x MLO-REBIND-FUTILE (dom1)' >> "$T/kmsg"
+check "dead again 100 s after the reload: no reload (bound 600 s), said once" "0 1 1" "$(mlo_at 1120) $(grep -c 'dead again' "$T/log")"
+check "  still inside the bound: not said again" "0 1 1" "$(mlo_at 1300) $(grep -c 'dead again' "$T/log")"
+check "past 600 s: the next module reload" "0 2" "$(mlo_at 1625)"
+rm -f "$S/failed/bcawl2"; printf 'given_up=0\nnext=999999\n' > "$S/failed/bcawl0"; echo 'x MLO-REBIND-FUTILE (dom0)' >> "$T/kmsg"
+check "5gl (not a member) failed: no module reload" "0 2" "$(mlo_at 2400)"
+rm -f "$MWD/futile.base"; printf 'given_up=0\nnext=999999\n' > "$S/failed/bcawl3"
+check "no base (the module loaded by someone else): taken now, no reload" "0 2 3" "$(mlo_at 3000) $(cat "$MWD/futile.base")"
+echo 'GT_BE98_MODULES' > /dev/null; : > "$T/modules"
+echo 'x MLO-REBIND-FUTILE (dom2)' >> "$T/kmsg"
+check "the driver not loaded: no module reload" "0 2" "$(mlo_at 4000)"
+echo 'bca_pcie_ipc 4194304 0 - Live 0x0' > "$T/modules"
+unset GT_BE98_MLO_RECOVER GT_BE98_KMSG
+for d in bcawl0 bcawl1 bcawl2 bcawl3; do rm -rf "$T/net/$d/phy80211"; done
+rm -rf "$S/failed" "$MWD"
+
 if [ $fail = 0 ]; then echo "ALL OK ($n checks)"; else echo "FAILED"; cat "$T/log"; fi
 exit $fail

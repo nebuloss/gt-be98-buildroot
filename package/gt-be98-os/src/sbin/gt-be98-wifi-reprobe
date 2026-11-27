@@ -46,6 +46,22 @@
 #     most HAP_DEATHS reloads per 600 s (then logged once and left: a hostapd
 #     that dies at every start is not hidden behind a restart loop).
 #
+# [MLO-REBIND-FUTILE] (open-wifi, design note MLO-PROD2 21; orchestrator
+# 2026-11-27): on the MLO build of the driver (the 5 GHz-high and 6 GHz radio
+# netdevs on one wiphy) a member radio whose firmware died while the MLO
+# group was HALTED is NOT re-probed by the driver: its re-probe would be
+# refused, so the radio stays bound, latched dead (every start fails at
+# once), its netdev kept, and the driver says MLO-REBIND-FUTILE once. The
+# only recovery is a module reload. So, before the rest of a pass: when a
+# member (bcawl2, bcawl1, bcawl3) has a failure record AND the kernel log
+# holds more MLO-REBIND-FUTILE lines than when the module was loaded
+# ($RUNDIR/gt-be98-wifi-mlo/futile.base, written by gt-be98-wifi at the load;
+# absent: taken now, no reload), ONE `rc-service gt-be98-wifi mlo_recover`
+# (stop with the module unloaded, start: the MLD-RADIO-RESTART rules),
+# detached (the service stops this daemon), at most one per MLO_RELOAD_MIN s
+# (600). A member dead again inside that bound: logged once, the radio left
+# dead, no reload of any kind for it (a restart of gt-be98-wifi retries).
+#
 # Settings (environment, defaults): REPROBE_POLL 2, REPROBE_SETTLE 5,
 # REPROBE_GONE 90, REPROBE_MIN 20, REPROBE_TRIES 3, REPROBE_DISABLED 10,
 # REPROBE_SAFETY 30, HAP_DEATHS 3, HOSTAPD_CTRL /run/hostapd. State:
@@ -86,6 +102,8 @@ RUNDIR=${GT_BE98_RUN:-/run}
 SYSNET=${GT_BE98_SYSNET:-/sys/class/net}
 STATE=$RUNDIR/gt-be98-wifi
 W=$STATE/reprobe
+MW=$RUNDIR/gt-be98-wifi-mlo
+MLO_MIN=${MLO_RELOAD_MIN:-600}
 
 num() { case "$1" in ''|*[!0-9]*) N=$2 ;; *) N=$1 ;; esac; }
 num "${REPROBE_POLL:-}" 2; POLL=$N
@@ -228,6 +246,37 @@ health() {
 	return 0
 }
 
+# [MLO-REBIND-FUTILE] (header): 0 = handled (a module reload started, or
+# refused by the bound), 1 = nothing for it (the rest of the pass runs)
+futile_count() {
+	if [ -n "${GT_BE98_KMSG:-}" ]; then grep -c 'MLO-REBIND-FUTILE' "$GT_BE98_KMSG" 2>/dev/null
+	else dmesg 2>/dev/null | grep -c 'MLO-REBIND-FUTILE'; fi
+}
+mlo_check() {
+	local p5 p6 d dead='' n base last
+	rd p5 "$SYSNET/bcawl1/phy80211/name"; rd p6 "$SYSNET/bcawl2/phy80211/name"
+	[ -n "$p5" ] && [ "$p5" = "$p6" ] || return 1
+	for d in bcawl2 bcawl1 bcawl3; do [ -f "$STATE/failed/$d" ] && dead="$dead $d"; done
+	[ -n "$dead" ] || return 1
+	[ -d "$MW" ] || mkdir -p "$MW" 2>/dev/null
+	n=$(futile_count); case "$n" in ''|*[!0-9]*) n=0 ;; esac
+	rd base "$MW/futile.base"
+	case "$base" in ''|*[!0-9]*) echo "$n" > "$MW/futile.base"; return 1 ;; esac
+	[ "$n" -gt "$base" ] || return 1
+	tnow; rd last "$MW/last"
+	case "$last" in *[!0-9]*) last= ;; esac
+	if [ -n "$last" ] && [ $((T - last)) -lt "$MLO_MIN" ] && [ "$T" -ge "$last" ]; then
+		[ -f "$MW/said" ] || { log "MLO member(s)${dead} dead again (MLO-REBIND-FUTILE) $((T - last)) s after the module reload: no further reload within ${MLO_MIN} s, the radio(s) left dead (a restart of gt-be98-wifi retries)"; : > "$MW/said"; }
+		return 0
+	fi
+	echo "$T" > "$MW/last"; echo "$n" > "$MW/futile.base"; rmx "$MW/said"
+	log "MLO member(s)${dead} dead (MLO-REBIND-FUTILE: the MLO group HALTED, the driver cannot re-probe it): reloading the Wi-Fi module (gt-be98-wifi mlo_recover; at most one per ${MLO_MIN} s)"
+	# detached: the service's stop stops this daemon
+	if [ -n "${GT_BE98_MLO_RECOVER:-}" ]; then $GT_BE98_MLO_RECOVER > /dev/null 2>&1 < /dev/null
+	else setsid rc-service gt-be98-wifi mlo_recover > /dev/null 2>&1 < /dev/null & fi
+	return 0
+}
+
 # the driver is loaded (one read of the module list, no fork)
 drv_loaded() {
 	local m
@@ -241,6 +290,7 @@ cmd_check() {
 	T=
 	[ -d "$W" ] || mkdir -p "$W" 2>/dev/null || return 0
 	WHY=; health; why=$WHY
+	drv_loaded && mlo_check && return 0
 	[ -d "$STATE/ids" ] || [ -n "$why" ] || return 0	# the service runs no radio
 	for f in "$STATE"/ids/*; do
 		[ -f "$f" ] || continue

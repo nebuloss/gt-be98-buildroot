@@ -227,7 +227,7 @@
 # shellcheck disable=SC2034 # read by openrc-run
 description="Open Wi-Fi driver + hostapd (optional)"
 # shellcheck disable=SC2034 # read by openrc-run
-extra_started_commands="reload"
+extra_started_commands="reload mlo_recover"
 
 # (GT_BE98_*: the offline test harness only)
 RUNDIR=${GT_BE98_RUN:-/run}
@@ -1899,6 +1899,8 @@ start() {
 		if [ -n "${WIFI_KO:-}" ]; then insmod "$WIFI_KO" $WIFI_ARGS
 		else modprobe bca_pcie_ipc $WIFI_ARGS; fi
 		eend $? || { svc_unlock; return 1; }
+		# [MLO-REBIND-FUTILE] the driver's dead-member messages so far (gt-be98-wifi-reprobe)
+		mkdir -p "$RUNDIR/gt-be98-wifi-mlo" && dmesg 2>/dev/null | grep -c 'MLO-REBIND-FUTILE' > "$RUNDIR/gt-be98-wifi-mlo/futile.base"
 	fi
 	WAIT_RADIOS=1 apply_hostapd
 	local rc=$?
@@ -1983,6 +1985,16 @@ stop() {
 		rm -f "$STATE/radio-macs"
 	fi
 	svc_unlock
+}
+
+# [MLO-REBIND-FUTILE] (gt-be98-wifi-reprobe header): a dead MLO member is
+# recovered by reloading the module: stop (the module unloaded whatever
+# WIFI_UNLOAD_ON_STOP says), then start (the MLD-RADIO-RESTART rules)
+mlo_recover() {
+	ewarn "MLO member radio dead (MLO-REBIND-FUTILE): reloading the Wi-Fi module"
+	slog "mlo_recover: reloading the Wi-Fi module (an MLO member radio is dead: MLO-REBIND-FUTILE)"
+	WIFI_UNLOAD_ON_STOP=yes stop
+	start
 }
 
 status() {

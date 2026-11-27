@@ -66,7 +66,11 @@
 #  cfg80211's own CAC end: the cfg80211_cac_event WARNING of q468/q472) + MLO-MEMBER-CORE-UP 8bbfa315 (a member radio with no AP
 #  counts for the group after 10 s when its netdev is up; q475 F2A, q476 r48 PASS with no MLD and a member band empty); gates GREEN).
 #  imgint17b ships this ONE module, the MLO build (orchestrator 2026-11-26 after q476), WIFI_MLO=1.
-GT_BE98_OPEN_WIFI_VERSION = 8bbfa3150da6586b46b8627849c8b2c9f301e15a
+# om-mlo-product-2026-11-26 9abe2dbd (imgint17c; driver code = 1b6911e3, gates GREEN): 8bbfa315 + ZW-CYCLE (no background-CAC arm
+#  while an MLO whole-group cycle is open; the background margin 15 s in the group build, 5 s shipped) + JOIN-SDK52 (the directed
+#  join's wl_join_params in the SDK's 52-byte layout) + MLO-REBIND-FUTILE (a HALTED group's member is not rebound into our own
+#  probe refusal: it stays bound, latched dead, its netdev kept; the OS reloads the module, gt-be98-wifi-reprobe)
+GT_BE98_OPEN_WIFI_VERSION = 9abe2dbdd612b5851998715d75e0cf0bd8a77302
 GT_BE98_OPEN_WIFI_SITE = git@github.com:nebuloss/gt-be98-open-wifi.git
 GT_BE98_OPEN_WIFI_SITE_METHOD = git
 GT_BE98_OPEN_WIFI_LICENSE = GPL-2.0-only
